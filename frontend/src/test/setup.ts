@@ -7,6 +7,7 @@ import { resetAuthRuntimeForTests } from '../auth/runtime';
 import { clearAppStorage } from '../auth/storage';
 import { resetPasswordAuthForTests } from '../auth/PasswordAuthProvider';
 import { resetRouterForTests } from '../router/router';
+import { resetThemeForTests } from '../theme/themePreference';
 import { resetDeviceWorkspaceForTests } from '../workspace/deviceWorkspace';
 import { resetMockDb } from '../mocks/db';
 import { resetMockRealtime } from '../mocks/realtime';
@@ -35,6 +36,7 @@ beforeEach(() => {
   clearAppStorage();
   resetDeviceWorkspaceForTests();
   resetRouterForTests('/');
+  resetThemeForTests();
 });
 
 afterEach(() => {

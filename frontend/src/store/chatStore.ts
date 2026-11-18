@@ -41,6 +41,7 @@ import {
 } from '../auth/storage';
 import type { AppConfig } from '../config/env';
 import { maxSeq, mergeMessages, minSeq } from '../domain/messages';
+import { sumUnread } from '../domain/unread';
 import { newUuid } from '../lib/ids';
 import { isE2eeEnabled } from '../e2ee/app/flag';
 import { readChatModePin } from '../e2ee/device/modePin';
@@ -314,6 +315,12 @@ export interface AppState {
   workspaces: WorkspaceSummary[];
   activeWorkspaceId: string | null;
   activeWorkspace: WorkspaceSummary | null;
+  /**
+   * D1-FE1: last known sum of `ChatSummary.unread_count` per workspace. The
+   * active workspace is always recomputed from `chats`; inactive workspaces
+   * keep the summary loaded by the rail (no per-workspace unread endpoint yet).
+   */
+  workspaceUnread: Record<string, number>;
   onboardingRequired: boolean;
   onboardingStatus: OnboardingStatus;
   onboardingError: ApiError | null;
@@ -504,6 +511,8 @@ export class ChatStore {
   private notificationsPromise: Promise<void> | null = null;
   private preferencesPromise: Promise<void> | null = null;
   private chatLimitsPromise: Promise<void> | null = null;
+  /** D1-FE1: workspaces whose chat list was read only for the unread badge. */
+  private readonly unreadWorkspaceRequests = new Set<string>();
   /** E10-F: member directory race guards (search chain + load-more). */
   private membersToken = 0;
   private membersInFlight: Promise<void> | null = null;
@@ -545,6 +554,7 @@ export class ChatStore {
       workspaces: [],
       activeWorkspaceId: null,
       activeWorkspace: null,
+      workspaceUnread: {},
       onboardingRequired: false,
       onboardingStatus: 'idle',
       onboardingError: null,
@@ -692,9 +702,17 @@ export class ChatStore {
   }
 
   private updateChatSummary(chatId: string, patch: Partial<ChatSummary>): void {
-    this.patch({
-      chats: this.state.chats.map((chat) => (chat.id === chatId ? { ...chat, ...patch } : chat)),
-    });
+    const chats = this.state.chats.map((chat) =>
+      chat.id === chatId ? { ...chat, ...patch } : chat,
+    );
+    this.patch({ chats, workspaceUnread: this.withActiveWorkspaceUnread(chats) });
+  }
+
+  /** D1-FE1: keep the active workspace badge in sync with its chat list. */
+  private withActiveWorkspaceUnread(chats: ChatSummary[]): Record<string, number> {
+    const activeWorkspaceId = this.state.activeWorkspaceId;
+    if (activeWorkspaceId === null) return this.state.workspaceUnread;
+    return { ...this.state.workspaceUnread, [activeWorkspaceId]: sumUnread(chats) };
   }
 
   /**
@@ -819,6 +837,7 @@ export class ChatStore {
           onboardingStatus: 'idle',
           activeWorkspaceId: null,
           activeWorkspace: null,
+          workspaceUnread: {},
           chats: [],
           slices: {},
           threads: {},
@@ -897,6 +916,14 @@ export class ChatStore {
     this.notificationEpoch += 1;
     writeDeviceWorkspaceId(workspace.id);
     this.files.setWorkspace(workspace.id, workspace.role ?? null);
+    // D1-FE1: keep the outgoing workspace badge truthful after `chats` is
+    // cleared; the value is the same sum the server just gave us.
+    const previousWorkspaceId = this.state.activeWorkspaceId;
+    const previousUnread = previousWorkspaceId === null ? null : sumUnread(this.state.chats);
+    const workspaceUnread =
+      previousWorkspaceId === null || previousUnread === null
+        ? this.state.workspaceUnread
+        : { ...this.state.workspaceUnread, [previousWorkspaceId]: previousUnread };
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.seenEventIds.length = 0;
@@ -905,6 +932,7 @@ export class ChatStore {
     this.patch({
       activeWorkspaceId: workspace.id,
       activeWorkspace: workspace,
+      workspaceUnread,
       sessionStatus: 'loading',
       sessionError: null,
       authExpired: false,
@@ -949,6 +977,7 @@ export class ChatStore {
         chats,
         slices,
         activeChatId,
+        workspaceUnread: { ...workspaceUnread, [workspace.id]: sumUnread(chats) },
       });
 
       void this.loadNotifications();
@@ -971,6 +1000,43 @@ export class ChatStore {
     const workspace = this.state.workspaces.find((item) => item.id === workspaceId);
     if (!workspace) return;
     await this.activateWorkspace(workspace);
+  }
+
+  /**
+   * D1-FE1: the contract has no aggregate unread endpoint yet, so the rail
+   * reads each inactive workspace's chat list once and sums
+   * `ChatSummary.unread_count`. Failures are ignored: the badge simply stays
+   * absent, while the active workspace is always computed from live chats.
+   */
+  async loadWorkspaceUnread(): Promise<void> {
+    if (this.state.sessionStatus !== 'ready') return;
+    const activeWorkspaceId =
+      this.state.activeWorkspaceId ?? this.state.session?.workspace.id ?? null;
+    const requests: Promise<void>[] = [];
+    for (const workspace of this.state.workspaces) {
+      if (workspace.id === activeWorkspaceId) continue;
+      if (this.unreadWorkspaceRequests.has(workspace.id)) continue;
+      this.unreadWorkspaceRequests.add(workspace.id);
+      requests.push(
+        this.api
+          .listChats(workspace.id)
+          .then((list) => {
+            // A workspace switch/logout while the request was in flight must
+            // not resurrect old badge state.
+            if (this.state.sessionStatus !== 'ready') return;
+            this.patch({
+              workspaceUnread: {
+                ...this.state.workspaceUnread,
+                [workspace.id]: sumUnread(list.items),
+              },
+            });
+          })
+          .catch(() => {
+            this.unreadWorkspaceRequests.delete(workspace.id);
+          }),
+      );
+    }
+    await Promise.all(requests);
   }
 
   /**
@@ -1495,6 +1561,7 @@ export class ChatStore {
       this.patch({
         chats,
         slices,
+        workspaceUnread: this.withActiveWorkspaceUnread(chats),
         chatCreateStatus: 'idle',
         chatCreateError: null,
       });
@@ -1593,6 +1660,7 @@ export class ChatStore {
     this.stickers.reset();
     this.ops.reset();
     this.chatLimitsPromise = null;
+    this.unreadWorkspaceRequests.clear();
     this.membersToken += 1;
     this.membersInFlight = null;
     this.membersLoadMoreInFlight = false;
@@ -1611,6 +1679,7 @@ export class ChatStore {
       workspaces: [],
       activeWorkspaceId: null,
       activeWorkspace: null,
+      workspaceUnread: {},
       onboardingRequired: false,
       onboardingStatus: 'idle',
       onboardingError: null,
@@ -4125,7 +4194,7 @@ export class ChatStore {
       };
     });
 
-    this.patch({ slices, chats });
+    this.patch({ slices, chats, workspaceUnread: this.withActiveWorkspaceUnread(chats) });
   }
 }
 

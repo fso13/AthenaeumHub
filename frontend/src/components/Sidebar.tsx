@@ -1,14 +1,34 @@
 import type { AppState } from '../store/chatStore';
+import type { AppView, PageView } from '../router/views';
 import { chatDisplayName } from '../domain/chatLabel';
 import { formatShortDate } from '../domain/messages';
-import { t } from '../i18n/ru';
+import { t, type MessageKey } from '../i18n/ru';
 import { Avatar } from './Avatar';
-import { LogoutIcon, PeopleIcon, PlusIcon, SettingsIcon } from './Icons';
+import {
+  FolderIcon,
+  LogoutIcon,
+  OverviewIcon,
+  PeopleIcon,
+  PlugIcon,
+  PlusIcon,
+  SettingsIcon,
+  ShieldIcon,
+} from './Icons';
 import { NotificationBell } from './NotificationBell';
+
+const NAV_ITEMS: ReadonlyArray<{ view: PageView; label: MessageKey; Icon: typeof OverviewIcon }> = [
+  { view: 'overview', label: 'nav.overview', Icon: OverviewIcon },
+  { view: 'files', label: 'nav.files', Icon: FolderIcon },
+  { view: 'plugins', label: 'nav.plugins', Icon: PlugIcon },
+  { view: 'security', label: 'nav.security', Icon: ShieldIcon },
+  { view: 'settings', label: 'nav.settings', Icon: SettingsIcon },
+];
 
 interface SidebarProps {
   state: AppState;
   useMocks: boolean;
+  view: AppView;
+  onNavigate: (view: AppView) => void;
   onSelect: (chatId: string) => void;
   onLogout?: () => void;
   onSelectWorkspace?: (workspaceId: string) => void;
@@ -20,6 +40,8 @@ interface SidebarProps {
 export function Sidebar({
   state,
   useMocks,
+  view,
+  onNavigate,
   onSelect,
   onLogout,
   onSelectWorkspace,
@@ -37,6 +59,46 @@ export function Sidebar({
   // active member, so the dialog (not the entry point) enforces the type.
   const canCreateChat = !chatLimitReached;
   const isAdmin = state.me?.user.is_platform_admin === true;
+  const channels = state.chats.filter((chat) => chat.type === 'GROUP');
+  const directs = state.chats.filter((chat) => chat.type === 'DIRECT');
+
+  const renderChatItem = (chat: AppState['chats'][number]) => {
+    const active = chat.id === state.activeChatId;
+    const unread = chat.unread_count;
+    const label = chatDisplayName(chat, state.workspaceMembers.items);
+    return (
+      <li key={chat.id}>
+        <button
+          type="button"
+          className={`chat-item${active ? ' chat-item--active' : ''}`}
+          aria-current={active ? 'page' : undefined}
+          onClick={() => onSelect(chat.id)}
+        >
+          <Avatar name={label} seed={chat.id} size="md" />
+          <span className="chat-item__body">
+            <span className="chat-item__row">
+              <span className="chat-item__name">{label}</span>
+              {chat.last_message_at ? (
+                <time className="chat-item__time" dateTime={chat.last_message_at}>
+                  {formatShortDate(chat.last_message_at)}
+                </time>
+              ) : null}
+            </span>
+            <span className="chat-item__row">
+              <span className="chat-item__preview">
+                {chat.type === 'GROUP' ? t('chat.group') : t('chat.direct')}
+              </span>
+              {unread > 0 ? (
+                <span className="unread-badge" aria-label={t('sidebar.unread', { count: unread })}>
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              ) : null}
+            </span>
+          </span>
+        </button>
+      </li>
+    );
+  };
 
   return (
     <aside className="sidebar" aria-label={t('sidebar.label')}>
@@ -110,6 +172,27 @@ export function Sidebar({
         ) : null}
       </div>
 
+      <nav className="sidebar__nav" aria-label={t('nav.label')}>
+        <ul className="sidebar__nav-items">
+          {NAV_ITEMS.map(({ view: itemView, label, Icon }) => {
+            const active = view === itemView;
+            return (
+              <li key={itemView}>
+                <button
+                  type="button"
+                  className={`sidebar__nav-item${active ? ' sidebar__nav-item--active' : ''}`}
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => onNavigate(itemView)}
+                >
+                  <Icon aria-hidden="true" />
+                  <span>{t(label)}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+
       <nav className="chat-list" aria-label={t('sidebar.chats')}>
         {loading ? (
           <div className="chat-list__skeleton" aria-hidden="true">
@@ -123,48 +206,20 @@ export function Sidebar({
         ) : state.chats.length === 0 ? (
           <p className="chat-list__empty">{t('sidebar.noChats')}</p>
         ) : (
-          <ul className="chat-list__items">
-            {state.chats.map((chat) => {
-              const active = chat.id === state.activeChatId;
-              const unread = chat.unread_count;
-              const label = chatDisplayName(chat, state.workspaceMembers.items);
-              return (
-                <li key={chat.id}>
-                  <button
-                    type="button"
-                    className={`chat-item${active ? ' chat-item--active' : ''}`}
-                    aria-current={active ? 'page' : undefined}
-                    onClick={() => onSelect(chat.id)}
-                  >
-                    <Avatar name={label} seed={chat.id} size="md" />
-                    <span className="chat-item__body">
-                      <span className="chat-item__row">
-                        <span className="chat-item__name">{label}</span>
-                        {chat.last_message_at ? (
-                          <time className="chat-item__time" dateTime={chat.last_message_at}>
-                            {formatShortDate(chat.last_message_at)}
-                          </time>
-                        ) : null}
-                      </span>
-                      <span className="chat-item__row">
-                        <span className="chat-item__preview">
-                          {chat.type === 'GROUP' ? t('chat.group') : t('chat.direct')}
-                        </span>
-                        {unread > 0 ? (
-                          <span
-                            className="unread-badge"
-                            aria-label={t('sidebar.unread', { count: unread })}
-                          >
-                            {unread > 99 ? '99+' : unread}
-                          </span>
-                        ) : null}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <>
+            {channels.length > 0 ? (
+              <section className="chat-list__section" aria-label={t('sidebar.channels')}>
+                <h2 className="chat-list__section-title">{t('sidebar.channels')}</h2>
+                <ul className="chat-list__items">{channels.map(renderChatItem)}</ul>
+              </section>
+            ) : null}
+            {directs.length > 0 ? (
+              <section className="chat-list__section" aria-label={t('sidebar.directs')}>
+                <h2 className="chat-list__section-title">{t('sidebar.directs')}</h2>
+                <ul className="chat-list__items">{directs.map(renderChatItem)}</ul>
+              </section>
+            ) : null}
+          </>
         )}
       </nav>
 

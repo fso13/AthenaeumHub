@@ -7,8 +7,9 @@
  * server always re-checks membership, so a forged id only falls back to the
  * server default.
  *
- * `scripts/check-security.mjs` allows `localStorage` only in this module for
- * that reason. Keep the surface to the workspace id.
+ * `scripts/check-security.mjs` allows `localStorage` in this module and in
+ * `theme/themePreference.ts` (explicit light/dark choice) only. Keep the
+ * surface to the workspace id.
  */
 const WORKSPACE_ID_KEY = 'krug.workspace.id';
 const MAX_ID_LENGTH = 64;

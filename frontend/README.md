@@ -4,6 +4,41 @@ Managed-чат по контракту `contracts/openapi.yaml`: история 
 
 Контракт — единственный источник API-форм. `backend/**`, `infra/**`, `docs/**`, `design/**` и `contracts/**` не изменяются.
 
+## D1-FE1 — Message Dashboard shell
+
+Срез **D1-FE1** переносит каркас макета `design/dashboard` v1.0.0 в продукт, не
+меняя API: контракт и `schema.d.ts` остаются прежними.
+
+- **Space rail**: пространства из `/me` (в dev-режиме — единственное workspace
+  сессии). Бейдж — сумма `ChatSummary.unread_count` по чатам пространства;
+  `> 99` отображается как `99+`, `0` — без бейджа, `aria-label` кнопки содержит
+  точное число. Активное пространство подсвечено (`aria-current="page"`).
+  Для неактивных пространств бейдж подгружается одним `GET
+/workspaces/{id}/chats` (агрегатного unread-эндпоинта в контракте нет);
+  активное всегда пересчитывается из `chats` после `markRead`, WS и `/sync`.
+- **Shell/navigation**: сайдбар с секциями «Каналы»/«Личные сообщения» и
+  навигацией `Обзор`, `Файлы`, `Плагины`, `Защита`, `Настройки`. Роутинг —
+  `?view=overview|files|settings|plugins|security` через history API;
+  «К чатам» и выбор чата возвращают в переписку, активный чат/тред не
+  сбрасываются. Мобильный drawer (кнопка меню, `Esc`, фон, закрытие при выборе
+  чата).
+- **Темы**: светлая/тёмная через `data-theme` на `<html>`, токены макета
+  (`design/dashboard/tokens.json`) вынесены в CSS-переменные. Выбор хранится
+  только как несекретная per-device настройка (`krug.theme`); по умолчанию —
+  системная тема, `prefers-reduced-motion` и focus-visible сохранены.
+- **Страницы**: `Overview` — метрики (чаты, участники, непрочитанные, роль),
+  хранилище из `GET /workspaces/{id}/limits`, быстрые чаты и недавние вложения
+  из загруженных сообщений; `Files` — вложения из уже загруженных сообщений,
+  лимиты/квоты, поиск, фильтры и честные empty/error состояния; `Settings` —
+  только существующие данные (`/me`, устройство, роль/режим, лимиты), настройки
+  уведомлений и тема. `Plugins`/`Protection` — явно недоступные разделы без
+  фиктивных переключателей: API каталога/DLP/аудита в этом контракте нет.
+- **Тесты**: `src/components/Dashboard.test.tsx` (14): rail badge/`99+`/точный
+  aria/переключение пространства, роутинг и back-to-chat, Overview, Files
+  empty/error/search/filter, честные Plugins/Protection, темы, мобильный drawer
+  и axe. Полный `npm run check` — **783** теста (74 файла), contract
+  47 paths / 55 operations / 87 schemas. Отчёт: `D1-FE1-REPORT.md`.
+
 ## Стек
 
 - Vite 7 + React 19 + TypeScript 5.9 (`strict`, `noUncheckedIndexedAccess`).
@@ -113,7 +148,9 @@ src/
     store.ts         # packs/favorites/recent/disabled, optimistic favorite + rollback
   realtime/          # protocol v1, close codes/backoff, RealtimeClient, socket adapter
   hooks/             # bootstrap, online/offline, reconnect, debounce read
-  components/        # ChatScreen, Sidebar, MessageList, Composer, StickerPicker, AttachmentCard, LimitsBar, UploadTray, NotificationBell/Panel/Preferences, WorkspaceMembersDialog, auth/*
+  components/        # AppShell, SpaceRail, Sidebar, ChatScreen, MessageList, Composer, pages/*, ThreadPanel, StickerPicker, AttachmentCard, LimitsBar, UploadTray, NotificationBell/Panel/Preferences, WorkspaceMembersDialog, auth/*
+  router/views.ts    # D1-FE1: ?view=… section routing helpers
+  theme/             # D1-FE1: explicit light/dark preference (localStorage, no auth data)
   mocks/             # MSW handlers (files, stickers, notifications/preferences, workspace members) + in-process mock WS server
   i18n/ru.ts         # простой типизированный словарь RU
   styles/app.css     # токены по мотивам design/, без импорта прототипа

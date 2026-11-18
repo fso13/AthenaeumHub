@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  useChatState,
-  ChatProvider,
-  useChatStore,
-  useOpsState,
-  useOpsStore,
-} from './store/ChatProvider';
+import { useChatState, ChatProvider, useOpsState, useOpsStore } from './store/ChatProvider';
 import type { ChatStore } from './store/chatStore';
 import type { AppConfig } from './config/env';
 import {
@@ -15,7 +9,6 @@ import {
   useReconnectSync,
 } from './hooks/useChatEffects';
 import { maxSeq } from './domain/messages';
-import { t } from './i18n/ru';
 import { AuthRoot } from './auth/AuthRoot';
 import { useAppAuth } from './auth/AuthContext';
 import { useLocation, useNavigate } from './router/router';
@@ -29,11 +22,10 @@ import {
   SplashScreen,
 } from './components/auth/AuthStatusScreens';
 import { OnboardingScreen } from './components/auth/OnboardingScreen';
-import { ChatScreen } from './components/ChatScreen';
 import { CreateChatDialog } from './components/CreateChatDialog';
 import { AdminScreen } from './components/admin/AdminScreen';
 import { SetupWizard } from './components/admin/SetupWizard';
-import { Sidebar } from './components/Sidebar';
+import { AppShell } from './components/AppShell';
 import { WorkspaceMembersDialog } from './components/WorkspaceMembersDialog';
 
 interface AppProps {
@@ -79,49 +71,38 @@ function useChatRuntime(store: ChatStore, config: AppConfig, bootstrapKey: strin
 }
 
 function ChatWorkspace({
-  state,
   config,
   onLogout,
   onSelectWorkspace,
   onOpenAdmin,
 }: {
-  state: ReturnType<typeof useChatRuntime>;
   config: AppConfig;
   onLogout?: () => void;
   onSelectWorkspace?: (workspaceId: string) => void;
   onOpenAdmin?: () => void;
 }) {
-  const store = useChatStore();
   const [createOpen, setCreateOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   return (
-    <div className="app">
-      <a className="skip-link" href="#chat-main">
-        {t('app.skipToChat')}
-      </a>
-      <Sidebar
-        state={state}
-        useMocks={config.useMocks}
-        onSelect={(chatId) => {
-          void store.setActiveChat(chatId);
-        }}
+    <>
+      <AppShell
+        config={config}
         onLogout={onLogout}
         onSelectWorkspace={onSelectWorkspace}
         onCreateChat={() => setCreateOpen(true)}
         onOpenAdmin={onOpenAdmin}
         onOpenMembers={() => setMembersOpen(true)}
       />
-      <ChatScreen />
       <CreateChatDialog open={createOpen} onClose={() => setCreateOpen(false)} />
       <WorkspaceMembersDialog open={membersOpen} onClose={() => setMembersOpen(false)} />
-    </div>
+    </>
   );
 }
 
 /** F-01 dev mode: POST /dev/session on boot and on 401. */
 function DevApp({ store, config }: AppProps) {
-  const state = useChatRuntime(store, config);
-  return <ChatWorkspace state={state} config={config} />;
+  useChatRuntime(store, config);
+  return <ChatWorkspace config={config} />;
 }
 
 /**
@@ -266,7 +247,6 @@ function PasswordApp({ store, config }: AppProps) {
 
   return (
     <ChatWorkspace
-      state={state}
       config={config}
       onLogout={logout}
       onSelectWorkspace={(workspaceId) => void store.selectWorkspace(workspaceId)}
