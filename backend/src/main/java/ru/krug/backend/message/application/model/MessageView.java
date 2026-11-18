@@ -5,12 +5,14 @@ import java.util.List;
 import java.util.UUID;
 
 import ru.krug.backend.message.domain.model.Message;
+import ru.krug.backend.message.domain.model.ThreadSummary;
 import ru.krug.backend.sticker.application.model.StickerRefView;
 
 /**
  * Application-level result/read model. The API maps this to a response DTO, so controllers
  * never import domain classes. {@code cryptoScheme} stays internal (it is not part of the
  * OpenAPI {@code Message}); {@code crypto} is the envelope for the requesting device only.
+ * {@code threadSummary} is attached to thread roots only and is never present for E2EE.
  */
 public record MessageView(
         UUID id,
@@ -22,6 +24,8 @@ public record MessageView(
         String senderDisplayName,
         String text,
         UUID replyToId,
+        UUID threadRootId,
+        ThreadSummaryView threadSummary,
         Instant createdAt,
         Instant editedAt,
         Instant deletedAt,
@@ -41,8 +45,9 @@ public record MessageView(
                 message.type().name(), message.cryptoScheme().name(), message.senderId(),
                 message.senderDisplayName(),
                 message.body() == null ? null : message.body().value(), message.replyToId(),
-                message.createdAt(), message.editedAt(), message.deletedAt(), message.version(),
-                message.clientMessageId(), null, message.stickerId(), null, List.of());
+                message.threadRootId(), null, message.createdAt(), message.editedAt(),
+                message.deletedAt(), message.version(), message.clientMessageId(), null,
+                message.stickerId(), null, List.of());
     }
 
     public boolean isE2ee() {
@@ -51,21 +56,30 @@ public record MessageView(
 
     public MessageView withAttachments(List<MessageAttachmentView> values) {
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
-                text, replyToId, createdAt, editedAt, deletedAt, version, clientMessageId,
-                crypto, stickerId, sticker, values == null ? List.of() : values);
+                text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
+                version, clientMessageId, crypto, stickerId, sticker,
+                values == null ? List.of() : values);
     }
 
     public MessageView withSticker(StickerRefView value) {
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
-                text, replyToId, createdAt, editedAt, deletedAt, version, clientMessageId,
-                crypto, stickerId, value == null ? null : MessageStickerView.from(value),
-                attachments);
+                text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
+                version, clientMessageId, crypto, stickerId,
+                value == null ? null : MessageStickerView.from(value), attachments);
     }
 
     /** Attaches the envelope of the requesting device (E2EE) or clears it (managed). */
     public MessageView withCrypto(Object value) {
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
-                text, replyToId, createdAt, editedAt, deletedAt, version, clientMessageId,
-                value, stickerId, sticker, attachments);
+                text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
+                version, clientMessageId, value, stickerId, sticker, attachments);
+    }
+
+    /** Server-computed summary for a thread root; null for replies and empty threads. */
+    public MessageView withThreadSummary(ThreadSummary value) {
+        return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
+                text, replyToId, threadRootId, value == null ? null : ThreadSummaryView.from(value),
+                createdAt, editedAt, deletedAt, version, clientMessageId, crypto, stickerId,
+                sticker, attachments);
     }
 }

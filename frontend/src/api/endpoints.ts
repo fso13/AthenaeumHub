@@ -54,6 +54,11 @@ export interface ListMessagesQuery {
   afterSeq?: number;
   beforeSeq?: number;
   limit?: number;
+  /**
+   * D1-FE3: fetch replies of one flat thread. Without it the server returns
+   * only the main feed (`thread_root_id = null`); replies never leak into it.
+   */
+  threadRootId?: string;
 }
 
 /**
@@ -446,6 +451,7 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
             after_seq: query.afterSeq,
             before_seq: query.beforeSeq,
             limit: query.limit,
+            thread_root_id: query.threadRootId,
           },
         );
         return response.data;

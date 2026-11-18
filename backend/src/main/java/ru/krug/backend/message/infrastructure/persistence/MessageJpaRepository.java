@@ -80,4 +80,101 @@ public interface MessageJpaRepository extends JpaRepository<MessageEntity, UUID>
                                      @Param("afterSeq") long afterSeq,
                                      @Param("beforeSeq") long beforeSeq,
                                      Pageable pageable);
+
+    // ------------------------------------------------------------------
+    // D1-BE1: main feed excludes replies; a thread page filters by root.
+    // ------------------------------------------------------------------
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId is null
+             order by m.seq desc
+            """)
+    List<MessageEntity> mainPageDesc(@Param("workspaceId") UUID workspaceId,
+                                     @Param("chatId") UUID chatId,
+                                     Pageable pageable);
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId is null and m.seq < :beforeSeq
+             order by m.seq desc
+            """)
+    List<MessageEntity> mainPageDescBefore(@Param("workspaceId") UUID workspaceId,
+                                           @Param("chatId") UUID chatId,
+                                           @Param("beforeSeq") long beforeSeq,
+                                           Pageable pageable);
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId is null and m.seq > :afterSeq
+             order by m.seq asc
+            """)
+    List<MessageEntity> mainPageAscAfter(@Param("workspaceId") UUID workspaceId,
+                                         @Param("chatId") UUID chatId,
+                                         @Param("afterSeq") long afterSeq,
+                                         Pageable pageable);
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId is null and m.seq > :afterSeq and m.seq < :beforeSeq
+             order by m.seq asc
+            """)
+    List<MessageEntity> mainPageAscRange(@Param("workspaceId") UUID workspaceId,
+                                         @Param("chatId") UUID chatId,
+                                         @Param("afterSeq") long afterSeq,
+                                         @Param("beforeSeq") long beforeSeq,
+                                         Pageable pageable);
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId = :threadRootId
+             order by m.seq desc
+            """)
+    List<MessageEntity> threadPageDesc(@Param("workspaceId") UUID workspaceId,
+                                       @Param("chatId") UUID chatId,
+                                       @Param("threadRootId") UUID threadRootId,
+                                       Pageable pageable);
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId = :threadRootId and m.seq < :beforeSeq
+             order by m.seq desc
+            """)
+    List<MessageEntity> threadPageDescBefore(@Param("workspaceId") UUID workspaceId,
+                                             @Param("chatId") UUID chatId,
+                                             @Param("threadRootId") UUID threadRootId,
+                                             @Param("beforeSeq") long beforeSeq,
+                                             Pageable pageable);
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId = :threadRootId and m.seq > :afterSeq
+             order by m.seq asc
+            """)
+    List<MessageEntity> threadPageAscAfter(@Param("workspaceId") UUID workspaceId,
+                                           @Param("chatId") UUID chatId,
+                                           @Param("threadRootId") UUID threadRootId,
+                                           @Param("afterSeq") long afterSeq,
+                                           Pageable pageable);
+
+    @Query("""
+            select m from MessageEntity m
+             where m.workspaceId = :workspaceId and m.chatId = :chatId
+               and m.threadRootId = :threadRootId
+               and m.seq > :afterSeq and m.seq < :beforeSeq
+             order by m.seq asc
+            """)
+    List<MessageEntity> threadPageAscRange(@Param("workspaceId") UUID workspaceId,
+                                           @Param("chatId") UUID chatId,
+                                           @Param("threadRootId") UUID threadRootId,
+                                           @Param("afterSeq") long afterSeq,
+                                           @Param("beforeSeq") long beforeSeq,
+                                           Pageable pageable);
 }

@@ -15,10 +15,14 @@ interface MessageListProps {
   retryDisabled: boolean;
   /** E7-F5F: never render server plaintext in an E2EE chat. */
   e2eeChat?: boolean;
+  /** D1-FE3: managed chats only; E2EE renders a disabled thread action. */
+  threadsAvailable?: boolean;
+  threadDisabledReason?: string | null;
   onLoadMore: () => void;
   onRetry: (clientMessageId: string) => void;
   onRestore: (item: OutgoingMessage) => void;
   onReply: (message: ApiMessage) => void;
+  onOpenThread: (message: ApiMessage) => void;
 }
 
 export function MessageList({
@@ -27,10 +31,13 @@ export function MessageList({
   readByOthersSeq,
   retryDisabled,
   e2eeChat = false,
+  threadsAvailable = false,
+  threadDisabledReason = null,
   onLoadMore,
   onRetry,
   onRestore,
   onReply,
+  onOpenThread,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousScrollHeight = useRef<number | null>(null);
@@ -41,6 +48,8 @@ export function MessageList({
   const ordered = useMemo(
     () =>
       sortBySeq(slice.messages).filter((message) => {
+        // D1-FE3: replies belong to the thread panel, never to the channel.
+        if (message.thread_root_id) return false;
         const view = slice.e2ee[message.id];
         return view === undefined || (view.status !== 'control' && view.status !== 'superseded');
       }),
@@ -51,6 +60,16 @@ export function MessageList({
     () => new Map(ordered.map((message) => [message.id, message])),
     [ordered],
   );
+  /** Local sender directory for the thread link's "author: excerpt" preview. */
+  const nameBySender = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const message of ordered) {
+      if (message.sender_id && message.sender_display_name) {
+        names.set(message.sender_id, message.sender_display_name);
+      }
+    }
+    return names;
+  }, [ordered]);
 
   const handleLoadMore = () => {
     const element = scrollRef.current;
@@ -174,6 +193,13 @@ export function MessageList({
               }
               e2ee={slice.e2ee[item.message.id]}
               e2eeChat={e2eeChat}
+              threadsAvailable={threadsAvailable}
+              threadDisabledReason={threadDisabledReason}
+              threadAuthorName={
+                item.message.thread_summary?.last_reply_author_id
+                  ? (nameBySender.get(item.message.thread_summary.last_reply_author_id) ?? null)
+                  : null
+              }
               replyTo={
                 item.message.reply_to_id ? (replyById.get(item.message.reply_to_id) ?? null) : null
               }
@@ -183,6 +209,7 @@ export function MessageList({
                   : null
               }
               onReply={onReply}
+              onOpenThread={onOpenThread}
               onJumpTo={handleJumpTo}
             />
           ),

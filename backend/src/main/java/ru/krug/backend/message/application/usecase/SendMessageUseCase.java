@@ -176,6 +176,11 @@ public class SendMessageUseCase {
             canonical.put("sticker_id", command.input().stickerId());
         }
         canonical.put("reply_to_id", command.input().replyToId());
+        // Only replies add the field: a legacy managed request without a thread keeps the
+        // exact same hash, so pre-D1 Idempotency-Key replays stay replays.
+        if (command.input().threadRootId() != null) {
+            canonical.put("thread_root_id", command.input().threadRootId());
+        }
         canonical.put("attachment_ids", command.input().attachmentIds());
         if (envelopes.present()) {
             // Deterministic fingerprint instead of the parsed JSON text: field order and
@@ -227,11 +232,13 @@ public class SendMessageUseCase {
         if (input.isSticker()) {
             return "STICKER".equals(existing.type())
                     && Objects.equals(existing.stickerId(), input.stickerId())
-                    && Objects.equals(existing.replyToId(), input.replyToId());
+                    && Objects.equals(existing.replyToId(), input.replyToId())
+                    && Objects.equals(existing.threadRootId(), input.threadRootId());
         }
         return "TEXT".equals(existing.type())
                 && Objects.equals(existing.text(), input.text())
                 && Objects.equals(existing.replyToId(), input.replyToId())
+                && Objects.equals(existing.threadRootId(), input.threadRootId())
                 && Objects.equals(existing.attachments().stream()
                         .map(attachment -> attachment.id()).sorted().toList(),
                         input.attachmentIds().stream().sorted().toList());

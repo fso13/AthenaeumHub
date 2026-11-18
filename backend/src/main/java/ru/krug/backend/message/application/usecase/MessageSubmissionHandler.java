@@ -35,6 +35,7 @@ import ru.krug.backend.message.domain.model.MessageEnvelope;
 import ru.krug.backend.message.domain.repository.MessageEnvelopeRepository;
 import ru.krug.backend.message.domain.repository.MessageRepository;
 import ru.krug.backend.message.domain.service.MessageReplyPolicy;
+import ru.krug.backend.message.domain.service.MessageThreadPolicy;
 import ru.krug.backend.ops.application.model.IdempotencyReservation;
 import ru.krug.backend.ops.application.model.OutboxEvent;
 import ru.krug.backend.ops.application.port.IdempotencyPort;
@@ -156,6 +157,11 @@ public class MessageSubmissionHandler {
             throw DomainException.badRequest("text or attachment_ids must be present",
                     Map.of("field", "text", "reason", "empty_message"));
         }
+        if (input.threadRootId() != null) {
+            Message root = messageRepository.findById(principal.workspaceId(),
+                    input.threadRootId()).orElse(null);
+            MessageThreadPolicy.ensureThreadRoot(chatId, input.threadRootId(), root);
+        }
         MessageBody body = !input.isSticker() && input.hasText()
                 ? new MessageBody(input.text()) : null;
         if (input.replyToId() != null) {
@@ -181,10 +187,11 @@ public class MessageSubmissionHandler {
         Message message = input.isSticker()
                 ? Message.createSticker(messageId, principal.workspaceId(), chatId, seq,
                         principal.userId(), principal.deviceId(), senderDisplayName,
-                        input.stickerId(), input.replyToId(), input.clientMessageId(), now)
+                        input.stickerId(), input.replyToId(), input.threadRootId(),
+                        input.clientMessageId(), now)
                 : Message.createText(messageId, principal.workspaceId(), chatId, seq,
                         principal.userId(), principal.deviceId(), senderDisplayName, body,
-                        input.replyToId(), input.clientMessageId(), now);
+                        input.replyToId(), input.threadRootId(), input.clientMessageId(), now);
         messageRepository.save(message);
 
         MessageView view = MessageView.from(message).withAttachments(attachments)
@@ -253,6 +260,13 @@ public class MessageSubmissionHandler {
     }
 
     private void requireE2eePayload(MessageCreateInput input, EnvelopeBatch envelopes) {
+        // D1: threads are managed-only. Checked first so the caller gets the explicit
+        // THREADS_E2EE_UNSUPPORTED code instead of a generic plaintext error.
+        if (input.threadRootId() != null) {
+            throw DomainException.unprocessable(ErrorCode.THREADS_E2EE_UNSUPPORTED,
+                    "Threads are not supported in E2EE chats",
+                    Map.of("field", "thread_root_id"));
+        }
         if (!envelopes.present() || envelopes.isEmpty()) {
             throw DomainException.unprocessable(ErrorCode.ENVELOPES_REQUIRED,
                     "An E2EE message requires at least one envelope",
@@ -353,6 +367,7 @@ public class MessageSubmissionHandler {
         payload.put("seq", event.seq());
         payload.put("sender_id", event.senderId());
         payload.put("type", view.type());
+        payload.put("thread_root_id", view.threadRootId());
         payload.put("sticker_id", view.stickerId());
         if (view.sticker() != null) {
             payload.put("sticker", Map.of(

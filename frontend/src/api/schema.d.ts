@@ -831,10 +831,13 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Без after_seq — последняя страница (seq DESC); с after_seq — вперёд (seq ASC). Клиент сортирует по seq и не полагается на created_at. */
+        /** @description Без after_seq — последняя страница (seq DESC); с after_seq — вперёд (seq ASC). Клиент сортирует по seq и не полагается на created_at. Без `thread_root_id` возвращается только основная лента (`thread_root_id = null`): ответы тредов в неё не попадают. С `thread_root_id` — ответы одного треда, упорядоченные по seq с той же cursor/limit-семантикой. */
         get: operations["listMessages"];
         put?: never;
-        /** Отправить сообщение; managed — text/attachments, E2EE — только envelopes */
+        /**
+         * Отправить сообщение; managed — text/attachments, E2EE — только envelopes
+         * @description С `thread_root_id` создаётся ответ в тред: корень должен существовать в том же чате, сам не быть ответом (максимальная глубина 1) и не быть удалённым; тот же `Idempotency-Key`. В E2EE-чате треды не поддерживаются → `422 THREADS_E2EE_UNSUPPORTED`. Ответ на ответ → `422 THREAD_NESTING_UNSUPPORTED`.
+         */
         post: operations["sendMessage"];
         delete?: never;
         options?: never;
@@ -882,7 +885,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. */
+        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. */
         Error: {
             code: string;
             message: string;
@@ -1459,6 +1462,20 @@ export interface components {
             text?: string | null;
             /** Format: uuid */
             reply_to_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Корень треда; null — обычное сообщение канала. У ответа — id корня, глубина всегда 1. В E2EE-чате всегда null.
+             */
+            thread_root_id?: string | null;
+            /** @description Только для корня треда; считается сервером одним запросом. У корня без ответов — объект с `reply_count = 0`. Managed-only: для E2EE `null`, plaintext-превью не раскрывается. */
+            thread_summary?: {
+                reply_count?: number;
+                /** Format: date-time */
+                last_reply_at?: string | null;
+                /** Format: uuid */
+                last_reply_author_id?: string | null;
+                last_reply_excerpt?: string | null;
+            } | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -1474,7 +1491,7 @@ export interface components {
             client_message_id?: string | null;
             crypto?: components["schemas"]["CryptoEnvelope"] | null;
         };
-        /** @description Managed: text/sticker/attachments. E2EE: только `envelopes[]`; `text`, `sticker_id`, `attachment_ids`, `reply_to_id` запрещены (422 E2EE_PLAINTEXT_FORBIDDEN). Managed-запрос с `envelopes` → 422 ENVELOPES_NOT_ALLOWED; при выключенном флаге E2EE → 409 E2EE_DISABLED. */
+        /** @description Managed: text/sticker/attachments. E2EE: только `envelopes[]`; `text`, `sticker_id`, `attachment_ids`, `reply_to_id`, `thread_root_id` запрещены (422 E2EE_PLAINTEXT_FORBIDDEN / THREADS_E2EE_UNSUPPORTED). Managed-запрос с `envelopes` → 422 ENVELOPES_NOT_ALLOWED; при выключенном флаге E2EE → 409 E2EE_DISABLED. */
         MessageCreate: {
             /** Format: uuid */
             client_message_id: string;
@@ -1483,6 +1500,11 @@ export interface components {
             text?: string | null;
             /** Format: uuid */
             reply_to_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Ответ в тред: id корня в том же чате. Запрещён для E2EE (422 THREADS_E2EE_UNSUPPORTED); ответ на ответ запрещён (422 THREAD_NESTING_UNSUPPORTED).
+             */
+            thread_root_id?: string | null;
             /** Format: uuid */
             sticker_id?: string | null;
             attachment_ids?: string[];
@@ -3389,6 +3411,8 @@ export interface operations {
                 after_seq?: number;
                 before_seq?: number;
                 limit?: number;
+                /** @description Корень треда. Должен существовать в этом чате и сам не быть ответом (глубина 1). Для E2EE-чата треды не поддерживаются → `422 THREADS_E2EE_UNSUPPORTED`. */
+                thread_root_id?: string;
             };
             header: {
                 "X-Device-Id": components["parameters"]["DeviceId"];
@@ -3412,6 +3436,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
         };
     };
     sendMessage: {

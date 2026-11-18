@@ -31,8 +31,9 @@ public class MessagePersistenceMapper {
                 Message.Type.valueOf(entity.getType()),
                 CryptoScheme.valueOf(entity.getCryptoScheme()),
                 text == null ? null : new MessageBody(text), entity.getStickerId(),
-                entity.getReplyToId(), entity.getClientMessageId(), entity.getCreatedAt(),
-                entity.getEditedAt(), entity.getDeletedAt(), entity.getVersion());
+                entity.getReplyToId(), entity.getThreadRootId(), entity.getClientMessageId(),
+                entity.getCreatedAt(), entity.getEditedAt(), entity.getDeletedAt(),
+                entity.getVersion());
     }
 
     public MessageEntity toEntity(Message message) {
@@ -46,7 +47,7 @@ public class MessagePersistenceMapper {
                 message.senderId(), message.senderDeviceId(), message.senderDisplayName(),
                 message.type().name(), message.cryptoScheme().name(), ciphertext, contentMeta,
                 message.clientMessageId(), message.stickerId(), message.replyToId(),
-                message.createdAt(), message.version());
+                message.threadRootId(), message.createdAt(), message.version());
     }
 
 }

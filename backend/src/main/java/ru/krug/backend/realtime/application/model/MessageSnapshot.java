@@ -18,6 +18,7 @@ public record MessageSnapshot(
         String senderDisplayName,
         String text,
         UUID replyToId,
+        UUID threadRootId,
         Instant createdAt,
         Instant editedAt,
         Instant deletedAt,
@@ -32,14 +33,14 @@ public record MessageSnapshot(
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
     }
 
-    /** Back-compat constructor for managed snapshots without the I-01 fields. */
+    /** Back-compat constructor for managed snapshots without thread root. */
     public MessageSnapshot(UUID workspaceId, UUID id, UUID chatId, long seq, String type,
                            UUID senderId, String senderDisplayName, String text, UUID replyToId,
                            Instant createdAt, Instant editedAt, Instant deletedAt, int version,
                            UUID stickerId, StickerSnapshot sticker,
                            List<AttachmentSnapshot> attachments) {
         this(workspaceId, id, chatId, seq, type, senderId, senderDisplayName, text, replyToId,
-                createdAt, editedAt, deletedAt, version, null, null, stickerId, sticker,
+                null, createdAt, editedAt, deletedAt, version, null, null, stickerId, sticker,
                 attachments);
     }
 }

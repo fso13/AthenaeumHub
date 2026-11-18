@@ -20,6 +20,7 @@ public record MessageCreateRequest(
         String text,
         @JsonDeserialize(using = CanonicalUuidDeserializer.class) UUID stickerId,
         @JsonDeserialize(using = CanonicalUuidDeserializer.class) UUID replyToId,
+        @JsonDeserialize(using = CanonicalUuidDeserializer.class) UUID threadRootId,
         @JsonDeserialize(contentUsing = CanonicalUuidDeserializer.class)
         List<UUID> attachmentIds,
         JsonNode envelopes) {

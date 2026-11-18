@@ -151,6 +151,43 @@ class RealtimeWebSocketIT extends WebSocketIntegrationTestBase {
         client.close();
     }
 
+    @Test
+    void messageCreatedCarriesThreadRootIdLiveAndOnReplay() throws Exception {
+        SessionResponse session = devSession();
+        UUID chatId = session.chat().id();
+        JsonNode root = sendMessage(session, chatId, "root", UUID.randomUUID().toString());
+        UUID rootId = UUID.fromString(root.get("id").asText());
+
+        WebSocketClient client = connect(ticket(session).get("ticket").asText());
+        client.awaitType("hello", TIMEOUT);
+        client.send(subscribeFrame(chatId, 0, false));
+        client.awaitType("subscribed", TIMEOUT);
+
+        JsonNode replayedRoot = client.awaitEvent("message.created", TIMEOUT);
+        assertThat(replayedRoot.get("payload").get("thread_root_id").isNull()).isTrue();
+
+        JsonNode reply = sendMessage(session, chatId, "reply", UUID.randomUUID().toString(),
+                rootId);
+        JsonNode live = client.awaitEvent("message.created", TIMEOUT);
+        assertThat(live.get("seq").asLong()).isEqualTo(2);
+        assertThat(live.get("payload").get("id").asText())
+                .isEqualTo(reply.get("id").asText());
+        assertThat(live.get("payload").get("thread_root_id").asText())
+                .isEqualTo(rootId.toString());
+        client.close();
+
+        // Replay from last_seq=1 includes the reply and keeps the same thread root.
+        WebSocketClient reconnected = connect(ticket(session).get("ticket").asText());
+        reconnected.awaitType("hello", TIMEOUT);
+        reconnected.send(subscribeFrame(chatId, 1, false));
+        reconnected.awaitType("subscribed", TIMEOUT);
+        JsonNode replayReply = reconnected.awaitEvent("message.created", TIMEOUT);
+        assertThat(replayReply.get("seq").asLong()).isEqualTo(2);
+        assertThat(replayReply.get("payload").get("thread_root_id").asText())
+                .isEqualTo(rootId.toString());
+        reconnected.close();
+    }
+
     private static void assertStickerPayload(JsonNode event, UUID stickerId) {
         JsonNode payload = event.get("payload");
         assertThat(payload.get("type").asText()).isEqualTo("STICKER");

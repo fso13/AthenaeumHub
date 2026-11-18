@@ -62,6 +62,9 @@ public class MessageEntity {
     @Column(name = "reply_to_id")
     private UUID replyToId;
 
+    @Column(name = "thread_root_id")
+    private UUID threadRootId;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -83,8 +86,9 @@ public class MessageEntity {
     private MessageEntity(UUID id, UUID workspaceId, UUID chatId, Long seq, UUID senderId,
                           UUID senderDeviceId, String senderDisplayName, String type,
                           String cryptoScheme, byte[] bodyCiphertext, Map<String, Object> contentMeta,
-                          UUID clientMessageId, UUID stickerId, UUID replyToId, Instant createdAt,
-                          Instant editedAt, Instant deletedAt, UUID deletedBy, Integer version) {
+                          UUID clientMessageId, UUID stickerId, UUID replyToId,
+                          UUID threadRootId, Instant createdAt, Instant editedAt,
+                          Instant deletedAt, UUID deletedBy, Integer version) {
         this.id = id;
         this.workspaceId = workspaceId;
         this.chatId = chatId;
@@ -99,6 +103,7 @@ public class MessageEntity {
         this.clientMessageId = clientMessageId;
         this.stickerId = stickerId;
         this.replyToId = replyToId;
+        this.threadRootId = threadRootId;
         this.createdAt = createdAt;
         this.editedAt = editedAt;
         this.deletedAt = deletedAt;
@@ -110,11 +115,12 @@ public class MessageEntity {
                                        UUID senderId, UUID senderDeviceId, String senderDisplayName,
                                        String type, String cryptoScheme, byte[] bodyCiphertext,
                                        Map<String, Object> contentMeta, UUID clientMessageId,
-                                       UUID stickerId, UUID replyToId, Instant createdAt,
-                                       Integer version) {
+                                       UUID stickerId, UUID replyToId, UUID threadRootId,
+                                       Instant createdAt, Integer version) {
         return new MessageEntity(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, type, cryptoScheme, bodyCiphertext, contentMeta,
-                clientMessageId, stickerId, replyToId, createdAt, null, null, null, version);
+                clientMessageId, stickerId, replyToId, threadRootId, createdAt, null, null, null,
+                version);
     }
 
     public UUID getId() {
@@ -167,6 +173,10 @@ public class MessageEntity {
 
     public UUID getReplyToId() {
         return replyToId;
+    }
+
+    public UUID getThreadRootId() {
+        return threadRootId;
     }
 
     public Instant getCreatedAt() {

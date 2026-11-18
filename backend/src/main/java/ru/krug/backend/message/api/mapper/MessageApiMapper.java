@@ -8,10 +8,12 @@ import ru.krug.backend.message.api.dto.MessagePageInfo;
 import ru.krug.backend.message.api.dto.MessagePageResponse;
 import ru.krug.backend.message.api.dto.MessageResponse;
 import ru.krug.backend.message.api.dto.MessageStickerResponse;
+import ru.krug.backend.message.api.dto.ThreadSummaryResponse;
 import ru.krug.backend.message.application.model.EnvelopeCoverageView;
 import ru.krug.backend.message.application.model.MessagePageView;
 import ru.krug.backend.message.application.model.MessageStickerView;
 import ru.krug.backend.message.application.model.MessageView;
+import ru.krug.backend.message.application.model.ThreadSummaryView;
 
 /**
  * Application result/read model -> API DTO. No domain imports in the API layer.
@@ -46,9 +48,10 @@ public final class MessageApiMapper {
                 .toList();
         return new MessageResponse(view.id(), view.chatId(), view.seq(), view.type(),
                 view.senderId(), view.senderDisplayName(), view.text(), view.replyToId(),
-                view.createdAt(), view.editedAt(), view.deletedAt(), view.version(),
-                view.clientMessageId(), view.crypto(), view.stickerId(), sticker(view.sticker()),
-                attachments, coverage(coverage));
+                view.threadRootId(), view.createdAt(), view.editedAt(), view.deletedAt(),
+                view.version(), view.clientMessageId(), view.crypto(), view.stickerId(),
+                sticker(view.sticker()), attachments, summary(view.threadSummary()),
+                coverage(coverage));
     }
 
     public static MessagePageResponse toResponse(MessagePageView view) {
@@ -74,5 +77,13 @@ public final class MessageApiMapper {
         }
         return new MessageStickerResponse(sticker.id(), sticker.packId(), sticker.alt(),
                 sticker.url(), sticker.favorite());
+    }
+
+    private static ThreadSummaryResponse summary(ThreadSummaryView summary) {
+        if (summary == null) {
+            return null;
+        }
+        return new ThreadSummaryResponse(summary.replyCount(), summary.lastReplyAt(),
+                summary.lastReplyAuthorId(), summary.lastReplyExcerpt());
     }
 }

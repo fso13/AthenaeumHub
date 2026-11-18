@@ -45,9 +45,9 @@ public class RealtimeMessageCreatedListener {
             }
             MessageSnapshot snapshot = new MessageSnapshot(notification.workspaceId(), view.id(),
                     view.chatId(), view.seq(), view.type(), view.senderId(),
-                    view.senderDisplayName(), view.text(), view.replyToId(), view.createdAt(),
-                    view.editedAt(), view.deletedAt(), view.version(), view.clientMessageId(),
-                    view.crypto(), view.stickerId(),
+                    view.senderDisplayName(), view.text(), view.replyToId(),
+                    view.threadRootId(), view.createdAt(), view.editedAt(), view.deletedAt(),
+                    view.version(), view.clientMessageId(), view.crypto(), view.stickerId(),
                     view.sticker() == null ? null : new StickerSnapshot(view.sticker().id(),
                             view.sticker().packId(), view.sticker().alt(),
                             view.sticker().url(), view.sticker().favorite()),

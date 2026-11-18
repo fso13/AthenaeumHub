@@ -374,6 +374,8 @@ export interface MockDb {
   realtimeTickets: Map<string, MockRealtimeTicket>;
   failNextSend: number;
   forceSendError: ForcedSendError | null;
+  /** D1-FE3: fail thread list pages without affecting the main feed. */
+  forceThreadError: ForcedSendError | null;
   sendDelayMs: number;
   sendAttempts: Array<{ idempotencyKey: string; clientMessageId: string; bodyHash: string }>;
   /** Last validated request bodies, for E5 send-shape assertions. */
@@ -536,6 +538,7 @@ export function createMockDb(): MockDb {
     realtimeTickets: new Map(),
     failNextSend: 0,
     forceSendError: null,
+    forceThreadError: null,
     sendDelayMs: 0,
     sendAttempts: [],
     sendBodies: [],
@@ -643,6 +646,7 @@ export function resetMockDb(db: MockDb): void {
   db.realtimeTickets.clear();
   db.failNextSend = 0;
   db.forceSendError = null;
+  db.forceThreadError = null;
   db.sendDelayMs = 0;
   db.sendAttempts = [];
   db.sendBodies = [];
@@ -757,6 +761,31 @@ export function insertMockMessage(
       created_at: created,
     });
   }
+  return message;
+}
+
+/**
+ * D1-FE3: simulate a reply written by another participant. The message is a
+ * normal chat row with `thread_root_id`; the main feed handler filters it out,
+ * while the thread endpoint and `thread_summary` include it.
+ */
+export function insertMockThreadReply(
+  db: MockDb,
+  chatId: string,
+  rootId: string,
+  text: string,
+  sender: { id: string; name: string } = {
+    id: IDS.mark,
+    name: 'Марк Соколов',
+  },
+): ApiMessage {
+  const chat = db.chats[chatId];
+  if (!chat) throw new Error(`Unknown mock chat: ${chatId}`);
+  if (!chat.messages.some((message) => message.id === rootId && !message.thread_root_id)) {
+    throw new Error(`Unknown thread root: ${rootId}`);
+  }
+  const message = insertMockMessage(db, chatId, text, sender);
+  message.thread_root_id = rootId;
   return message;
 }
 

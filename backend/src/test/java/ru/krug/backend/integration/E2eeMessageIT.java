@@ -251,6 +251,39 @@ class E2eeMessageIT extends IntegrationTestBase {
     }
 
     @Test
+    void threadsAreRejectedInE2eeChats() throws Exception {
+        Fixture fixture = fixture();
+        Device a1 = register(fixture.alice(), "a1");
+        Device b1 = register(fixture.bob(), "b1");
+        UUID chatId = UUID.fromString(createDirect(fixture.alice(), fixture.workspaceId(),
+                fixture.bob().user().id(), 201).get("id").asText());
+
+        JsonNode root = send(fixture.alice(), a1, chatId, e2eeBody(UUID.randomUUID(),
+                List.of(envelope(chatId, a1, a1.material(), b1, b1.material(),
+                        random(300), true))), 201);
+        UUID rootId = UUID.fromString(root.get("id").asText());
+
+        // A thread root is plaintext metadata: D1 never accepts it in an E2EE chat.
+        Map<String, Object> reply = e2eeBody(UUID.randomUUID(),
+                List.of(envelope(chatId, a1, a1.material(), b1, b1.material(),
+                        random(300), true)));
+        reply.put("thread_root_id", rootId.toString());
+        JsonNode error = expectError(fixture.alice(), a1, chatId, reply, 422);
+        assertThat(error.get("code").asText()).isEqualTo("THREADS_E2EE_UNSUPPORTED");
+        assertThat(error.get("details").get("field").asText()).isEqualTo("thread_root_id");
+        assertThat(messageCount(chatId)).isEqualTo(1);
+
+        // The thread list is rejected too, before any envelope is read.
+        MvcResult listResult = mockMvc.perform(authed(
+                        get("/api/v1/chats/{id}/messages", chatId)
+                                .param("thread_root_id", rootId.toString()),
+                        sessionFor(fixture.alice(), a1.id(), fixture.workspaceId()), a1.id()))
+                .andReturn();
+        assertThat(listResult.getResponse().getStatus()).isEqualTo(422);
+        assertThat(json(listResult).get("code").asText()).isEqualTo("THREADS_E2EE_UNSUPPORTED");
+    }
+
+    @Test
     void invalidEnvelopeShapesAreRejected() throws Exception {
         Fixture fixture = fixture();
         Device a1 = register(fixture.alice(), "a1");

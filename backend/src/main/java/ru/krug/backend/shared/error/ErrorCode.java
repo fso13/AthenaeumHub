@@ -118,6 +118,12 @@ public final class ErrorCode {
     public static final String ROLE_CHANGE_FORBIDDEN = "ROLE_CHANGE_FORBIDDEN";
     public static final String LAST_OWNER = "LAST_OWNER";
 
+    // D1-BE1: flat threads (docs/TASKS-DASHBOARD-V1.md §3.2). Managed-only, depth 1.
+    public static final String THREAD_ROOT_NOT_FOUND = "THREAD_ROOT_NOT_FOUND";
+    public static final String THREAD_ROOT_DELETED = "THREAD_ROOT_DELETED";
+    public static final String THREAD_NESTING_UNSUPPORTED = "THREAD_NESTING_UNSUPPORTED";
+    public static final String THREADS_E2EE_UNSUPPORTED = "THREADS_E2EE_UNSUPPORTED";
+
     private ErrorCode() {
     }
 }

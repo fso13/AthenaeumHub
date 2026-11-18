@@ -45,9 +45,12 @@ public class MessageController {
                                     @RequestParam(value = "after_seq", required = false) Long afterSeq,
                                     @RequestParam(value = "before_seq", required = false) Long beforeSeq,
                                     @RequestParam(value = "limit", required = false) Integer limit,
+                                    @RequestParam(value = "thread_root_id", required = false)
+                                    UUID threadRootId,
                                     Principal principal) {
         return MessageApiMapper.toResponse(messageQueryHandler.list(
-                new ListMessagesQuery(principal, chatId, afterSeq, beforeSeq, limit)));
+                new ListMessagesQuery(principal, chatId, afterSeq, beforeSeq, limit,
+                        threadRootId)));
     }
 
     @PostMapping
@@ -63,7 +66,7 @@ public class MessageController {
         }
         MessageCreateInput input = new MessageCreateInput(request.clientMessageId(),
                 request.type(), request.text(), request.stickerId(), request.replyToId(),
-                request.attachmentIds(), request.envelopes());
+                request.threadRootId(), request.attachmentIds(), request.envelopes());
         SendMessageResult result = sendMessageUseCase.send(
                 new SendMessageCommand(principal, chatId, key, input));
         ResponseEntity.BodyBuilder builder = ResponseEntity.status(result.status());

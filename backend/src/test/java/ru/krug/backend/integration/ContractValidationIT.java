@@ -79,6 +79,51 @@ class ContractValidationIT extends IntegrationTestBase {
     }
 
     @Test
+    void threadFieldsAndSummaryMatchTheContract() throws Exception {
+        SessionResponse session = devSession();
+        UUID chatId = session.chat().id();
+        JsonNode root = sendMessage(session, chatId, UUID.randomUUID().toString(),
+                UUID.randomUUID().toString(), "root");
+        CONTRACT.assertValid("Message", root);
+        assertThat(root.get("thread_root_id").isNull()).isTrue();
+        assertThat(root.get("thread_summary").isNull()).isTrue();
+
+        String body = objectMapper.writeValueAsString(java.util.Map.of(
+                "client_message_id", UUID.randomUUID().toString(),
+                "type", "TEXT",
+                "text", "reply",
+                "thread_root_id", root.get("id").asText()));
+        MvcResult replyResult = mockMvc.perform(authed(
+                        post("/api/v1/chats/{chatId}/messages", chatId), session)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isCreated())
+                .andReturn();
+        CONTRACT.assertValid("Message", json(replyResult));
+        assertThat(json(replyResult).get("thread_root_id").asText())
+                .isEqualTo(root.get("id").asText());
+
+        MvcResult threadPage = mockMvc.perform(authed(
+                        get("/api/v1/chats/{chatId}/messages", chatId), session)
+                        .param("thread_root_id", root.get("id").asText()))
+                .andExpect(status().isOk())
+                .andReturn();
+        CONTRACT.assertValid("MessagePage", json(threadPage));
+
+        MvcResult mainPage = mockMvc.perform(authed(
+                        get("/api/v1/chats/{chatId}/messages", chatId), session))
+                .andExpect(status().isOk())
+                .andReturn();
+        CONTRACT.assertValid("MessagePage", json(mainPage));
+        JsonNode summary = json(mainPage).get("items").get(0).get("thread_summary");
+        assertThat(summary.get("reply_count").asInt()).isEqualTo(1);
+        assertThat(summary.get("last_reply_excerpt").asText()).isEqualTo("reply");
+        assertThat(summary.has("last_reply_at")).isTrue();
+        assertThat(summary.has("last_reply_author_id")).isTrue();
+    }
+
+    @Test
     void errorEnvelopesMatchTheContract() throws Exception {
         SessionResponse alice = devSession();
         SessionResponse bob = devSession();

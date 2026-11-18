@@ -96,6 +96,11 @@ public abstract class WebSocketIntegrationTestBase {
 
     protected JsonNode sendMessage(SessionResponse session, UUID chatId, String text,
                                    String clientMessageId) throws Exception {
+        return sendMessage(session, chatId, text, clientMessageId, null);
+    }
+
+    protected JsonNode sendMessage(SessionResponse session, UUID chatId, String text,
+                                   String clientMessageId, UUID threadRootId) throws Exception {
         HttpHeaders headers = authHeaders(session);
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.add("Idempotency-Key", UUID.randomUUID().toString());
@@ -103,6 +108,9 @@ public abstract class WebSocketIntegrationTestBase {
         body.put("client_message_id", clientMessageId);
         body.put("type", "TEXT");
         body.put("text", text);
+        if (threadRootId != null) {
+            body.put("thread_root_id", threadRootId.toString());
+        }
         ResponseEntity<String> response = rest.exchange(
                 url("/api/v1/chats/" + chatId + "/messages"), HttpMethod.POST,
                 new HttpEntity<>(objectMapper.writeValueAsString(body), headers), String.class);

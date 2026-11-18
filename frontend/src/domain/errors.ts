@@ -119,6 +119,50 @@ export function describeError(error: unknown, translator: Translator = t): Descr
     };
   }
 
+  if (error.code === 'THREAD_ROOT_DELETED') {
+    return {
+      ...meta,
+      kind: 'conflict',
+      title: translate('errors.threadRootDeleted.title'),
+      message: translate('errors.threadRootDeleted.text'),
+      retryable: false,
+      canRestoreText: true,
+    };
+  }
+
+  if (error.code === 'THREAD_ROOT_NOT_FOUND') {
+    return {
+      ...meta,
+      kind: 'no_access',
+      title: translate('errors.threadRootNotFound.title'),
+      message: translate('errors.threadRootNotFound.text'),
+      retryable: false,
+      canRestoreText: true,
+    };
+  }
+
+  if (error.code === 'THREAD_NESTING_UNSUPPORTED') {
+    return {
+      ...meta,
+      kind: 'validation',
+      title: translate('errors.threadNesting.title'),
+      message: translate('errors.threadNesting.text'),
+      retryable: false,
+      canRestoreText: false,
+    };
+  }
+
+  if (error.code === 'THREADS_E2EE_UNSUPPORTED') {
+    return {
+      ...meta,
+      kind: 'no_access',
+      title: translate('errors.threadsE2ee.title'),
+      message: translate('errors.threadsE2ee.text'),
+      retryable: false,
+      canRestoreText: false,
+    };
+  }
+
   if (error.status === 403 || error.status === 404) {
     return {
       ...meta,

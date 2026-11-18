@@ -59,9 +59,12 @@
 `message.created` payload — `Message` из OpenAPI. Для E2EE-сообщения `payload.text=null`, а
 `payload.crypto` — конверт **только для устройства соединения**; для отправителя на том же
 устройстве `crypto:null` (локальная копия уже есть). `client_message_id` присутствует всегда
-(nullable) и не является секретом. При `krug.e2ee.enabled=false` live- и replay-кадры
-E2EE не публикуются: ни `message.created`, ни `crypto` (P2-03 review-06); managed-события
-не затронуты.
+(nullable) и не является секретом. `thread_root_id` присутствует всегда (nullable): `null` —
+сообщение основной ленты, `uuid` — ответ в тред с этим корнем (глубина 1). `thread_summary`
+в WS-кадр не входит: сервер считает его только в `GET /chats/{id}/messages`, клиент
+инкрементирует счётчик/превью корня локально по `message.created`. При
+`krug.e2ee.enabled=false` live- и replay-кадры E2EE не публикуются: ни `message.created`, ни
+`crypto` (P2-03 review-06); managed-события не затронуты.
 
 `chat.keys.changed.reason`: `DEVICE_ADDED | DEVICE_REVOKED | IDENTITY_KEY_CHANGED |
 VERIFICATION_CHANGED | KEY_GENERATION_CHANGED`. Событие несёт только метаданные ключей/устройств,
@@ -95,6 +98,7 @@ generation при этом не меняется) плюс `device.list.changed`
     "sender_id": "...",
     "sender_display_name": "...",
     "text": "...",
+    "thread_root_id": null,
     "created_at": "..."
   }
 }
@@ -123,6 +127,9 @@ generation при этом не меняется) плюс `device.list.changed`
   - читает `messages` с `seq > last_seq` ORDER BY `seq ASC` LIMIT 500;
   - отправляет `event: message.created` по порядку;
   - если `max_seq - last_seq > 500`, отправляет `resume.gap` с `from_seq=last_seq`, `to_seq=max_seq-500`; клиент добирает REST-страницами и продолжает live.
+- Replay/live `message.created` содержат **все** сообщения чата, включая ответы тредов
+  (`thread_root_id != null`): это тот же seq-поток, что и раньше. Клиент раскладывает их по
+  `thread_root_id`; REST-лента без `thread_root_id` отдаёт только корни.
 - Клиент игнорирует `seq <= last_seq`; дубликаты — по `event_id`.
 - `message.receipt` не replay-ится; актуальное состояние — `GET /sync`.
 - `typing`/`presence` не replay-ятся.

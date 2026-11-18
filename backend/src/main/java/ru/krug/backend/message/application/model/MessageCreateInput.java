@@ -8,8 +8,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 /**
  * Application input, built by the API from its request DTO. TEXT may omit text when it
  * carries attachments; STICKER requires exactly one sticker_id and no text/attachments.
- * {@code envelopes} is the raw E2EE array: it is parsed and validated by the application
- * layer, never by the controller, and the server never decrypts it.
+ * {@code threadRootId} turns the message into a depth-one reply; it is rejected in E2EE
+ * chats. {@code envelopes} is the raw E2EE array: it is parsed and validated by the
+ * application layer, never by the controller, and the server never decrypts it.
  */
 public record MessageCreateInput(
         UUID clientMessageId,
@@ -17,6 +18,7 @@ public record MessageCreateInput(
         String text,
         UUID stickerId,
         UUID replyToId,
+        UUID threadRootId,
         List<UUID> attachmentIds,
         JsonNode envelopes) {
 
@@ -26,7 +28,7 @@ public record MessageCreateInput(
 
     public MessageCreateInput(UUID clientMessageId, String type, String text, UUID stickerId,
                               UUID replyToId, List<UUID> attachmentIds) {
-        this(clientMessageId, type, text, stickerId, replyToId, attachmentIds, null);
+        this(clientMessageId, type, text, stickerId, replyToId, null, attachmentIds, null);
     }
 
     public boolean hasText() {

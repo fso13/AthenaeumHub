@@ -29,6 +29,7 @@ import type {
   RealtimeTicket,
   StickerRef,
   SyncResponse,
+  ThreadSummary,
   UploadInitRequest,
   UploadSession,
   WorkspaceMember,
@@ -98,6 +99,72 @@ function requireAuth(request: Request): Response | null {
   if (unauthorized) return unauthorized;
   if (!request.headers.get('x-device-id')) {
     return errorResponse(401, 'UNAUTHENTICATED', 'Device id is missing');
+  }
+  return null;
+}
+
+type ChatLike = ChatRecord;
+
+/** Managed-only excerpt: normalized and cut by code points (never a surrogate half). */
+function threadExcerpt(value: string | null | undefined): string | null {
+  const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
+  if (normalized.length === 0) return null;
+  const chars = Array.from(normalized);
+  return chars.length <= 160 ? normalized : `${chars.slice(0, 159).join('')}…`;
+}
+
+/** Live (non-deleted) replies of one root in seq order. */
+function threadRepliesOf(chat: ChatLike, rootId: string): ApiMessage[] {
+  return chat.messages
+    .filter((message) => message.thread_root_id === rootId && !message.deleted_at)
+    .sort((a, b) => a.seq - b.seq);
+}
+
+function buildThreadSummary(chat: ChatLike, rootId: string): ThreadSummary | null {
+  // E2EE never builds a plaintext reply summary (contract `null`).
+  if (chat.summary.security_mode === 'E2EE') return null;
+  const replies = threadRepliesOf(chat, rootId);
+  const last = replies[replies.length - 1] ?? null;
+  return {
+    reply_count: replies.length,
+    last_reply_at: last?.created_at ?? null,
+    last_reply_author_id: last?.sender_id ?? null,
+    last_reply_excerpt:
+      last && last.type !== 'STICKER' && !last.sticker_id ? threadExcerpt(last.text) : null,
+  };
+}
+
+/** Adds the root-only `thread_summary` the real server computes per page. */
+function presentMessage(chat: ChatLike, message: ApiMessage): ApiMessage {
+  const threadRootId = message.thread_root_id ?? null;
+  if (threadRootId !== null) {
+    return { ...message, thread_root_id: threadRootId, thread_summary: null };
+  }
+  return {
+    ...message,
+    thread_root_id: null,
+    thread_summary: buildThreadSummary(chat, message.id),
+  };
+}
+
+/** Validates a thread root the same way the backend does (422, typed codes). */
+function validateThreadRoot(chat: ChatLike, rootId: string): Response | null {
+  if (chat.summary.security_mode === 'E2EE') {
+    return errorResponse(
+      422,
+      'THREADS_E2EE_UNSUPPORTED',
+      'Threads are not supported in an E2EE chat',
+    );
+  }
+  const root = chat.messages.find((message) => message.id === rootId);
+  if (!root) {
+    return errorResponse(422, 'THREAD_ROOT_NOT_FOUND', 'Thread root not found');
+  }
+  if (root.thread_root_id) {
+    return errorResponse(422, 'THREAD_NESTING_UNSUPPORTED', 'A reply cannot be a thread root');
+  }
+  if (root.deleted_at) {
+    return errorResponse(422, 'THREAD_ROOT_DELETED', 'Thread root is deleted');
   }
   return null;
 }
@@ -2415,7 +2482,31 @@ export function createHandlers(db: MockDb) {
       const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '', 10);
       const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, rawLimit)) : 50;
 
-      const sorted = [...chat.messages].sort((a, b) => a.seq - b.seq);
+      // D1-FE3: with `thread_root_id` the server pages replies of one root;
+      // without it only the main feed (`thread_root_id = null`) is returned.
+      const rawThreadRootId = url.searchParams.get('thread_root_id');
+      let threadRootId: string | null = null;
+      if (rawThreadRootId !== null) {
+        if (!UUID_RE.test(rawThreadRootId)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'thread_root_id must be a UUID');
+        }
+        const invalid = validateThreadRoot(chat, rawThreadRootId);
+        if (invalid) return invalid;
+        threadRootId = rawThreadRootId;
+        if (db.forceThreadError) {
+          const forced = db.forceThreadError;
+          return errorResponse(forced.status, forced.code, forced.message, {
+            details: forced.details,
+            retryAfterSeconds: forced.retryAfterSeconds,
+          });
+        }
+      }
+
+      const sorted = [...chat.messages]
+        .sort((a, b) => a.seq - b.seq)
+        .filter((message) =>
+          threadRootId === null ? !message.thread_root_id : message.thread_root_id === threadRootId,
+        );
       let pageItems = sorted;
       let hasMore = false;
 
@@ -2433,7 +2524,7 @@ export function createHandlers(db: MockDb) {
       }
 
       return HttpResponse.json({
-        items: pageItems,
+        items: pageItems.map((message) => presentMessage(chat, message)),
         page: { next_cursor: null, has_more: hasMore },
       });
     }),
@@ -2474,7 +2565,7 @@ export function createHandlers(db: MockDb) {
             details: { original_request_hash: replay.bodyHash },
           });
         }
-        return HttpResponse.json(replay.body, {
+        return HttpResponse.json(presentMessage(chat, replay.body), {
           status: replay.status,
           headers: { ...replay.headers, 'Idempotent-Replay': 'true' },
         });
@@ -2508,6 +2599,16 @@ export function createHandlers(db: MockDb) {
         typeof candidate.reply_to_id !== 'string'
       ) {
         return errorResponse(400, 'VALIDATION_FAILED', 'reply_to_id must be a UUID or null');
+      }
+
+      // D1-FE3: same-chat / depth-1 / deleted-root / E2EE guards (contract 422).
+      const threadRootId = candidate.thread_root_id ?? null;
+      if (threadRootId !== null) {
+        if (typeof threadRootId !== 'string' || !UUID_RE.test(threadRootId)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'thread_root_id must be a UUID');
+        }
+        const invalid = validateThreadRoot(chat, threadRootId);
+        if (invalid) return invalid;
       }
 
       let text: string | null | undefined;
@@ -2606,7 +2707,8 @@ export function createHandlers(db: MockDb) {
           if (
             (typeof text === 'string' && text.length > 0) ||
             attachments.length > 0 ||
-            candidate.reply_to_id !== undefined
+            candidate.reply_to_id !== undefined ||
+            threadRootId !== null
           ) {
             return errorResponse(
               422,
@@ -2640,7 +2742,7 @@ export function createHandlers(db: MockDb) {
             body: existing,
             headers: {},
           });
-          return HttpResponse.json(existing, {
+          return HttpResponse.json(presentMessage(chat, existing), {
             status: 201,
             headers: { 'Idempotent-Replay': 'true' },
           });
@@ -2658,6 +2760,7 @@ export function createHandlers(db: MockDb) {
         sender_display_name: db.session.user.display_name,
         text: sticker ? null : typeof text === 'string' && text.length > 0 ? text : null,
         reply_to_id: candidate.reply_to_id ?? null,
+        thread_root_id: threadRootId,
         client_message_id: candidate.client_message_id,
         crypto: null,
         created_at: created,
@@ -2692,7 +2795,7 @@ export function createHandlers(db: MockDb) {
 
       publishMockMessageCreated(db, message);
 
-      return HttpResponse.json(message, { status: 201 });
+      return HttpResponse.json(presentMessage(chat, message), { status: 201 });
     }),
 
     http.post(`${API}/chats/:chatId/read`, async ({ request, params }) => {

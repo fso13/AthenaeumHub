@@ -25,6 +25,7 @@ import { ChatIcon, LockIcon, PaperclipIcon } from './Icons';
 import { MessageList } from './MessageList';
 import { StatePanel } from './StatePanel';
 import { StickerPicker } from './StickerPicker';
+import { ThreadPanel } from './ThreadPanel';
 import { TypingIndicator } from './TypingIndicator';
 import { LimitsBar } from './LimitsBar';
 import { UploadTray } from './UploadTray';
@@ -82,6 +83,9 @@ export function ChatScreen() {
         ? ('e2ee_blocked' as const)
         : null;
   const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
+  const threadsAvailable = activeChatId ? store.threadsAvailable(activeChatId) : false;
+  const threadDisabledReason = threadsAvailable ? null : t('thread.e2eeDisabled');
+  const threadOpen = state.activeThread !== null;
   // P2-33: the reply bar must never show the server's plaintext quote in an
   // E2EE context; only the decrypted local view (or "unavailable") is allowed.
   const replyE2eeText =
@@ -281,17 +285,20 @@ export function ChatScreen() {
         readByOthersSeq={readByOthersSeq}
         retryDisabled={sendBlockedReason !== null}
         e2eeChat={isE2eeChat}
+        threadsAvailable={threadsAvailable}
+        threadDisabledReason={threadDisabledReason}
         onLoadMore={() => void store.loadMore(activeChatId)}
         onRetry={(clientMessageId) => void store.retry(activeChatId, clientMessageId)}
         onRestore={handleRestore}
         onReply={handleReply}
+        onOpenThread={(message) => void store.openThread(activeChatId, message.id)}
       />
     );
   }
 
   return (
     <main
-      className="chat"
+      className={`chat${threadOpen ? ' chat--thread-open' : ''}`}
       id="chat-main"
       tabIndex={-1}
       aria-label={chatDisplayName(
@@ -304,127 +311,133 @@ export function ChatScreen() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <ChatHeader
-        state={state}
-        chat={chatSummary}
-        onRefresh={() => void store.sync()}
-        onOpenSafety={() => setSafetyOpen(true)}
-      />
-
-      {activeChatId ? (
-        <E2eeBanner
+      <div className="chat__main">
+        <ChatHeader
           state={state}
-          chatId={activeChatId}
-          onAcceptKeyChange={(userId, deviceId) => {
-            void store.acceptKeyChange(activeChatId, userId, deviceId);
-          }}
-          onConfirmManaged={() => {
-            void store.confirmManagedMode(activeChatId);
-          }}
-          onRefresh={() => {
-            void store.refreshE2eeChat(activeChatId);
-          }}
-          onRetryReset={() => {
-            void store.retryPendingReset(activeChatId);
-          }}
+          chat={chatSummary}
+          onRefresh={() => void store.sync()}
+          onOpenSafety={() => setSafetyOpen(true)}
         />
-      ) : null}
 
-      {!state.online ? <OfflineBanner /> : null}
-      {rateLimitSeconds > 0 ? <RateLimitBanner seconds={rateLimitSeconds} /> : null}
-      {state.syncStatus === 'error' ? <SyncErrorBanner onRetry={() => void store.sync()} /> : null}
-      <RealtimeBanner
-        issue={state.realtimeIssue}
-        status={state.realtimeStatus}
-        onReconnect={() => store.reconnectRealtime()}
-      />
-
-      <div className="chat__body">{body}</div>
-
-      {activeChatId ? (
-        <SafetyNumberDialog
-          open={safetyOpen}
-          chatId={activeChatId}
-          onClose={() => setSafetyOpen(false)}
-        />
-      ) : null}
-
-      <TypingIndicator entries={typingEntries} />
-
-      {dragActive && canAttach ? (
-        <div className="drop-overlay" role="status" aria-live="polite">
-          <PaperclipIcon aria-hidden="true" />
-          <strong>{t('files.dropTitle')}</strong>
-          <span>{t('files.dropHint')}</span>
-        </div>
-      ) : null}
-
-      {ready ? (
-        <div className="composer-stack">
-          <input
-            id="file-input"
-            ref={fileInputRef}
-            className="visually-hidden"
-            type="file"
-            multiple
-            tabIndex={-1}
-            aria-label={t('files.attach')}
-            onChange={(event) => {
-              handleFileInput(event.target.files);
-              event.target.value = '';
+        {activeChatId ? (
+          <E2eeBanner
+            state={state}
+            chatId={activeChatId}
+            onAcceptKeyChange={(userId, deviceId) => {
+              void store.acceptKeyChange(activeChatId, userId, deviceId);
+            }}
+            onConfirmManaged={() => {
+              void store.confirmManagedMode(activeChatId);
+            }}
+            onRefresh={() => {
+              void store.refreshE2eeChat(activeChatId);
+            }}
+            onRetryReset={() => {
+              void store.retryPendingReset(activeChatId);
             }}
           />
-          <LimitsBar
-            limits={filesState.limits}
-            status={filesState.limitsStatus}
-            error={filesState.limitsError}
-            role={role}
-            onRetry={() => void filesStore.refreshLimits()}
+        ) : null}
+
+        {!state.online ? <OfflineBanner /> : null}
+        {rateLimitSeconds > 0 ? <RateLimitBanner seconds={rateLimitSeconds} /> : null}
+        {state.syncStatus === 'error' ? (
+          <SyncErrorBanner onRetry={() => void store.sync()} />
+        ) : null}
+        <RealtimeBanner
+          issue={state.realtimeIssue}
+          status={state.realtimeStatus}
+          onReconnect={() => store.reconnectRealtime()}
+        />
+
+        <div className="chat__body">{body}</div>
+
+        {activeChatId ? (
+          <SafetyNumberDialog
+            open={safetyOpen}
+            chatId={activeChatId}
+            onClose={() => setSafetyOpen(false)}
           />
-          <UploadTray
-            tasks={uploadTasks}
-            onPause={(localId) => filesStore.pauseTask(localId)}
-            onResume={(localId) => void filesStore.resumeTask(localId)}
-            onCancel={(localId) => void filesStore.cancelTask(localId)}
-            onRetry={(localId) => void filesStore.retryTask(localId)}
-            onRemove={(localId) => void filesStore.removeTask(localId)}
-          />
-          {stickerPickerOpen ? (
-            <StickerPicker
-              state={stickersState}
-              onSend={handleSendSticker}
-              onFavorite={handleFavoriteSticker}
-              onRetry={() => {
-                if (activeChatId) void stickersStore.load(activeChatId, true);
+        ) : null}
+
+        <TypingIndicator entries={typingEntries} />
+
+        {dragActive && canAttach ? (
+          <div className="drop-overlay" role="status" aria-live="polite">
+            <PaperclipIcon aria-hidden="true" />
+            <strong>{t('files.dropTitle')}</strong>
+            <span>{t('files.dropHint')}</span>
+          </div>
+        ) : null}
+
+        {ready ? (
+          <div className="composer-stack">
+            <input
+              id="file-input"
+              ref={fileInputRef}
+              className="visually-hidden"
+              type="file"
+              multiple
+              tabIndex={-1}
+              aria-label={t('files.attach')}
+              onChange={(event) => {
+                handleFileInput(event.target.files);
+                event.target.value = '';
               }}
-              onClose={() => setStickerPickerOpen(false)}
+            />
+            <LimitsBar
+              limits={filesState.limits}
+              status={filesState.limitsStatus}
+              error={filesState.limitsError}
+              role={role}
+              onRetry={() => void filesStore.refreshLimits()}
+            />
+            <UploadTray
+              tasks={uploadTasks}
+              onPause={(localId) => filesStore.pauseTask(localId)}
+              onResume={(localId) => void filesStore.resumeTask(localId)}
+              onCancel={(localId) => void filesStore.cancelTask(localId)}
+              onRetry={(localId) => void filesStore.retryTask(localId)}
+              onRemove={(localId) => void filesStore.removeTask(localId)}
+            />
+            {stickerPickerOpen ? (
+              <StickerPicker
+                state={stickersState}
+                onSend={handleSendSticker}
+                onFavorite={handleFavoriteSticker}
+                onRetry={() => {
+                  if (activeChatId) void stickersStore.load(activeChatId, true);
+                }}
+                onClose={() => setStickerPickerOpen(false)}
+                sendBlockedReason={sendBlockedReason}
+                rateLimitSeconds={rateLimitSeconds}
+                triggerRef={stickerButtonRef}
+              />
+            ) : null}
+            <Composer
+              value={draft}
+              onChange={handleDraftChange}
+              onSend={handleSend}
+              disabled={false}
               sendBlockedReason={sendBlockedReason}
               rateLimitSeconds={rateLimitSeconds}
-              triggerRef={stickerButtonRef}
+              replyTo={replyTo}
+              e2eeChat={isE2eeChat}
+              replyText={replyE2eeText}
+              onCancelReply={() => setReplyTo(null)}
+              textareaRef={textareaRef}
+              attachmentCount={readyAttachments.length}
+              attachDisabled={!canAttach}
+              attachHint={attachHint}
+              onAttach={() => fileInputRef.current?.click()}
+              stickersOpen={stickerPickerOpen}
+              onToggleStickers={handleToggleStickers}
+              stickerButtonRef={stickerButtonRef}
             />
-          ) : null}
-          <Composer
-            value={draft}
-            onChange={handleDraftChange}
-            onSend={handleSend}
-            disabled={false}
-            sendBlockedReason={sendBlockedReason}
-            rateLimitSeconds={rateLimitSeconds}
-            replyTo={replyTo}
-            e2eeChat={isE2eeChat}
-            replyText={replyE2eeText}
-            onCancelReply={() => setReplyTo(null)}
-            textareaRef={textareaRef}
-            attachmentCount={readyAttachments.length}
-            attachDisabled={!canAttach}
-            attachHint={attachHint}
-            onAttach={() => fileInputRef.current?.click()}
-            stickersOpen={stickerPickerOpen}
-            onToggleStickers={handleToggleStickers}
-            stickerButtonRef={stickerButtonRef}
-          />
-        </div>
-      ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <ThreadPanel />
     </main>
   );
 }

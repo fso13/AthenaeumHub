@@ -937,3 +937,71 @@ AUTH_UNAVAILABLE` — «изменения не применены», кнопк
 
 Полный `npm run check` — **730** тестов (71 файл), `contract:check` —
 **47 paths / 55 operations / 87 schemas**, `schema.d.ts` синхронен.
+
+## D1-FE3 — threads UI (managed-only)
+
+Плоское дерево глубины 1 по контракту D1-C1 (`docs/TASKS-DASHBOARD-V1.md` §3.2):
+ответ — обычное сообщение с `thread_root_id`, без вложенных тредов. E2EE-флаг в этом
+срезе `false`; треды доступны только в managed-чатах, в E2EE показывается честно
+выключенный контрол без plaintext-превью.
+
+### Типизированный клиент
+
+- `listMessages(chatId, {threadRootId, beforeSeq?, afterSeq?, limit?})` добавляет query
+  `thread_root_id`; без него сервер отдаёт только основную ленту.
+- `sendMessage` принимает штатный `MessageCreate.thread_root_id`; новых полей и
+  схем не изобреталось, `schema.d.ts` не менялся и синхронен контракту
+  (`47 paths / 55 operations / 87 schemas`).
+- `ThreadSummary` — алиас `NonNullable<ApiMessage['thread_summary']>`; все поля
+  (`reply_count`, `last_reply_at`, `last_reply_author_id`, `last_reply_excerpt`)
+  читаются из ответа сервера. Для E2EE summary всегда `null`.
+
+### Store
+
+- `AppState.threads` — кэш `ThreadSlice` по ключу `threadKey(chatId, rootId)`;
+  `AppState.activeThread` — открытая панель. Переключение чата, workspace и logout
+  закрывают/очищают треды.
+- `openThread` загружает первую страницу ответов; корень остаётся в основной ленте,
+  ответы живут только в thread slice. `loadMoreThread` листает назад по `before_seq`,
+  `retryThread` повторяет первую страницу.
+- `sendThreadReply` использует тот же optimistic outbox/`Idempotency-Key`/seq, что и
+  обычная отправка: строка видна как «Отправляется…», серверный id/seq появляется
+  только из `201`; ошибка сохраняет текст и предлагает retry/restore.
+- WS `message.created` с `thread_root_id` маршрутизируется в открытый thread slice и
+  инкрементирует кэш корня (`reply_count`, последний автор/время/excerpt ≤ 160 code
+  points). Ответы никогда не попадают в `.messages`: фильтр есть на загрузке,
+  catch-up, WS и в рендере. `last_seq` чата учитывает ответы (subscribe/ack), а
+  счётчик summary защищён от replay-двойного инкремента.
+- Состояния: loading/empty/ready/error, ошибка «показать ещё» без потери строк,
+  retry, `THREAD_ROOT_DELETED`/`THREAD_ROOT_NOT_FOUND` → панель с объяснением и
+  выключенным композером; удалённые ответы фильтруются.
+
+### UI
+
+- `ThreadLink` под корнем: счётчик с русским склонением, превью последнего ответа и
+  время; кликабельная ссылка открывает панель. Для пустого треда действие «В тред»
+  в hover-actions (на touch — всегда видимо).
+- `ThreadPanel`: `role="dialog"`, `aria-labelledby`, focus trap по Tab, `Esc`,
+  возврат фокуса на кнопку-триггер, `Назад` на мобильном sheet. Контент: корень,
+  ответы (с quote-reply навигацией), «Более ранние ответы», пустое состояние,
+  ошибка с retry, `OutgoingRow` с retry/restore.
+- `ThreadComposer` — только текст (вложения/стикеры вне среза): label, Enter/Shift+
+  Enter, счётчик длины, блокировки offline/rate-limit/недоступный тред.
+- Desktop: правая колонка (`chat--thread-open`), `≤900px` — full-screen sheet,
+  `390/768/1440` без горизонтального скролла; light/dark переменные, `focus-visible`.
+- E2EE: `ThreadLink`/действие `disabled` с объяснением, `openThread` возвращает
+  `false`, plaintext корня/ответов не рендерится.
+
+### MSW и тесты
+
+- `GET /chats/{id}/messages` валидирует `thread_root_id` (UUID, same-chat, depth 1,
+  deleted, E2EE), фильтрует main/thread и считает `thread_summary`; `POST` повторяет
+  те же 422-коды и пишет `thread_root_id` в сообщение/WS.
+- `src/components/Threads.test.tsx` (11): открытие пустого треда, отправка и счётчик,
+  пагинация `before_seq`, live WS и обновление счётчика, отсутствие двойного счёта
+  REST+WS, Esc/close/focus trap/return, mobile `Назад`, ошибка загрузки + retry,
+  ошибка «показать ещё» + retry, root deleted 422, E2EE disabled, axe.
+
+Полный `npm run check` — **769** тестов (73 файла), `contract:check` —
+**47 paths / 55 operations / 87 schemas**, `vite build` зелёный. Отчёт:
+[`D1-FE3-REPORT.md`](D1-FE3-REPORT.md).

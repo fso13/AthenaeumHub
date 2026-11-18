@@ -1535,6 +1535,9 @@ paths:
       description: >
         Без after_seq — последняя страница (seq DESC); с after_seq — вперёд (seq ASC).
         Клиент сортирует по seq и не полагается на created_at.
+        Без `thread_root_id` возвращается только основная лента (`thread_root_id = null`):
+        ответы тредов в неё не попадают. С `thread_root_id` — ответы одного треда,
+        упорядоченные по seq с той же cursor/limit-семантикой.
       parameters:
         - name: after_seq
           in: query
@@ -1545,6 +1548,13 @@ paths:
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: thread_root_id
+          in: query
+          description: >
+            Корень треда. Должен существовать в этом чате и сам не быть ответом
+            (глубина 1). Для E2EE-чата треды не поддерживаются → `422
+            THREADS_E2EE_UNSUPPORTED`.
+          schema: { type: string, format: uuid }
       responses:
         "200":
           description: Страница сообщений
@@ -1558,11 +1568,18 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
 
     post:
       tags: [messages]
       operationId: sendMessage
       summary: Отправить сообщение; managed — text/attachments, E2EE — только envelopes
+      description: >
+        С `thread_root_id` создаётся ответ в тред: корень должен существовать в том же
+        чате, сам не быть ответом (максимальная глубина 1) и не быть удалённым; тот же
+        `Idempotency-Key`. В E2EE-чате треды не поддерживаются → `422
+        THREADS_E2EE_UNSUPPORTED`. Ответ на ответ → `422 THREAD_NESTING_UNSUPPORTED`.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -1728,6 +1745,8 @@ components:
         E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND,
         MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN,
         LAST_OWNER.
+        D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND,
+        THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED.
       properties:
         code: { type: string }
         message: { type: string }
@@ -2569,6 +2588,23 @@ components:
         sender_display_name: { type: [string, "null"] }
         text: { type: [string, "null"] }
         reply_to_id: { type: [string, "null"], format: uuid }
+        thread_root_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            Корень треда; null — обычное сообщение канала. У ответа — id корня,
+            глубина всегда 1. В E2EE-чате всегда null.
+        thread_summary:
+          type: [object, "null"]
+          description: >
+            Только для корня треда; считается сервером одним запросом. У корня без
+            ответов — объект с `reply_count = 0`. Managed-only: для E2EE `null`,
+            plaintext-превью не раскрывается.
+          properties:
+            reply_count: { type: integer, minimum: 0 }
+            last_reply_at: { type: [string, "null"], format: date-time }
+            last_reply_author_id: { type: [string, "null"], format: uuid }
+            last_reply_excerpt: { type: [string, "null"], maxLength: 160 }
         created_at: { type: string, format: date-time }
         edited_at: { type: [string, "null"], format: date-time }
         deleted_at: { type: [string, "null"], format: date-time }
@@ -2592,15 +2628,23 @@ components:
       type: object
       description: >
         Managed: text/sticker/attachments. E2EE: только `envelopes[]`; `text`,
-        `sticker_id`, `attachment_ids`, `reply_to_id` запрещены (422
-        E2EE_PLAINTEXT_FORBIDDEN). Managed-запрос с `envelopes` → 422
-        ENVELOPES_NOT_ALLOWED; при выключенном флаге E2EE → 409 E2EE_DISABLED.
+        `sticker_id`, `attachment_ids`, `reply_to_id`, `thread_root_id` запрещены (422
+        E2EE_PLAINTEXT_FORBIDDEN / THREADS_E2EE_UNSUPPORTED). Managed-запрос с
+        `envelopes` → 422 ENVELOPES_NOT_ALLOWED; при выключенном флаге E2EE → 409
+        E2EE_DISABLED.
       required: [client_message_id, type]
       properties:
         client_message_id: { type: string, format: uuid }
         type: { type: string, enum: [TEXT, STICKER] }
         text: { type: [string, "null"], maxLength: 8000 }
         reply_to_id: { type: [string, "null"], format: uuid }
+        thread_root_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            Ответ в тред: id корня в том же чате. Запрещён для E2EE (422
+            THREADS_E2EE_UNSUPPORTED); ответ на ответ запрещён (422
+            THREAD_NESTING_UNSUPPORTED).
         sticker_id: { type: [string, "null"], format: uuid }
         attachment_ids:
           type: array

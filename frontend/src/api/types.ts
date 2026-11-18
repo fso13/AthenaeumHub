@@ -9,6 +9,8 @@ export type Session = components['schemas']['Session'];
 export type ChatSummary = components['schemas']['ChatSummary'];
 export type ChatList = components['schemas']['ChatList'];
 export type ApiMessage = components['schemas']['Message'];
+/** D1-FE3: server-computed reply summary; present on managed thread roots only. */
+export type ThreadSummary = NonNullable<ApiMessage['thread_summary']>;
 export type MessageCreateBody = components['schemas']['MessageCreate'];
 export type MessagePage = components['schemas']['MessagePage'];
 export type MessagePageMeta = MessagePage['page'];

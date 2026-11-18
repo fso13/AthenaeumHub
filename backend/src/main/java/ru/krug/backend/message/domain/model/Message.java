@@ -27,6 +27,8 @@ public final class Message {
     private final MessageBody body;
     private final UUID stickerId;
     private final UUID replyToId;
+    /** Root of a flat thread; null for a main-feed message. Depth is always one. */
+    private final UUID threadRootId;
     private final UUID clientMessageId;
     private final Instant createdAt;
     private final Instant editedAt;
@@ -36,8 +38,8 @@ public final class Message {
     private Message(UUID id, UUID workspaceId, UUID chatId, long seq, UUID senderId,
                     UUID senderDeviceId, String senderDisplayName, Type type,
                     CryptoScheme cryptoScheme, MessageBody body, UUID stickerId,
-                    UUID replyToId, UUID clientMessageId, Instant createdAt, Instant editedAt,
-                    Instant deletedAt, int version) {
+                    UUID replyToId, UUID threadRootId, UUID clientMessageId, Instant createdAt,
+                    Instant editedAt, Instant deletedAt, int version) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
         this.chatId = Objects.requireNonNull(chatId, "chatId");
@@ -53,6 +55,10 @@ public final class Message {
         this.body = body;
         this.stickerId = stickerId;
         this.replyToId = replyToId;
+        if (threadRootId != null && threadRootId.equals(id)) {
+            throw new IllegalArgumentException("message cannot be its own thread root");
+        }
+        this.threadRootId = threadRootId;
         this.clientMessageId = clientMessageId;
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt");
         this.editedAt = editedAt;
@@ -65,18 +71,35 @@ public final class Message {
                                      UUID senderId, UUID senderDeviceId, String senderDisplayName,
                                      MessageBody body, UUID replyToId, UUID clientMessageId,
                                      Instant createdAt) {
+        return createText(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, body, replyToId, null, clientMessageId, createdAt);
+    }
+
+    public static Message createText(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                     UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                     MessageBody body, UUID replyToId, UUID threadRootId,
+                                     UUID clientMessageId, Instant createdAt) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, Type.TEXT, CryptoScheme.MANAGED, body, null, replyToId,
-                clientMessageId, createdAt, null, null, 1);
+                threadRootId, clientMessageId, createdAt, null, null, 1);
     }
 
     public static Message createSticker(UUID id, UUID workspaceId, UUID chatId, long seq,
                                         UUID senderId, UUID senderDeviceId,
                                         String senderDisplayName, UUID stickerId, UUID replyToId,
                                         UUID clientMessageId, Instant createdAt) {
+        return createSticker(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, stickerId, replyToId, null, clientMessageId, createdAt);
+    }
+
+    public static Message createSticker(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                        UUID senderId, UUID senderDeviceId,
+                                        String senderDisplayName, UUID stickerId, UUID replyToId,
+                                        UUID threadRootId, UUID clientMessageId,
+                                        Instant createdAt) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, Type.STICKER, CryptoScheme.MANAGED, null, stickerId,
-                replyToId, clientMessageId, createdAt, null, null, 1);
+                replyToId, threadRootId, clientMessageId, createdAt, null, null, 1);
     }
 
     /**
@@ -89,7 +112,7 @@ public final class Message {
                                      Instant createdAt) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, Type.TEXT, CryptoScheme.E2EE_PAIRWISE, null, null, null,
-                clientMessageId, createdAt, null, null, 1);
+                null, clientMessageId, createdAt, null, null, 1);
     }
 
     public static Message reconstitute(UUID id, UUID workspaceId, UUID chatId, long seq,
@@ -98,8 +121,19 @@ public final class Message {
                                        UUID stickerId, UUID replyToId, UUID clientMessageId,
                                        Instant createdAt, Instant editedAt, Instant deletedAt,
                                        int version) {
+        return reconstitute(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, type, cryptoScheme, body, stickerId, replyToId, null,
+                clientMessageId, createdAt, editedAt, deletedAt, version);
+    }
+
+    public static Message reconstitute(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                       UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                       Type type, CryptoScheme cryptoScheme, MessageBody body,
+                                       UUID stickerId, UUID replyToId, UUID threadRootId,
+                                       UUID clientMessageId, Instant createdAt, Instant editedAt,
+                                       Instant deletedAt, int version) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
-                senderDisplayName, type, cryptoScheme, body, stickerId, replyToId,
+                senderDisplayName, type, cryptoScheme, body, stickerId, replyToId, threadRootId,
                 clientMessageId, createdAt, editedAt, deletedAt, version);
     }
 
@@ -116,6 +150,9 @@ public final class Message {
             }
             if (replyToId != null) {
                 throw new IllegalArgumentException("E2EE message must not have reply_to_id");
+            }
+            if (threadRootId != null) {
+                throw new IllegalArgumentException("E2EE message must not have thread_root_id");
             }
             if (senderId == null || senderDeviceId == null) {
                 throw new IllegalArgumentException("E2EE message requires sender and device");
@@ -192,6 +229,10 @@ public final class Message {
 
     public UUID replyToId() {
         return replyToId;
+    }
+
+    public UUID threadRootId() {
+        return threadRootId;
     }
 
     public UUID clientMessageId() {

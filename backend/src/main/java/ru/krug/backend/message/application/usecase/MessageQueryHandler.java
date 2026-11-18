@@ -19,8 +19,10 @@ import ru.krug.backend.message.application.port.MessageDeviceDirectoryPort;
 import ru.krug.backend.message.application.service.EnvelopeWireMapper;
 import ru.krug.backend.message.domain.model.Message;
 import ru.krug.backend.message.domain.model.MessageEnvelope;
+import ru.krug.backend.message.domain.model.ThreadSummary;
 import ru.krug.backend.message.domain.repository.MessageEnvelopeRepository;
 import ru.krug.backend.message.domain.repository.MessageRepository;
+import ru.krug.backend.message.domain.service.MessageThreadPolicy;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.E2eeSettingsPort;
 import ru.krug.backend.shared.application.port.TenantContext;
@@ -94,9 +96,20 @@ public class MessageQueryHandler {
                     "E2EE message reads are not enabled in this slice",
                     Map.of("flag", "e2ee.enabled"));
         }
+        if (query.threadRootId() != null) {
+            // D1 threads are managed-only: E2EE has no server-visible thread metadata.
+            MessageThreadPolicy.ensureThreadsSupported(e2ee);
+            Message root = messageRepository.findById(query.principal().workspaceId(),
+                    query.threadRootId()).orElse(null);
+            MessageThreadPolicy.ensureThreadRoot(query.chatId(), query.threadRootId(), root);
+        }
 
-        List<Message> rows = messageRepository.findPage(query.principal().workspaceId(),
-                query.chatId(), query.afterSeq(), query.beforeSeq(), limit + 1);
+        List<Message> rows = query.threadRootId() == null
+                ? messageRepository.findMainPage(query.principal().workspaceId(),
+                        query.chatId(), query.afterSeq(), query.beforeSeq(), limit + 1)
+                : messageRepository.findThreadPage(query.principal().workspaceId(),
+                        query.chatId(), query.threadRootId(), query.afterSeq(),
+                        query.beforeSeq(), limit + 1);
         boolean hasMore = rows.size() > limit;
         List<MessageView> items = enrich(query.principal().workspaceId(),
                 query.principal().userId(),
@@ -106,6 +119,8 @@ public class MessageQueryHandler {
         if (e2ee) {
             items = withCrypto(query.principal().workspaceId(),
                     query.principal().userId(), query.principal().deviceId(), items);
+        } else if (query.threadRootId() == null) {
+            items = withThreadSummaries(query.principal().workspaceId(), query.chatId(), items);
         }
         String nextCursor = null;
         if (hasMore && !items.isEmpty()) {
@@ -222,13 +237,40 @@ public class MessageQueryHandler {
                 .toList();
     }
 
+    /**
+     * D1-BE1: one windowed summary query per page. Main-feed items are roots by definition,
+     * so only their ids are passed; replies never receive a summary. E2EE never reaches
+     * this method, and the summary itself is managed-only.
+     */
+    private List<MessageView> withThreadSummaries(UUID workspaceId, UUID chatId,
+                                                  List<MessageView> views) {
+        List<UUID> rootIds = views.stream()
+                .filter(view -> view.threadRootId() == null)
+                .map(MessageView::id)
+                .distinct()
+                .toList();
+        if (rootIds.isEmpty()) {
+            return views;
+        }
+        Map<UUID, ThreadSummary> summaries = messageRepository.findThreadSummaries(
+                workspaceId, chatId, rootIds);
+        // Every managed root carries a summary, including reply_count=0: the client can
+        // render "create thread" without a second request. Replies keep null.
+        return views.stream()
+                .map(view -> view.threadRootId() == null
+                        ? view.withThreadSummary(summaries.getOrDefault(view.id(),
+                                ThreadSummary.empty(view.id())))
+                        : view)
+                .toList();
+    }
+
     private ListMessagesQuery scope(ListMessagesQuery query) {
         Principal scoped = scope(query.principal(), query.chatId());
         if (scoped.equals(query.principal())) {
             return query;
         }
         return new ListMessagesQuery(scoped, query.chatId(), query.afterSeq(), query.beforeSeq(),
-                query.limit());
+                query.limit(), query.threadRootId());
     }
 
     private Principal scope(Principal principal, UUID chatId) {

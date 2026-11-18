@@ -7,7 +7,8 @@ import { isStickerMessage, stickerOf } from '../stickers/model';
 import { AttachmentList } from './AttachmentCard';
 import { Avatar } from './Avatar';
 import { ErrorDetails } from './ErrorDetails';
-import { AlertIcon, ClockIcon, ReplyIcon, RetryIcon } from './Icons';
+import { AlertIcon, ClockIcon, ReplyIcon, RetryIcon, ThreadIcon } from './Icons';
+import { ThreadLink } from './ThreadLink';
 
 const UNKNOWN_AUTHOR = () => t('chat.unknownAuthor');
 
@@ -25,7 +26,16 @@ interface MessageRowProps {
    * never be rendered here, even before decryption or when init failed.
    */
   e2eeChat?: boolean;
-  onReply: (message: ApiMessage) => void;
+  /** D1-FE3: flat threads are managed-only; `false` renders an honest disabled action. */
+  threadsAvailable?: boolean;
+  /** Explanation shown on the disabled thread action (E2EE chats). */
+  threadDisabledReason?: string | null;
+  /** Resolved display name of `thread_summary.last_reply_author_id`. */
+  threadAuthorName?: string | null;
+  onOpenThread?: (message: ApiMessage) => void;
+  /** D1-FE3: replies inside a thread do not offer quote-reply. */
+  allowReply?: boolean;
+  onReply?: (message: ApiMessage) => void;
   onJumpTo: (messageId: string) => void;
 }
 
@@ -49,6 +59,11 @@ export function MessageRow({
   e2ee,
   replyText,
   e2eeChat = false,
+  threadsAvailable = false,
+  threadDisabledReason = null,
+  threadAuthorName = null,
+  onOpenThread,
+  allowReply = true,
   onReply,
   onJumpTo,
 }: MessageRowProps) {
@@ -80,6 +95,68 @@ export function MessageRow({
   const quoteText = e2eeChat
     ? (replyText ?? (replyTo?.deleted_at ? t('chat.deletedMessage') : t('chat.replyUnavailable')))
     : (replyText ?? messagePreview(replyTo));
+
+  // D1-FE3: only a main-feed root can start/open a thread (depth is one).
+  const canThread = !deleted && !message.thread_root_id;
+  const threadSummary = message.thread_summary ?? null;
+  const threadReplyCount = threadSummary?.reply_count ?? 0;
+  const threadLink =
+    canThread &&
+    threadsAvailable &&
+    threadSummary !== null &&
+    threadReplyCount > 0 &&
+    onOpenThread ? (
+      <ThreadLink
+        summary={threadSummary}
+        authorName={threadAuthorName}
+        onOpen={() => onOpenThread(message)}
+      />
+    ) : null;
+  const replyAction =
+    !deleted && allowReply && onReply ? (
+      <button
+        type="button"
+        className="message-action"
+        onClick={() => onReply(message)}
+        aria-label={`${t('chat.reply')}: ${author}`}
+        title={t('chat.reply')}
+      >
+        <ReplyIcon aria-hidden="true" />
+        <span>{t('chat.reply')}</span>
+      </button>
+    ) : null;
+  // With replies the always-visible `ThreadLink` is the single entry point;
+  // the hover action only creates a still-empty thread (no duplicate control
+  // with the same accessible name).
+  const threadAction =
+    canThread && threadsAvailable && onOpenThread && threadReplyCount === 0 ? (
+      <button
+        type="button"
+        className="message-action"
+        onClick={() => onOpenThread(message)}
+        aria-label={
+          threadReplyCount > 0
+            ? t('thread.openLabel', { count: threadReplyCount })
+            : t('thread.startLabel', { author })
+        }
+        title={threadReplyCount > 0 ? t('thread.open') : t('thread.start')}
+      >
+        <ThreadIcon aria-hidden="true" />
+        <span>{threadReplyCount > 0 ? t('thread.open') : t('thread.start')}</span>
+      </button>
+    ) : canThread && !threadsAvailable && threadDisabledReason ? (
+      <button
+        type="button"
+        className="message-action"
+        disabled
+        aria-label={threadDisabledReason}
+        title={threadDisabledReason}
+      >
+        <ThreadIcon aria-hidden="true" />
+        <span>{t('thread.disabled')}</span>
+      </button>
+    ) : null;
+  const hasActions = Boolean(replyAction || threadAction);
 
   const quote = message.reply_to_id ? (
     replyTo ? (
@@ -139,18 +216,11 @@ export function MessageRow({
               <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
             </div>
           </div>
-          {!deleted ? (
+          {threadLink}
+          {hasActions ? (
             <div className="message-actions">
-              <button
-                type="button"
-                className="message-action"
-                onClick={() => onReply(message)}
-                aria-label={`${t('chat.reply')}: ${author}`}
-                title={t('chat.reply')}
-              >
-                <ReplyIcon aria-hidden="true" />
-                <span>{t('chat.reply')}</span>
-              </button>
+              {replyAction}
+              {threadAction}
             </div>
           ) : null}
         </div>
@@ -183,18 +253,11 @@ export function MessageRow({
             <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
           </div>
         </div>
-        {!deleted ? (
+        {threadLink}
+        {hasActions ? (
           <div className="message-actions">
-            <button
-              type="button"
-              className="message-action"
-              onClick={() => onReply(message)}
-              aria-label={`${t('chat.reply')}: ${author}`}
-              title={t('chat.reply')}
-            >
-              <ReplyIcon aria-hidden="true" />
-              <span>{t('chat.reply')}</span>
-            </button>
+            {replyAction}
+            {threadAction}
           </div>
         ) : null}
       </div>

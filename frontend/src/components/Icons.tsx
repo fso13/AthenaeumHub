@@ -60,6 +60,17 @@ export function ReplyIcon(props: IconProps) {
   );
 }
 
+/** D1-FE3: flat thread branch (one root, depth 1). */
+export function ThreadIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M5 4v7a3 3 0 0 0 3 3h7" />
+      <path d="m12 11 3 3-3 3" />
+      <path d="M9 20h4" />
+    </IconBase>
+  );
+}
+
 export function CloseIcon(props: IconProps) {
   return (
     <IconBase {...props}>

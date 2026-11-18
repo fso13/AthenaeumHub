@@ -111,8 +111,8 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
         return new MessageSnapshot(message.workspaceId(), message.id(), message.chatId(),
                 message.seq(), message.type().name(), message.senderId(),
                 message.senderDisplayName(), message.body() == null ? null
-                        : message.body().value(), message.replyToId(), message.createdAt(),
-                message.editedAt(), message.deletedAt(), message.version(),
+                        : message.body().value(), message.replyToId(), message.threadRootId(),
+                message.createdAt(), message.editedAt(), message.deletedAt(), message.version(),
                 message.clientMessageId(), crypto, message.stickerId(),
                 sticker == null ? null : new StickerSnapshot(sticker.id(), sticker.packId(),
                         sticker.alt(), sticker.url(), sticker.favorite()),

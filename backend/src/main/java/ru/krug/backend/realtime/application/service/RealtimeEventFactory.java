@@ -45,6 +45,7 @@ public final class RealtimeEventFactory {
         payload.put("sender_display_name", message.senderDisplayName());
         payload.put("text", message.text());
         payload.put("reply_to_id", message.replyToId());
+        payload.put("thread_root_id", message.threadRootId());
         payload.put("created_at", message.createdAt());
         payload.put("edited_at", message.editedAt());
         payload.put("deleted_at", message.deletedAt());

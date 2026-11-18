@@ -140,6 +140,36 @@ class MigrationsIT extends IntegrationTestBase {
     }
 
     @Test
+    void createsThreadColumnIndexConstraintAndTrigger() {
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'message' AND table_name = 'messages'
+                   AND column_name = 'thread_root_id'
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_constraint
+                 WHERE conrelid = 'message.messages'::regclass
+                   AND conname IN ('ck_messages_thread_no_self',
+                                   'ck_messages_e2ee_no_thread_root')
+                """, Integer.class)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = 'message.messages'::regclass
+                   AND tgname = 'trg_messages_thread_root' AND NOT tgisinternal
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT indexdef FROM pg_indexes
+                 WHERE schemaname = 'message' AND indexname = 'ix_messages_chat_thread_seq'
+                """, String.class)).contains("(chat_id, thread_root_id, seq)");
+        // The partitioned index is cloned onto every current partition.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'message' AND tablename LIKE 'messages\\_2%'
+                   AND indexdef LIKE '%(chat_id, thread_root_id, seq)%'
+                """, Integer.class)).isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
     void createsAppAndMigratorRolesAndPartitionFunction() {
         Integer roles = jdbc.queryForObject("""
                 SELECT count(*) FROM pg_roles WHERE rolname IN ('krug_migrator', 'krug_app')

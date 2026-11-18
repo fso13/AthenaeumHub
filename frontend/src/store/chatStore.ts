@@ -19,6 +19,7 @@ import type {
   Session,
   StickerRef,
   SyncResponse,
+  ThreadSummary,
   WorkspaceLimits,
   WorkspaceMember,
   WorkspaceMemberPage,
@@ -108,6 +109,11 @@ export interface OutgoingMessage {
   control?: boolean;
   retryOfClientMessageId?: string | null;
   coverageWarning?: 'PEER_DEVICE_UNCOVERED' | 'SELF_DEVICE_UNCOVERED' | null;
+  /**
+   * D1-FE3: root of the flat thread this outgoing reply belongs to. `null` /
+   * `undefined` means the main feed. The row lives in the thread outbox.
+   */
+  threadRootId?: string | null;
 }
 
 /** Decrypted view for one E2EE message; keyed by `ApiMessage.id`. */
@@ -135,6 +141,60 @@ export interface ChatSlice {
   receipts: Record<string, number>;
   /** E7-F5: decrypted/control/unavailable views, keyed by server message id. */
   e2ee: Record<string, E2eeMessageView>;
+}
+
+/** D1-FE3: why a thread panel cannot load or accept replies. */
+export type ThreadUnavailable = 'deleted' | 'not_found' | null;
+
+/**
+ * D1-FE3: replies of one flat thread (max depth 1), keyed by
+ * `${chatId}:${rootId}`. Roots stay in `ChatSlice.messages`; replies never do.
+ */
+export interface ThreadSlice {
+  chatId: string;
+  rootId: string;
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  replies: ApiMessage[];
+  outbox: OutgoingMessage[];
+  hasMore: boolean;
+  beforeSeq: number | null;
+  loadMoreStatus: 'idle' | 'loading' | 'error';
+  loadMoreError: ApiError | null;
+  error: ApiError | null;
+  /**
+   * Server said the root is deleted/missing (`THREAD_ROOT_DELETED` /
+   * `THREAD_ROOT_NOT_FOUND` / `404`). Kept separate from `status` so already
+   * loaded replies stay visible while the composer is honestly disabled.
+   */
+  unavailable: ThreadUnavailable;
+  /** Max seq observed in this thread; dedupes replay/live/REST deliveries. */
+  lastSeq: number;
+}
+
+export interface ActiveThread {
+  chatId: string;
+  rootId: string;
+}
+
+export function threadKey(chatId: string, rootId: string): string {
+  return `${chatId}:${rootId}`;
+}
+
+export function createEmptyThreadSlice(chatId: string, rootId: string): ThreadSlice {
+  return {
+    chatId,
+    rootId,
+    status: 'idle',
+    replies: [],
+    outbox: [],
+    hasMore: false,
+    beforeSeq: null,
+    loadMoreStatus: 'idle',
+    loadMoreError: null,
+    error: null,
+    unavailable: null,
+    lastSeq: 0,
+  };
 }
 
 export interface TypingEntry {
@@ -262,6 +322,10 @@ export interface AppState {
   chats: ChatSummary[];
   activeChatId: string | null;
   slices: Record<string, ChatSlice>;
+  /** D1-FE3: cached flat-thread replies keyed by `threadKey(chatId, rootId)`. */
+  threads: Record<string, ThreadSlice>;
+  /** D1-FE3: currently open thread panel, `null` when closed. */
+  activeThread: ActiveThread | null;
   online: boolean;
   syncStatus: 'idle' | 'syncing' | 'error';
   syncError: ApiError | null;
@@ -488,6 +552,8 @@ export class ChatStore {
       chats: [],
       activeChatId: null,
       slices: {},
+      threads: {},
+      activeThread: null,
       online: typeof navigator === 'undefined' ? true : navigator.onLine,
       syncStatus: 'idle',
       syncError: null,
@@ -591,6 +657,22 @@ export class ChatStore {
     });
   }
 
+  /** D1-FE3: patch one cached thread without touching the main slice. */
+  private patchThread(key: string, patch: Partial<ThreadSlice>): void {
+    const current = this.state.threads[key];
+    if (!current) return;
+    this.patch({
+      threads: {
+        ...this.state.threads,
+        [key]: { ...current, ...patch },
+      },
+    });
+  }
+
+  private threadFor(chatId: string, rootId: string): ThreadSlice | null {
+    return this.state.threads[threadKey(chatId, rootId)] ?? null;
+  }
+
   private handleRateLimit(error: ApiError): void {
     if (error.status !== 429) return;
     const seconds = error.retryAfterSeconds ?? 5;
@@ -612,6 +694,19 @@ export class ChatStore {
   private updateChatSummary(chatId: string, patch: Partial<ChatSummary>): void {
     this.patch({
       chats: this.state.chats.map((chat) => (chat.id === chatId ? { ...chat, ...patch } : chat)),
+    });
+  }
+
+  /**
+   * D1-FE3: a late REST `201` must not move the chat tail backwards when a live
+   * frame with a higher seq (e.g. a thread reply) was already applied.
+   */
+  private updateChatTail(chatId: string, message: ApiMessage): void {
+    const current = this.chatLastSeq(chatId);
+    this.updateChatSummary(chatId, {
+      last_seq: Math.max(current, message.seq),
+      ...(message.seq >= current ? { last_message_at: message.created_at } : {}),
+      unread_count: 0,
     });
   }
 
@@ -726,6 +821,8 @@ export class ChatStore {
           activeWorkspace: null,
           chats: [],
           slices: {},
+          threads: {},
+          activeThread: null,
           activeChatId: null,
         });
         return;
@@ -814,6 +911,8 @@ export class ChatStore {
       onboardingRequired: false,
       chats: [],
       slices: {},
+      threads: {},
+      activeThread: null,
       activeChatId: null,
       syncStatus: 'idle',
       syncError: null,
@@ -1519,6 +1618,8 @@ export class ChatStore {
       chats: [],
       activeChatId: null,
       slices: {},
+      threads: {},
+      activeThread: null,
       syncStatus: 'idle',
       syncError: null,
       lastSyncedAt: null,
@@ -1544,7 +1645,11 @@ export class ChatStore {
 
   async setActiveChat(chatId: string): Promise<void> {
     if (!this.state.slices[chatId]) return;
-    this.patch({ activeChatId: chatId });
+    // D1-FE3: a thread belongs to one chat; switching chats closes the panel.
+    this.patch({
+      activeChatId: chatId,
+      ...(this.state.activeThread?.chatId === chatId ? {} : { activeThread: null }),
+    });
     this.updateRealtimeSubscriptions();
     const slice = this.state.slices[chatId];
     if (slice && (slice.status === 'idle' || slice.status === 'error')) {
@@ -1571,13 +1676,18 @@ export class ChatStore {
       });
       const current = this.state.slices[chatId];
       if (!current) return;
-      const messages = mergeMessages(current.messages, page.items);
+      // D1-FE3: the main feed is roots only. The server already filters
+      // replies; the extra filter keeps replay/REST races out of the channel.
+      const roots = page.items.filter((message) => !message.thread_root_id);
+      const messages = mergeMessages(current.messages, roots);
       this.patchSlice(chatId, {
         status: 'ready',
         messages,
         hasMore: page.page.has_more,
         beforeSeq: minSeq(messages),
-        lastSeq: maxSeq(messages),
+        // `ChatSummary.last_seq` includes thread replies, which are not in
+        // `messages`; subscribe/ack must start after the true chat tail.
+        lastSeq: Math.max(current.lastSeq, maxSeq(messages), this.chatLastSeq(chatId)),
         error: null,
         loadMoreStatus: 'idle',
         loadMoreError: null,
@@ -1625,12 +1735,14 @@ export class ChatStore {
       });
       const current = this.state.slices[chatId];
       if (!current) return;
-      const messages = mergeMessages(current.messages, page.items);
+      const roots = page.items.filter((message) => !message.thread_root_id);
+      const messages = mergeMessages(current.messages, roots);
       this.patchSlice(chatId, {
         messages,
         hasMore: page.page.has_more,
         beforeSeq: minSeq(messages),
-        lastSeq: maxSeq(messages),
+        // Older roots never move the live cursor backwards.
+        lastSeq: Math.max(current.lastSeq, maxSeq(messages)),
         loadMoreStatus: 'idle',
         loadMoreError: null,
       });
@@ -1642,6 +1754,309 @@ export class ChatStore {
         loadMoreError: apiError,
       });
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* D1-FE3: flat threads (managed only)                                 */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Threads are a managed-only feature: E2EE replies would require plaintext
+   * metadata the server must never see. The UI renders an honest disabled
+   * affordance instead of opening a panel.
+   */
+  threadsAvailable(chatId: string): boolean {
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    if (!chat || chat.security_mode === 'E2EE') return false;
+    return !this.isE2eeChat(chatId);
+  }
+
+  /**
+   * Opens the thread panel and loads its first page. The root stays in the
+   * main feed; replies are stored only in the thread slice, so opening the
+   * panel never duplicates a row in the channel.
+   */
+  async openThread(chatId: string, rootId: string): Promise<boolean> {
+    if (!this.threadsAvailable(chatId)) return false;
+    const slice = this.state.slices[chatId];
+    if (!slice) return false;
+    const root = slice.messages.find((message) => message.id === rootId);
+    // Depth is one: a reply can never be a thread root (contract 422).
+    if (root?.thread_root_id) return false;
+
+    const key = threadKey(chatId, rootId);
+    if (!this.state.threads[key]) {
+      this.patch({
+        threads: {
+          ...this.state.threads,
+          [key]: createEmptyThreadSlice(chatId, rootId),
+        },
+      });
+    }
+    if (this.state.activeThread?.chatId === chatId && this.state.activeThread.rootId === rootId) {
+      return true;
+    }
+    this.patch({ activeThread: { chatId, rootId } });
+    await this.loadThread(chatId, rootId);
+    return true;
+  }
+
+  closeThread(): void {
+    if (this.state.activeThread === null) return;
+    this.patch({ activeThread: null });
+  }
+
+  /** Loads (or retries) the newest page of thread replies. */
+  async loadThread(chatId: string, rootId: string, force = false): Promise<void> {
+    if (!this.threadsAvailable(chatId)) return;
+    const key = threadKey(chatId, rootId);
+    const thread = this.state.threads[key];
+    if (!thread) return;
+    if (!force && (thread.status === 'loading' || thread.status === 'ready')) return;
+
+    this.patchThread(key, { status: 'loading', error: null, unavailable: null });
+    try {
+      const page = await this.api.listMessages(chatId, {
+        threadRootId: rootId,
+        limit: this.config.historyPageSize,
+      });
+      const current = this.state.threads[key];
+      if (!current) return;
+      const replies = mergeMessages(
+        [],
+        page.items.filter((message) => message.thread_root_id === rootId),
+      );
+      this.patchThread(key, {
+        status: 'ready',
+        replies,
+        hasMore: page.page.has_more,
+        beforeSeq: minSeq(replies),
+        lastSeq: maxSeq(replies),
+        error: null,
+        unavailable: null,
+        loadMoreStatus: 'idle',
+        loadMoreError: null,
+      });
+      // Defence in depth: if a replay ever merged a reply into the channel,
+      // remove it now that the server confirmed it belongs to this thread.
+      this.removeRepliesFromMain(chatId, replies);
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      const unavailable = threadUnavailableFromError(apiError);
+      this.patchThread(key, {
+        status: 'error',
+        error: apiError,
+        unavailable,
+      });
+    }
+  }
+
+  async retryThread(chatId: string, rootId: string): Promise<void> {
+    const thread = this.threadFor(chatId, rootId);
+    if (!thread) return;
+    this.patchThread(threadKey(chatId, rootId), {
+      status: 'idle',
+      error: null,
+      unavailable: null,
+    });
+    await this.loadThread(chatId, rootId, true);
+  }
+
+  /** Older replies are prepended; the server pages by `before_seq`. */
+  async loadMoreThread(chatId: string, rootId: string): Promise<void> {
+    const key = threadKey(chatId, rootId);
+    const thread = this.state.threads[key];
+    if (
+      !thread ||
+      thread.status !== 'ready' ||
+      !thread.hasMore ||
+      thread.loadMoreStatus === 'loading'
+    ) {
+      return;
+    }
+    if (thread.beforeSeq === null) {
+      this.patchThread(key, { hasMore: false });
+      return;
+    }
+
+    this.patchThread(key, { loadMoreStatus: 'loading', loadMoreError: null });
+    try {
+      const page = await this.api.listMessages(chatId, {
+        threadRootId: rootId,
+        beforeSeq: thread.beforeSeq,
+        limit: this.config.historyPageSize,
+      });
+      const current = this.state.threads[key];
+      if (!current) return;
+      const replies = mergeMessages(
+        current.replies,
+        page.items.filter((message) => message.thread_root_id === rootId),
+      );
+      this.patchThread(key, {
+        replies,
+        hasMore: page.page.has_more,
+        beforeSeq: minSeq(replies),
+        lastSeq: Math.max(current.lastSeq, maxSeq(replies)),
+        loadMoreStatus: 'idle',
+        loadMoreError: null,
+      });
+      this.removeRepliesFromMain(chatId, replies);
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patchThread(key, {
+        loadMoreStatus: 'error',
+        loadMoreError: apiError,
+      });
+    }
+  }
+
+  /**
+   * Sends a reply through the same optimistic outbox/idempotency pipeline as a
+   * channel message. The row is rendered in the thread panel only; the server
+   * assigns `seq`/`id` (no invented server fields).
+   */
+  async sendThreadReply(chatId: string, rootId: string, text: string): Promise<boolean> {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length > MAX_TEXT_LENGTH) return false;
+    if (!this.threadsAvailable(chatId)) return false;
+    if (!this.state.online || this.isRateLimited()) return false;
+    // Threads are managed-only; a temporarily unready E2EE device state must
+    // not block a managed chat's thread composer.
+
+    const key = threadKey(chatId, rootId);
+    const thread = this.state.threads[key];
+    if (!thread || thread.status !== 'ready' || thread.unavailable !== null) return false;
+
+    const root = this.state.slices[chatId]?.messages.find((message) => message.id === rootId);
+    if (root?.deleted_at) {
+      this.patchThread(key, { unavailable: 'deleted' });
+      return false;
+    }
+
+    const outgoing: OutgoingMessage = {
+      clientMessageId: this.createId(),
+      idempotencyKey: this.createId(),
+      kind: 'TEXT',
+      text: trimmed,
+      sticker: null,
+      replyToId: null,
+      attachments: [],
+      createdAt: this.now(),
+      status: 'sending',
+      error: null,
+      attempts: 0,
+      threadRootId: rootId,
+    };
+
+    this.patchThread(key, { outbox: [...thread.outbox, outgoing] });
+    await this.attemptSend(chatId, outgoing.clientMessageId, rootId);
+    return true;
+  }
+
+  async retryThreadReply(chatId: string, rootId: string, clientMessageId: string): Promise<void> {
+    const thread = this.threadFor(chatId, rootId);
+    const item = thread?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+    if (!thread || !item || item.status !== 'failed') return;
+    this.clearTimer(this.timerKey(chatId, clientMessageId));
+    this.patchThreadOutgoing(chatId, rootId, clientMessageId, {
+      status: 'sending',
+      error: null,
+    });
+    await this.attemptSend(chatId, clientMessageId, rootId);
+  }
+
+  /** Removes a failed reply row and returns it so the draft can be restored. */
+  discardThreadReply(
+    chatId: string,
+    rootId: string,
+    clientMessageId: string,
+  ): OutgoingMessage | null {
+    const key = threadKey(chatId, rootId);
+    const thread = this.state.threads[key];
+    const item = thread?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+    if (!thread || !item) return null;
+    this.clearTimer(this.timerKey(chatId, clientMessageId));
+    this.patchThread(key, {
+      outbox: thread.outbox.filter((entry) => entry.clientMessageId !== clientMessageId),
+    });
+    return item;
+  }
+
+  /** Copies the server summary of a root into the cached channel row. */
+  private bumpRootSummary(chatId: string, rootId: string, reply: ApiMessage): void {
+    const slice = this.state.slices[chatId];
+    if (!slice) return;
+    // `ChatSummary.last_seq` also covers replies and is advanced by `/sync` and
+    // by every applied event. If it already includes this seq, the row is a
+    // replay/late delivery and the server summary already contains it: adding
+    // one more would double count after reload. Live replies are always ahead.
+    if (reply.seq <= this.chatLastSeq(chatId)) return;
+    let changed = false;
+    const messages = slice.messages.map((message) => {
+      if (message.id !== rootId) return message;
+      const previous = message.thread_summary ?? null;
+      // A replay/out-of-order delivery must not decrease the counter.
+      if (
+        previous?.last_reply_at &&
+        Date.parse(reply.created_at) < Date.parse(previous.last_reply_at)
+      ) {
+        return message;
+      }
+      const summary: ThreadSummary = {
+        reply_count: (previous?.reply_count ?? 0) + 1,
+        last_reply_at: reply.created_at,
+        last_reply_author_id: reply.sender_id ?? null,
+        last_reply_excerpt: threadExcerpt(reply),
+      };
+      changed = true;
+      return { ...message, thread_summary: summary };
+    });
+    if (changed) this.patchSlice(chatId, { messages });
+  }
+
+  private removeRepliesFromMain(chatId: string, replies: readonly ApiMessage[]): void {
+    if (replies.length === 0) return;
+    const slice = this.state.slices[chatId];
+    if (!slice) return;
+    const replyIds = new Set(replies.map((reply) => reply.id));
+    if (!slice.messages.some((message) => replyIds.has(message.id))) return;
+    const messages = slice.messages.filter((message) => !replyIds.has(message.id));
+    this.patchSlice(chatId, { messages, beforeSeq: minSeq(messages) });
+  }
+
+  private patchThreadOutgoing(
+    chatId: string,
+    rootId: string,
+    clientMessageId: string,
+    patch: Partial<OutgoingMessage>,
+  ): void {
+    const key = threadKey(chatId, rootId);
+    const thread = this.state.threads[key];
+    if (!thread) return;
+    this.patchThread(key, {
+      outbox: thread.outbox.map((entry) =>
+        entry.clientMessageId === clientMessageId ? { ...entry, ...patch } : entry,
+      ),
+    });
+  }
+
+  /** Finds an outgoing row in the channel or in any cached thread of the chat. */
+  private findOutgoing(
+    chatId: string,
+    clientMessageId: string,
+  ): { item: OutgoingMessage; threadRootId: string | null } | null {
+    const main = this.state.slices[chatId]?.outbox.find(
+      (entry) => entry.clientMessageId === clientMessageId,
+    );
+    if (main) return { item: main, threadRootId: null };
+    for (const thread of Object.values(this.state.threads)) {
+      if (thread.chatId !== chatId) continue;
+      const item = thread.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+      if (item) return { item, threadRootId: thread.rootId };
+    }
+    return null;
   }
 
   async send(
@@ -2396,14 +2811,10 @@ export class ChatStore {
         ...current.e2ee,
         [message.id]: { status: 'decrypted', text, replyToId },
       },
-      lastSeq: maxSeq(messages),
+      lastSeq: Math.max(current.lastSeq, message.seq),
       beforeSeq: minSeq(messages),
     });
-    this.updateChatSummary(chatId, {
-      last_seq: message.seq,
-      last_message_at: message.created_at,
-      unread_count: 0,
-    });
+    this.updateChatTail(chatId, message);
   }
 
   private async sendE2eeText(
@@ -2495,14 +2906,10 @@ export class ChatStore {
             replyToId: item.replyToId,
           },
         },
-        lastSeq: maxSeq(messages),
+        lastSeq: Math.max(current.lastSeq, result.message.seq),
         beforeSeq: minSeq(messages),
       });
-      this.updateChatSummary(chatId, {
-        last_seq: result.message.seq,
-        last_message_at: result.message.created_at,
-        unread_count: 0,
-      });
+      this.updateChatTail(chatId, result.message);
     } catch (error) {
       const apiError = toApiError(error);
       this.handleFailure(apiError);
@@ -2555,18 +2962,23 @@ export class ChatStore {
   }
 
   async retry(chatId: string, clientMessageId: string): Promise<void> {
-    const item = this.state.slices[chatId]?.outbox.find(
-      (entry) => entry.clientMessageId === clientMessageId,
-    );
-    if (!item || item.status !== 'failed') return;
+    const found = this.findOutgoing(chatId, clientMessageId);
+    if (!found || found.item.status !== 'failed') return;
 
     this.clearTimer(this.timerKey(chatId, clientMessageId));
-    this.patchOutgoing(chatId, clientMessageId, { status: 'sending', error: null });
-    if (item.e2ee) {
+    if (found.threadRootId !== null) {
+      this.patchThreadOutgoing(chatId, found.threadRootId, clientMessageId, {
+        status: 'sending',
+        error: null,
+      });
+    } else {
+      this.patchOutgoing(chatId, clientMessageId, { status: 'sending', error: null });
+    }
+    if (found.item.e2ee) {
       await this.retryE2ee(chatId, clientMessageId);
       return;
     }
-    await this.attemptSend(chatId, clientMessageId);
+    await this.attemptSend(chatId, clientMessageId, found.threadRootId);
   }
 
   discardOutgoing(chatId: string, clientMessageId: string): OutgoingMessage | null {
@@ -2607,20 +3019,36 @@ export class ChatStore {
     });
   }
 
-  private async attemptSend(chatId: string, clientMessageId: string): Promise<void> {
+  private async attemptSend(
+    chatId: string,
+    clientMessageId: string,
+    threadRootId: string | null = null,
+  ): Promise<void> {
     const key = this.timerKey(chatId, clientMessageId);
     if (this.inFlight.has(key)) return;
 
     const slice = this.state.slices[chatId];
-    const item = slice?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+    const thread = threadRootId !== null ? this.threadFor(chatId, threadRootId) : null;
+    const item =
+      threadRootId !== null
+        ? thread?.outbox.find((entry) => entry.clientMessageId === clientMessageId)
+        : slice?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
     if (!slice || !item) return;
 
     this.inFlight.add(key);
-    this.patchOutgoing(chatId, clientMessageId, {
-      status: 'sending',
-      error: null,
-      attempts: item.attempts + 1,
-    });
+    if (threadRootId !== null) {
+      this.patchThreadOutgoing(chatId, threadRootId, clientMessageId, {
+        status: 'sending',
+        error: null,
+        attempts: item.attempts + 1,
+      });
+    } else {
+      this.patchOutgoing(chatId, clientMessageId, {
+        status: 'sending',
+        error: null,
+        attempts: item.attempts + 1,
+      });
+    }
 
     const body: MessageCreateBody =
       item.kind === 'STICKER' && item.sticker
@@ -2629,6 +3057,7 @@ export class ChatStore {
             type: 'STICKER',
             sticker_id: item.sticker.id,
             ...(item.replyToId ? { reply_to_id: item.replyToId } : {}),
+            ...(threadRootId !== null ? { thread_root_id: threadRootId } : {}),
           }
         : {
             client_message_id: item.clientMessageId,
@@ -2636,6 +3065,7 @@ export class ChatStore {
             // Contract: text is nullable; attachment_ids carry the payload.
             text: item.text.length > 0 ? item.text : null,
             ...(item.replyToId ? { reply_to_id: item.replyToId } : {}),
+            ...(threadRootId !== null ? { thread_root_id: threadRootId } : {}),
             ...(item.attachments.length > 0
               ? { attachment_ids: item.attachments.map((attachment) => attachment.id) }
               : {}),
@@ -2643,33 +3073,66 @@ export class ChatStore {
 
     try {
       const result = await this.api.sendMessage(chatId, body, item.idempotencyKey);
-      const current = this.state.slices[chatId];
-      if (!current) return;
+      if (threadRootId !== null) {
+        const currentThread = this.threadFor(chatId, threadRootId);
+        const currentSlice = this.state.slices[chatId];
+        if (!currentThread || !currentSlice) return;
+        // A live WS frame may have delivered this reply first; in that case the
+        // summary is already incremented and only the outbox row is settled.
+        const known = currentThread.replies.some((reply) => reply.id === result.message.id);
+        const replies = mergeMessages(currentThread.replies, [result.message]);
+        this.patchThread(threadKey(chatId, threadRootId), {
+          replies,
+          outbox: currentThread.outbox.filter((entry) => entry.clientMessageId !== clientMessageId),
+          lastSeq: Math.max(currentThread.lastSeq, result.message.seq),
+          beforeSeq: minSeq(replies),
+        });
+        this.patchSlice(chatId, {
+          lastSeq: Math.max(currentSlice.lastSeq, result.message.seq),
+        });
+        if (!known) this.bumpRootSummary(chatId, threadRootId, result.message);
+      } else {
+        const current = this.state.slices[chatId];
+        if (!current) return;
 
-      const messages = mergeMessages(current.messages, [result.message]);
-      this.patchSlice(chatId, {
-        messages,
-        outbox: current.outbox.filter((entry) => entry.clientMessageId !== clientMessageId),
-        lastSeq: maxSeq(messages),
-        beforeSeq: minSeq(messages),
-      });
-      this.files.markBound(item.attachments.map((attachment) => attachment.id));
-      this.updateChatSummary(chatId, {
-        last_seq: result.message.seq,
-        last_message_at: result.message.created_at,
-        unread_count: 0,
-      });
+        const messages = mergeMessages(current.messages, [result.message]);
+        this.patchSlice(chatId, {
+          messages,
+          outbox: current.outbox.filter((entry) => entry.clientMessageId !== clientMessageId),
+          lastSeq: Math.max(current.lastSeq, result.message.seq),
+          beforeSeq: minSeq(messages),
+        });
+        this.files.markBound(item.attachments.map((attachment) => attachment.id));
+      }
+      this.updateChatTail(chatId, result.message);
     } catch (error) {
       const apiError = toApiError(error);
       this.handleFailure(apiError);
-      const current = this.state.slices[chatId];
-      const failed = current?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
-      if (!current || !failed) return;
+      const failed =
+        threadRootId !== null
+          ? this.threadFor(chatId, threadRootId)?.outbox.find(
+              (entry) => entry.clientMessageId === clientMessageId,
+            )
+          : this.state.slices[chatId]?.outbox.find(
+              (entry) => entry.clientMessageId === clientMessageId,
+            );
+      if (!failed) return;
 
-      this.patchOutgoing(chatId, clientMessageId, {
-        status: 'failed',
-        error: apiError,
-      });
+      if (threadRootId !== null) {
+        this.patchThreadOutgoing(chatId, threadRootId, clientMessageId, {
+          status: 'failed',
+          error: apiError,
+        });
+        const unavailable = threadUnavailableFromError(apiError);
+        if (unavailable !== null) {
+          this.patchThread(threadKey(chatId, threadRootId), { unavailable });
+        }
+      } else {
+        this.patchOutgoing(chatId, clientMessageId, {
+          status: 'failed',
+          error: apiError,
+        });
+      }
 
       if (apiError.code === 'STICKER_PACK_DISABLED') {
         const packId =
@@ -2687,10 +3150,15 @@ export class ChatStore {
         const delay = (apiError.retryAfterSeconds ?? 1) * 1000;
         const timer = setTimeout(() => {
           this.timers.delete(key);
-          const latest = this.state.slices[chatId]?.outbox.find(
-            (entry) => entry.clientMessageId === clientMessageId,
-          );
-          if (latest?.status === 'failed') void this.retry(chatId, clientMessageId);
+          const stillFailed =
+            threadRootId !== null
+              ? this.threadFor(chatId, threadRootId)?.outbox.find(
+                  (entry) => entry.clientMessageId === clientMessageId,
+                )
+              : this.state.slices[chatId]?.outbox.find(
+                  (entry) => entry.clientMessageId === clientMessageId,
+                );
+          if (stillFailed?.status === 'failed') void this.retry(chatId, clientMessageId);
         }, delay);
         this.timers.set(key, timer);
       }
@@ -3158,12 +3626,15 @@ export class ChatStore {
       const current = this.state.slices[chatId];
       if (!current) return;
 
-      const messages = mergeMessages(current.messages, page.items);
+      // REST catch-up is roots-only by contract, but keep the channel clean if
+      // a reply ever appears in the after_seq page.
+      const roots = page.items.filter((message) => !message.thread_root_id);
+      const messages = mergeMessages(current.messages, roots);
       if (page.items.length > 0) mergedAny = true;
       cursor = Math.max(cursor, maxSeq(page.items));
       this.patchSlice(chatId, {
         messages,
-        lastSeq: maxSeq(messages),
+        lastSeq: Math.max(current.lastSeq, cursor),
         beforeSeq: minSeq(messages),
       });
       const newest = page.items[page.items.length - 1];
@@ -3365,6 +3836,14 @@ export class ChatStore {
     // Contract §5: ignore seq <= last_seq; duplicates are also dropped by id.
     if (message.seq <= slice.lastSeq) return;
 
+    // D1-FE3: a reply belongs to its thread panel and to the root summary; it
+    // must never appear in the channel feed.
+    const threadRootId = message.thread_root_id ?? null;
+    if (threadRootId !== null) {
+      this.applyThreadReplyCreated(message, threadRootId);
+      return;
+    }
+
     const viewerId = this.viewerId();
     const mine = Boolean(viewerId && message.sender_id === viewerId);
     let outbox = slice.outbox;
@@ -3403,7 +3882,7 @@ export class ChatStore {
     this.patchSlice(message.chat_id, {
       messages,
       outbox,
-      lastSeq: maxSeq(messages),
+      lastSeq: Math.max(slice.lastSeq, message.seq),
       beforeSeq: minSeq(messages),
       unread,
     });
@@ -3415,6 +3894,60 @@ export class ChatStore {
 
     if (this.e2eeBridge !== null) void this.decryptE2eeSlice(message.chat_id);
     if (this.state.activeChatId === message.chat_id) {
+      this.realtime?.sendAck(message.seq);
+    }
+  }
+
+  /**
+   * Live reply routing: append to the thread only, bump the cached root
+   * summary and advance the chat tail (reply seq is part of the chat stream and
+   * must be acknowledged / replayed correctly).
+   */
+  private applyThreadReplyCreated(message: ApiMessage, rootId: string): void {
+    const chatId = message.chat_id;
+    const slice = this.state.slices[chatId];
+    const summary = this.state.chats.find((chat) => chat.id === chatId) ?? null;
+    if (!slice || slice.status !== 'ready') {
+      if (summary && message.seq > summary.last_seq) {
+        this.updateChatSummary(chatId, {
+          last_seq: message.seq,
+          last_message_at: message.created_at,
+          unread_count: summary.unread_count + 1,
+        });
+      }
+      return;
+    }
+
+    const key = threadKey(chatId, rootId);
+    const thread = this.state.threads[key] ?? null;
+    const viewerId = this.viewerId();
+    const mine = Boolean(viewerId && message.sender_id === viewerId);
+    const known = thread?.replies.some((reply) => reply.id === message.id) ?? false;
+
+    if (thread && thread.status === 'ready' && !known) {
+      const replies = mergeMessages(thread.replies, [message]);
+      const outbox = mine ? settleThreadOutbox(thread, message) : thread.outbox;
+      this.patchThread(key, {
+        replies,
+        outbox,
+        lastSeq: Math.max(thread.lastSeq, message.seq),
+        beforeSeq: minSeq(replies),
+      });
+    }
+
+    const visible = this.isActiveChatVisible(chatId);
+    const unread = mine || visible ? 0 : slice.unread + 1;
+    this.patchSlice(chatId, {
+      lastSeq: Math.max(slice.lastSeq, message.seq),
+      unread,
+    });
+    if (!known) this.bumpRootSummary(chatId, rootId, message);
+    this.updateChatSummary(chatId, {
+      last_seq: Math.max(this.chatLastSeq(chatId), message.seq),
+      last_message_at: message.created_at,
+      unread_count: mine || visible ? 0 : (summary?.unread_count ?? 0) + 1,
+    });
+    if (this.state.activeChatId === chatId) {
       this.realtime?.sendAck(message.seq);
     }
   }
@@ -3631,6 +4164,38 @@ function failureCode(error: unknown): string {
   if (isE2eeError(error)) return error.code;
   if (isApiError(error)) return error.code;
   return 'UNKNOWN';
+}
+
+/** D1-FE3: soft-deleted roots cannot accept replies (contract `THREAD_ROOT_DELETED`). */
+function threadUnavailableFromError(error: ApiError): ThreadUnavailable {
+  if (error.code === 'THREAD_ROOT_DELETED') return 'deleted';
+  if (error.code === 'THREAD_ROOT_NOT_FOUND' || error.status === 404) return 'not_found';
+  return null;
+}
+
+/**
+ * Local mirror of the server excerpt: whitespace-normalized, at most 160
+ * Unicode code points (never split a surrogate pair), `null` for a sticker or
+ * an attachment-only reply (the UI renders its own fallback).
+ */
+function threadExcerpt(message: ApiMessage): string | null {
+  if (message.deleted_at) return null;
+  if (message.type === 'STICKER' || message.sticker_id) return null;
+  const normalized = (message.text ?? '').replace(/\s+/g, ' ').trim();
+  if (normalized.length === 0) return null;
+  const chars = Array.from(normalized);
+  if (chars.length <= 160) return normalized;
+  return `${chars.slice(0, 159).join('')}…`;
+}
+
+/** Removes the optimistic reply row when its own live `message.created` wins. */
+function settleThreadOutbox(thread: ThreadSlice, message: ApiMessage): OutgoingMessage[] {
+  const clientId = message.client_message_id ?? null;
+  const text = message.text ?? '';
+  return thread.outbox.filter((entry) => {
+    if (clientId !== null) return entry.clientMessageId !== clientId;
+    return !(entry.kind === 'TEXT' && entry.text === text);
+  });
 }
 
 /** Server plaintext fields in an E2EE message are a security alert (§4.3 P2-13). */
