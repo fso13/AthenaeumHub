@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="128" viewBox="0 0 160 128" role="img" aria-label="Типографика">
+  <rect width="160" height="128" fill="#F6F2E7"/>
+  <text x="16" y="86" font-family="Inter, system-ui, sans-serif" font-size="78" font-weight="800" letter-spacing="-4" fill="#1C2A21">Aa</text>
+  <circle cx="132" cy="34" r="9" fill="#65BD45"/>
+  <rect x="16" y="100" width="86" height="7" rx="3.5" fill="#CFC6B1"/>
+  <rect x="16" y="112" width="54" height="7" rx="3.5" fill="#DCD4C1"/>
+  <rect x="112" y="96" width="32" height="24" rx="6" fill="#1C2A21"/>
+</svg>

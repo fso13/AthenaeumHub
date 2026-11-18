@@ -1,0 +1,10 @@
+spring:
+  # Dev-only bootstrap endpoint is enabled by @Profile({"dev","test"}).
+  # Keep SQL params out of logs even in dev.
+  jdbc:
+    template:
+      fetch-size: 100
+
+logging:
+  level:
+    ru.krug.backend: INFO

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.npm-cache/
+.playwright-browsers/
+test-results/
+playwright-report/
+e2e/
+playwright.*.config.ts
+E7-*.md
+.env
+.env.*
+!.env.example
+Dockerfile

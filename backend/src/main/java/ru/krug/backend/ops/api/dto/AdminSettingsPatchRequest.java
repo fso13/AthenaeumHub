@@ -1,0 +1,25 @@
+package ru.krug.backend.ops.api.dto;
+
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
+
+/**
+ * PATCH /admin/settings. Every field is optional; {@code complete_setup=true} (alias
+ * {@code setup_completed=true}) finishes the first-run wizard and is rejected with 409
+ * once setup is complete. SMTP password is write-only and is never echoed by any response.
+ */
+public record AdminSettingsPatchRequest(
+        @Size(max = 255) String smtpHost,
+        @Min(1) @Max(65535) Integer smtpPort,
+        @Size(max = 255) String smtpUsername,
+        @Size(max = 512) String smtpPassword,
+        @Size(max = 254) String smtpFrom,
+        Boolean smtpStarttls,
+        @Min(1) @Max(1000000) Integer maxChatsPerUser,
+        @Min(1) @Max(1000000) Integer maxChatsPerWorkspace,
+        @Min(1) @Max(1000000) Integer maxWorkspaceMembers,
+        Boolean registrationOpen,
+        Boolean completeSetup,
+        Boolean setupCompleted) {
+}

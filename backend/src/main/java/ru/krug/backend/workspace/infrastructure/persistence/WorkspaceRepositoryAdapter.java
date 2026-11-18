@@ -1,0 +1,129 @@
+package ru.krug.backend.workspace.infrastructure.persistence;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import jakarta.persistence.EntityManager;
+
+import org.springframework.stereotype.Repository;
+
+import ru.krug.backend.workspace.domain.model.Membership;
+import ru.krug.backend.workspace.domain.model.Workspace;
+import ru.krug.backend.workspace.domain.model.WorkspaceMembership;
+import ru.krug.backend.workspace.domain.repository.WorkspaceRepository;
+
+@Repository
+public class WorkspaceRepositoryAdapter implements WorkspaceRepository {
+
+    private final WorkspaceJpaRepository jpaRepository;
+    private final EntityManager entityManager;
+
+    public WorkspaceRepositoryAdapter(WorkspaceJpaRepository jpaRepository,
+                                      EntityManager entityManager) {
+        this.jpaRepository = jpaRepository;
+        this.entityManager = entityManager;
+    }
+
+    @Override
+    public boolean isActiveMember(UUID workspaceId, UUID userId) {
+        Number count = (Number) entityManager.createNativeQuery("""
+                        SELECT count(*)
+                          FROM workspace.memberships
+                         WHERE workspace_id = ?1
+                           AND user_id = ?2
+                           AND status = 'ACTIVE'
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, userId)
+                .getSingleResult();
+        return count.longValue() > 0;
+    }
+
+    @Override
+    public Optional<Workspace> findById(UUID workspaceId) {
+        return jpaRepository.findById(workspaceId).map(WorkspacePersistenceMapper::toDomain);
+    }
+
+    @Override
+    public Optional<Membership> findMembership(UUID workspaceId, UUID userId) {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT role, status
+                          FROM workspace.memberships
+                         WHERE workspace_id = ?1 AND user_id = ?2
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, userId)
+                .getResultList();
+        return rows.stream().findFirst().map(row -> Membership.reconstitute(workspaceId, userId,
+                Membership.Role.valueOf((String) row[0]),
+                Membership.Status.valueOf((String) row[1])));
+    }
+
+    @Override
+    public List<WorkspaceMembership> listActiveMemberships(UUID userId) {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT w.id, w.name, w.slug::text, w.security_mode, w.status, w.created_by,
+                               m.role, m.status
+                          FROM workspace.workspaces w
+                          JOIN workspace.memberships m
+                            ON m.workspace_id = w.id
+                         WHERE m.user_id = ?1
+                           AND m.status = 'ACTIVE'
+                           AND w.status = 'ACTIVE'
+                         ORDER BY m.joined_at ASC, w.id ASC
+                        """)
+                .setParameter(1, userId)
+                .getResultList();
+        return rows.stream().map(row -> {
+            Workspace workspace = Workspace.reconstitute((UUID) row[0], (String) row[1],
+                    (String) row[2], Workspace.SecurityMode.valueOf((String) row[3]),
+                    Workspace.Status.valueOf((String) row[4]), (UUID) row[5]);
+            Membership membership = Membership.reconstitute((UUID) row[0], userId,
+                    Membership.Role.valueOf((String) row[6]),
+                    Membership.Status.valueOf((String) row[7]));
+            return new WorkspaceMembership(workspace, membership);
+        }).toList();
+    }
+
+    @Override
+    public void save(Workspace workspace) {
+        entityManager.createNativeQuery("""
+                        INSERT INTO workspace.workspaces
+                               (id, name, slug, security_mode, status, created_by)
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                        ON CONFLICT (id) DO UPDATE
+                           SET name = EXCLUDED.name,
+                               status = 'ACTIVE',
+                               updated_at = now()
+                        -- security_mode is immutable (V16 trigger): never overwrite it on
+                        -- onboarding upsert, otherwise an existing E2EE workspace -> 409/500.
+                        """)
+                .setParameter(1, workspace.id())
+                .setParameter(2, workspace.name())
+                .setParameter(3, workspace.slug())
+                .setParameter(4, workspace.securityMode().name())
+                .setParameter(5, workspace.status().name())
+                .setParameter(6, workspace.createdBy())
+                .executeUpdate();
+    }
+
+    @Override
+    public void save(Membership membership) {
+        entityManager.createNativeQuery("""
+                        INSERT INTO workspace.memberships (workspace_id, user_id, role, status)
+                        VALUES (?1, ?2, ?3, ?4)
+                        ON CONFLICT (workspace_id, user_id) DO UPDATE
+                           SET role = EXCLUDED.role,
+                               status = 'ACTIVE',
+                               updated_at = now()
+                        """)
+                .setParameter(1, membership.workspaceId())
+                .setParameter(2, membership.userId())
+                .setParameter(3, membership.role().name())
+                .setParameter(4, membership.status().name())
+                .executeUpdate();
+    }
+}

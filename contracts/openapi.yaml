@@ -1,0 +1,3081 @@
+openapi: 3.1.0
+info:
+  title: Krug — E2 managed slice contract
+  version: 0.1.0
+  description: |
+    Контракт первого вертикального среза: dev-сессия, список чатов, история,
+    отправка текстового сообщения, read receipt и sync.
+    Это подмножество docs/SYSTEM-ANALYSIS.md §7; расширение — только через
+    обновление этого файла и docs/TASKS.md.
+servers:
+  - url: http://localhost:8081/api/v1
+    description: Локальный dev-порт; 8080 занят другим проектом в окружении
+security:
+  - bearerAuth: []
+tags:
+  - name: dev
+  - name: chats
+  - name: messages
+  - name: sync
+  - name: auth
+  - name: devices
+  - name: workspaces
+  - name: realtime
+  - name: files
+  - name: stickers
+  - name: notifications
+  - name: setup
+  - name: admin
+
+paths:
+  /health:
+    get:
+      tags: [dev]
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Сервис жив
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+
+  /dev/session:
+    post:
+      tags: [dev]
+      operationId: devSession
+      security: []
+      summary: Dev-only bootstrap (профиль dev; в prod 404)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                  maxLength: 80
+                  default: Дмитрий
+      responses:
+        "200":
+          description: Готовая сессия с воркспейсом и чатом
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /workspaces/{workspaceId}/chats:
+    get:
+      tags: [chats]
+      operationId: listChats
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Чаты воркспейса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [chats]
+      operationId: createChat
+      summary: Создать DIRECT/GROUP-чат; повтор DIRECT-пары идемпотентен (200)
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCreateRequest"
+      responses:
+        "201":
+          description: Чат создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chat"
+        "200":
+          description: DIRECT-пара уже существует — возвращается тот же чат
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chat"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: >
+            Конфликт состояния. Для создания чата при достижении лимита —
+            `409 CHAT_LIMIT_REACHED` с `details.scope` (`USER`|`WORKSPACE`),
+            `details.limit` и `details.used`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /workspaces/{workspaceId}/members:
+    get:
+      tags: [workspaces]
+      operationId: listWorkspaceMembers
+      summary: Активные участники воркспейса для DIRECT-чата
+      description: >
+        Только активные членства (`ACTIVE`) в активном воркспейсе и активные
+        пользователи. Поля — `user_id`, `display_name`, `role`, `joined_at`; email,
+        пароли, устройства и ключи не возвращаются. Вызывающий должен быть активным
+        участником воркспейса: чужая или неизвестная workspace даёт `403` без раскрытия
+        факта её существования. Поиск — literal-подстрока по `display_name` без учёта
+        регистра; стабильный порядок `display_name ASC, user_id ASC`; `cursor`
+        непрозрачен и привязан к воркспейсу; `has_more` вычисляется по `limit + 1`.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+        - name: query
+          in: query
+          required: false
+          schema: { type: string, maxLength: 80 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Страница активных участников
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMemberPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [workspaces]
+      operationId: addWorkspaceMember
+      summary: Добавить существующего пользователя в воркспейс по email
+      description: >
+        Вызывающий должен быть ACTIVE OWNER/ADMIN воркспейса (иначе `403 FORBIDDEN`,
+        существование чужой/неизвестной workspace не раскрывается). Добавлять можно
+        только существующий ACTIVE-аккаунт: неизвестный или неактивный email даёт
+        `404 USER_NOT_FOUND`, приглашения на незарегистрированный email — v1.1. OWNER
+        назначать нельзя (`403 ROLE_CHANGE_FORBIDDEN`), ADMIN может назначать только
+        `MEMBER`/`GUEST`. Проверка `max_workspace_members` и вставка выполняются в одной
+        транзакции под per-workspace advisory lock; превышение — `409
+        WORKSPACE_MEMBER_LIMIT_REACHED` с `details.limit/used`, повтор (включая ранее
+        удалённого) — `409 MEMBER_ALREADY_EXISTS`. Событие аудита содержит только
+        `user_id` и `role`, без email и display name.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddWorkspaceMemberRequest"
+      responses:
+        "201":
+          description: Участник добавлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /workspaces/{workspaceId}/members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/DeviceId"
+    patch:
+      tags: [workspaces]
+      operationId: changeWorkspaceMemberRole
+      summary: Изменить роль участника воркспейса
+      description: >
+        OWNER управляет ролями ADMIN/MEMBER/GUEST; ADMIN — только MEMBER/GUEST и не может
+        менять OWNER/другого ADMIN. Назначить OWNER нельзя, последнего OWNER нельзя
+        понизить, менять собственную роль нельзя. Нарушение прав — `403
+        ROLE_CHANGE_FORBIDDEN` (или `403 FORBIDDEN` для не-OWNER/ADMIN), self — `409
+        SELF_ACTION_FORBIDDEN`, последний OWNER — `409 LAST_OWNER`; неизвестное активное
+        членство — `404 MEMBER_NOT_FOUND`. Повтор той же роли идемпотентен (`200`) и не
+        создаёт аудит-событие. Аудит содержит `previous_role`/`role`, без email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeWorkspaceMemberRoleRequest"
+      responses:
+        "200":
+          description: Роль изменена (или уже была такой)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceMember"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      tags: [workspaces]
+      operationId: removeWorkspaceMember
+      summary: Удалить участника воркспейса
+      description: >
+        Мягкое удаление (`status = 'REMOVED'`): строка членства и `joined_at`
+        сохраняются. Удалённый теряет доступ к воркспейсу и его чатам при следующем
+        запросе; уже выданные access-токены не отзываются (проверка прав выполняется на
+        каждом запросе). OWNER может удалять ADMIN/MEMBER/GUEST, ADMIN — только
+        MEMBER/GUEST; нельзя удалить себя и последнего OWNER (`409
+        SELF_ACTION_FORBIDDEN`/`LAST_OWNER`). Аудит содержит `user_id` и `role`.
+      responses:
+        "204":
+          description: Участник удалён (soft)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /setup/status:
+    get:
+      tags: [setup]
+      operationId: getSetupStatus
+      security: []
+      summary: Публичный статус первичной настройки (без секретов)
+      responses:
+        "200":
+          description: Нужна ли первичная настройка и открыта ли регистрация
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupStatus"
+
+  /admin/settings:
+    get:
+      tags: [admin]
+      operationId: getAdminSettings
+      summary: Системные параметры установки (platform_admin)
+      responses:
+        "200":
+          description: Параметры без SMTP-пароля
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags: [admin]
+      operationId: updateAdminSettings
+      summary: Частично обновить параметры или завершить setup (platform_admin)
+      description: >
+        `complete_setup=true` атомарно завершает первичную настройку; повторная попытка —
+        `409 SETUP_ALREADY_COMPLETED`. SMTP-пароль только на запись, в ответах и логах
+        отсутствует. Пустое поле `smtp_password` означает «не менять».
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminSettingsPatch"
+      responses:
+        "200":
+          description: Сохранённые параметры без SMTP-пароля
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSettings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Setup уже завершён (`SETUP_ALREADY_COMPLETED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /admin/settings/test-email:
+    post:
+      tags: [admin]
+      operationId: testAdminEmail
+      summary: Отправить тестовое письмо с текущими SMTP-настройками (platform_admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestEmailRequest"
+      responses:
+        "202":
+          description: Письмо принято SMTP-релеем
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestEmailResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /admin/overview:
+    get:
+      tags: [admin]
+      operationId: getAdminOverview
+      summary: Агрегированный обзор установки (platform_admin)
+      responses:
+        "200":
+          description: Количество пользователей, воркспейсов и чатов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOverview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/users:
+    get:
+      tags: [admin]
+      operationId: listAdminUsers
+      summary: Список пользователей установки (platform_admin)
+      description: >
+        Метаданные и агрегаты: email, display name, статус, флаг platform_admin, число
+        активных воркспейсов/чатов, использованное место и дата регистрации. Поиск по
+        email/display name. Непрозрачный cursor и стабильный порядок
+        `created_at DESC, id DESC`. Контент сообщений, E2EE-конверты и содержимое файлов
+        не возвращаются; удалённые пользователи в выдачу не попадают. Каждое чтение
+        пишет audit-событие `admin.users.viewed` (только счётчики).
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema: { type: string, maxLength: 254 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Страница пользователей
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/users/{userId}/suspend:
+    post:
+      tags: [admin]
+      operationId: suspendAdminUser
+      summary: Приостановить пользователя (platform_admin)
+      description: >
+        `auth.users.status` → `SUSPENDED`; Keycloak-пользователь выключается, все его
+        активные Keycloak-сессии отзываются (`POST /admin/realms/{realm}/users/{id}/logout`,
+        refresh-токены перестают работать), live WS-сессии закрываются кадром
+        `session.revoked` и close 4403. Действие аудируется (`admin.user.suspended`),
+        metadata — только предыдущий/новый статус. Повторная приостановка →
+        `409 USER_ALREADY_SUSPENDED`; себя приостановить нельзя (`409
+        SELF_ACTION_FORBIDDEN`), последнего platform_admin — нельзя (`409
+        LAST_PLATFORM_ADMIN`, атомарная проверка в БД). Неизвестный или удалённый
+        пользователь → `404`. Ответ без тела.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Пользователь приостановлен
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /admin/users/{userId}/activate:
+    post:
+      tags: [admin]
+      operationId: activateAdminUser
+      summary: Реактивировать пользователя (platform_admin)
+      description: >
+        `auth.users.status` → `ACTIVE`, Keycloak-пользователь снова включается; отзыв
+        сессий при активации не требуется. Действие аудируется
+        (`admin.user.activated`), metadata — только предыдущий/новый статус. Повторная
+        активация → `409 USER_ALREADY_ACTIVE`; неизвестный или удалённый пользователь →
+        `404`. Ответ без тела.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Пользователь активирован
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /admin/chats:
+    get:
+      tags: [admin]
+      operationId: listAdminChats
+      summary: Список чатов across workspaces (platform_admin)
+      description: >
+        Метаданные чатов: workspace, тип, режим, число участников/сообщений и последняя
+        активность. Фильтры `workspace_id`, `type`, поиск по имени чата. Непрозрачный
+        cursor и стабильный порядок `created_at DESC, id DESC`. Текст сообщений,
+        E2EE-конверты и файлы не возвращаются; удалённые чаты/воркспейсы не попадают в
+        выдачу. `messages_count` — число выделенных последовательностей (`chat_counters`).
+        Каждое чтение пишет audit-событие `admin.chats.viewed` (только счётчики).
+      parameters:
+        - name: workspace_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: query
+          in: query
+          required: false
+          schema: { type: string, maxLength: 120 }
+        - name: type
+          in: query
+          required: false
+          schema: { type: string, enum: [DIRECT, GROUP] }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Страница чатов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminChatPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/chats/{chatId}:
+    delete:
+      tags: [admin]
+      operationId: deleteAdminChat
+      summary: Soft-delete чата (platform_admin)
+      description: >
+        Проставляет `chats.deleted_at` и не удаляет физически ни чат, ни сообщения, ни
+        вложения: участники перестают видеть чат в списках и получать доступ к сообщениям,
+        но данные сохраняются для аудита/восстановления. Действие аудируется
+        (`admin.chat.deleted`), metadata — только id воркспейса и число участников, без
+        имени чата и текста сообщений. Повторный вызов → `409 CHAT_ALREADY_DELETED`
+        (осознанный выбор вместо тихого 204: UI отличает retry от успеха). Неизвестный
+        чат → `404`. Ответ без тела.
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Чат помечен удалённым (soft-delete)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /admin/storage:
+    get:
+      tags: [admin]
+      operationId: getAdminStorage
+      summary: Storage dashboard по воркспейсам (platform_admin)
+      description: >
+        Агрегаты хранения: `used_bytes`/`reserved_bytes` из `file.workspace_usage`,
+        число объектов и вложений, разбивка по воркспейсам (и опциональный фильтр
+        `workspace_id`). Только агрегаты: имена файлов, object keys, содержимое и E2EE
+        не возвращаются. Каждое чтение пишет audit-событие `admin.storage.viewed`
+        (только счётчики).
+      parameters:
+        - name: workspace_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Итоги и разбивка по воркспейсам
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminStorage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/audit:
+    get:
+      tags: [admin]
+      operationId: listAdminAudit
+      summary: Audit-лог установки (platform_admin)
+      description: >
+        Cross-tenant страница append-only audit-лога с непрозрачным cursor и стабильным
+        порядком `created_at DESC, id DESC`; опциональный точный фильтр `action`. Каждая
+        строка содержит только `id`, `action`, `actor_id`, `actor_email`, `target_type`,
+        `target_id`, `created_at`: metadata JSONB, хэши цепочки, request id, тела
+        сообщений, E2EE-конверты, имена файлов и секреты не возвращаются. Чтение аудита
+        само аудируется (`admin.audit.viewed`, только счётчики). Hash-chain не меняется.
+      parameters:
+        - name: action
+          in: query
+          required: false
+          description: Точное имя действия (например `admin.user.suspended`)
+          schema: { type: string, maxLength: 120 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Страница audit-лога
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAuditPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: authRegister
+      security: []
+      summary: Регистрация через BFF; пароль хранит только Keycloak
+      description: >
+        Создаёт пользователя в Keycloak (`enabled=false`, `emailVerified=false`),
+        генерирует 20-байтный TOTP-секрет (RFC 6238, SHA-1, 6 цифр, шаг 30 с) и
+        отправляет 6-значный код письмом. Ответ не раскрывает существование аккаунта
+        сверх документированного `409 EMAIL_TAKEN`. Пароль не сохраняется в БД
+        приложения и не логируется.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthRegisterRequest"
+      responses:
+        "202":
+          description: Код отправлен на email
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthRegisterResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Регистрация закрыта (`REGISTRATION_CLOSED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Email уже занят (`EMAIL_TAKEN`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Пароль отклонён политикой Keycloak (`VALIDATION_FAILED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      operationId: authVerifyEmail
+      security: []
+      summary: Подтвердить email 6-значным TOTP-кодом и получить сессию
+      description: >
+        Неверный код — `422 CODE_INVALID` (до 5 попыток), истёкший/использованный —
+        `410 CODE_EXPIRED`, исчерпанные попытки — `429 RATE_LIMITED`. Успех включает
+        пользователя в Keycloak (`enabled=true`, `emailVerified=true`) и возвращает
+        токены Keycloak. Пароль в запросе отсутствует.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthVerifyEmailRequest"
+      responses:
+        "200":
+          description: Email подтверждён, сессия выдана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          description: Код истёк или уже использован (`CODE_EXPIRED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Неверный код (`CODE_INVALID`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/resend-email-code:
+    post:
+      tags: [auth]
+      operationId: authResendEmailCode
+      security: []
+      summary: Повторно отправить код подтверждения
+      description: >
+        Новый TOTP-код выводится из нового секрета; старый код перестаёт действовать.
+        Повтор возможен не чаще `resend_after` секунд, иначе `429 RATE_LIMITED`.
+        Срок жизни подтверждения (`expires_in`) не продлевается.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthResendEmailCodeRequest"
+      responses:
+        "202":
+          description: Код отправлен повторно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResendEmailCodeResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          description: Подтверждение истекло или уже использовано (`CODE_EXPIRED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: authLogin
+      security: []
+      summary: Вход по email/паролю через Keycloak token endpoint
+      description: >
+        Keycloak `grant_type=password`, client `krug-web`. Неверные учётные данные —
+        `401 INVALID_CREDENTIALS`; неподтверждённый/отключённый пользователь —
+        `403 EMAIL_NOT_VERIFIED` с `details.verification_id`, если подтверждение ещё
+        живо. Пароль не логируется.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthLoginRequest"
+      responses:
+        "200":
+          description: Сессия выдана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Неверные учётные данные (`INVALID_CREDENTIALS`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Email не подтверждён (`EMAIL_NOT_VERIFIED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: authRefresh
+      security: []
+      summary: Обновить пару токенов через Keycloak
+      description: >
+        Refresh-токен передаётся в теле, не в URL. Keycloak ротирует пару; недействительный
+        refresh — `401 INVALID_CREDENTIALS`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthRefreshRequest"
+      responses:
+        "200":
+          description: Новая сессия
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Refresh-токен недействителен (`INVALID_CREDENTIALS`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: authLogout
+      security: []
+      summary: Отозвать refresh-токен в Keycloak
+      description: Идемпотентно; недействительный refresh-токен также даёт `204`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthLogoutRequest"
+      responses:
+        "204":
+          description: Сессия отозвана (или уже была недействительна)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /me:
+    get:
+      tags: [auth]
+      operationId: me
+      summary: Профиль и доступные воркспейсы после OIDC-входа
+      responses:
+        "200":
+          description: Пользователь и его воркспейсы
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /devices:
+    post:
+      tags: [devices]
+      operationId: registerDevice
+      summary: Зарегистрировать устройство после входа
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceRegistration"
+      responses:
+        "201":
+          description: Устройство зарегистрировано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+    get:
+      tags: [devices]
+      operationId: listDevices
+      summary: Список своих устройств (для revoke/UX)
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Устройства пользователя
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /devices/{deviceId}:
+    delete:
+      tags: [devices]
+      operationId: revokeDevice
+      summary: Отозвать устройство; key_generation++
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204":
+          description: Устройство отозвано (повтор идемпотентен)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+
+  /devices/{deviceId}/prekeys:
+    post:
+      tags: [devices]
+      operationId: uploadPrekeys
+      summary: Ротация signed prekey и пополнение one-time prekeys
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignedPrekeyUpload"
+      responses:
+        "200":
+          description: Prekeys сохранены (повтор с теми же bytes идемпотентен)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrekeyUploadResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /keys/claim:
+    post:
+      tags: [devices]
+      operationId: claimPrekeys
+      summary: Атомарно выдать prekey bundle для устройств участников чата
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KeyClaimRequest"
+      responses:
+        "200":
+          description: Bundles и недоступные устройства
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyClaimResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /workspaces:
+    post:
+      tags: [workspaces]
+      operationId: createWorkspace
+      summary: Создать воркспейс при первом входе
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceRequest"
+      responses:
+        "201":
+          description: Воркспейс создан; пользователь — OWNER
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /realtime/ticket:
+    post:
+      tags: [realtime]
+      operationId: createRealtimeTicket
+      summary: Одноразовый тикет для WebSocket (TTL 30 с)
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Тикет создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RealtimeTicket"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /notifications:
+    get:
+      tags: [notifications]
+      operationId: listNotifications
+      summary: In-app уведомления пользователя
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - name: cursor
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Страница уведомлений и unread_count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /notifications/read:
+    post:
+      tags: [notifications]
+      operationId: markNotificationsRead
+      summary: Отметить уведомления прочитанными
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReadNotificationsRequest"
+      responses:
+        "204":
+          description: Отмечено
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /notification-preferences:
+    get:
+      tags: [notifications]
+      operationId: getNotificationPreferences
+      summary: Настройки уведомлений
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Настройки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPreferences"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [notifications]
+      operationId: updateNotificationPreference
+      summary: Изменить настройку уведомлений
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationPreferencePatch"
+      responses:
+        "200":
+          description: Настройка обновлена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPreference"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /sticker-packs:
+    get:
+      tags: [stickers]
+      operationId: listStickerPacks
+      summary: Наборы стикеров, доступные в чате
+      parameters:
+        - name: chat_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Наборы и стикеры
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StickerPackList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /stickers/{stickerId}/favorite:
+    parameters:
+      - $ref: "#/components/parameters/StickerId"
+      - $ref: "#/components/parameters/DeviceId"
+    put:
+      tags: [stickers]
+      operationId: favoriteSticker
+      summary: Добавить стикер в избранное
+      responses:
+        "204":
+          description: Добавлено
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [stickers]
+      operationId: unfavoriteSticker
+      summary: Убрать стикер из избранного
+      responses:
+        "204":
+          description: Убрано
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /workspaces/{workspaceId}/limits:
+    get:
+      tags: [workspaces]
+      operationId: getWorkspaceLimits
+      summary: Серверные лимиты и квота воркспейса
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Лимиты и текущая квота
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceLimits"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /uploads/preflight:
+    post:
+      tags: [files]
+      operationId: preflightUpload
+      summary: Проверить лимиты/квоту до загрузки (сервер — источник истины)
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreflightRequest"
+      responses:
+        "200":
+          description: Решение по каждому файлу
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreflightResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /uploads:
+    post:
+      tags: [files]
+      operationId: initUpload
+      summary: Создать upload-сессию и резерв квоты
+      parameters:
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadInitRequest"
+      responses:
+        "201":
+          description: Сессия создана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /uploads/{uploadId}:
+    get:
+      tags: [files]
+      operationId: getUpload
+      summary: Состояние загрузки и список полученных частей
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Состояние upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          $ref: "#/components/responses/Gone"
+
+  /uploads/{uploadId}/parts/{partNo}:
+    put:
+      tags: [files]
+      operationId: putUploadPart
+      summary: Идемпотентная загрузка одной части
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - $ref: "#/components/parameters/PartNo"
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/ContentSha256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Часть принята
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadPart"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /uploads/{uploadId}/complete:
+    post:
+      tags: [files]
+      operationId: completeUpload
+      summary: Завершить загрузку, проверить хеш и запустить скан
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadCompleteRequest"
+      responses:
+        "200":
+          description: Объект готов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+        "202":
+          description: Объект на сканировании
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /uploads/{uploadId}/abort:
+    post:
+      tags: [files]
+      operationId: abortUpload
+      summary: Отменить upload и освободить резерв квоты
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204":
+          description: Upload отменён
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          $ref: "#/components/responses/Gone"
+
+  /attachments/{attachmentId}/download-url:
+    get:
+      tags: [files]
+      operationId: attachmentDownloadUrl
+      summary: Presigned URL на скачивание (TTL 5 минут)
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: URL для скачивания
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadUrl"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "423":
+          description: Объект в карантине
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /chats/{chatId}/keys:
+    get:
+      tags: [devices]
+      operationId: getChatKeys
+      summary: Устройства и identity-ключи E2EE-чата; verified для X-Device-Id
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Ключи устройств чата
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatKeysResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /chats/{chatId}/keys/verification:
+    put:
+      tags: [devices]
+      operationId: verifyDeviceKeys
+      summary: Attestation сверки safety number; verifier device = X-Device-Id
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerificationRequest"
+      responses:
+        "201":
+          description: Верификация сохранена (повтор заменяет запись)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /chats/{chatId}/messages:
+    parameters:
+      - $ref: "#/components/parameters/ChatId"
+      - $ref: "#/components/parameters/DeviceId"
+    get:
+      tags: [messages]
+      operationId: listMessages
+      description: >
+        Без after_seq — последняя страница (seq DESC); с after_seq — вперёд (seq ASC).
+        Клиент сортирует по seq и не полагается на created_at.
+      parameters:
+        - name: after_seq
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+        - name: before_seq
+          in: query
+          schema: { type: integer, format: int64, minimum: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Страница сообщений
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      tags: [messages]
+      operationId: sendMessage
+      summary: Отправить сообщение; managed — text/attachments, E2EE — только envelopes
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageCreate"
+      responses:
+        "201":
+          description: >
+            Сообщение создано; seq назначен сервером. Managed-ответ не содержит
+            envelope_coverage; E2EE-ответ обязан его содержать (D-S4-04).
+          headers:
+            Idempotent-Replay:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageCreateResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /chats/{chatId}/read:
+    parameters:
+      - $ref: "#/components/parameters/ChatId"
+      - $ref: "#/components/parameters/DeviceId"
+    post:
+      tags: [messages]
+      operationId: markRead
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReadRequest"
+      responses:
+        "204":
+          description: Read receipt обновлён
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /sync:
+    get:
+      tags: [sync]
+      operationId: sync
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceIdQuery"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Состояние чатов для reconnect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DeviceId:
+      name: X-Device-Id
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+    ChatId:
+      name: chatId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    WorkspaceIdQuery:
+      name: workspace_id
+      in: query
+      required: true
+      schema: { type: string, format: uuid }
+    StickerId:
+      name: stickerId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UploadId:
+      name: uploadId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AttachmentId:
+      name: attachmentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PartNo:
+      name: partNo
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1, maximum: 10000 }
+    ContentSha256:
+      name: Content-SHA256
+      in: header
+      required: true
+      schema: { type: string, pattern: "^[a-f0-9]{64}$" }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message, request_id]
+      description: >
+        `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED,
+        DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY,
+        PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE,
+        KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED,
+        E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE,
+        INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE,
+        PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE,
+        E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN,
+        CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING,
+        NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED,
+        KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES.
+        Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED,
+        CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED,
+        AUTH_UNAVAILABLE.
+        E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED,
+        SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE.
+        E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN,
+        USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN,
+        CHAT_ALREADY_DELETED.
+        E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND,
+        MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN,
+        LAST_OWNER.
+      properties:
+        code: { type: string }
+        message: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+        request_id: { type: string }
+
+    Session:
+      type: object
+      required: [access_token, expires_at, user, device, workspace, chat]
+      properties:
+        access_token: { type: string }
+        expires_at: { type: string, format: date-time }
+        user:
+          type: object
+          required: [id, display_name]
+          properties:
+            id: { type: string, format: uuid }
+            display_name: { type: string }
+        device:
+          type: object
+          required: [id, platform]
+          properties:
+            id: { type: string, format: uuid }
+            platform: { type: string, enum: [WEB] }
+        workspace:
+          type: object
+          required: [id, name, security_mode]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            security_mode: { type: string, enum: [MANAGED] }
+        chat:
+          type: object
+          required: [id, name, type]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            type: { type: string, enum: [GROUP] }
+
+    MeResponse:
+      type: object
+      required: [user, workspaces, default_workspace_id]
+      properties:
+        user:
+          type: object
+          required: [id, display_name, email, is_platform_admin]
+          properties:
+            id: { type: string, format: uuid }
+            display_name: { type: string }
+            email: { type: string, format: email }
+            is_platform_admin:
+              type: boolean
+              description: Серверный флаг auth.users.is_platform_admin (R-03)
+        workspaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkspaceSummary"
+        default_workspace_id: { type: [string, "null"], format: uuid }
+
+    SetupStatus:
+      type: object
+      required: [setup_required, registration_open]
+      properties:
+        setup_required:
+          type: boolean
+          description: true, пока setup_completed_at пуст
+        registration_open:
+          type: boolean
+          description: Сохранённый переключатель регистрации установки
+
+    AdminSettings:
+      type: object
+      required:
+        [
+          setup_completed,
+          setup_completed_at,
+          smtp_host,
+          smtp_port,
+          smtp_username,
+          smtp_from,
+          smtp_starttls,
+          smtp_configured,
+          max_chats_per_user,
+          max_chats_per_workspace,
+          max_workspace_members,
+          registration_open,
+          updated_at,
+          updated_by,
+        ]
+      description: >
+        Настройки установки. SMTP-пароль никогда не возвращается; `smtp_configured`
+        отражает, задан ли хост и отправитель. `updated_by` — platform_admin,
+        сделавший последнее изменение.
+      properties:
+        setup_completed: { type: boolean }
+        setup_completed_at: { type: [string, "null"], format: date-time }
+        smtp_host: { type: [string, "null"], maxLength: 255 }
+        smtp_port: { type: [integer, "null"], minimum: 1, maximum: 65535 }
+        smtp_username: { type: [string, "null"], maxLength: 255 }
+        smtp_from: { type: [string, "null"], maxLength: 254 }
+        smtp_starttls: { type: boolean }
+        smtp_configured: { type: boolean, readOnly: true }
+        max_chats_per_user: { type: integer, minimum: 1, maximum: 1000000 }
+        max_chats_per_workspace: { type: integer, minimum: 1, maximum: 1000000 }
+        max_workspace_members: { type: integer, minimum: 1, maximum: 1000000 }
+        registration_open: { type: boolean }
+        updated_at: { type: string, format: date-time }
+        updated_by: { type: [string, "null"], format: uuid }
+
+    AdminSettingsPatch:
+      type: object
+      additionalProperties: false
+      description: >
+        Все поля опциональны; `null` означает «не менять». `smtp_password` — writeOnly,
+        пустая строка также означает «не менять». `complete_setup=true` завершает
+        первичную настройку.
+      properties:
+        smtp_host: { type: [string, "null"], maxLength: 255 }
+        smtp_port: { type: [integer, "null"], minimum: 1, maximum: 65535 }
+        smtp_username: { type: [string, "null"], maxLength: 255 }
+        smtp_password:
+          type: [string, "null"]
+          maxLength: 512
+          writeOnly: true
+        smtp_from: { type: [string, "null"], maxLength: 254 }
+        smtp_starttls: { type: [boolean, "null"] }
+        max_chats_per_user: { type: [integer, "null"], minimum: 1, maximum: 1000000 }
+        max_chats_per_workspace: { type: [integer, "null"], minimum: 1, maximum: 1000000 }
+        max_workspace_members: { type: [integer, "null"], minimum: 1, maximum: 1000000 }
+        registration_open: { type: [boolean, "null"] }
+        complete_setup: { type: [boolean, "null"] }
+        setup_completed:
+          type: [boolean, "null"]
+          description: Алиас `complete_setup` (совместимость с именем поля ответа)
+
+    AdminOverview:
+      type: object
+      required: [users, workspaces, chats]
+      description: Только агрегаты; содержимое чатов и E2EE не раскрывается.
+      properties:
+        users: { type: integer, format: int64, minimum: 0 }
+        workspaces: { type: integer, format: int64, minimum: 0 }
+        chats: { type: integer, format: int64, minimum: 0 }
+
+    AdminUser:
+      type: object
+      required:
+        [
+          id,
+          email,
+          display_name,
+          is_platform_admin,
+          status,
+          workspaces_count,
+          chats_count,
+          storage_used_bytes,
+          created_at,
+        ]
+      description: >
+        Метаданные пользователя для админ-списка. `workspaces_count` — активные
+        членства в неудалённых воркспейсах, `chats_count` — активные членства в
+        неудалённых чатах, `storage_used_bytes` — сумма байт его неудалённых
+        вложений, объекты которых ещё хранятся (READY/BOUND). Контента здесь нет.
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: [string, "null"], format: email, maxLength: 254 }
+        display_name: { type: string, maxLength: 80 }
+        is_platform_admin: { type: boolean }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, DELETED] }
+        workspaces_count: { type: integer, format: int64, minimum: 0 }
+        chats_count: { type: integer, format: int64, minimum: 0 }
+        storage_used_bytes: { type: integer, format: int64, minimum: 0 }
+        created_at: { type: string, format: date-time }
+
+    AdminUserPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminUser"
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    AdminChat:
+      type: object
+      required:
+        [
+          id,
+          name,
+          type,
+          security_mode,
+          workspace_id,
+          workspace_name,
+          members_count,
+          messages_count,
+          created_at,
+          last_activity_at,
+        ]
+      description: >
+        Метаданные чата для админ-списка. `members_count` — активные участники,
+        `messages_count` — число выделенных последовательностей `chat_counters`
+        (включая удалённые сообщения), `last_activity_at` — `chats.last_message_at`.
+        Текст сообщений, E2EE-конверты и вложения не раскрываются.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: [string, "null"], maxLength: 120 }
+        type: { type: string, enum: [DIRECT, GROUP] }
+        security_mode: { type: string, enum: [MANAGED, E2EE] }
+        workspace_id: { type: string, format: uuid }
+        workspace_name: { type: string, maxLength: 120 }
+        members_count: { type: integer, format: int64, minimum: 0 }
+        messages_count: { type: integer, format: int64, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        last_activity_at: { type: [string, "null"], format: date-time }
+
+    AdminChatPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminChat"
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    AdminStorageWorkspace:
+      type: object
+      required:
+        [
+          workspace_id,
+          workspace_name,
+          security_mode,
+          used_bytes,
+          reserved_bytes,
+          storage_limit_bytes,
+          objects,
+          attachments,
+        ]
+      description: >
+        Строка storage dashboard по воркспейсу. `objects` — вложения, объекты которых
+        ещё хранятся (READY/BOUND); `attachments` — все неудалённые записи вложений
+        (включая карантин). Имена файлов, object keys и содержимое не возвращаются.
+      properties:
+        workspace_id: { type: string, format: uuid }
+        workspace_name: { type: string, maxLength: 120 }
+        security_mode: { type: string, enum: [MANAGED, E2EE] }
+        used_bytes: { type: integer, format: int64, minimum: 0 }
+        reserved_bytes: { type: integer, format: int64, minimum: 0 }
+        storage_limit_bytes: { type: integer, format: int64, minimum: 0 }
+        objects: { type: integer, format: int64, minimum: 0 }
+        attachments: { type: integer, format: int64, minimum: 0 }
+
+    AdminStorageTotals:
+      type: object
+      required: [used_bytes, reserved_bytes, objects, attachments]
+      description: Сумма по строкам выдачи (с учётом фильтра `workspace_id`).
+      properties:
+        used_bytes: { type: integer, format: int64, minimum: 0 }
+        reserved_bytes: { type: integer, format: int64, minimum: 0 }
+        objects: { type: integer, format: int64, minimum: 0 }
+        attachments: { type: integer, format: int64, minimum: 0 }
+
+    AdminStorage:
+      type: object
+      required: [totals, workspaces]
+      properties:
+        totals:
+          $ref: "#/components/schemas/AdminStorageTotals"
+        workspaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminStorageWorkspace"
+
+    AdminAuditEvent:
+      type: object
+      required:
+        [id, action, actor_id, actor_email, target_type, target_id, created_at]
+      description: >
+        Строка audit-лога для platform_admin. Только действие, актор, цель и время:
+        `metadata` (даже если там лишь счётчики), хэши hash-chain и `request_id` не
+        возвращаются, поэтому тела сообщений/файлов и секреты не могут утечь через этот
+        ответ. `actor_email` — единственное PII-поле, явно разрешённое контрактом
+        администратора. `actor_id`/`target_id`/`actor_email`/`target_type` могут быть
+        `null` для системных событий.
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string, maxLength: 120 }
+        actor_id: { type: [string, "null"], format: uuid }
+        actor_email: { type: [string, "null"], format: email, maxLength: 254 }
+        target_type: { type: [string, "null"], maxLength: 40 }
+        target_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+
+    AdminAuditPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminAuditEvent"
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    TestEmailRequest:
+      type: object
+      additionalProperties: false
+      required: [to]
+      properties:
+        to: { type: string, format: email, maxLength: 254 }
+
+    TestEmailResponse:
+      type: object
+      required: [sent, to]
+      properties:
+        sent: { type: boolean }
+        to: { type: string, format: email }
+
+    AuthRegisterRequest:
+      type: object
+      required: [email, display_name, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        display_name: { type: string, minLength: 1, maxLength: 80 }
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+          description: Передаётся только в Keycloak; backend не хранит и не логирует.
+
+    AuthRegisterResponse:
+      type: object
+      required: [verification_id, expires_in, resend_after]
+      properties:
+        verification_id: { type: string, format: uuid }
+        expires_in: { type: integer, minimum: 1, description: Секунды до истечения кода }
+        resend_after: { type: integer, minimum: 0, description: Секунды до повторной отправки }
+
+    AuthVerifyEmailRequest:
+      type: object
+      required: [verification_id, code]
+      properties:
+        verification_id: { type: string, format: uuid }
+        code: { type: string, pattern: "^[0-9]{6}$" }
+
+    AuthResendEmailCodeRequest:
+      type: object
+      required: [verification_id]
+      properties:
+        verification_id: { type: string, format: uuid }
+
+    AuthResendEmailCodeResponse:
+      type: object
+      required: [expires_in, resend_after]
+      properties:
+        expires_in: { type: integer, minimum: 0, description: Остаток срока жизни подтверждения }
+        resend_after: { type: integer, minimum: 0 }
+
+    AuthLoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+
+    AuthRefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+
+    AuthLogoutRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+
+    AuthSessionUser:
+      type: object
+      required: [id, display_name, email, is_platform_admin]
+      properties:
+        id: { type: string, format: uuid, description: Локальный id (JIT-провижининг) }
+        display_name: { type: string }
+        email: { type: string, format: email }
+        is_platform_admin:
+          type: boolean
+          description: Серверный флаг платформенного администратора (R-03)
+
+    AuthSession:
+      type: object
+      required: [access_token, refresh_token, expires_in, token_type, user]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer, minimum: 1 }
+        token_type: { type: string, enum: [Bearer] }
+        user:
+          $ref: "#/components/schemas/AuthSessionUser"
+
+    WorkspaceSummary:
+      type: object
+      required: [id, name, slug, role, security_mode]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        role: { type: string, enum: [OWNER, ADMIN, MEMBER, GUEST] }
+        security_mode: { type: string, enum: [MANAGED, E2EE] }
+
+    WorkspaceMember:
+      type: object
+      required: [user_id, display_name, role, joined_at]
+      description: >
+        Активный участник воркспейса для выбора peer в DIRECT-чате. Возвращаются только
+        каталожные поля: email, пароли, устройства и ключи в ответ не попадают.
+        Вызывающий сам может быть в списке, если он активен; self-peer отсекается
+        сервером при создании DIRECT-чата.
+      properties:
+        user_id: { type: string, format: uuid }
+        display_name: { type: string, minLength: 1, maxLength: 80 }
+        role: { type: string, enum: [OWNER, ADMIN, MEMBER, GUEST] }
+        joined_at: { type: string, format: date-time }
+
+    WorkspaceMemberPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkspaceMember"
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    AddWorkspaceMemberRequest:
+      type: object
+      required: [email, role]
+      description: >
+        Только существующий ACTIVE-пользователь. `role=OWNER` не назначается: сервер
+        отвечает `403 ROLE_CHANGE_FORBIDDEN`; ADMIN может назначать только `MEMBER`/`GUEST`.
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        role: { type: string, enum: [OWNER, ADMIN, MEMBER, GUEST] }
+
+    ChangeWorkspaceMemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [OWNER, ADMIN, MEMBER, GUEST] }
+
+    CreateWorkspaceRequest:
+      type: object
+      required: [name, security_mode]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        security_mode: { type: string, enum: [MANAGED, E2EE] }
+
+    DeviceRegistration:
+      type: object
+      description: >
+        All-or-none: либо все ключи (`identity_signing_key`, `identity_dh_key`,
+        `identity_binding_signature`, `identity_key_alg`, `signed_prekey`) и опциональные
+        `one_time_prekeys`, либо ни одного. Частичный набор → 422 INVALID_KEY_FORMAT.
+        Без ключей → 201 legacy-устройство (`identity_key_alg=LEGACY`,
+        `e2ee_capable=false`). Legacy не апгрейдится in-place (D-17/D-S4-03).
+      required: [name, platform, app_version]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        platform: { type: string, enum: [WEB] }
+        app_version: { type: string, maxLength: 40 }
+        identity_signing_key: { $ref: "#/components/schemas/Base64Url32" }
+        identity_dh_key: { $ref: "#/components/schemas/Base64Url32" }
+        identity_binding_signature: { $ref: "#/components/schemas/Base64Url64" }
+        identity_key_alg: { type: string, enum: [Ed25519+X25519, LEGACY] }
+        signed_prekey: { $ref: "#/components/schemas/SignedPrekey" }
+        one_time_prekeys:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/OneTimePrekey" }
+
+    Notification:
+      type: object
+      required: [id, type, chat_id, title, created_at, read]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [MESSAGE, MENTION, SYSTEM] }
+        chat_id: { type: [string, "null"], format: uuid }
+        chat_name: { type: [string, "null"] }
+        title: { type: string }
+        body: { type: [string, "null"], description: "Для E2EE всегда null" }
+        created_at: { type: string, format: date-time }
+        read: { type: boolean }
+
+    NotificationPage:
+      type: object
+      required: [items, page, unread_count]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        page:
+          type: object
+          required: [has_more]
+          properties:
+            next_cursor: { type: [string, "null"] }
+            has_more: { type: boolean }
+        unread_count: { type: integer, minimum: 0 }
+
+    ReadNotificationsRequest:
+      type: object
+      properties:
+        ids:
+          type: array
+          maxItems: 100
+          items: { type: string, format: uuid }
+        all: { type: boolean, default: false }
+
+    NotificationPreference:
+      type: object
+      required: [type, channel, mode]
+      properties:
+        chat_id: { type: [string, "null"], format: uuid }
+        type: { type: string, enum: [MESSAGE, MENTION, SYSTEM] }
+        channel: { type: string, enum: [IN_APP, EMAIL] }
+        mode: { type: string, enum: [ALL, MENTIONS, MUTE] }
+
+    NotificationPreferences:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationPreference"
+
+    NotificationPreferencePatch:
+      allOf:
+        - $ref: "#/components/schemas/NotificationPreference"
+        - type: object
+          required: [mode]
+
+    StickerRef:
+      type: object
+      required: [id, pack_id, alt, url, favorite]
+      properties:
+        id: { type: string, format: uuid }
+        pack_id: { type: string, format: uuid }
+        alt: { type: string, maxLength: 120 }
+        url: { type: string }
+        favorite: { type: boolean }
+
+    StickerPack:
+      type: object
+      required: [id, name, cover_url, stickers]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        cover_url: { type: string }
+        stickers:
+          type: array
+          items:
+            $ref: "#/components/schemas/StickerRef"
+
+    StickerPackList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StickerPack"
+
+    WorkspaceLimits:
+      type: object
+      required:
+        [
+          tariff,
+          max_file_bytes,
+          storage_bytes,
+          max_attachments,
+          guest_file_bytes,
+          usage,
+          max_chats_per_user,
+          chats_used,
+        ]
+      properties:
+        tariff: { type: string, enum: [COMMUNITY, FAMILY, TEAM, ENTERPRISE] }
+        max_file_bytes: { type: integer, format: int64 }
+        storage_bytes: { type: integer, format: int64 }
+        max_attachments: { type: integer }
+        guest_file_bytes: { type: integer, format: int64 }
+        usage:
+          type: object
+          required: [used, reserved, limit]
+          properties:
+            used: { type: integer, format: int64 }
+            reserved: { type: integer, format: int64 }
+            limit: { type: integer, format: int64 }
+        max_chats_per_user:
+          type: integer
+          minimum: 1
+          description: Лимит активных чатов пользователя в воркспейсе (system_settings)
+        chats_used:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Текущее число активных чатов пользователя в воркспейсе
+
+    PreflightFile:
+      type: object
+      required: [name, size]
+      properties:
+        name: { type: string, maxLength: 255 }
+        size: { type: integer, format: int64, minimum: 1 }
+        mime: { type: string }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+
+    PreflightRequest:
+      type: object
+      required: [chat_id, files]
+      properties:
+        chat_id: { type: string, format: uuid }
+        files:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/PreflightFile"
+
+    PreflightDecision:
+      type: object
+      required: [name, allowed]
+      properties:
+        name: { type: string }
+        allowed: { type: boolean }
+        error: { type: [string, "null"] }
+        details:
+          type: object
+          additionalProperties: true
+        part_size: { type: [integer, "null"] }
+
+    PreflightResponse:
+      type: object
+      required: [decision, max_file_bytes, max_attachments, quota, files]
+      properties:
+        decision: { type: string, enum: [ALLOW, DENY] }
+        max_file_bytes: { type: integer, format: int64 }
+        max_attachments: { type: integer }
+        quota:
+          type: object
+          required: [used, reserved, limit]
+          properties:
+            used: { type: integer, format: int64 }
+            reserved: { type: integer, format: int64 }
+            limit: { type: integer, format: int64 }
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/PreflightDecision"
+
+    UploadInitRequest:
+      type: object
+      required: [chat_id, filename, size, encryption_mode]
+      properties:
+        chat_id: { type: string, format: uuid }
+        filename: { type: string, maxLength: 255 }
+        size: { type: integer, format: int64, minimum: 1 }
+        mime: { type: string }
+        encryption_mode: { type: string, enum: [MANAGED] }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+
+    UploadSession:
+      type: object
+      required: [upload_id, status, part_size, total_parts, expires_at]
+      properties:
+        upload_id: { type: string, format: uuid }
+        status:
+          type: string
+          enum:
+            [
+              INIT,
+              UPLOADING,
+              PAUSED,
+              COMPLETING,
+              SCANNING,
+              READY,
+              QUARANTINED,
+              BOUND,
+              FAILED,
+              ABORTED,
+              EXPIRED,
+            ]
+        part_size: { type: integer }
+        total_parts: { type: integer }
+        received_parts:
+          type: array
+          items: { type: integer }
+        expires_at: { type: string, format: date-time }
+        attachment_id: { type: [string, "null"], format: uuid }
+
+    UploadPart:
+      type: object
+      required: [part_no, received]
+      properties:
+        part_no: { type: integer }
+        received: { type: boolean }
+        etag: { type: [string, "null"] }
+        size_bytes: { type: integer, format: int64 }
+
+    UploadCompleteRequest:
+      type: object
+      required: [sha256, parts_count]
+      properties:
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        parts_count: { type: integer, minimum: 1 }
+
+    AttachmentRef:
+      type: object
+      required: [id, size_bytes, scan_status]
+      properties:
+        id: { type: string, format: uuid }
+        filename: { type: [string, "null"] }
+        size_bytes: { type: integer, format: int64 }
+        mime_type: { type: [string, "null"] }
+        scan_status:
+          { type: string, enum: [PENDING, CLEAN, INFECTED, FAILED, SKIPPED] }
+
+    DownloadUrl:
+      type: object
+      required: [url, expires_at, size_bytes, sha256]
+      properties:
+        url: { type: string, format: uri }
+        expires_at: { type: string, format: date-time }
+        size_bytes: { type: integer, format: int64 }
+        sha256: { type: string }
+
+    RealtimeTicket:
+      type: object
+      required: [ticket, expires_at, ws_url]
+      properties:
+        ticket: { type: string }
+        expires_at: { type: string, format: date-time }
+        ws_url: { type: string, example: "ws://localhost:8081/ws" }
+
+    Device:
+      type: object
+      required: [id, platform, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: [string, "null"] }
+        platform: { type: string, enum: [WEB] }
+        status: { type: string, enum: [PENDING, ACTIVE, REVOKED] }
+        e2ee_capable: { type: boolean }
+        key_generation: { type: integer, minimum: 1 }
+        identity_signing_key:
+          oneOf:
+            - $ref: "#/components/schemas/Base64Url32"
+            - type: "null"
+        identity_dh_key:
+          oneOf:
+            - $ref: "#/components/schemas/Base64Url32"
+            - type: "null"
+        identity_binding_signature:
+          oneOf:
+            - $ref: "#/components/schemas/Base64Url64"
+            - type: "null"
+        identity_key_alg: { type: string, enum: [Ed25519+X25519, LEGACY] }
+        fingerprint:
+          oneOf:
+            - $ref: "#/components/schemas/Base64Url32"
+            - type: "null"
+        signed_prekey:
+          oneOf:
+            - $ref: "#/components/schemas/SignedPrekey"
+            - type: "null"
+        one_time_prekeys_available: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: [string, "null"], format: date-time }
+
+    DeviceList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Device" }
+
+    ChatSummary:
+      type: object
+      required: [id, name, type, security_mode, unread_count, last_seq]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: [string, "null"] }
+        type: { type: string, enum: [DIRECT, GROUP] }
+        security_mode: { type: string, enum: [MANAGED, E2EE] }
+        peer_id: { type: [string, "null"], format: uuid }
+        peer_has_e2ee_capable_devices: { type: boolean }
+        last_message_at: { type: [string, "null"], format: date-time }
+        unread_count: { type: integer, minimum: 0 }
+        last_seq: { type: integer, format: int64, minimum: 0 }
+
+    ChatList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatSummary"
+
+    Message:
+      type: object
+      required: [id, chat_id, seq, type, created_at, version]
+      properties:
+        id: { type: string, format: uuid }
+        chat_id: { type: string, format: uuid }
+        seq: { type: integer, format: int64, minimum: 1 }
+        type: { type: string, enum: [TEXT, STICKER, SYSTEM] }
+        sender_id: { type: [string, "null"], format: uuid }
+        sender_display_name: { type: [string, "null"] }
+        text: { type: [string, "null"] }
+        reply_to_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        edited_at: { type: [string, "null"], format: date-time }
+        deleted_at: { type: [string, "null"], format: date-time }
+        version: { type: integer, minimum: 1 }
+        sticker_id: { type: [string, "null"], format: uuid }
+        sticker:
+          type: [object, "null"]
+          allOf:
+            - $ref: "#/components/schemas/StickerRef"
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttachmentRef"
+        client_message_id: { type: [string, "null"], format: uuid }
+        crypto:
+          oneOf:
+            - $ref: "#/components/schemas/CryptoEnvelope"
+            - type: "null"
+
+    MessageCreate:
+      type: object
+      description: >
+        Managed: text/sticker/attachments. E2EE: только `envelopes[]`; `text`,
+        `sticker_id`, `attachment_ids`, `reply_to_id` запрещены (422
+        E2EE_PLAINTEXT_FORBIDDEN). Managed-запрос с `envelopes` → 422
+        ENVELOPES_NOT_ALLOWED; при выключенном флаге E2EE → 409 E2EE_DISABLED.
+      required: [client_message_id, type]
+      properties:
+        client_message_id: { type: string, format: uuid }
+        type: { type: string, enum: [TEXT, STICKER] }
+        text: { type: [string, "null"], maxLength: 8000 }
+        reply_to_id: { type: [string, "null"], format: uuid }
+        sticker_id: { type: [string, "null"], format: uuid }
+        attachment_ids:
+          type: array
+          maxItems: 10
+          items: { type: string, format: uuid }
+        envelopes:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: "#/components/schemas/CryptoEnvelope" }
+
+    MessagePage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        page:
+          type: object
+          required: [has_more]
+          properties:
+            next_cursor: { type: [string, "null"] }
+            has_more: { type: boolean }
+
+    Base64Url16:
+      type: string
+      contentEncoding: base64url
+      pattern: "^[A-Za-z0-9_-]{22}$"
+    Base64Url32:
+      type: string
+      contentEncoding: base64url
+      pattern: "^[A-Za-z0-9_-]{43}$"
+    Base64Url64:
+      type: string
+      contentEncoding: base64url
+      pattern: "^[A-Za-z0-9_-]{86}$"
+
+    SignedPrekey:
+      type: object
+      additionalProperties: false
+      required: [key_id, public_key, signature]
+      properties:
+        key_id:
+          {
+            type: string,
+            minLength: 1,
+            maxLength: 64,
+            pattern: "^[A-Za-z0-9._-]+$",
+          }
+        public_key: { $ref: "#/components/schemas/Base64Url32" }
+        signature: { $ref: "#/components/schemas/Base64Url64" }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    OneTimePrekey:
+      type: object
+      additionalProperties: false
+      required: [key_id, public_key]
+      properties:
+        key_id:
+          {
+            type: string,
+            minLength: 1,
+            maxLength: 64,
+            pattern: "^[A-Za-z0-9._-]+$",
+          }
+        public_key: { $ref: "#/components/schemas/Base64Url32" }
+
+    CryptoHeader:
+      type: object
+      additionalProperties: false
+      required: [v, dh, pn, n]
+      properties:
+        v: { type: integer, enum: [1] }
+        dh: { $ref: "#/components/schemas/Base64Url32" }
+        pn: { type: integer, minimum: 0, maximum: 2147483647 }
+        n: { type: integer, minimum: 0, maximum: 2147483647 }
+
+    PrekeyBlock:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          sender_identity_signing_key,
+          sender_identity_dh_key,
+          sender_ephemeral_key,
+          recipient_identity_dh_key,
+          spk_id,
+          spk_public,
+          signature,
+        ]
+      properties:
+        sender_identity_signing_key:
+          { $ref: "#/components/schemas/Base64Url32" }
+        sender_identity_dh_key: { $ref: "#/components/schemas/Base64Url32" }
+        sender_ephemeral_key: { $ref: "#/components/schemas/Base64Url32" }
+        recipient_identity_dh_key: { $ref: "#/components/schemas/Base64Url32" }
+        spk_id:
+          {
+            type: string,
+            minLength: 1,
+            maxLength: 64,
+            pattern: "^[A-Za-z0-9._-]+$",
+          }
+        spk_public: { $ref: "#/components/schemas/Base64Url32" }
+        opk_id:
+          {
+            type: [string, "null"],
+            maxLength: 64,
+            pattern: "^[A-Za-z0-9._-]+$",
+          }
+        opk_public:
+          oneOf:
+            - $ref: "#/components/schemas/Base64Url32"
+            - type: "null"
+        signature: { $ref: "#/components/schemas/Base64Url64" }
+
+    CryptoEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          v,
+          scheme,
+          chat_id,
+          sender_device_id,
+          sender_key_generation,
+          recipient_device_id,
+          recipient_key_generation,
+          session_id,
+          header,
+          ciphertext,
+        ]
+      properties:
+        v: { type: integer, enum: [1] }
+        scheme: { type: string, enum: [PAIRWISE_X3DH_DR] }
+        chat_id: { type: string, format: uuid }
+        sender_device_id: { type: string, format: uuid }
+        sender_key_generation:
+          { type: integer, minimum: 1, maximum: 2147483647 }
+        recipient_device_id: { type: string, format: uuid }
+        recipient_key_generation:
+          { type: integer, minimum: 1, maximum: 2147483647 }
+        session_id: { $ref: "#/components/schemas/Base64Url16" }
+        header: { $ref: "#/components/schemas/CryptoHeader" }
+        ciphertext:
+          type: string
+          contentEncoding: base64url
+          minLength: 363
+          maxLength: 44054
+        prekey:
+          oneOf:
+            - $ref: "#/components/schemas/PrekeyBlock"
+            - type: "null"
+
+    SignedPrekeyUpload:
+      type: object
+      additionalProperties: false
+      properties:
+        signed_prekey: { $ref: "#/components/schemas/SignedPrekey" }
+        one_time_prekeys:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/OneTimePrekey" }
+
+    PrekeyUploadResult:
+      type: object
+      required: [device_id, key_generation, one_time_prekeys_available]
+      properties:
+        device_id: { type: string, format: uuid }
+        key_generation: { type: integer, minimum: 1 }
+        signed_prekey_id: { type: [string, "null"] }
+        signed_prekey_expires_at: { type: [string, "null"], format: date-time }
+        one_time_prekeys_stored: { type: integer, minimum: 0 }
+        one_time_prekeys_available: { type: integer, minimum: 0 }
+        one_time_prekeys_limit: { type: integer, enum: [200] }
+
+    KeyClaimRequest:
+      type: object
+      required: [chat_id, devices]
+      properties:
+        chat_id: { type: string, format: uuid }
+        devices:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required: [device_id, user_id]
+            properties:
+              device_id: { type: string, format: uuid }
+              user_id: { type: string, format: uuid }
+
+    PrekeyBundle:
+      type: object
+      required:
+        [
+          user_id,
+          device_id,
+          key_generation,
+          identity_signing_key,
+          identity_dh_key,
+          identity_binding_signature,
+          identity_key_alg,
+          signed_prekey,
+          otp_exhausted,
+        ]
+      properties:
+        user_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        key_generation: { type: integer, minimum: 1 }
+        identity_signing_key: { $ref: "#/components/schemas/Base64Url32" }
+        identity_dh_key: { $ref: "#/components/schemas/Base64Url32" }
+        identity_binding_signature: { $ref: "#/components/schemas/Base64Url64" }
+        identity_key_alg: { type: string, enum: [Ed25519+X25519] }
+        signed_prekey: { $ref: "#/components/schemas/SignedPrekey" }
+        one_time_prekey:
+          oneOf:
+            - $ref: "#/components/schemas/OneTimePrekey"
+            - type: "null"
+        otp_exhausted: { type: boolean }
+
+    UnavailableDevice:
+      type: object
+      required: [device_id, reason]
+      properties:
+        device_id: { type: string, format: uuid }
+        reason: { type: string, enum: [NO_SPK, NO_KEYS] }
+
+    KeyClaimResponse:
+      type: object
+      required: [bundles, unavailable]
+      properties:
+        bundles:
+          type: array
+          items: { $ref: "#/components/schemas/PrekeyBundle" }
+        unavailable:
+          type: array
+          items: { $ref: "#/components/schemas/UnavailableDevice" }
+
+    DeviceKeyInfo:
+      type: object
+      required:
+        [
+          device_id,
+          user_id,
+          status,
+          key_generation,
+          identity_signing_key,
+          identity_dh_key,
+          identity_binding_signature,
+          identity_key_alg,
+          fingerprint,
+          is_self,
+        ]
+      properties:
+        device_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        platform: { type: string, enum: [WEB] }
+        status: { type: string, enum: [PENDING, ACTIVE, REVOKED] }
+        identity_signing_key: { $ref: "#/components/schemas/Base64Url32" }
+        identity_dh_key: { $ref: "#/components/schemas/Base64Url32" }
+        identity_binding_signature: { $ref: "#/components/schemas/Base64Url64" }
+        identity_key_alg: { type: string, enum: [Ed25519+X25519] }
+        fingerprint: { $ref: "#/components/schemas/Base64Url32" }
+        key_generation: { type: integer, minimum: 1 }
+        signed_prekey_id: { type: [string, "null"] }
+        is_self: { type: boolean }
+        verified: { type: [boolean, "null"] }
+        verified_at: { type: [string, "null"], format: date-time }
+        verification_method:
+          { type: [string, "null"], enum: [QR, MANUAL, null] }
+        last_seen_at: { type: [string, "null"], format: date-time }
+
+    ChatKeysResponse:
+      type: object
+      required:
+        [chat_id, security_mode, my_device_id, verifier_device_id, devices]
+      properties:
+        chat_id: { type: string, format: uuid }
+        security_mode: { type: string, enum: [E2EE], readOnly: true }
+        key_epoch: { type: [integer, "null"], minimum: 0 }
+        my_device_id: { type: string, format: uuid }
+        verifier_device_id: { type: string, format: uuid }
+        verified_count: { type: integer, minimum: 0 }
+        verified_by_other_devices_count: { type: integer, minimum: 0 }
+        devices_total: { type: integer, minimum: 0 }
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/DeviceKeyInfo" }
+
+    VerificationRequest:
+      type: object
+      additionalProperties: false
+      required: [device_id, method, vh_version, safety_number_hash]
+      properties:
+        device_id: { type: string, format: uuid }
+        method: { type: string, enum: [QR, MANUAL] }
+        vh_version: { type: integer, enum: [2] }
+        safety_number_hash: { $ref: "#/components/schemas/Base64Url32" }
+        # Optional TOFU guard: the target key_generation the verifier saw. A mismatch is
+        # 409 KEY_CHANGED and no row is written (E2EE-SPEC §6.2.7/§7.5).
+        expected_key_generation: { type: integer, minimum: 1 }
+
+    VerificationResponse:
+      type: object
+      required:
+        [
+          chat_id,
+          verifier_device_id,
+          device_id,
+          key_generation,
+          verified,
+          verified_at,
+          method,
+        ]
+      properties:
+        chat_id: { type: string, format: uuid }
+        verifier_device_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        key_generation: { type: integer, minimum: 1 }
+        verified: { type: boolean }
+        verified_at: { type: string, format: date-time }
+        method: { type: string, enum: [QR, MANUAL] }
+
+    EnvelopeCoverage:
+      type: object
+      required:
+        [
+          devices,
+          covered,
+          peer_devices,
+          peer_covered,
+          self_devices,
+          self_covered,
+          uncovered_device_ids,
+        ]
+      properties:
+        devices: { type: integer, minimum: 0 }
+        covered: { type: integer, minimum: 0 }
+        peer_devices:
+          type: integer
+          minimum: 0
+          description: >
+            ACTIVE e2ee_capable devices of the peer at the time the coverage is
+            computed. A new E2EE send always has at least 1 (otherwise
+            E2EE_NO_ACTIVE_DEVICES); an idempotent replay of an already stored
+            message may honestly report 0 after the peer revoked its device
+            (E2EE-REVIEW-06 P2-01). Never clamp this value to 1.
+        peer_covered: { type: integer, minimum: 0 }
+        self_devices: { type: integer, minimum: 0 }
+        self_covered: { type: integer, minimum: 0 }
+        warning:
+          type: [string, "null"]
+          enum: [SELF_DEVICE_UNCOVERED, PEER_DEVICE_UNCOVERED, null]
+        uncovered_device_ids:
+          type: array
+          items: { type: string, format: uuid }
+
+    MessageCreateResult:
+      allOf:
+        - $ref: "#/components/schemas/Message"
+        - type: object
+          properties:
+            envelope_coverage: { $ref: "#/components/schemas/EnvelopeCoverage" }
+
+    ChatCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [DIRECT, GROUP] }
+        peer_id: { type: [string, "null"], format: uuid }
+        name: { type: [string, "null"], maxLength: 120 }
+
+    Chat:
+      type: object
+      required: [id, type, security_mode, last_seq, unread_count, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [DIRECT, GROUP] }
+        security_mode: { type: string, enum: [MANAGED, E2EE], readOnly: true }
+        peer_id: { type: [string, "null"], format: uuid }
+        peer_has_e2ee_capable_devices: { type: boolean }
+        name: { type: [string, "null"] }
+        key_epoch: { type: [integer, "null"], minimum: 0 }
+        last_seq: { type: integer, format: int64, minimum: 0 }
+        unread_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+
+    ReadRequest:
+      type: object
+      required: [last_seq]
+      properties:
+        last_seq: { type: integer, format: int64, minimum: 0 }
+
+    SyncResponse:
+      type: object
+      required: [server_time, chats]
+      properties:
+        server_time: { type: string, format: date-time }
+        chats:
+          type: array
+          items:
+            type: object
+            required: [chat_id, last_seq, unread_count]
+            properties:
+              chat_id: { type: string, format: uuid }
+              last_seq: { type: integer, format: int64, minimum: 0 }
+              unread_count: { type: integer, minimum: 0 }
+
+  responses:
+    BadRequest:
+      description: Неверный запрос
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Нет/просрочен токен
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Нет прав
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Объект не найден или недоступен
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Конфликт состояния или идемпотентности
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unprocessable:
+      description: Семантическая ошибка
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Gone:
+      description: Объект истёк или удалён
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooLarge:
+      description: Превышен лимит размера
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UnsupportedMediaType:
+      description: Формат не поддерживается
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyRequests:
+      description: Rate limit
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ServiceUnavailable:
+      description: >
+        Внешняя зависимость BFF недоступна (Keycloak/SMTP) — `AUTH_UNAVAILABLE`.
+        Повтор допустим после `Retry-After`.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

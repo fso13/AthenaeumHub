@@ -1,0 +1,38 @@
+# Prod-like profile: the dev bootstrap endpoint does not exist (404) and identity comes
+# from Keycloak OIDC only. There are deliberately no dev defaults for secrets, OIDC or the
+# database: ProdGuard fails startup with a clear list of missing/insecure settings.
+krug:
+  # HMAC dev tokens are not issued or accepted in prod, but the secret is still required so
+  # a deployment cannot accidentally inherit the development value.
+  auth:
+    jwt-secret: ${KRUG_AUTH_JWT_SECRET:}
+  content:
+    key: ${KRUG_CONTENT_KEY:}
+  oidc:
+    issuer: ${KRUG_OIDC_ISSUER:}
+    jwk-set-uri: ${KRUG_OIDC_JWKS_URI:}
+    audience: ${KRUG_OIDC_AUDIENCE:krug-api}
+    authorized-party: ${KRUG_OIDC_AZP:krug-web}
+    clock-skew: ${KRUG_OIDC_CLOCK_SKEW:30s}
+  rate-limit:
+    enabled: true
+  realtime:
+    # Fail closed: set KRUG_WS_ALLOWED_ORIGINS to the deployed SPA origin(s).
+    allowed-origins: "${KRUG_WS_ALLOWED_ORIGINS:}"
+
+# Production must supply its own DB credentials (no krug_app/krug_migrator defaults).
+# Flyway and the runtime pool may use different roles.
+spring:
+  datasource:
+    url: ${DB_URL:}
+    username: ${DB_USER:}
+    password: ${DB_PASSWORD:}
+  flyway:
+    url: ${FLYWAY_URL:${DB_URL:}}
+    user: ${FLYWAY_USER:}
+    password: ${FLYWAY_PASSWORD:}
+
+logging:
+  level:
+    root: INFO
+    org.springframework.security: WARN

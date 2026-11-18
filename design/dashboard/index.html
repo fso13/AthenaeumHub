@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="design-version" content="1.0.0" />
+  <meta name="design-frozen" content="2026-11-18" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#F2F4F7" />
+  <title>Pickle — Message Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="assets/app-icon.svg" />
+</head>
+<body data-theme="light">
+
+<!-- ══════════ ICONS ══════════ -->
+<svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.6"/><path d="m20 20-3.3-3.3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6.5 9.5 5.5 5.5 5.5-5.5"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9.5 5.5 6.5 6.5-6.5 6.5"/></symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m14.5 5.5-6.5 6.5 6.5 6.5"/></symbol>
+  <symbol id="i-dashboard" viewBox="0 0 24 24"><path d="M12 3 20 7.4v9.2L12 21l-8-4.4V7.4L12 3Z"/><path d="m4.2 7.6 7.8 4.3 7.8-4.3M12 12v8.6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.4A2.4 2.4 0 0 1 5.9 5h3.3l2 2.6h6.9a2.4 2.4 0 0 1 2.4 2.4v7.6a2.4 2.4 0 0 1-2.4 2.4H5.9a2.4 2.4 0 0 1-2.4-2.4V7.4Z"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3.6v3.8M15 3.6v3.8"/><path d="M6.6 7.4h10.8v3.1a5.4 5.4 0 0 1-10.8 0V7.4Z"/><path d="M12 15.9v4.5"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.4 5.2 6.2v5.1c0 4.1 2.8 7.5 6.8 9 4-1.5 6.8-4.9 6.8-9V6.2L12 3.4Z"/></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M12 3.4 5.2 6.2v5.1c0 4.1 2.8 7.5 6.8 9 4-1.5 6.8-4.9 6.8-9V6.2L12 3.4Z"/><path d="m8.9 11.8 2.1 2.1 4.2-4.3"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.1 14.6a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9.4 3.8 7.9 20.2M16.2 3.8l-1.5 16.4M3.8 8.4h16.4M3.2 15.6h16.4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.4" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="18.6" cy="12" r="1.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M6.7 3.8 9 3.2l1.8 4.2-1.9 1.4a12 12 0 0 0 4.9 4.9l1.4-1.9 4.2 1.8-.6 2.4c-.3 1.3-1.5 2.1-2.8 1.9C9.8 16.9 7 14.1 5.8 7.1c-.2-1.5.5-2.9 1.9-3.3Z"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6.2" width="12" height="11.6" rx="3"/><path d="m15 10.6 5-2.9v8.6l-5-2.9"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 11.2v5.1M12 7.8v.2"/></symbol>
+  <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m19.8 11.4-7.6 7.6a5 5 0 0 1-7.1-7.1l8.4-8.4a3.5 3.5 0 0 1 4.9 4.9l-8.1 8.1a2 2 0 0 1-2.9-2.8l7.1-7.1"/></symbol>
+  <symbol id="i-sticker" viewBox="0 0 24 24"><path d="M4.4 7.6a3.1 3.1 0 0 1 3.1-3.1h9a3.1 3.1 0 0 1 3.1 3.1v6.1l-5.7 5.8H7.5a3.1 3.1 0 0 1-3.1-3.1V7.6Z"/><path d="M19.6 13.5h-3.8a2 2 0 0 0-2 2v3.9"/><path d="M8.6 13.6a3 3 0 0 0 4.9 0"/><path d="M9 9.4v.2M14.4 9.4v.2"/></symbol>
+  <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M8.6 13.8a4.1 4.1 0 0 0 6.8 0"/><path d="M9.2 9.4v.2M14.8 9.4v.2"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M20.3 3.7 3.9 10.3a.5.5 0 0 0 .02.94l6.36 2.1 2.1 6.36a.5.5 0 0 0 .94.02L20.3 3.7Z"/><path d="m10.3 13.4 4.6-4.6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6.2 6.2 17.8 17.8M17.8 6.2 6.2 17.8"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.6" y="10.4" width="14.8" height="10.2" rx="3"/><path d="M8.1 10.4V8a3.9 3.9 0 0 1 7.8 0v2.4"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.4" r="3.3"/><path d="M3.4 20c.4-3.3 2.7-5.1 5.6-5.1s5.2 1.8 5.6 5.1"/><path d="M15.9 5.5a3.3 3.3 0 0 1 0 5.9"/><path d="M17.5 15.2c1.9.6 3 2.2 3.3 4.4"/></symbol>
+  <symbol id="i-user-plus" viewBox="0 0 24 24"><circle cx="9.4" cy="8.4" r="3.5"/><path d="M3.4 20.2c.4-3.4 2.8-5.3 6-5.3 1.2 0 2.3.3 3.2.8"/><path d="M18.4 13.6v6M15.4 16.6h6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.6h7.6L19 9v11.4H6V3.6Z"/><path d="M13.6 3.6V9H19"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.4" y="4.4" width="17.2" height="15.2" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m5 17.4 4.6-4.6 4.6 4.6 2.6-2.6 3.7 3.7"/></symbol>
+  <symbol id="i-poll" viewBox="0 0 24 24"><path d="M5.2 19.4V9.6M12 19.4V4.8M18.8 19.4v-6.8"/><path d="M2.6 19.4h18.8"/></symbol>
+  <symbol id="i-task" viewBox="0 0 24 24"><rect x="3.8" y="3.8" width="16.4" height="16.4" rx="4.4"/><path d="m8.3 12 2.4 2.4 5.1-5.2"/></symbol>
+  <symbol id="i-translate" viewBox="0 0 24 24"><path d="M3.6 5.6h8.2M7.7 3.6v2c0 4-2 7.1-5 8.6"/><path d="M4.8 10.6c1.3 2.6 3.3 4.1 6.1 4.6"/><path d="m11.8 20.4 4.1-10.2 4.1 10.2M13.4 16.9h5.1"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4.2"/><path d="M12.2 12h8.6M18.2 12v3.1M15.7 12v2.1"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4.4" width="18" height="12.4" rx="2.6"/><path d="M9 20h6M12 16.8V20"/></symbol>
+  <symbol id="i-smartphone" viewBox="0 0 24 24"><rect x="7" y="2.6" width="10" height="18.8" rx="2.6"/><path d="M11 18.4h2"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14.6 4.4h3.2A2.2 2.2 0 0 1 20 6.6v10.8a2.2 2.2 0 0 1-2.2 2.2h-3.2"/><path d="M10 8.2 5.8 12l4.2 3.8M5.8 12h9.4"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.6v2.1M12 19.3v2.1M4.2 4.2l1.5 1.5M18.3 18.3l1.5 1.5M2.6 12h2.1M19.3 12h2.1M4.2 19.8l1.5-1.5M18.3 5.7l1.5-1.5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8Z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.2 9.6a5.8 5.8 0 0 1 11.6 0c0 4.8 1.9 5.4 1.9 5.4H4.3s1.9-.6 1.9-5.4Z"/><path d="M10 18.6a2.2 2.2 0 0 0 4 0"/></symbol>
+  <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M6.2 9.6a5.8 5.8 0 0 1 9.7-4.4M17.8 11.6c0 3.4 1.9 3.4 1.9 3.4H7.2"/><path d="M10 18.6a2.2 2.2 0 0 0 4 0M4 4l16 16"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="m9 4 6 0-.8 5.2 3 3.1-4.3.9L12 20l-1.9-6.8-4.3-.9 3-3.1L9 4Z"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="M10 8.4 4.4 13.2 10 18"/><path d="M4.4 13.2h8.7a6 6 0 0 1 6 6v.6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.4 4.5 4.5L19 6.8"/></symbol>
+  <symbol id="i-check-double" viewBox="0 0 24 24"><path d="m2.6 12.6 4 4L15 8"/><path d="m9.8 16.6 1.5 1.5L20 8"/></symbol>
+  <symbol id="i-crown" viewBox="0 0 24 24"><path d="m3.6 8.2 4.4 4 4-6.6 4 6.6 4.4-4-1.7 10.4H5.3L3.6 8.2Z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 21 20H3L12 4Z"/><path d="M12 9.6v4.5M12 17.3v.2"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l2.6-2.6a4.5 4.5 0 0 0-6.4-6.4L11 6.6"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0L5 12.6a4.5 4.5 0 0 0 6.4 6.4l1.6-1.6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.6v11M7.6 10.2 12 14.6l4.4-4.4"/><path d="M4.6 19.6h14.8"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5 19 12 8 18.5v-13Z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.4V12l3 2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.6 12S6.1 5.6 12 5.6 21.4 12 21.4 12 17.9 18.4 12 18.4 2.6 12 2.6 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M6 20.4V4.2c4.2-2 6 2.2 11 0v9.4c-5 2.2-6.8-2-11 0"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.6 7h14.8M9.4 7V4.6h5.2V7M6.4 7l1 13h9.2l1-13M10.2 11v5.4M13.8 11v5.4"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.4" y="8.4" width="11.4" height="11.4" rx="3"/><path d="M15.6 8.4V6.2a2 2 0 0 0-2-2H6.2a2 2 0 0 0-2 2v7.4a2 2 0 0 0 2 2h2.2"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"/><path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.2 2.3 3.3 5.1 3.3 8.4S14.2 18.1 12 20.4C9.8 18.1 8.7 15.3 8.7 12S9.8 5.9 12 3.6Z"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v4.6a3 3 0 0 0 4.4 2.4A9 9 0 1 0 17 20.1"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h11"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.6 11.4a6.4 6.4 0 0 0 12.8 0M12 17.8v3.2M8.6 21h6.8"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5.5v13M15 5.5v13"/></symbol>
+  <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V6.5l10-2v11"/><circle cx="6.2" cy="18" r="2.8"/><circle cx="16.2" cy="15.5" r="2.8"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="3.4" y="5.4" width="17.2" height="13.2" rx="2.6"/><path d="M7.4 5.4v13.2M16.6 5.4v13.2M3.4 12h17.2M3.4 8.7h4M3.4 15.3h4M16.6 8.7h4M16.6 15.3h4"/></symbol>
+  <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="13" width="4.2" height="7" rx="2"/><rect x="16.8" y="13" width="4.2" height="7" rx="2"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5.4M11 5.6 4.6 12l6.4 6.4"/></symbol>
+  <symbol id="i-thread" viewBox="0 0 24 24"><path d="M4.4 6.8A2.8 2.8 0 0 1 7.2 4h9.6a2.8 2.8 0 0 1 2.8 2.8v6.4a2.8 2.8 0 0 1-2.8 2.8H9.2l-4.8 4v-4.2a2.8 2.8 0 0 1-2-2.6V6.8Z"/><path d="M8 8.6h8M8 11.7h5.4"/></symbol>
+</svg>
+
+<div class="backdrop"></div>
+
+<div class="app" id="app">
+
+  <!-- ══════════ RAIL ══════════ -->
+  <aside class="rail" aria-label="Пространства">
+    <a class="rail-logo" href="#" aria-label="Pickle">
+      <img src="assets/app-icon.svg" alt="" width="40" height="40" />
+    </a>
+    <div class="rail-spaces" id="rail-spaces"></div>
+    <button class="rail-add" id="rail-add" aria-label="Создать пространство" title="Создать пространство">
+      <svg class="i"><use href="#i-plus"/></svg>
+    </button>
+  </aside>
+
+  <!-- ══════════ SIDEBAR ══════════ -->
+  <aside class="sidebar" id="sidebar" aria-label="Навигация и чаты">
+    <header class="ws-head">
+      <button class="ws-btn" id="ws-btn" aria-haspopup="menu" aria-expanded="false">
+        <span id="ws-name">Студия «Восход»</span>
+        <svg class="i chev"><use href="#i-chevron-down"/></svg>
+      </button>
+      <button class="icon-btn" id="new-chat" aria-label="Новый чат" title="Новый чат">
+        <svg class="i"><use href="#i-plus"/></svg>
+      </button>
+
+      <div class="ws-menu" id="ws-menu" role="menu" hidden>
+        <div class="menu-label">Пространства</div>
+        <div id="ws-menu-list"></div>
+        <button class="ws-create" id="ws-create" role="menuitem">
+          <svg class="i"><use href="#i-plus"/></svg>
+          Создать пространство
+        </button>
+      </div>
+    </header>
+
+    <nav class="nav" id="nav" aria-label="Разделы"></nav>
+
+    <div class="side-scroll" id="side-scroll"></div>
+
+    <footer class="me">
+      <button class="me-btn" id="me-btn" title="Профиль и настройки">
+        <span class="av av-36 av-me">ДК<span class="presence is-online"></span></span>
+        <span class="me-text">
+          <b>Дмитрий Крылов</b>
+          <span class="me-status"><i class="dot is-online"></i>В сети</span>
+        </span>
+      </button>
+      <div class="me-actions">
+        <button class="icon-btn" id="theme-toggle" aria-label="Переключить тему" title="Светлая / тёмная тема">
+          <svg class="i i-sun"><use href="#i-sun"/></svg>
+          <svg class="i i-moon"><use href="#i-moon"/></svg>
+        </button>
+        <button class="icon-btn" id="logout" aria-label="Выйти" title="Выйти">
+          <svg class="i"><use href="#i-logout"/></svg>
+        </button>
+      </div>
+    </footer>
+  </aside>
+
+  <!-- ══════════ CHAT ══════════ -->
+  <main class="chat" id="chat">
+    <header class="chat-head">
+      <button class="mobile-back" id="mobile-back" aria-label="К списку чатов">
+        <svg class="i"><use href="#i-chevron-left"/></svg>
+      </button>
+      <button class="chat-id" id="chat-id" aria-label="Открыть информацию о чате"></button>
+      <div class="chat-actions">
+        <button class="icon-btn" id="search-toggle" aria-label="Поиск в переписке" title="Поиск в переписке">
+          <svg class="i"><use href="#i-search"/></svg>
+        </button>
+        <button class="icon-btn hide-sm" id="call-btn" aria-label="Аудиозвонок" title="Аудиозвонок">
+          <svg class="i"><use href="#i-phone"/></svg>
+        </button>
+        <button class="icon-btn hide-sm" id="video-btn" aria-label="Видеозвонок" title="Видеозвонок">
+          <svg class="i"><use href="#i-video"/></svg>
+        </button>
+        <button class="icon-btn" id="details-toggle" aria-label="Панель чата" title="О чате">
+          <svg class="i"><use href="#i-info"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="chat-search" id="chat-search" hidden>
+      <svg class="i"><use href="#i-search"/></svg>
+      <input id="search-input" type="search" placeholder="Поиск в переписке" aria-label="Поиск в переписке" autocomplete="off" />
+      <span class="search-count" id="search-count"></span>
+      <button class="icon-btn icon-btn--sm" id="search-close" aria-label="Закрыть поиск">
+        <svg class="i"><use href="#i-x"/></svg>
+      </button>
+    </div>
+
+    <div class="messages" id="messages" tabindex="0" aria-live="polite"></div>
+
+    <div class="composer-wrap">
+      <div class="typing" id="typing" hidden>
+        <span class="typing-dots"><i></i><i></i><i></i></span>
+        <span id="typing-name">Анна печатает…</span>
+      </div>
+
+      <div class="recording" id="recording" hidden aria-live="polite">
+        <span class="rec-dot"></span>
+        <span class="rec-time" id="rec-time">0:00</span>
+        <div class="rec-wave" id="rec-wave" aria-hidden="true"></div>
+        <span class="rec-hint">Запись голосового</span>
+        <button type="button" class="rec-btn" id="rec-cancel" aria-label="Отменить запись" title="Отменить">
+          <svg class="i"><use href="#i-trash"/></svg>
+        </button>
+        <button type="button" class="rec-send" id="rec-send" aria-label="Отправить голосовое" title="Отправить">
+          <svg class="i"><use href="#i-send"/></svg>
+        </button>
+      </div>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <button type="button" class="round-btn" id="attach" aria-label="Прикрепить" title="Прикрепить">
+          <svg class="i"><use href="#i-plus"/></svg>
+        </button>
+        <button type="button" class="round-btn" id="sticker-btn" aria-label="Стикеры" title="Стикеры">
+          <svg class="i"><use href="#i-sticker"/></svg>
+        </button>
+
+        <div class="field" id="field">
+          <textarea id="input" rows="1" placeholder="Написать сообщение…" aria-label="Текст сообщения"></textarea>
+          <button type="button" class="field-emoji" id="emoji-btn" aria-label="Эмодзи" title="Эмодзи">
+            <svg class="i"><use href="#i-smile"/></svg>
+          </button>
+        </div>
+
+        <button type="button" class="round-btn" id="mic-btn" aria-label="Голосовое сообщение" title="Голосовое сообщение">
+          <svg class="i"><use href="#i-mic"/></svg>
+        </button>
+
+        <button type="submit" class="send-btn" id="send-btn" aria-label="Отправить" title="Отправить">
+          <svg class="i"><use href="#i-send"/></svg>
+        </button>
+
+        <div class="pop attach-pop" id="attach-pop" hidden>
+          <button type="button" class="pop-item" data-attach="file">
+            <span class="pop-ic"><svg class="i"><use href="#i-file"/></svg></span>
+            <span><b>Файл</b><small>до 200 МБ в демо-тарифе</small></span>
+          </button>
+          <button type="button" class="pop-item" data-attach="image">
+            <span class="pop-ic"><svg class="i"><use href="#i-image"/></svg></span>
+            <span><b>Изображение</b><small>PNG, JPG, WebP</small></span>
+          </button>
+          <button type="button" class="pop-item" data-attach="audio">
+            <span class="pop-ic"><svg class="i"><use href="#i-music"/></svg></span>
+            <span><b>Аудио или песня</b><small>MP3 · обложка и ID3-теги</small></span>
+          </button>
+          <button type="button" class="pop-item" data-attach="poll">
+            <span class="pop-ic"><svg class="i"><use href="#i-poll"/></svg></span>
+            <span><b>Опрос</b><small>плагин «Опросы» включён</small></span>
+          </button>
+          <button type="button" class="pop-item" data-attach="task">
+            <span class="pop-ic"><svg class="i"><use href="#i-task"/></svg></span>
+            <span><b>Задача</b><small>плагин «Задачи» включён</small></span>
+          </button>
+        </div>
+
+        <div class="pop sticker-pop" id="sticker-pop" hidden>
+          <div class="pop-head">
+            <span>Стикеры</span>
+            <small>набор «Круг»</small>
+          </div>
+          <div class="sticker-grid" id="sticker-grid"></div>
+        </div>
+
+        <div class="pop emoji-pop" id="emoji-pop" hidden>
+          <div class="emoji-grid" id="emoji-grid"></div>
+        </div>
+      </form>
+
+      <div class="composer-note" id="composer-note"></div>
+    </div>
+
+  </main>
+
+  <!-- ══════════ DETAILS ══════════ -->
+  <aside class="details" id="details" aria-label="О чате">
+    <button class="details-close" id="details-close" aria-label="Закрыть панель">
+      <svg class="i"><use href="#i-x"/></svg>
+    </button>
+    <div class="details-inner" id="details-inner"></div>
+  </aside>
+
+  <aside class="thread" id="thread" hidden aria-label="Тред">
+    <header class="thread-head">
+      <div class="thread-heading">
+        <span class="thread-eyebrow">Тред</span>
+        <h2 class="thread-title" id="thread-title">Обсуждение</h2>
+      </div>
+      <button class="icon-btn" id="thread-close" aria-label="Закрыть тред" title="Закрыть тред">
+        <svg class="i"><use href="#i-x"/></svg>
+      </button>
+    </header>
+    <div class="thread-body" id="thread-body"></div>
+    <form class="thread-composer" id="thread-composer" autocomplete="off">
+      <textarea id="thread-input" rows="1" placeholder="Ответить в треде…" aria-label="Ответ в треде"></textarea>
+      <button type="submit" class="send-btn" id="thread-send" aria-label="Отправить в тред">
+        <svg class="i"><use href="#i-send"/></svg>
+      </button>
+    </form>
+  </aside>
+
+  <section class="page" id="page" hidden aria-label="Раздел пространства">
+    <header class="page-head">
+      <button class="page-back" id="page-back" aria-label="Назад в чат" title="Назад в чат">
+        <svg class="i"><use href="#i-arrow-left"/></svg>
+      </button>
+      <div class="page-heading">
+        <span class="page-eyebrow" id="page-eyebrow"></span>
+        <h1 class="page-title" id="page-title"></h1>
+      </div>
+      <div class="page-actions" id="page-actions"></div>
+    </header>
+    <div class="page-body" id="page-body"></div>
+  </section>
+
+  <div class="modal-layer" id="modal-layer" hidden>
+    <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
+  </div>
+
+  <div class="scrim" id="scrim" hidden></div>
+
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<input type="file" id="audio-input" accept="audio/*,.mp3,.m4a" hidden />
+<script src="app.js"></script>
+</body>
+</html>

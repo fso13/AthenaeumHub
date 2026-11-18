@@ -1,0 +1,35 @@
+# Keycloak OIDC profile (B-04). Local defaults point at the dev compose service on 8180;
+# override KRUG_OIDC_ISSUER / KRUG_OIDC_JWKS_URI for another realm.
+#
+# The resource server validates: signature (JWKS), iss, exp/nbf with a clock skew,
+# aud=krug-api and azp=krug-web. POST /dev/session is not mapped in this profile.
+#
+# B-02: KRUG_CONTENT_KEY is mandatory and the dev/test content-key default is rejected by
+# ProdGuard, so the keycloak profile cannot silently encrypt with the development key.
+krug:
+  realtime:
+    # Browser SPA origin(s); override for another host (comma-separated).
+    allowed-origins: "${KRUG_WS_ALLOWED_ORIGINS:http://localhost:5173}"
+  content:
+    key: ${KRUG_CONTENT_KEY:}
+  oidc:
+    issuer: ${KRUG_OIDC_ISSUER:http://localhost:8180/realms/krug}
+    jwk-set-uri: ${KRUG_OIDC_JWKS_URI:${KRUG_OIDC_ISSUER:http://localhost:8180/realms/krug}/protocol/openid-connect/certs}
+    audience: ${KRUG_OIDC_AUDIENCE:krug-api}
+    authorized-party: ${KRUG_OIDC_AZP:krug-web}
+    clock-skew: ${KRUG_OIDC_CLOCK_SKEW:30s}
+  # Auth BFF admin/token calls must use the internal Keycloak URL (never :8180 from a
+  # browser). Blank base-url = derive scheme://host:port from krug.oidc.issuer, which the
+  # compose file already points at http://keycloak:8080/realms/krug.
+  auth-bff:
+    keycloak:
+      base-url: ${KRUG_KEYCLOAK_URL:}
+  # The dev HMAC token is never issued in this profile, so the HMAC secret is not required.
+  auth:
+    jwt-secret: ""
+
+logging:
+  level:
+    ru.krug.backend: INFO
+    # Never raise Nimbus/Security debug logging in a profile that handles real tokens.
+    org.springframework.security: WARN

@@ -1,0 +1,3647 @@
+import type { ChatApi, ListMessagesQuery } from '../api/endpoints';
+import { ApiError, isApiError, toApiError } from '../api/problem';
+import type {
+  AddWorkspaceMemberRequest,
+  ApiAttachment,
+  ApiMessage,
+  AssignableMemberRole,
+  ChangeWorkspaceMemberRoleRequest,
+  Chat,
+  ChatCreateRequest,
+  ChatSummary,
+  Device,
+  MeResponse,
+  MeUser,
+  MessageCreateBody,
+  Notification,
+  NotificationPreference,
+  NotificationPreferencePatch,
+  Session,
+  StickerRef,
+  SyncResponse,
+  WorkspaceLimits,
+  WorkspaceMember,
+  WorkspaceMemberPage,
+  WorkspaceSummary,
+} from '../api/types';
+import { createFilesStore, type FilesStore } from './filesStore';
+import { createStickersStore, type StickersStore } from '../stickers/store';
+import { createOpsStore, type OpsStore } from '../ops/store';
+import { readDeviceWorkspaceId, writeDeviceWorkspaceId } from '../workspace/deviceWorkspace';
+import { getDeviceId, getSession, setSession } from '../auth/session';
+import { setRuntimeDeviceId } from '../auth/runtime';
+import {
+  clearPendingDeviceKey,
+  clearPendingWorkspaceKey,
+  getPendingDeviceKey,
+  getPendingWorkspaceKey,
+  setPendingDeviceKey,
+  setPendingWorkspaceKey,
+} from '../auth/storage';
+import type { AppConfig } from '../config/env';
+import { maxSeq, mergeMessages, minSeq } from '../domain/messages';
+import { newUuid } from '../lib/ids';
+import { isE2eeEnabled } from '../e2ee/app/flag';
+import { readChatModePin } from '../e2ee/device/modePin';
+import {
+  createE2eeBridge,
+  type E2eeBridge,
+  type E2eeChatInput,
+  type E2eeDeviceTransport,
+} from '../e2ee/app/chatBridge';
+import {
+  createE2eeState,
+  createIdleE2eeChatState,
+  type E2eeBlockReason,
+  type E2eeChatState,
+  type E2eeLocalCopyView,
+  type E2eeResetProgress,
+  type E2eeState,
+} from '../e2ee/app/types';
+import { getE2eeStorage } from '../e2ee/storage/runtime';
+import { isE2eeError } from '../e2ee/errors';
+import type { WireCryptoEnvelope } from '../e2ee/api/deviceKeys';
+import type { SessionResetBody } from '../e2ee/session/reset';
+import {
+  RealtimeClient,
+  type RealtimeFailure,
+  type RealtimeFailureKind,
+  type RealtimeStatus,
+} from '../realtime/RealtimeClient';
+import type {
+  ErrorFrame,
+  EventFrame,
+  PresenceFrame,
+  PresenceStatus,
+  ResumeGapFrame,
+  SubscribedFrame,
+  TypingFrame,
+} from '../realtime/protocol';
+import { resolveRealtimeUrl, type SocketFactory } from '../realtime/socket';
+
+export type OutgoingStatus = 'sending' | 'failed';
+
+export interface OutgoingMessage {
+  clientMessageId: string;
+  /**
+   * Reused on every retry of the same logical message (contract §7.3).
+   * The server never returns client_message_id, so correlation is local.
+   */
+  idempotencyKey: string;
+  /** E5: STICKER messages carry exactly one sticker and no text/attachments. */
+  kind: 'TEXT' | 'STICKER';
+  text: string;
+  sticker: StickerRef | null;
+  replyToId: string | null;
+  /** Ready managed attachments; empty for a text-only message. */
+  attachments: ApiAttachment[];
+  createdAt: number;
+  status: OutgoingStatus;
+  error: ApiError | null;
+  attempts: number;
+  /**
+   * E7-F5: this row was produced by the E2EE pipeline. Retries replay the exact
+   * stored envelope bytes from the F4 outbox instead of re-encrypting.
+   */
+  e2ee?: boolean;
+  /** E2EE control message (SESSION_RESET): never rendered as a chat message. */
+  control?: boolean;
+  retryOfClientMessageId?: string | null;
+  coverageWarning?: 'PEER_DEVICE_UNCOVERED' | 'SELF_DEVICE_UNCOVERED' | null;
+}
+
+/** Decrypted view for one E2EE message; keyed by `ApiMessage.id`. */
+export interface E2eeMessageView {
+  readonly status: 'decrypted' | 'unavailable' | 'control' | 'error' | 'superseded';
+  readonly text: string | null;
+  readonly replyToId: string | null;
+  readonly code?: string;
+}
+
+export interface ChatSlice {
+  chatId: string;
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  messages: ApiMessage[];
+  outbox: OutgoingMessage[];
+  hasMore: boolean;
+  beforeSeq: number | null;
+  loadMoreStatus: 'idle' | 'loading' | 'error';
+  loadMoreError: ApiError | null;
+  error: ApiError | null;
+  readSeq: number;
+  unread: number;
+  lastSeq: number;
+  /** Per-user read receipts from WS (`message.receipt` is not replayed). */
+  receipts: Record<string, number>;
+  /** E7-F5: decrypted/control/unavailable views, keyed by server message id. */
+  e2ee: Record<string, E2eeMessageView>;
+}
+
+export interface TypingEntry {
+  userId: string;
+  displayName: string | null;
+  expiresAt: number;
+}
+
+export interface PresenceEntry {
+  status: PresenceStatus;
+  lastSeenAt: string | null;
+}
+
+export interface RealtimeIssue {
+  kind: RealtimeFailureKind;
+  message: string;
+  code?: string;
+  status?: number;
+}
+
+export type OnboardingStatus = 'idle' | 'submitting' | 'error';
+
+export type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+/** E6-F: server state for `/notifications` plus optimistic read bookkeeping. */
+export interface NotificationsState {
+  items: Notification[];
+  status: LoadStatus;
+  error: ApiError | null;
+  unreadCount: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  loadMoreStatus: 'idle' | 'loading' | 'error';
+  loadMoreError: ApiError | null;
+  /** Ids with an in-flight POST /notifications/read. */
+  readPendingIds: string[];
+  readAllPending: boolean;
+  readError: ApiError | null;
+  lastLoadedAt: number | null;
+}
+
+/** E6-F: `/notification-preferences` server state. */
+export interface NotificationPreferencesState {
+  items: NotificationPreference[];
+  status: LoadStatus;
+  error: ApiError | null;
+  saving: boolean;
+  saveError: ApiError | null;
+}
+
+/**
+ * E10-F: active member directory for the DIRECT peer picker. Pages are
+ * appended in server order and de-duplicated by `user_id`; a search change
+ * starts a new cursor chain and drops the stale in-flight response.
+ */
+export interface WorkspaceMembersState {
+  items: WorkspaceMember[];
+  /** Normalized literal search over `display_name` (max 80). */
+  query: string;
+  status: LoadStatus;
+  error: ApiError | null;
+  nextCursor: string | null;
+  hasMore: boolean;
+  loadMoreStatus: 'idle' | 'loading' | 'error';
+  loadMoreError: ApiError | null;
+}
+
+export function createEmptyWorkspaceMembersState(): WorkspaceMembersState {
+  return {
+    items: [],
+    query: '',
+    status: 'idle',
+    error: null,
+    nextCursor: null,
+    hasMore: false,
+    loadMoreStatus: 'idle',
+    loadMoreError: null,
+  };
+}
+
+/**
+ * E12-F (R-09): server-confirmed member mutations. There is deliberately no
+ * optimistic row state: a row changes only after `201`/`200`/`204`, and every
+ * failure keeps the previous row plus the API error for a translated message.
+ */
+export interface WorkspaceMemberAdminState {
+  addStatus: 'idle' | 'adding' | 'error';
+  addError: ApiError | null;
+  /** `user_id` with an in-flight `PATCH`; the row stays disabled meanwhile. */
+  rolePendingUserId: string | null;
+  roleError: { userId: string; error: ApiError } | null;
+  /** `user_id` with an in-flight `DELETE`. */
+  removePendingUserId: string | null;
+  removeError: { userId: string; error: ApiError } | null;
+}
+
+export function createEmptyWorkspaceMemberAdminState(): WorkspaceMemberAdminState {
+  return {
+    addStatus: 'idle',
+    addError: null,
+    rolePendingUserId: null,
+    roleError: null,
+    removePendingUserId: null,
+    removeError: null,
+  };
+}
+
+export interface AppState {
+  sessionStatus: 'idle' | 'loading' | 'ready' | 'error';
+  /** Dev-profile session (F-01). Null in password/Auth BFF mode. */
+  session: Session | null;
+  sessionError: ApiError | null;
+  /** Auth BFF profile from GET /me; null in dev mode. */
+  user: MeUser | null;
+  me: MeResponse | null;
+  device: Device | null;
+  workspaces: WorkspaceSummary[];
+  activeWorkspaceId: string | null;
+  activeWorkspace: WorkspaceSummary | null;
+  onboardingRequired: boolean;
+  onboardingStatus: OnboardingStatus;
+  onboardingError: ApiError | null;
+  /** The last protected call returned 401 even after refresh. */
+  authExpired: boolean;
+  chats: ChatSummary[];
+  activeChatId: string | null;
+  slices: Record<string, ChatSlice>;
+  online: boolean;
+  syncStatus: 'idle' | 'syncing' | 'error';
+  syncError: ApiError | null;
+  lastSyncedAt: string | null;
+  rateLimitUntil: number | null;
+  realtimeStatus: RealtimeStatus;
+  realtimeIssue: RealtimeIssue | null;
+  /** Ephemeral typing peers keyed by chat; TTL-cleaned, never persisted. */
+  typing: Record<string, TypingEntry[]>;
+  /** Ephemeral presence keyed by user; TTL-cleaned, never persisted. */
+  presence: Record<string, PresenceEntry>;
+  /** E6-F: bell badge, panel list and read state. */
+  notifications: NotificationsState;
+  /** E6-F: preferences loaded lazily by the settings dialog. */
+  notificationPreferences: NotificationPreferencesState;
+  /** E7-F5: E2EE feature/device/chat state (empty when the flag is off). */
+  e2ee: E2eeState;
+  /** E8/R-01: `GET /workspaces/{id}/limits` chat counters for the create dialog. */
+  chatLimits: WorkspaceLimits | null;
+  chatLimitsStatus: LoadStatus;
+  chatLimitsError: ApiError | null;
+  chatCreateStatus: 'idle' | 'creating' | 'error';
+  chatCreateError: ApiError | null;
+  /** E10-F: DIRECT peer picker source (`GET /workspaces/{id}/members`). */
+  workspaceMembers: WorkspaceMembersState;
+  /** E12-F: add/role/remove feedback; rows change only on server success. */
+  workspaceMemberAdmin: WorkspaceMemberAdminState;
+}
+
+export interface ChatStoreDeps {
+  api: ChatApi;
+  config: AppConfig;
+  now?: () => number;
+  createId?: () => string;
+  /** Test/mock adapter; production uses the browser WebSocket factory. */
+  socketFactory?: SocketFactory;
+  /** E7-F5: device API used by the real E2EE bridge (required when flag is on). */
+  e2eeDevice?: E2eeDeviceTransport;
+  /** Test seam: inject a prepared bridge (bypasses flag/transport wiring). */
+  e2eeBridge?: E2eeBridge | null;
+  /** Test seam for the feature flag; defaults to `VITE_E2EE_ENABLED`. */
+  e2eeEnabled?: boolean;
+}
+
+const MAX_TEXT_LENGTH = 8000;
+const MAX_AUTO_RETRIES = 3;
+const MAX_CATCH_UP_PAGES = 10;
+/**
+ * E7-F8 P1-01: an already received message can no longer be opened after its
+ * session is gone (R-15 completion, §5.7 loser deletion, TTL/GC). These codes
+ * must try the sealed incoming local copy before rendering an error or sending
+ * another SESSION_RESET. `KEY_CHANGE_DETECTED` is deliberately NOT here: a real
+ * key change stays blocking until the user accepts it.
+ */
+const E2EE_COPY_RESTORE_CODES: ReadonlySet<string> = new Set([
+  'NO_SESSION',
+  'KEY_HANDSHAKE_INVALID',
+  'SPK_DELETED',
+  'DECRYPT_FAILED',
+]);
+/** Contract default for GET /notifications; the panel loads one page at a time. */
+const NOTIFICATIONS_PAGE_SIZE = 30;
+/** Contract default (and cap-sane size) for the member picker. */
+const MEMBER_PAGE_SIZE = 50;
+/** Contract `query` maxLength for `GET /workspaces/{id}/members`. */
+const MEMBER_QUERY_MAX_LENGTH = 80;
+/** Contract `AddWorkspaceMemberRequest.email` maxLength and format. */
+const MEMBER_EMAIL_MAX_LENGTH = 254;
+const MEMBER_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** E12-F: `OWNER` is never assignable through the member UI. */
+export function isAssignableMemberRole(role: string): role is AssignableMemberRole {
+  return role === 'ADMIN' || role === 'MEMBER' || role === 'GUEST';
+}
+
+export function createEmptyNotificationsState(): NotificationsState {
+  return {
+    items: [],
+    status: 'idle',
+    error: null,
+    unreadCount: 0,
+    hasMore: false,
+    nextCursor: null,
+    loadMoreStatus: 'idle',
+    loadMoreError: null,
+    readPendingIds: [],
+    readAllPending: false,
+    readError: null,
+    lastLoadedAt: null,
+  };
+}
+
+export function createEmptyNotificationPreferencesState(): NotificationPreferencesState {
+  return {
+    items: [],
+    status: 'idle',
+    error: null,
+    saving: false,
+    saveError: null,
+  };
+}
+
+export function createEmptySlice(chatId: string, unread = 0): ChatSlice {
+  return {
+    chatId,
+    status: 'idle',
+    messages: [],
+    outbox: [],
+    hasMore: false,
+    beforeSeq: null,
+    loadMoreStatus: 'idle',
+    loadMoreError: null,
+    error: null,
+    readSeq: 0,
+    unread,
+    lastSeq: 0,
+    receipts: {},
+    e2ee: {},
+  };
+}
+
+/** `POST /workspaces/{id}/chats` returns `Chat`, not `ChatSummary`. */
+export function toChatSummary(chat: Chat): ChatSummary {
+  return {
+    id: chat.id,
+    name: chat.name ?? null,
+    type: chat.type,
+    security_mode: chat.security_mode,
+    peer_id: chat.peer_id ?? null,
+    peer_has_e2ee_capable_devices: chat.peer_has_e2ee_capable_devices ?? false,
+    last_message_at: null,
+    unread_count: chat.unread_count,
+    last_seq: chat.last_seq,
+  };
+}
+
+/** E10-F: logical payload for `POST /workspaces/{id}/chats`. */
+export type ChatCreateInput = { type: 'GROUP'; name: string } | { type: 'DIRECT'; peerId: string };
+
+export class ChatStore {
+  private readonly api: ChatApi;
+  private readonly config: AppConfig;
+  private readonly now: () => number;
+  private readonly createId: () => string;
+  private readonly e2eeEnabled: boolean;
+  private readonly e2eeBridge: E2eeBridge | null;
+  private e2eeInitPromise: Promise<void> | null = null;
+  private readonly e2eeDecrypting = new Set<string>();
+  private readonly e2eeResetInFlight = new Set<string>();
+  /**
+   * E7-F6 R-15 UX: failed reset windows kept for an explicit retry. Metadata
+   * only (failed session id / chain / anchor), never plaintext.
+   */
+  private readonly pendingResets = new Map<
+    string,
+    { readonly reset: SessionResetBody; readonly senderDeviceId: string }
+  >();
+  /** E4-F upload queue + workspace limits; ephemeral client state. */
+  readonly files: FilesStore;
+  /** E5-F sticker catalog, favorites and local recent list. */
+  readonly stickers: StickersStore;
+  /** E8: setup status and platform-admin settings/overview. */
+  readonly ops: OpsStore;
+
+  private state: AppState;
+  private listeners = new Set<() => void>();
+  private bootstrapPromise: Promise<void> | null = null;
+  private syncPromise: Promise<void> | null = null;
+  private readonly inFlight = new Set<string>();
+  private readonly readKeys = new Map<string, string>();
+  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly realtime: RealtimeClient | null;
+  private readonly seenEventIds: string[] = [];
+  private readonly seenEventIdSet = new Set<string>();
+  private readonly gapInFlight = new Set<string>();
+  private notificationsPromise: Promise<void> | null = null;
+  private preferencesPromise: Promise<void> | null = null;
+  private chatLimitsPromise: Promise<void> | null = null;
+  /** E10-F: member directory race guards (search chain + load-more). */
+  private membersToken = 0;
+  private membersInFlight: Promise<void> | null = null;
+  private membersLoadMoreInFlight = false;
+  /** Guards a single-read rollback that races with a successful read-all. */
+  private notificationReadGeneration = 0;
+  /** Invalidates in-flight notification responses across logout/workspace switch. */
+  private notificationEpoch = 0;
+  private disposed = false;
+
+  constructor(deps: ChatStoreDeps) {
+    this.api = deps.api;
+    this.config = deps.config;
+    this.now = deps.now ?? (() => Date.now());
+    this.createId = deps.createId ?? newUuid;
+    this.e2eeEnabled =
+      deps.e2eeEnabled !== undefined
+        ? deps.e2eeEnabled
+        : deps.e2eeBridge
+          ? true
+          : deps.e2eeDevice !== undefined && isE2eeEnabled();
+    this.e2eeBridge =
+      deps.e2eeBridge !== undefined
+        ? deps.e2eeBridge
+        : this.e2eeEnabled && deps.e2eeDevice
+          ? createE2eeBridge({
+              storage: getE2eeStorage(),
+              transport: deps.e2eeDevice,
+              now: () => this.now(),
+            })
+          : null;
+    this.state = {
+      sessionStatus: 'idle',
+      session: null,
+      sessionError: null,
+      user: null,
+      me: null,
+      device: null,
+      workspaces: [],
+      activeWorkspaceId: null,
+      activeWorkspace: null,
+      onboardingRequired: false,
+      onboardingStatus: 'idle',
+      onboardingError: null,
+      authExpired: false,
+      chats: [],
+      activeChatId: null,
+      slices: {},
+      online: typeof navigator === 'undefined' ? true : navigator.onLine,
+      syncStatus: 'idle',
+      syncError: null,
+      lastSyncedAt: null,
+      rateLimitUntil: null,
+      realtimeStatus: 'idle',
+      realtimeIssue: null,
+      typing: {},
+      presence: {},
+      notifications: createEmptyNotificationsState(),
+      notificationPreferences: createEmptyNotificationPreferencesState(),
+      e2ee: createE2eeState(this.e2eeEnabled && this.e2eeBridge !== null),
+      chatLimits: null,
+      chatLimitsStatus: 'idle',
+      chatLimitsError: null,
+      chatCreateStatus: 'idle',
+      chatCreateError: null,
+      workspaceMembers: createEmptyWorkspaceMembersState(),
+      workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
+    };
+
+    this.ops = createOpsStore({ api: deps.api });
+
+    this.files = createFilesStore({
+      api: deps.api,
+      config: deps.config,
+    });
+
+    this.stickers = createStickersStore({ api: deps.api });
+
+    this.realtime =
+      deps.config.realtimeEnabled && this.config.realtimeEnabled
+        ? new RealtimeClient({
+            createTicket: () => this.api.createRealtimeTicket(),
+            getSubscriptions: () => this.realtimeSubscriptions(),
+            socketFactory: deps.socketFactory,
+            resolveUrl: (ticketWsUrl) => resolveRealtimeUrl(ticketWsUrl, this.config.wsUrl),
+            enabled: this.config.realtimeEnabled,
+            maxReconnectPerHour: this.config.realtimeMaxPerHour,
+            defaultHeartbeatMs: this.config.realtimeHeartbeatMs,
+            timeoutMs: this.config.realtimeTimeoutMs,
+            callbacks: {
+              onStatus: (status) => this.handleRealtimeStatus(status),
+              onFailure: (failure) => this.handleRealtimeFailure(failure),
+              onServerError: (frame) => this.handleRealtimeServerError(frame),
+              onRevoked: (reason) => this.handleRealtimeRevoked(reason),
+              onSubscribed: (frame) => this.handleSubscribed(frame),
+              onEvent: (frame) => this.handleRealtimeEvent(frame),
+              onGap: (frame) => void this.handleResumeGap(frame),
+              onTyping: (frame) => this.handleTyping(frame),
+              onPresence: (frame) => this.handlePresence(frame),
+              onBeforeReconnect: () => this.syncForReconnect(),
+            },
+          })
+        : null;
+  }
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  readonly getSnapshot = (): AppState => this.state;
+
+  dispose(): void {
+    this.disposed = true;
+    this.realtime?.stop();
+    this.files.dispose();
+    this.stickers.dispose();
+    this.ops.dispose();
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    this.listeners.clear();
+  }
+
+  getActiveSlice(): ChatSlice | null {
+    const { activeChatId, slices } = this.state;
+    return activeChatId ? (slices[activeChatId] ?? null) : null;
+  }
+
+  private emit(next: AppState): void {
+    if (this.disposed) return;
+    this.state = next;
+    for (const listener of this.listeners) listener();
+  }
+
+  private patch(patch: Partial<AppState>): void {
+    this.emit({ ...this.state, ...patch });
+  }
+
+  private patchSlice(chatId: string, patch: Partial<ChatSlice>): void {
+    const current = this.state.slices[chatId];
+    if (!current) return;
+    this.patch({
+      slices: {
+        ...this.state.slices,
+        [chatId]: { ...current, ...patch },
+      },
+    });
+  }
+
+  private handleRateLimit(error: ApiError): void {
+    if (error.status !== 429) return;
+    const seconds = error.retryAfterSeconds ?? 5;
+    this.patch({ rateLimitUntil: this.now() + seconds * 1000 });
+  }
+
+  private handleFailure(error: ApiError): void {
+    this.handleRateLimit(error);
+    if (error.status === 401) {
+      this.realtime?.stop();
+      this.patch({
+        authExpired: true,
+        sessionError: error,
+        sessionStatus: 'error',
+      });
+    }
+  }
+
+  private updateChatSummary(chatId: string, patch: Partial<ChatSummary>): void {
+    this.patch({
+      chats: this.state.chats.map((chat) => (chat.id === chatId ? { ...chat, ...patch } : chat)),
+    });
+  }
+
+  async bootstrap(): Promise<void> {
+    const ready =
+      this.state.sessionStatus === 'ready' &&
+      (this.state.activeChatId !== null || this.state.onboardingRequired);
+    if (ready) return;
+    if (this.bootstrapPromise) return this.bootstrapPromise;
+
+    this.bootstrapPromise = (
+      this.config.authMode === 'password' ? this.runPasswordBootstrap() : this.runDevBootstrap()
+    ).finally(() => {
+      this.bootstrapPromise = null;
+    });
+    return this.bootstrapPromise;
+  }
+
+  /** F-01 path: POST /dev/session -> workspace chats -> history. */
+  private async runDevBootstrap(): Promise<void> {
+    this.patch({ sessionStatus: 'loading', sessionError: null, authExpired: false });
+    try {
+      const existing = getSession();
+      const session = existing ?? (await this.api.bootstrapDevSession());
+      await this.initializeE2ee(session.user.id);
+      this.stickers.setOwner(session.user.id);
+      this.files.setWorkspace(session.workspace.id, null);
+      const chatList = await this.api.listChats(session.workspace.id);
+      const chats = chatList.items;
+      const activeChatId =
+        chats.find((chat) => chat.id === session.chat.id)?.id ?? chats[0]?.id ?? null;
+
+      const slices = { ...this.state.slices };
+      for (const chat of chats) {
+        slices[chat.id] ??= createEmptySlice(chat.id, chat.unread_count);
+      }
+
+      this.emit({
+        ...this.state,
+        session,
+        sessionStatus: 'ready',
+        sessionError: null,
+        chats,
+        slices,
+        activeChatId,
+      });
+
+      // E6: bell badge and list are loaded with the first paint, in parallel
+      // with history so notifications never block the chat.
+      void this.loadNotifications();
+      void this.loadNotificationPreferences();
+      void this.loadChatLimits();
+
+      if (activeChatId) {
+        await this.loadChat(activeChatId);
+        if (this.state.slices[activeChatId]?.status === 'ready') {
+          // Fill last_synced_at and unread counters before the first paint.
+          await this.sync();
+        }
+        this.startRealtime();
+      }
+    } catch (error) {
+      this.failBootstrap(error);
+    }
+  }
+
+  /**
+   * Auth BFF (password) path: device -> /me -> default workspace -> chats.
+   * An empty workspace list is a valid state and opens onboarding.
+   */
+  private async runPasswordBootstrap(): Promise<void> {
+    this.patch({
+      sessionStatus: 'loading',
+      sessionError: null,
+      onboardingError: null,
+      authExpired: false,
+    });
+    try {
+      const me = await this.api.getMe();
+      let device: Device;
+      if (this.e2eeBridge !== null) {
+        // Keyed registration needs the authenticated user id (owner-scoped
+        // identity/K_storage) and produces this browser's device id.
+        await this.initializeE2ee(me.user.id);
+        const keyedDeviceId = this.state.e2ee.deviceId;
+        if (keyedDeviceId === null) {
+          throw new ApiError({
+            source: 'client',
+            status: 0,
+            code: 'E2EE_DEVICE_UNAVAILABLE',
+            message: 'E2EE device registration failed',
+          });
+        }
+        device = this.state.device ?? {
+          id: keyedDeviceId,
+          platform: 'WEB',
+          created_at: new Date(this.now()).toISOString(),
+        };
+      } else {
+        device = await this.ensureDevice();
+      }
+      this.patch({ device, me, user: me.user, workspaces: me.workspaces });
+      this.stickers.setOwner(me.user.id);
+
+      if (me.workspaces.length === 0) {
+        this.patch({
+          sessionStatus: 'ready',
+          sessionError: null,
+          onboardingRequired: true,
+          onboardingStatus: 'idle',
+          activeWorkspaceId: null,
+          activeWorkspace: null,
+          chats: [],
+          slices: {},
+          activeChatId: null,
+        });
+        return;
+      }
+
+      const workspace = this.pickWorkspace(me);
+      await this.activateWorkspace(workspace);
+    } catch (error) {
+      this.failBootstrap(error);
+    }
+  }
+
+  private failBootstrap(error: unknown): void {
+    const apiError = toApiError(error);
+    this.handleFailure(apiError);
+    this.patch({
+      sessionStatus: 'error',
+      sessionError: apiError,
+      authExpired: apiError.status === 401,
+    });
+  }
+
+  private pickWorkspace(me: MeResponse): WorkspaceSummary {
+    // Per-device selection (R-02) is only a hint: the server has already
+    // filtered `me.workspaces` by membership, so an unknown/forged id falls
+    // back to the server default instead of leaking anything.
+    const storedId = readDeviceWorkspaceId();
+    const stored = storedId
+      ? me.workspaces.find((workspace) => workspace.id === storedId)
+      : undefined;
+    if (stored) return stored;
+    const preferred = me.workspaces.find((workspace) => workspace.id === me.default_workspace_id);
+    return preferred ?? me.workspaces[0]!;
+  }
+
+  /** Workspace for chat calls: dev mode has no `activeWorkspace` projection. */
+  private currentWorkspaceId(): string | null {
+    return this.state.activeWorkspaceId ?? this.state.session?.workspace.id ?? null;
+  }
+
+  private async ensureDevice(): Promise<Device> {
+    const existingId = getDeviceId();
+    if (existingId) {
+      return {
+        id: existingId,
+        platform: 'WEB',
+        created_at: new Date(this.now()).toISOString(),
+      };
+    }
+
+    let idempotencyKey = getPendingDeviceKey();
+    if (!idempotencyKey) {
+      idempotencyKey = this.createId();
+      setPendingDeviceKey(idempotencyKey);
+    }
+
+    const device = await this.api.registerDevice(
+      {
+        name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
+        platform: 'WEB',
+        app_version: this.config.appVersion.slice(0, 40),
+      },
+      idempotencyKey,
+    );
+    clearPendingDeviceKey();
+    setRuntimeDeviceId(device.id);
+    return device;
+  }
+
+  private async activateWorkspace(workspace: WorkspaceSummary): Promise<void> {
+    this.realtime?.stop();
+    this.notificationEpoch += 1;
+    writeDeviceWorkspaceId(workspace.id);
+    this.files.setWorkspace(workspace.id, workspace.role ?? null);
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    this.seenEventIds.length = 0;
+    this.seenEventIdSet.clear();
+    this.gapInFlight.clear();
+    this.patch({
+      activeWorkspaceId: workspace.id,
+      activeWorkspace: workspace,
+      sessionStatus: 'loading',
+      sessionError: null,
+      authExpired: false,
+      onboardingRequired: false,
+      chats: [],
+      slices: {},
+      activeChatId: null,
+      syncStatus: 'idle',
+      syncError: null,
+      lastSyncedAt: null,
+      realtimeStatus: 'idle',
+      realtimeIssue: null,
+      typing: {},
+      presence: {},
+      notifications: createEmptyNotificationsState(),
+      notificationPreferences: createEmptyNotificationPreferencesState(),
+      e2ee: { ...this.state.e2ee, chats: {} },
+      chatLimits: null,
+      chatLimitsStatus: 'loading',
+      chatLimitsError: null,
+      chatCreateStatus: 'idle',
+      chatCreateError: null,
+      workspaceMembers: createEmptyWorkspaceMembersState(),
+      workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
+    });
+    void this.loadChatLimits();
+
+    try {
+      const chatList = await this.api.listChats(workspace.id);
+      const chats = chatList.items;
+      const slices: Record<string, ChatSlice> = {};
+      for (const chat of chats) {
+        slices[chat.id] = createEmptySlice(chat.id, chat.unread_count);
+      }
+      const activeChatId = chats[0]?.id ?? null;
+
+      this.patch({
+        sessionStatus: 'ready',
+        sessionError: null,
+        chats,
+        slices,
+        activeChatId,
+      });
+
+      void this.loadNotifications();
+      void this.loadNotificationPreferences();
+
+      if (activeChatId) {
+        await this.loadChat(activeChatId);
+        if (this.state.slices[activeChatId]?.status === 'ready') {
+          await this.sync();
+        }
+        this.startRealtime();
+      }
+    } catch (error) {
+      this.failBootstrap(error);
+    }
+  }
+
+  async selectWorkspace(workspaceId: string): Promise<void> {
+    if (workspaceId === this.state.activeWorkspaceId) return;
+    const workspace = this.state.workspaces.find((item) => item.id === workspaceId);
+    if (!workspace) return;
+    await this.activateWorkspace(workspace);
+  }
+
+  /**
+   * R-01: `GET /workspaces/{id}/limits` drives the `used/limit` counter. The
+   * server remains the source of truth; this is only UI pre-check.
+   */
+  async loadChatLimits(force = false): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) return;
+    if (!force && (this.state.chatLimitsStatus === 'ready' || this.chatLimitsPromise !== null)) {
+      return this.chatLimitsPromise ?? undefined;
+    }
+    if (this.chatLimitsPromise) return this.chatLimitsPromise;
+
+    this.patch({ chatLimitsStatus: 'loading', chatLimitsError: null });
+    this.chatLimitsPromise = (async () => {
+      try {
+        const limits = await this.api.getWorkspaceLimits(workspaceId);
+        if (this.currentWorkspaceId() !== workspaceId) return;
+        this.patch({ chatLimits: limits, chatLimitsStatus: 'ready', chatLimitsError: null });
+      } catch (error) {
+        if (this.currentWorkspaceId() !== workspaceId) return;
+        this.patch({ chatLimitsStatus: 'error', chatLimitsError: toApiError(error) });
+      } finally {
+        if (this.currentWorkspaceId() === workspaceId) this.chatLimitsPromise = null;
+      }
+    })();
+    return this.chatLimitsPromise;
+  }
+
+  /**
+   * E10-F: `GET /workspaces/{id}/members` for the DIRECT peer picker.
+   *
+   * `query` is literal server-side search over `display_name`; `cursor` is
+   * opaque and only echoed back. A changed query starts a new page chain and
+   * invalidates the previous in-flight response (same generation guard as the
+   * admin directory). The caller is included by the server and filtered by the
+   * UI, so no client-side field invention is required.
+   */
+  loadWorkspaceMembers(options: { query?: string; force?: boolean } = {}): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) return Promise.resolve();
+    const query = (options.query ?? this.state.workspaceMembers.query)
+      .trim()
+      .slice(0, MEMBER_QUERY_MAX_LENGTH);
+    const current = this.state.workspaceMembers;
+
+    if (!options.force && this.membersInFlight && query === current.query) {
+      return this.membersInFlight;
+    }
+    if (!options.force && query === current.query && current.status === 'ready') {
+      return Promise.resolve();
+    }
+
+    const token = ++this.membersToken;
+    this.patch({
+      workspaceMembers: {
+        ...createEmptyWorkspaceMembersState(),
+        query,
+        status: 'loading',
+      },
+    });
+
+    const promise = (async () => {
+      try {
+        const page: WorkspaceMemberPage = await this.api.listWorkspaceMembers(workspaceId, {
+          query: query || undefined,
+          limit: MEMBER_PAGE_SIZE,
+        });
+        if (token !== this.membersToken || this.currentWorkspaceId() !== workspaceId) return;
+        this.patch({
+          workspaceMembers: {
+            ...this.state.workspaceMembers,
+            items: page.items,
+            nextCursor: page.has_more ? (page.next_cursor ?? null) : null,
+            hasMore: page.has_more,
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        if (token !== this.membersToken || this.currentWorkspaceId() !== workspaceId) return;
+        this.patch({
+          workspaceMembers: {
+            ...this.state.workspaceMembers,
+            status: 'error',
+            error: toApiError(error),
+          },
+        });
+      } finally {
+        if (token === this.membersToken) this.membersInFlight = null;
+      }
+    })();
+    this.membersInFlight = promise;
+    return promise;
+  }
+
+  /** New search chain for the member picker; the UI debounces the input. */
+  searchWorkspaceMembers(rawQuery: string): void {
+    const query = rawQuery.trim().slice(0, MEMBER_QUERY_MAX_LENGTH);
+    const current = this.state.workspaceMembers;
+    if (query === current.query) {
+      if (current.status === 'idle') void this.loadWorkspaceMembers({ query });
+      return;
+    }
+    this.membersToken += 1;
+    this.membersInFlight = null;
+    this.membersLoadMoreInFlight = false;
+    this.patch({
+      workspaceMembers: {
+        ...createEmptyWorkspaceMembersState(),
+        query,
+        status: 'idle',
+      },
+    });
+    void this.loadWorkspaceMembers({ query, force: true });
+  }
+
+  /** Append the next member page; keeps the already loaded rows visible. */
+  async loadMoreWorkspaceMembers(): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    const current = this.state.workspaceMembers;
+    if (!workspaceId || !current.hasMore || !current.nextCursor) return;
+    if (this.membersLoadMoreInFlight || current.loadMoreStatus === 'loading') return;
+
+    const token = this.membersToken;
+    this.membersLoadMoreInFlight = true;
+    this.patch({
+      workspaceMembers: {
+        ...current,
+        loadMoreStatus: 'loading',
+        loadMoreError: null,
+      },
+    });
+
+    try {
+      const page = await this.api.listWorkspaceMembers(workspaceId, {
+        query: current.query || undefined,
+        cursor: current.nextCursor,
+        limit: MEMBER_PAGE_SIZE,
+      });
+      if (token !== this.membersToken || this.currentWorkspaceId() !== workspaceId) return;
+      const latest = this.state.workspaceMembers;
+      const seen = new Set(latest.items.map((member) => member.user_id));
+      const items = [...latest.items];
+      for (const member of page.items) {
+        if (seen.has(member.user_id)) continue;
+        seen.add(member.user_id);
+        items.push(member);
+      }
+      this.patch({
+        workspaceMembers: {
+          ...latest,
+          items,
+          nextCursor: page.has_more ? (page.next_cursor ?? null) : null,
+          hasMore: page.has_more,
+          loadMoreStatus: 'idle',
+          loadMoreError: null,
+        },
+      });
+    } catch (error) {
+      if (token !== this.membersToken || this.currentWorkspaceId() !== workspaceId) return;
+      this.patch({
+        workspaceMembers: {
+          ...this.state.workspaceMembers,
+          loadMoreStatus: 'error',
+          loadMoreError: toApiError(error),
+        },
+      });
+    } finally {
+      if (token === this.membersToken) this.membersLoadMoreInFlight = false;
+    }
+  }
+
+  /** Drop cached picker rows (dialog open/close or workspace switch). */
+  clearWorkspaceMembers(): void {
+    this.membersToken += 1;
+    this.membersInFlight = null;
+    this.membersLoadMoreInFlight = false;
+    if (
+      this.state.workspaceMembers.status !== 'idle' ||
+      this.state.workspaceMembers.items.length > 0 ||
+      this.state.workspaceMembers.query !== ''
+    ) {
+      this.patch({ workspaceMembers: createEmptyWorkspaceMembersState() });
+    }
+  }
+
+  /**
+   * E12-F (FR-WS-4/5): add an existing user by email. The server decides
+   * whether the actor may manage members and which role is allowed; the client
+   * only validates the obvious email shape before the request. The list is
+   * re-read from the server after `201`, so no invented/optimistic row appears.
+   */
+  async addWorkspaceMember(rawEmail: string, role: AssignableMemberRole): Promise<boolean> {
+    const admin = this.state.workspaceMemberAdmin;
+    if (admin.addStatus === 'adding') return false;
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) {
+      this.patch({
+        workspaceMemberAdmin: {
+          ...admin,
+          addStatus: 'error',
+          addError: ApiError.client(
+            'WORKSPACE_REQUIRED',
+            'No active workspace for member management',
+            409,
+          ),
+        },
+      });
+      return false;
+    }
+
+    const email = rawEmail.trim();
+    if (!email || email.length > MEMBER_EMAIL_MAX_LENGTH || !MEMBER_EMAIL_RE.test(email)) {
+      this.patch({
+        workspaceMemberAdmin: {
+          ...admin,
+          addStatus: 'error',
+          addError: ApiError.client('VALIDATION_FAILED', 'A valid email is required', 422, {
+            field: 'email',
+            max_length: MEMBER_EMAIL_MAX_LENGTH,
+          }),
+        },
+      });
+      return false;
+    }
+    if ((role as string) === 'OWNER') {
+      this.patch({
+        workspaceMemberAdmin: {
+          ...admin,
+          addStatus: 'error',
+          addError: ApiError.client('ROLE_CHANGE_FORBIDDEN', 'OWNER cannot be assigned', 403, {
+            field: 'role',
+          }),
+        },
+      });
+      return false;
+    }
+
+    const body: AddWorkspaceMemberRequest = { email, role };
+    this.patch({
+      workspaceMemberAdmin: { ...admin, addStatus: 'adding', addError: null },
+    });
+
+    try {
+      await this.api.addWorkspaceMember(workspaceId, body);
+      if (this.currentWorkspaceId() !== workspaceId) {
+        this.patch({
+          workspaceMemberAdmin: {
+            ...this.state.workspaceMemberAdmin,
+            addStatus: 'idle',
+            addError: null,
+          },
+        });
+        return false;
+      }
+      // Server order is `display_name ASC, user_id ASC`; a full first page is
+      // cheaper to trust than inserting a row locally. `adding` stays set until
+      // the refresh settles, so the form cannot double-submit the same email.
+      await this.loadWorkspaceMembers({
+        query: this.state.workspaceMembers.query,
+        force: true,
+      });
+      if (this.currentWorkspaceId() !== workspaceId) return false;
+      this.patch({
+        workspaceMemberAdmin: {
+          ...this.state.workspaceMemberAdmin,
+          addStatus: 'idle',
+          addError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.currentWorkspaceId() !== workspaceId) return false;
+      this.patch({
+        workspaceMemberAdmin: {
+          ...this.state.workspaceMemberAdmin,
+          addStatus: 'error',
+          addError: apiError,
+        },
+      });
+      return false;
+    }
+  }
+
+  /**
+   * E12-F (FR-WS-6): change a role. The updated row comes from the `200`
+   * response (server-confirmed) and is placed at the same position; a failure
+   * leaves the row and its role untouched.
+   */
+  async changeWorkspaceMemberRole(userId: string, role: AssignableMemberRole): Promise<boolean> {
+    const admin = this.state.workspaceMemberAdmin;
+    if (admin.rolePendingUserId !== null) return false;
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) return false;
+    if ((role as string) === 'OWNER' || !isAssignableMemberRole(role)) {
+      this.patch({
+        workspaceMemberAdmin: {
+          ...admin,
+          roleError: {
+            userId,
+            error: ApiError.client('ROLE_CHANGE_FORBIDDEN', 'OWNER cannot be assigned', 403, {
+              field: 'role',
+            }),
+          },
+        },
+      });
+      return false;
+    }
+
+    const body: ChangeWorkspaceMemberRoleRequest = { role };
+    this.patch({
+      workspaceMemberAdmin: {
+        ...admin,
+        rolePendingUserId: userId,
+        roleError: null,
+      },
+    });
+
+    try {
+      const updated = await this.api.changeWorkspaceMemberRole(workspaceId, userId, body);
+      if (this.currentWorkspaceId() !== workspaceId) {
+        this.patch({
+          workspaceMemberAdmin: {
+            ...this.state.workspaceMemberAdmin,
+            rolePendingUserId: null,
+            roleError: null,
+          },
+        });
+        return false;
+      }
+      const items = this.state.workspaceMembers.items.map((member) =>
+        member.user_id === updated.user_id ? updated : member,
+      );
+      this.patch({
+        workspaceMembers: { ...this.state.workspaceMembers, items },
+        workspaceMemberAdmin: {
+          ...this.state.workspaceMemberAdmin,
+          rolePendingUserId: null,
+          roleError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.currentWorkspaceId() !== workspaceId) return false;
+      this.patch({
+        workspaceMemberAdmin: {
+          ...this.state.workspaceMemberAdmin,
+          rolePendingUserId: null,
+          roleError: { userId, error: apiError },
+        },
+      });
+      return false;
+    }
+  }
+
+  /**
+   * E12-F (FR-WS-6): soft removal after an explicit confirmation. `204` is
+   * followed by a server refresh; an error keeps the row exactly as it was.
+   */
+  async removeWorkspaceMember(userId: string): Promise<boolean> {
+    const admin = this.state.workspaceMemberAdmin;
+    if (admin.removePendingUserId !== null) return false;
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) return false;
+
+    this.patch({
+      workspaceMemberAdmin: {
+        ...admin,
+        removePendingUserId: userId,
+        removeError: null,
+      },
+    });
+
+    try {
+      await this.api.removeWorkspaceMember(workspaceId, userId);
+      if (this.currentWorkspaceId() !== workspaceId) {
+        this.patch({
+          workspaceMemberAdmin: {
+            ...this.state.workspaceMemberAdmin,
+            removePendingUserId: null,
+            removeError: null,
+          },
+        });
+        return false;
+      }
+      // Keep the DELETE "pending" until the server list is re-read: a second
+      // confirm click must not fire a duplicate delete.
+      await this.loadWorkspaceMembers({
+        query: this.state.workspaceMembers.query,
+        force: true,
+      });
+      if (this.currentWorkspaceId() !== workspaceId) return false;
+      this.patch({
+        workspaceMemberAdmin: {
+          ...this.state.workspaceMemberAdmin,
+          removePendingUserId: null,
+          removeError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.currentWorkspaceId() !== workspaceId) return false;
+      this.patch({
+        workspaceMemberAdmin: {
+          ...this.state.workspaceMemberAdmin,
+          removePendingUserId: null,
+          removeError: { userId, error: apiError },
+        },
+      });
+      return false;
+    }
+  }
+
+  /** Drop add/role/remove feedback when the members dialog opens or closes. */
+  clearWorkspaceMemberAdmin(): void {
+    const admin = this.state.workspaceMemberAdmin;
+    if (
+      admin.addStatus !== 'idle' ||
+      admin.addError !== null ||
+      admin.rolePendingUserId !== null ||
+      admin.roleError !== null ||
+      admin.removePendingUserId !== null ||
+      admin.removeError !== null
+    ) {
+      this.patch({ workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState() });
+    }
+  }
+
+  async createChat(
+    nameOrRequest: string | ChatCreateInput,
+    idempotencyKey: string,
+  ): Promise<boolean> {
+    if (this.state.chatCreateStatus === 'creating') return false;
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) {
+      this.patch({
+        chatCreateStatus: 'error',
+        chatCreateError: ApiError.client(
+          'WORKSPACE_REQUIRED',
+          'No active workspace for chat creation',
+          409,
+        ),
+      });
+      return false;
+    }
+    const request: ChatCreateInput =
+      typeof nameOrRequest === 'string' ? { type: 'GROUP', name: nameOrRequest } : nameOrRequest;
+    let body: ChatCreateRequest;
+    if (request.type === 'GROUP') {
+      const trimmed = request.name.trim();
+      if (trimmed.length === 0 || trimmed.length > 120) {
+        this.patch({
+          chatCreateStatus: 'error',
+          chatCreateError: ApiError.client(
+            'VALIDATION_FAILED',
+            'Chat name must be 1..120 characters',
+            422,
+            { field: 'name', max_length: 120 },
+          ),
+        });
+        return false;
+      }
+      // Contract `additionalProperties: false`: GROUP sends name, never peer_id.
+      body = { type: 'GROUP', name: trimmed };
+    } else {
+      const peerId = request.peerId.trim();
+      if (peerId.length === 0 || peerId === this.viewerId()) {
+        this.patch({
+          chatCreateStatus: 'error',
+          chatCreateError: ApiError.client(
+            'VALIDATION_FAILED',
+            'peer_id must reference another active workspace member',
+            400,
+            { field: 'peer_id' },
+          ),
+        });
+        return false;
+      }
+      // Contract `additionalProperties: false`: DIRECT sends peer_id, no name.
+      body = { type: 'DIRECT', peer_id: peerId };
+    }
+
+    this.patch({ chatCreateStatus: 'creating', chatCreateError: null });
+    try {
+      const created = await this.api.createChat(
+        workspaceId,
+        body,
+        idempotencyKey || this.createId(),
+      );
+      // A workspace switch while the request was in flight must not insert the
+      // old workspace's chat into the new workspace UI.
+      if (this.currentWorkspaceId() !== workspaceId) {
+        this.patch({ chatCreateStatus: 'idle', chatCreateError: null });
+        return false;
+      }
+      let chats = this.state.chats.some((chat) => chat.id === created.id)
+        ? this.state.chats.map((chat) => (chat.id === created.id ? toChatSummary(created) : chat))
+        : [...this.state.chats, toChatSummary(created)];
+      try {
+        const list = await this.api.listChats(workspaceId);
+        if (this.currentWorkspaceId() === workspaceId) {
+          chats = list.items.some((chat) => chat.id === created.id)
+            ? list.items
+            : [...list.items, toChatSummary(created)];
+        }
+      } catch {
+        // The create succeeded; keep the returned chat if the list refresh
+        // failed, so the user still lands in the new chat.
+      }
+      const slices = { ...this.state.slices };
+      for (const chat of chats) {
+        slices[chat.id] ??= createEmptySlice(chat.id, chat.unread_count);
+      }
+      this.patch({
+        chats,
+        slices,
+        chatCreateStatus: 'idle',
+        chatCreateError: null,
+      });
+      await this.setActiveChat(created.id);
+      void this.loadChatLimits(true);
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.currentWorkspaceId() !== workspaceId) return false;
+      this.patch({
+        chatCreateStatus: 'error',
+        chatCreateError: apiError,
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      if (apiError.status === 409 && apiError.code === 'CHAT_LIMIT_REACHED') {
+        void this.loadChatLimits(true);
+      }
+      return false;
+    }
+  }
+
+  clearChatCreateError(): void {
+    if (this.state.chatCreateError || this.state.chatCreateStatus === 'error') {
+      this.patch({ chatCreateStatus: 'idle', chatCreateError: null });
+    }
+  }
+
+  /** First-login onboarding: POST /workspaces then open the created chat. */
+  async createWorkspace(name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.length > 120) return;
+    if (this.state.onboardingStatus === 'submitting') return;
+
+    this.patch({ onboardingStatus: 'submitting', onboardingError: null });
+    try {
+      let idempotencyKey = getPendingWorkspaceKey();
+      if (!idempotencyKey) {
+        idempotencyKey = this.createId();
+        setPendingWorkspaceKey(idempotencyKey);
+      }
+
+      const created = await this.api.createWorkspace(
+        { name: trimmed, security_mode: 'MANAGED' },
+        idempotencyKey,
+      );
+      clearPendingWorkspaceKey();
+
+      let me = await this.api.getMe();
+      if (!me.workspaces.some((workspace) => workspace.id === created.id)) {
+        me = {
+          ...me,
+          workspaces: [...me.workspaces, created],
+          default_workspace_id: created.id,
+        };
+      }
+      this.patch({
+        me,
+        user: me.user,
+        workspaces: me.workspaces,
+        onboardingStatus: 'idle',
+        onboardingError: null,
+      });
+
+      const workspace = me.workspaces.find((item) => item.id === created.id) ?? created;
+      await this.activateWorkspace(workspace);
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        onboardingStatus: 'error',
+        onboardingError: apiError,
+        authExpired: apiError.status === 401,
+      });
+    }
+  }
+
+  async retryBootstrap(): Promise<void> {
+    this.patch({
+      sessionStatus: 'idle',
+      sessionError: null,
+      authExpired: false,
+      onboardingError: null,
+      onboardingStatus: 'idle',
+      activeChatId: null,
+      onboardingRequired: false,
+    });
+    await this.bootstrap();
+  }
+
+  /** Drop all user-scoped state on logout or account switch. */
+  reset(): void {
+    this.realtime?.stop();
+    this.notificationEpoch += 1;
+    this.files.reset();
+    this.stickers.reset();
+    this.ops.reset();
+    this.chatLimitsPromise = null;
+    this.membersToken += 1;
+    this.membersInFlight = null;
+    this.membersLoadMoreInFlight = false;
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    this.seenEventIds.length = 0;
+    this.seenEventIdSet.clear();
+    this.gapInFlight.clear();
+    this.patch({
+      sessionStatus: 'idle',
+      session: null,
+      sessionError: null,
+      user: null,
+      me: null,
+      device: null,
+      workspaces: [],
+      activeWorkspaceId: null,
+      activeWorkspace: null,
+      onboardingRequired: false,
+      onboardingStatus: 'idle',
+      onboardingError: null,
+      authExpired: false,
+      chats: [],
+      activeChatId: null,
+      slices: {},
+      syncStatus: 'idle',
+      syncError: null,
+      lastSyncedAt: null,
+      rateLimitUntil: null,
+      realtimeStatus: 'idle',
+      realtimeIssue: null,
+      typing: {},
+      presence: {},
+      notifications: createEmptyNotificationsState(),
+      notificationPreferences: createEmptyNotificationPreferencesState(),
+      e2ee: createE2eeState(this.e2eeEnabled && this.e2eeBridge !== null),
+      chatLimits: null,
+      chatLimitsStatus: 'idle',
+      chatLimitsError: null,
+      chatCreateStatus: 'idle',
+      chatCreateError: null,
+      workspaceMembers: createEmptyWorkspaceMembersState(),
+      workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
+    });
+    this.e2eeBridge?.invalidateChat();
+    this.pendingResets.clear();
+  }
+
+  async setActiveChat(chatId: string): Promise<void> {
+    if (!this.state.slices[chatId]) return;
+    this.patch({ activeChatId: chatId });
+    this.updateRealtimeSubscriptions();
+    const slice = this.state.slices[chatId];
+    if (slice && (slice.status === 'idle' || slice.status === 'error')) {
+      await this.loadChat(chatId);
+      this.updateRealtimeSubscriptions();
+      this.startRealtime();
+    } else if (this.e2eeBridge !== null) {
+      void this.loadPersistedE2eeMarker(chatId).then(() =>
+        this.loadE2eeChat(chatId).then(() => this.decryptE2eeSlice(chatId)),
+      );
+    } else {
+      void this.loadPersistedE2eeMarker(chatId);
+    }
+  }
+
+  async loadChat(chatId: string): Promise<void> {
+    const slice = this.state.slices[chatId];
+    if (!slice || slice.status === 'loading' || slice.status === 'ready') return;
+
+    this.patchSlice(chatId, { status: 'loading', error: null });
+    try {
+      const page = await this.api.listMessages(chatId, {
+        limit: this.config.historyPageSize,
+      });
+      const current = this.state.slices[chatId];
+      if (!current) return;
+      const messages = mergeMessages(current.messages, page.items);
+      this.patchSlice(chatId, {
+        status: 'ready',
+        messages,
+        hasMore: page.page.has_more,
+        beforeSeq: minSeq(messages),
+        lastSeq: maxSeq(messages),
+        error: null,
+        loadMoreStatus: 'idle',
+        loadMoreError: null,
+      });
+      this.updateRealtimeSubscriptions();
+      void this.loadPersistedE2eeMarker(chatId).then(() => {
+        if (this.e2eeBridge !== null) {
+          void this.loadE2eeChat(chatId).then(() => this.decryptE2eeSlice(chatId));
+        }
+      });
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patchSlice(chatId, { status: 'error', error: apiError });
+    }
+  }
+
+  async retryHistory(chatId: string): Promise<void> {
+    const slice = this.state.slices[chatId];
+    if (!slice) return;
+    this.patchSlice(chatId, { status: 'idle', error: null });
+    await this.loadChat(chatId);
+  }
+
+  async loadMore(chatId: string): Promise<void> {
+    const slice = this.state.slices[chatId];
+    if (
+      !slice ||
+      slice.status !== 'ready' ||
+      !slice.hasMore ||
+      slice.loadMoreStatus === 'loading'
+    ) {
+      return;
+    }
+    if (slice.beforeSeq === null) {
+      this.patchSlice(chatId, { hasMore: false });
+      return;
+    }
+
+    this.patchSlice(chatId, { loadMoreStatus: 'loading', loadMoreError: null });
+    try {
+      const page = await this.api.listMessages(chatId, {
+        beforeSeq: slice.beforeSeq,
+        limit: this.config.historyPageSize,
+      });
+      const current = this.state.slices[chatId];
+      if (!current) return;
+      const messages = mergeMessages(current.messages, page.items);
+      this.patchSlice(chatId, {
+        messages,
+        hasMore: page.page.has_more,
+        beforeSeq: minSeq(messages),
+        lastSeq: maxSeq(messages),
+        loadMoreStatus: 'idle',
+        loadMoreError: null,
+      });
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patchSlice(chatId, {
+        loadMoreStatus: 'error',
+        loadMoreError: apiError,
+      });
+    }
+  }
+
+  async send(
+    chatId: string,
+    text: string,
+    replyToId: string | null = null,
+    attachments: readonly ApiAttachment[] = [],
+  ): Promise<void> {
+    const trimmed = text.trim();
+    const readyAttachments = attachments.slice(0, 10);
+    if (trimmed.length > MAX_TEXT_LENGTH) return;
+    // E4: text is optional when at least one ready attachment is present.
+    if (!trimmed && readyAttachments.length === 0) return;
+
+    const slice = this.state.slices[chatId];
+    if (!slice || slice.status !== 'ready') return;
+
+    const block = this.e2eeBlockReason(chatId);
+    if (block !== null) {
+      this.patchE2eeChat(chatId, { error: block });
+      return;
+    }
+    if (this.state.e2ee.enabled && this.e2eeChatState(chatId).securityMode === 'E2EE') {
+      if (readyAttachments.length > 0) {
+        this.patchE2eeChat(chatId, { error: 'unsupported' });
+        return;
+      }
+      await this.sendE2eeText(chatId, trimmed, replyToId);
+      return;
+    }
+
+    const outgoing: OutgoingMessage = {
+      clientMessageId: this.createId(),
+      idempotencyKey: this.createId(),
+      kind: 'TEXT',
+      text: trimmed,
+      sticker: null,
+      replyToId,
+      attachments: readyAttachments.map((attachment) => ({ ...attachment })),
+      createdAt: this.now(),
+      status: 'sending',
+      error: null,
+      attempts: 0,
+    };
+
+    this.patchSlice(chatId, { outbox: [...slice.outbox, outgoing] });
+    await this.attemptSend(chatId, outgoing.clientMessageId);
+  }
+
+  /**
+   * E5: send exactly one built-in sticker. The optimistic row renders the
+   * image immediately; the REST response is merged by id/seq. Recent is
+   * recorded locally (never server-side) on selection.
+   */
+  async sendSticker(
+    chatId: string,
+    sticker: StickerRef,
+    replyToId: string | null = null,
+  ): Promise<boolean> {
+    const slice = this.state.slices[chatId];
+    if (!slice || slice.status !== 'ready') return false;
+    if (!this.state.online || this.isRateLimited()) return false;
+    if (this.state.e2ee.enabled) {
+      const block = this.e2eeBlockReason(chatId);
+      const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+      if (block !== null && (chat?.security_mode === 'E2EE' || block !== 'not_ready')) {
+        return false;
+      }
+      if (this.e2eeChatState(chatId).securityMode === 'E2EE') return false;
+    }
+
+    const outgoing: OutgoingMessage = {
+      clientMessageId: this.createId(),
+      idempotencyKey: this.createId(),
+      kind: 'STICKER',
+      text: '',
+      sticker: { ...sticker },
+      replyToId,
+      attachments: [],
+      createdAt: this.now(),
+      status: 'sending',
+      error: null,
+      attempts: 0,
+    };
+
+    this.stickers.recordRecent(sticker);
+    this.patchSlice(chatId, { outbox: [...slice.outbox, outgoing] });
+    await this.attemptSend(chatId, outgoing.clientMessageId);
+    return true;
+  }
+
+  private isRateLimited(): boolean {
+    return this.state.rateLimitUntil !== null && this.state.rateLimitUntil > this.now();
+  }
+
+  /* ----------------------------------------------------------------------- */
+  /* E7-F5: E2EE wire-up                                                      */
+  /* ----------------------------------------------------------------------- */
+
+  private patchE2ee(patch: Partial<E2eeState>): void {
+    this.patch({ e2ee: { ...this.state.e2ee, ...patch } });
+  }
+
+  private e2eeChatState(chatId: string): E2eeChatState {
+    return this.state.e2ee.chats[chatId] ?? createIdleE2eeChatState(chatId);
+  }
+
+  private patchE2eeChat(chatId: string, patch: Partial<E2eeChatState>): void {
+    const current = this.e2eeChatState(chatId);
+    this.patchE2ee({
+      chats: { ...this.state.e2ee.chats, [chatId]: { ...current, ...patch } },
+    });
+  }
+
+  /**
+   * E7-F5G P2-33: the chat is E2EE if the server says so, a sealed local mode
+   * pin says so, a downgrade was detected, or history already contains crypto
+   * envelopes. The last two survive a server switch to MANAGED.
+   */
+  isE2eeChat(chatId: string): boolean {
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    const state = this.state.e2ee.chats[chatId] ?? null;
+    const slice = this.state.slices[chatId] ?? null;
+    if (chat?.security_mode === 'E2EE') return true;
+    if (state?.securityMode === 'E2EE') return true;
+    if (state?.modeAction === 'block_security_alert') return true;
+    return (
+      slice?.messages.some((message) => message.crypto !== undefined && message.crypto !== null) ??
+      false
+    );
+  }
+
+  /** Why E2EE refuses to send; `null` means the managed/E2EE path may proceed. */
+  e2eeBlockReason(chatId: string): E2eeBlockReason | null {
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    const state = this.state.e2ee.chats[chatId] ?? null;
+    if (!this.state.e2ee.enabled || this.e2eeBridge === null) {
+      return this.isE2eeChat(chatId) ? 'flag_disabled' : null;
+    }
+    if (chat?.security_mode === 'E2EE' && state?.status !== 'ready') return 'not_ready';
+    if (!state || state.status === 'idle' || state.status === 'loading') return 'not_ready';
+    if (state.status === 'error') return 'not_ready';
+    if (state.modeAction === 'block_security_alert') return 'mode_alert';
+    if (state.modeAction === 'confirm_mode_required') return 'mode_confirm_required';
+    if (state.keyChanges.length > 0) return 'key_change';
+    if (state.securityMode === 'E2EE' && state.peerDeviceIds.length === 0) {
+      return 'no_peer_devices';
+    }
+    return null;
+  }
+
+  /**
+   * Reads the local sealed chat-mode pin even when the feature flag is off
+   * (E7-F5G P2-33). A server that downgrades an E2EE chat to MANAGED must not
+   * turn old plaintext into a rendering/sending path. The pin is read-only
+   * metadata; missing storage/identity means "no marker", never a crash.
+   */
+  private async loadPersistedE2eeMarker(chatId: string): Promise<void> {
+    if (this.e2eeChatState(chatId).securityMode === 'E2EE') return;
+    try {
+      const pin = await readChatModePin(getE2eeStorage(), chatId);
+      if (pin?.mode === 'E2EE') {
+        this.patchE2eeChat(chatId, { securityMode: 'E2EE' });
+      }
+    } catch {
+      // No IndexedDB/identity on this profile: there is no local E2EE marker.
+    }
+  }
+
+  /**
+   * Registers (or reuses) the keyed device and opens the local E2EE account.
+   * Runs only when the flag is on; failures are surfaced as E2EE state, never as
+   * a plaintext fallback.
+   */
+  private async initializeE2ee(userId: string): Promise<void> {
+    if (this.e2eeBridge === null) return;
+    if (this.e2eeInitPromise) return this.e2eeInitPromise;
+    this.pendingResets.clear();
+    this.patchE2ee({ status: 'loading', error: null, userId, browserUnsupported: false });
+    this.e2eeInitPromise = (async () => {
+      try {
+        const self = await this.e2eeBridge!.initialize({
+          userId,
+          name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
+          appVersion: this.config.appVersion.slice(0, 40),
+        });
+        this.patchE2ee({
+          status: 'ready',
+          error: null,
+          userId: self.userId,
+          deviceId: self.deviceId,
+          keyGeneration: self.keyGeneration,
+          fingerprint: self.fingerprint,
+        });
+        // Every subsequent device-scoped request must use the keyed device id.
+        // The Auth BFF session persists it via the auth storage module; the dev session is
+        // in-memory only (AUTH-D-06) and is updated without touching storage.
+        if (this.config.authMode === 'password') {
+          setRuntimeDeviceId(self.deviceId);
+        } else {
+          const session = getSession();
+          if (session !== null && session.device.id !== self.deviceId) {
+            setSession({ ...session, device: { ...session.device, id: self.deviceId } });
+          }
+        }
+        if (this.state.device?.id !== self.deviceId) {
+          this.patch({
+            device: this.state.device
+              ? { ...this.state.device, id: self.deviceId }
+              : {
+                  id: self.deviceId,
+                  platform: 'WEB',
+                  created_at: new Date(this.now()).toISOString(),
+                },
+          });
+        }
+      } catch (error) {
+        const code = e2eeErrorLabel(error);
+        this.patchE2ee({
+          status: 'error',
+          error: code,
+          // ADR-26 runtime floor: a browser without a byte-exact RFC 8032
+          // Ed25519 must not silently get E2EE (WebKit/Safari).
+          browserUnsupported: code === 'E2EE_UNSUPPORTED_BROWSER',
+        });
+      } finally {
+        this.e2eeInitPromise = null;
+      }
+    })();
+    return this.e2eeInitPromise;
+  }
+
+  /** Loads mode pin, chat keys, TOFU/key-change state and safety numbers. */
+  async loadE2eeChat(chatId: string): Promise<void> {
+    if (this.e2eeBridge === null) return;
+    await this.loadPersistedE2eeMarker(chatId);
+    if (this.state.e2ee.status !== 'ready') return;
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    if (!chat) return;
+    const current = this.e2eeChatState(chatId);
+    if (current.status === 'loading') return;
+    this.patchE2eeChat(chatId, { status: 'loading', error: null });
+    const input: E2eeChatInput = {
+      chatId,
+      serverMode: chat.security_mode,
+      peerHasE2eeCapableDevices: chat.peer_has_e2ee_capable_devices,
+      workspaceMode: this.state.activeWorkspace?.security_mode ?? null,
+      e2eeHistoryMarker: current.securityMode === 'E2EE' || chat.security_mode === 'E2EE',
+    };
+    try {
+      const snapshot = await this.e2eeBridge.loadChat(input);
+      const safetyNumbers: Record<string, string> = {};
+      const verificationHashes: Record<string, string> = {};
+      for (const entry of snapshot.safetyNumbers) {
+        safetyNumbers[entry.deviceId] = entry.display;
+        if (entry.verificationHash !== undefined) {
+          verificationHashes[entry.deviceId] = entry.verificationHash;
+        }
+      }
+      this.patchE2eeChat(chatId, {
+        status: 'ready',
+        error: null,
+        securityMode: snapshot.securityMode,
+        modeAction: snapshot.modeAction,
+        evidence: snapshot.evidence,
+        selfDeviceId: snapshot.selfDeviceId,
+        devices: snapshot.devices,
+        peerDeviceIds: snapshot.peerDeviceIds,
+        keyChanges: snapshot.keyChanges,
+        safetyNumbers,
+        verificationHashes,
+        verificationError: null,
+        unavailableDeviceIds:
+          snapshot.unavailableDeviceIds.length > 0
+            ? snapshot.unavailableDeviceIds
+            : current.unavailableDeviceIds,
+        loadedAt: snapshot.loadedAt,
+      });
+    } catch (error) {
+      this.patchE2eeChat(chatId, { status: 'error', error: e2eeErrorLabel(error) });
+    }
+  }
+
+  async refreshE2eeChat(chatId: string): Promise<void> {
+    if (this.e2eeBridge === null) return;
+    this.e2eeBridge.invalidateChat(chatId);
+    await this.loadE2eeChat(chatId);
+    await this.decryptE2eeSlice(chatId);
+  }
+
+  /** Explicit "Принять новый ключ" after the warning is rendered. */
+  async acceptKeyChange(chatId: string, userId: string, deviceId: string): Promise<void> {
+    if (this.e2eeBridge === null) return;
+    try {
+      await this.e2eeBridge.acceptKeyChange(userId, deviceId);
+      await this.loadE2eeChat(chatId);
+      // P2-31: messages that arrived while the key-change block was active were
+      // stored with a KEY_CHANGE_DETECTED view; drop only those views and retry
+      // the slice now that the observed key is accepted. Other error views
+      // (e.g. DECRYPT_FAILED) keep their reset semantics.
+      const slice = this.state.slices[chatId];
+      if (slice) {
+        const e2ee = { ...slice.e2ee };
+        let changed = false;
+        for (const [messageId, view] of Object.entries(e2ee)) {
+          if (view.status === 'error' && view.code === 'KEY_CHANGE_DETECTED') {
+            delete e2ee[messageId];
+            changed = true;
+          }
+        }
+        if (changed) this.patchSlice(chatId, { e2ee });
+      }
+      await this.decryptE2eeSlice(chatId);
+    } catch (error) {
+      this.patchE2eeChat(chatId, { error: e2eeErrorLabel(error) });
+    }
+  }
+
+  /**
+   * P1-02: safety-number ceremony for one peer device. The bridge computes VH
+   * v2 and attests it with `PUT /chats/{id}/keys/verification`; `verified` is
+   * then read back from `DeviceKeyInfo.verified` (scoped to this verifier
+   * device). Nothing is marked verified locally if the request fails.
+   */
+  async verifyE2eeDevice(
+    chatId: string,
+    deviceId: string,
+    method: 'QR' | 'MANUAL' = 'MANUAL',
+  ): Promise<boolean> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null) return false;
+    const current = this.e2eeChatState(chatId);
+    if (current.verifyingDeviceId !== null) return false;
+    if (current.keyChanges.some((change) => change.deviceId === deviceId)) {
+      this.patchE2eeChat(chatId, { verificationError: 'KEY_CHANGE_DETECTED' });
+      return false;
+    }
+    this.patchE2eeChat(chatId, { verifyingDeviceId: deviceId, verificationError: null });
+    try {
+      await bridge.verifyDevice(chatId, deviceId, method);
+      await this.loadE2eeChat(chatId);
+      return true;
+    } catch (error) {
+      const code = e2eeErrorLabel(error);
+      this.patchE2eeChat(chatId, { verificationError: code });
+      if (code === 'KEY_CHANGE_DETECTED') {
+        // The target key generation moved: reload keys and show the warning;
+        // the user must accept the new key and re-verify.
+        await this.loadE2eeChat(chatId);
+      }
+      return false;
+    } finally {
+      this.patchE2eeChat(chatId, { verifyingDeviceId: null });
+    }
+  }
+
+  /** Explicit confirmation of a genuinely managed chat (fresh-device flow). */
+  async confirmManagedMode(chatId: string): Promise<void> {
+    if (this.e2eeBridge === null) return;
+    const state = this.e2eeChatState(chatId);
+    if (state.evidence.length > 0) return;
+    try {
+      await this.e2eeBridge.confirmManagedMode(chatId, state.evidence);
+      await this.loadE2eeChat(chatId);
+    } catch (error) {
+      this.patchE2eeChat(chatId, { error: e2eeErrorLabel(error) });
+    }
+  }
+
+  /**
+   * P1-01: resolves the sealed copy of an incoming row by
+   * `(chat, direction, sender device, client_message_id, message.id)`.
+   * A missing/tampered copy is not fatal: the caller falls back to the normal
+   * error path. `message.id` binding rejects a replayed old client id under a
+   * new server row (P2-04).
+   */
+  private async lookupIncomingCopy(
+    chatId: string,
+    message: ApiMessage,
+    bridge: E2eeBridge,
+  ): Promise<E2eeLocalCopyView | null> {
+    const senderDeviceId = message.crypto?.sender_device_id;
+    const clientMessageId = message.client_message_id;
+    if (!senderDeviceId || !clientMessageId) return null;
+    try {
+      return await bridge.lookupIncomingLocalCopy(
+        chatId,
+        senderDeviceId,
+        clientMessageId,
+        message.id,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /** Maps a sealed copy to a visible E2EE view; `null` means "no copy". */
+  private copyView(copy: E2eeLocalCopyView | null): E2eeMessageView | null {
+    if (copy === null) return null;
+    if (copy.status === 'superseded') {
+      // R-15 replaced this row; after reload the original must stay hidden.
+      return { status: 'superseded', text: null, replyToId: null };
+    }
+    if (copy.contentType === 2) {
+      // A restored SESSION_RESET control is never rendered as a message.
+      return { status: 'control', text: null, replyToId: null };
+    }
+    return { status: 'decrypted', text: copy.text ?? '', replyToId: copy.replyToId };
+  }
+
+  /**
+   * Decrypts every pending E2EE message of one chat. Failures are isolated per
+   * message; a control SESSION_RESET never reaches the visible list.
+   */
+  private async decryptE2eeSlice(chatId: string): Promise<void> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null || this.state.e2ee.status !== 'ready') return;
+    if (this.e2eeDecrypting.has(chatId)) return;
+    const slice = this.state.slices[chatId];
+    const summary = this.state.chats.find((chat) => chat.id === chatId) ?? null;
+    if (!slice || !summary) return;
+    const chatState = this.state.e2ee.chats[chatId];
+    const looksE2ee =
+      summary.security_mode === 'E2EE' || slice.messages.some((message) => message.crypto);
+    if (!looksE2ee) return;
+    if (chatState === undefined || chatState.status === 'idle') {
+      await this.loadE2eeChat(chatId);
+    }
+    this.e2eeDecrypting.add(chatId);
+    try {
+      for (;;) {
+        const current = this.state.slices[chatId];
+        if (!current) return;
+        const pending = current.messages.filter(
+          (message) => current.e2ee[message.id] === undefined && message.type !== 'SYSTEM',
+        );
+        if (pending.length === 0) return;
+        const views: Record<string, E2eeMessageView> = {};
+        const resets: Array<{ reset: SessionResetBody; messageId: string }> = [];
+        for (const message of pending) {
+          const viewerId = this.viewerId();
+          const mine = Boolean(viewerId && message.sender_id === viewerId);
+          if (hasServerPlaintext(message)) {
+            this.patchE2eeChat(chatId, { plaintextAlert: true });
+          }
+          if (message.crypto === undefined || message.crypto === null) {
+            if (mine && message.client_message_id) {
+              const copy = await bridge.lookupLocalCopy(chatId, message.client_message_id);
+              views[message.id] = this.copyView(copy) ?? {
+                status: 'unavailable',
+                text: null,
+                replyToId: null,
+              };
+            } else {
+              views[message.id] = { status: 'unavailable', text: null, replyToId: null };
+            }
+            continue;
+          }
+          const outcome = await bridge.receive(chatId, {
+            id: message.id,
+            chatId,
+            senderId: message.sender_id ?? null,
+            senderDeviceId: message.crypto.sender_device_id,
+            clientMessageId: message.client_message_id ?? null,
+            createdAt: message.created_at,
+            crypto: message.crypto,
+          });
+          if (outcome.kind === 'none') {
+            // Already received on this device (e.g. history after reload): the
+            // ratchet correctly rejects a second receive, so restore the sealed
+            // incoming copy by (sender device, client_message_id, message.id)
+            // instead of hiding a message that was decrypted before the reload.
+            const copy = await this.lookupIncomingCopy(chatId, message, bridge);
+            views[message.id] = this.copyView(copy) ?? {
+              status: 'unavailable',
+              text: null,
+              replyToId: null,
+            };
+          } else if (outcome.kind === 'message') {
+            views[message.id] = {
+              status: 'decrypted',
+              text: outcome.text,
+              replyToId: outcome.replyToId,
+            };
+          } else if (outcome.kind === 'control') {
+            views[message.id] = { status: 'control', text: null, replyToId: null };
+            void this.handleIncomingReset(chatId, outcome.senderDeviceId, outcome.reset);
+          } else {
+            // P1-01: after the session that decrypted this row is gone (R-15
+            // completion, §5.7 loser deletion, TTL/GC), `receive()` can only
+            // answer NO_SESSION / KEY_HANDSHAKE_INVALID / SPK_DELETED /
+            // DECRYPT_FAILED. The sealed incoming copy is the authoritative
+            // local history: restore it before showing an error or sending
+            // another reset (which could re-encrypt an already delivered
+            // window at the sender).
+            const restored = E2EE_COPY_RESTORE_CODES.has(outcome.code)
+              ? this.copyView(await this.lookupIncomingCopy(chatId, message, bridge))
+              : null;
+            if (restored !== null) {
+              views[message.id] = restored;
+              continue;
+            }
+            views[message.id] = {
+              status: 'error',
+              text: null,
+              replyToId: null,
+              code: outcome.code,
+            };
+            if (outcome.reset !== null) {
+              resets.push({ reset: outcome.reset, messageId: message.id });
+            }
+            if (outcome.code === 'KEY_CHANGE_DETECTED') {
+              this.patchE2eeChat(chatId, { error: null });
+              void this.loadE2eeChat(chatId);
+            }
+          }
+        }
+        const latest = this.state.slices[chatId];
+        if (!latest) return;
+        this.patchSlice(chatId, { e2ee: { ...latest.e2ee, ...views } });
+        for (const reset of resets) {
+          void this.sendResetControl(chatId, reset.reset);
+        }
+      }
+    } finally {
+      this.e2eeDecrypting.delete(chatId);
+    }
+  }
+
+  /** Receiver-side R-15: a rate-limited, invisible control message. */
+  private async sendResetControl(chatId: string, reset: SessionResetBody): Promise<void> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null) return;
+    const key = `${chatId}:${reset.failedSessionId}`;
+    if (this.e2eeResetInFlight.has(key)) return;
+    if (!bridge.resetRateLimiter.allow(reset.failedSessionId)) return;
+    this.e2eeResetInFlight.add(key);
+    let clientMessageId: string | null = null;
+    try {
+      const prepared = await bridge.sendReset({ chatId, reset });
+      clientMessageId = prepared.clientMessageId;
+      const result = await this.api.sendMessage(
+        chatId,
+        {
+          client_message_id: prepared.clientMessageId,
+          type: 'TEXT',
+          envelopes: [...prepared.envelopes],
+        },
+        prepared.idempotencyKey,
+      );
+      await bridge.confirmSent(prepared.clientMessageId, {
+        serverMessageId: result.message.id,
+        seq: result.message.seq,
+        warning: prepared.coverageWarning,
+      });
+    } catch (error) {
+      if (clientMessageId !== null) {
+        try {
+          await bridge.markFailed(clientMessageId, failureCode(error));
+        } catch {
+          // The outbox row may not exist if prepare failed before the commit.
+        }
+      }
+    } finally {
+      this.e2eeResetInFlight.delete(key);
+    }
+  }
+
+  /**
+   * Sender-side R-15: after a reset, re-encrypt the undecryptable window in a
+   * fresh session. Each message is a separate POST (§5.5); old rows become
+   * `superseded` only after their replacement is accepted by the server.
+   */
+  private async handleIncomingReset(
+    chatId: string,
+    senderDeviceId: string,
+    reset: SessionResetBody,
+  ): Promise<void> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null) return;
+    const key = `${chatId}:${reset.failedSessionId}`;
+    if (this.e2eeResetInFlight.has(key)) return;
+    this.e2eeResetInFlight.add(key);
+    let started = false;
+    let failed = 0;
+    let done = 0;
+    let total = 0;
+    let remaining = 0;
+    let skipped = 0;
+    try {
+      const outcome = await bridge.handleReset({ chatId, senderDeviceId, reset });
+      if (outcome.status !== 'pending') {
+        // A reset that can no longer be re-driven must not leave a dead retry
+        // affordance in the UI. A `duplicate` keeps any live pending window.
+        if (outcome.reason !== 'duplicate' && this.pendingResets.delete(key)) {
+          this.patchE2eeChat(chatId, { resetProgress: null, retryPendingCount: 0 });
+        }
+        return;
+      }
+      started = true;
+      remaining = outcome.remaining;
+      skipped = outcome.skipped;
+      total = outcome.candidates.length + outcome.remaining;
+      this.pendingResets.set(key, { reset, senderDeviceId });
+      this.patchE2eeChat(chatId, {
+        retryPendingCount: total,
+        resetProgress: {
+          status: 'running',
+          total,
+          done: 0,
+          failed: 0,
+          remaining,
+          skipped,
+        },
+      });
+      let first = true;
+      // E7-F5G P2-30: after the first fresh-prekey retry, the remaining batch
+      // reuses exactly those sessions. If one is gone the bridge creates a
+      // fresh prekey session instead of falling back to an old live session.
+      let reuseSessionIds: readonly string[] | undefined;
+      for (const candidate of outcome.candidates) {
+        try {
+          const prepared = await bridge.sendText({
+            chatId,
+            text: candidate.text,
+            replyToId: candidate.replyToId,
+            retryOfClientMessageId: candidate.originalClientMessageId,
+            freshPrekey: first,
+            reuseSessionIds,
+          });
+          if (first) {
+            reuseSessionIds = prepared.sessionIds;
+          }
+          this.patchE2eeChat(chatId, {
+            coverageWarning: prepared.coverageWarning,
+            unavailableDeviceIds: prepared.coverage.uncoveredDeviceIds,
+          });
+          const result = await this.api.sendMessage(
+            chatId,
+            {
+              client_message_id: prepared.clientMessageId,
+              type: 'TEXT',
+              envelopes: [...prepared.envelopes],
+            },
+            prepared.idempotencyKey,
+          );
+          await bridge.confirmSent(prepared.clientMessageId, {
+            serverMessageId: result.message.id,
+            seq: result.message.seq,
+            warning: prepared.coverageWarning,
+          });
+          await bridge.markSuperseded(candidate.originalClientMessageId);
+          first = false;
+          done += 1;
+          this.patchE2eeChat(chatId, {
+            resetProgress: {
+              status: 'running',
+              total,
+              done,
+              failed,
+              remaining,
+              skipped,
+            },
+          });
+          this.applyE2eeSentMessage(chatId, result.message, candidate.text, candidate.replyToId);
+          if (candidate.originalServerMessageId !== null) {
+            const latest = this.state.slices[chatId];
+            if (latest) {
+              this.patchSlice(chatId, {
+                e2ee: {
+                  ...latest.e2ee,
+                  [candidate.originalServerMessageId]: {
+                    status: 'superseded',
+                    text: null,
+                    replyToId: null,
+                  },
+                },
+              });
+            }
+          }
+        } catch {
+          failed += 1;
+          // The failed row stays `pending` in the F4 outbox; the next reset or
+          // the explicit "retry" action re-drives the window. There is no
+          // silent drop: the UI shows the explicit retry-pending state.
+          break;
+        }
+      }
+      const unprocessed = outcome.candidates.length - done - failed;
+      remaining = outcome.remaining + Math.max(0, unprocessed);
+      const status = failed === 0 && remaining === 0 ? 'completed' : 'failed';
+      const progress: E2eeResetProgress = {
+        status,
+        total,
+        done,
+        failed,
+        remaining,
+        skipped,
+      };
+      if (status === 'completed') this.pendingResets.delete(key);
+      this.patchE2eeChat(chatId, {
+        retryPendingCount: status === 'completed' ? 0 : failed + remaining,
+        resetProgress: progress,
+      });
+      void this.loadNotifications({ silent: true });
+    } finally {
+      if (started) {
+        // E7-F5G R-15: success deletes the failed session; a failed/partial
+        // batch unmarks the reset so the next one can re-drive the window.
+        try {
+          await bridge.finishReset({
+            chatId,
+            reset,
+            failedSessionId: reset.failedSessionId,
+            status: failed === 0 && remaining === 0 ? 'completed' : 'failed',
+          });
+        } catch {
+          // The retry outcome itself is already reflected in the UI state.
+        }
+      }
+      this.e2eeResetInFlight.delete(key);
+    }
+  }
+
+  /**
+   * E7-F6 R-15 UX: explicit retry of a failed re-encryption window. The reset
+   * body is retained in memory only after a failed/partial batch; a completed
+   * reset is removed so the button can never re-send already replaced messages.
+   */
+  async retryPendingReset(chatId: string): Promise<void> {
+    const prefix = `${chatId}:`;
+    const pending = [...this.pendingResets.entries()].filter(([key]) => key.startsWith(prefix));
+    if (pending.length === 0) return;
+    this.patchE2eeChat(chatId, { resetProgress: null, retryPendingCount: 0 });
+    for (const [, entry] of pending) {
+      await this.handleIncomingReset(chatId, entry.senderDeviceId, entry.reset);
+    }
+  }
+
+  private applyE2eeSentMessage(
+    chatId: string,
+    message: ApiMessage,
+    text: string,
+    replyToId: string | null,
+  ): void {
+    const current = this.state.slices[chatId];
+    if (!current) return;
+    const messages = mergeMessages(current.messages, [message]);
+    this.patchSlice(chatId, {
+      messages,
+      e2ee: {
+        ...current.e2ee,
+        [message.id]: { status: 'decrypted', text, replyToId },
+      },
+      lastSeq: maxSeq(messages),
+      beforeSeq: minSeq(messages),
+    });
+    this.updateChatSummary(chatId, {
+      last_seq: message.seq,
+      last_message_at: message.created_at,
+      unread_count: 0,
+    });
+  }
+
+  private async sendE2eeText(
+    chatId: string,
+    text: string,
+    replyToId: string | null,
+  ): Promise<void> {
+    const bridge = this.e2eeBridge;
+    const slice = this.state.slices[chatId];
+    if (bridge === null || !slice) return;
+    let prepared;
+    try {
+      prepared = await bridge.sendText({ chatId, text, replyToId });
+    } catch (error) {
+      this.patchE2eeChat(chatId, { error: e2eeErrorLabel(error) });
+      if (isE2eeError(error) && error.code === 'KEY_CHANGE_DETECTED') {
+        void this.loadE2eeChat(chatId);
+      }
+      return;
+    }
+    const outgoing: OutgoingMessage = {
+      clientMessageId: prepared.clientMessageId,
+      idempotencyKey: prepared.idempotencyKey,
+      kind: 'TEXT',
+      text,
+      sticker: null,
+      replyToId,
+      attachments: [],
+      createdAt: this.now(),
+      status: 'sending',
+      error: null,
+      attempts: 0,
+      e2ee: true,
+      coverageWarning: prepared.coverageWarning,
+    };
+    const latest = this.state.slices[chatId];
+    if (!latest) return;
+    this.patchSlice(chatId, { outbox: [...latest.outbox, outgoing] });
+    this.patchE2eeChat(chatId, {
+      error: null,
+      coverageWarning: prepared.coverageWarning,
+      unavailableDeviceIds: prepared.coverage.uncoveredDeviceIds,
+    });
+    await this.attemptE2eeSend(chatId, outgoing.clientMessageId, prepared.envelopes);
+  }
+
+  private async attemptE2eeSend(
+    chatId: string,
+    clientMessageId: string,
+    envelopes: readonly WireCryptoEnvelope[],
+  ): Promise<void> {
+    const key = this.timerKey(chatId, clientMessageId);
+    if (this.inFlight.has(key)) return;
+    const slice = this.state.slices[chatId];
+    const item = slice?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+    if (!slice || !item) return;
+    this.inFlight.add(key);
+    this.patchOutgoing(chatId, clientMessageId, {
+      status: 'sending',
+      error: null,
+      attempts: item.attempts + 1,
+    });
+    try {
+      const result = await this.api.sendMessage(
+        chatId,
+        {
+          client_message_id: clientMessageId,
+          type: 'TEXT',
+          envelopes: [...envelopes],
+        },
+        item.idempotencyKey,
+      );
+      await this.e2eeBridge?.confirmSent(clientMessageId, {
+        serverMessageId: result.message.id,
+        seq: result.message.seq,
+        warning: item.coverageWarning ?? null,
+      });
+      const current = this.state.slices[chatId];
+      if (!current) return;
+      const messages = mergeMessages(current.messages, [result.message]);
+      this.patchSlice(chatId, {
+        messages,
+        outbox: current.outbox.filter((entry) => entry.clientMessageId !== clientMessageId),
+        e2ee: {
+          ...current.e2ee,
+          [result.message.id]: {
+            status: 'decrypted',
+            text: item.text,
+            replyToId: item.replyToId,
+          },
+        },
+        lastSeq: maxSeq(messages),
+        beforeSeq: minSeq(messages),
+      });
+      this.updateChatSummary(chatId, {
+        last_seq: result.message.seq,
+        last_message_at: result.message.created_at,
+        unread_count: 0,
+      });
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      try {
+        await this.e2eeBridge?.markFailed(clientMessageId, apiError.code);
+      } catch {
+        // Outbox row may already be gone; nothing else to do here.
+      }
+      this.patchOutgoing(chatId, clientMessageId, {
+        status: 'failed',
+        error: apiError,
+      });
+      if (apiError.code === 'KEY_CHANGED' || apiError.code === 'KEY_GENERATION_MISMATCH') {
+        this.e2eeBridge?.invalidateChat(chatId);
+        void this.loadE2eeChat(chatId);
+      }
+      if (
+        apiError.status === 409 &&
+        apiError.code === 'IDEMPOTENCY_IN_PROGRESS' &&
+        item.attempts < MAX_AUTO_RETRIES
+      ) {
+        const delay = (apiError.retryAfterSeconds ?? 1) * 1000;
+        const timer = setTimeout(() => {
+          this.timers.delete(key);
+          const latest = this.state.slices[chatId]?.outbox.find(
+            (entry) => entry.clientMessageId === clientMessageId,
+          );
+          if (latest?.status === 'failed') void this.retry(chatId, clientMessageId);
+        }, delay);
+        this.timers.set(key, timer);
+      }
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  private async retryE2ee(chatId: string, clientMessageId: string): Promise<void> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null) return;
+    const entry = await bridge.loadOutgoing(clientMessageId);
+    if (entry === null) {
+      this.patchOutgoing(chatId, clientMessageId, {
+        status: 'failed',
+        error: ApiError.client('E2EE_UNAVAILABLE', 'E2EE outbox entry is missing'),
+      });
+      return;
+    }
+    this.patchOutgoing(chatId, clientMessageId, { status: 'sending', error: null });
+    await this.attemptE2eeSend(chatId, clientMessageId, entry.envelopes);
+  }
+
+  async retry(chatId: string, clientMessageId: string): Promise<void> {
+    const item = this.state.slices[chatId]?.outbox.find(
+      (entry) => entry.clientMessageId === clientMessageId,
+    );
+    if (!item || item.status !== 'failed') return;
+
+    this.clearTimer(this.timerKey(chatId, clientMessageId));
+    this.patchOutgoing(chatId, clientMessageId, { status: 'sending', error: null });
+    if (item.e2ee) {
+      await this.retryE2ee(chatId, clientMessageId);
+      return;
+    }
+    await this.attemptSend(chatId, clientMessageId);
+  }
+
+  discardOutgoing(chatId: string, clientMessageId: string): OutgoingMessage | null {
+    const slice = this.state.slices[chatId];
+    const item = slice?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+    if (!slice || !item) return null;
+
+    this.clearTimer(this.timerKey(chatId, clientMessageId));
+    this.patchSlice(chatId, {
+      outbox: slice.outbox.filter((entry) => entry.clientMessageId !== clientMessageId),
+    });
+    return item;
+  }
+
+  private timerKey(chatId: string, clientMessageId: string): string {
+    return `${chatId}:${clientMessageId}`;
+  }
+
+  private clearTimer(key: string): void {
+    const timer = this.timers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.timers.delete(key);
+    }
+  }
+
+  private patchOutgoing(
+    chatId: string,
+    clientMessageId: string,
+    patch: Partial<OutgoingMessage>,
+  ): void {
+    const slice = this.state.slices[chatId];
+    if (!slice) return;
+    this.patchSlice(chatId, {
+      outbox: slice.outbox.map((entry) =>
+        entry.clientMessageId === clientMessageId ? { ...entry, ...patch } : entry,
+      ),
+    });
+  }
+
+  private async attemptSend(chatId: string, clientMessageId: string): Promise<void> {
+    const key = this.timerKey(chatId, clientMessageId);
+    if (this.inFlight.has(key)) return;
+
+    const slice = this.state.slices[chatId];
+    const item = slice?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+    if (!slice || !item) return;
+
+    this.inFlight.add(key);
+    this.patchOutgoing(chatId, clientMessageId, {
+      status: 'sending',
+      error: null,
+      attempts: item.attempts + 1,
+    });
+
+    const body: MessageCreateBody =
+      item.kind === 'STICKER' && item.sticker
+        ? {
+            client_message_id: item.clientMessageId,
+            type: 'STICKER',
+            sticker_id: item.sticker.id,
+            ...(item.replyToId ? { reply_to_id: item.replyToId } : {}),
+          }
+        : {
+            client_message_id: item.clientMessageId,
+            type: 'TEXT',
+            // Contract: text is nullable; attachment_ids carry the payload.
+            text: item.text.length > 0 ? item.text : null,
+            ...(item.replyToId ? { reply_to_id: item.replyToId } : {}),
+            ...(item.attachments.length > 0
+              ? { attachment_ids: item.attachments.map((attachment) => attachment.id) }
+              : {}),
+          };
+
+    try {
+      const result = await this.api.sendMessage(chatId, body, item.idempotencyKey);
+      const current = this.state.slices[chatId];
+      if (!current) return;
+
+      const messages = mergeMessages(current.messages, [result.message]);
+      this.patchSlice(chatId, {
+        messages,
+        outbox: current.outbox.filter((entry) => entry.clientMessageId !== clientMessageId),
+        lastSeq: maxSeq(messages),
+        beforeSeq: minSeq(messages),
+      });
+      this.files.markBound(item.attachments.map((attachment) => attachment.id));
+      this.updateChatSummary(chatId, {
+        last_seq: result.message.seq,
+        last_message_at: result.message.created_at,
+        unread_count: 0,
+      });
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      const current = this.state.slices[chatId];
+      const failed = current?.outbox.find((entry) => entry.clientMessageId === clientMessageId);
+      if (!current || !failed) return;
+
+      this.patchOutgoing(chatId, clientMessageId, {
+        status: 'failed',
+        error: apiError,
+      });
+
+      if (apiError.code === 'STICKER_PACK_DISABLED') {
+        const packId =
+          typeof apiError.details?.pack_id === 'string'
+            ? apiError.details.pack_id
+            : failed.sticker?.pack_id;
+        if (packId) this.stickers.disablePack(packId);
+      }
+
+      if (
+        apiError.status === 409 &&
+        apiError.code === 'IDEMPOTENCY_IN_PROGRESS' &&
+        failed.attempts < MAX_AUTO_RETRIES
+      ) {
+        const delay = (apiError.retryAfterSeconds ?? 1) * 1000;
+        const timer = setTimeout(() => {
+          this.timers.delete(key);
+          const latest = this.state.slices[chatId]?.outbox.find(
+            (entry) => entry.clientMessageId === clientMessageId,
+          );
+          if (latest?.status === 'failed') void this.retry(chatId, clientMessageId);
+        }, delay);
+        this.timers.set(key, timer);
+      }
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  async markRead(chatId: string, lastSeq: number): Promise<void> {
+    const slice = this.state.slices[chatId];
+    if (
+      !slice ||
+      slice.status !== 'ready' ||
+      !this.state.online ||
+      lastSeq <= 0 ||
+      lastSeq <= slice.readSeq
+    ) {
+      return;
+    }
+
+    const key = `${chatId}:${lastSeq}`;
+    let idempotencyKey = this.readKeys.get(key);
+    if (!idempotencyKey) {
+      idempotencyKey = this.createId();
+      this.readKeys.set(key, idempotencyKey);
+    }
+
+    try {
+      await this.api.markRead(chatId, lastSeq, idempotencyKey);
+      const current = this.state.slices[chatId];
+      if (!current) return;
+      this.patchSlice(chatId, { readSeq: Math.max(current.readSeq, lastSeq), unread: 0 });
+      this.updateChatSummary(chatId, { unread_count: 0 });
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      // Read receipts are best-effort: never block the chat with a toast.
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* E6-F: notifications and preferences                                 */
+  /* ------------------------------------------------------------------ */
+
+  private canLoadNotifications(): boolean {
+    return this.state.sessionStatus === 'ready' && !this.state.onboardingRequired;
+  }
+
+  /**
+   * GET /notifications?limit=30. Called on bootstrap, after `message.created`
+   * and after `/sync`; a shared promise collapses these triggers into one call.
+   */
+  async loadNotifications(options: { silent?: boolean } = {}): Promise<void> {
+    if (!this.canLoadNotifications()) return;
+    if (this.notificationsPromise) return this.notificationsPromise;
+
+    const current = this.state.notifications;
+    const epoch = this.notificationEpoch;
+    const silent = options.silent === true && current.status === 'ready';
+    this.patch({
+      notifications: {
+        ...current,
+        status: silent ? current.status : 'loading',
+        error: null,
+      },
+    });
+
+    this.notificationsPromise = (async () => {
+      try {
+        const page = await this.api.listNotifications({ limit: NOTIFICATIONS_PAGE_SIZE });
+        if (epoch !== this.notificationEpoch) return;
+        const latest = this.state.notifications;
+        this.patch({
+          notifications: {
+            ...latest,
+            items: page.items,
+            status: 'ready',
+            error: null,
+            unreadCount: page.unread_count,
+            hasMore: page.page.has_more,
+            nextCursor: page.page.next_cursor ?? null,
+            loadMoreStatus: 'idle',
+            loadMoreError: null,
+            lastLoadedAt: this.now(),
+          },
+        });
+      } catch (error) {
+        const apiError = toApiError(error);
+        if (epoch !== this.notificationEpoch) return;
+        this.handleFailure(apiError);
+        const latest = this.state.notifications;
+        this.patch({
+          notifications: {
+            ...latest,
+            status: latest.items.length > 0 ? 'ready' : 'error',
+            error: apiError,
+          },
+        });
+      } finally {
+        this.notificationsPromise = null;
+      }
+    })();
+
+    return this.notificationsPromise;
+  }
+
+  /** Foreground refresh for the panel; never shows a spinner over loaded rows. */
+  refreshNotifications(): Promise<void> {
+    return this.loadNotifications();
+  }
+
+  async loadMoreNotifications(): Promise<void> {
+    const current = this.state.notifications;
+    if (
+      current.status !== 'ready' ||
+      !current.hasMore ||
+      current.nextCursor === null ||
+      current.loadMoreStatus === 'loading'
+    ) {
+      return;
+    }
+
+    const epoch = this.notificationEpoch;
+    this.patch({
+      notifications: { ...current, loadMoreStatus: 'loading', loadMoreError: null },
+    });
+
+    try {
+      const page = await this.api.listNotifications({
+        cursor: current.nextCursor,
+        limit: NOTIFICATIONS_PAGE_SIZE,
+      });
+      if (epoch !== this.notificationEpoch) return;
+      const latest = this.state.notifications;
+      const known = new Set(latest.items.map((item) => item.id));
+      const appended = page.items.filter((item) => !known.has(item.id));
+      this.patch({
+        notifications: {
+          ...latest,
+          items: [...latest.items, ...appended],
+          hasMore: page.page.has_more,
+          nextCursor: page.page.next_cursor ?? null,
+          loadMoreStatus: 'idle',
+          loadMoreError: null,
+        },
+      });
+    } catch (error) {
+      const apiError = toApiError(error);
+      if (epoch !== this.notificationEpoch) return;
+      this.handleFailure(apiError);
+      this.patch({
+        notifications: {
+          ...this.state.notifications,
+          loadMoreStatus: 'error',
+          loadMoreError: apiError,
+        },
+      });
+    }
+  }
+
+  /** Optimistic read-one with rollback; returns false when the server rejects it. */
+  async markNotificationRead(id: string): Promise<boolean> {
+    const current = this.state.notifications;
+    const item = current.items.find((entry) => entry.id === id);
+    if (!item || item.read) return true;
+    if (current.readPendingIds.includes(id)) return true;
+
+    const generation = this.notificationReadGeneration;
+    const epoch = this.notificationEpoch;
+    this.patch({
+      notifications: {
+        ...current,
+        items: current.items.map((entry) => (entry.id === id ? { ...entry, read: true } : entry)),
+        unreadCount: Math.max(0, current.unreadCount - 1),
+        readPendingIds: [...current.readPendingIds, id],
+        readError: null,
+      },
+    });
+
+    try {
+      // One key per logical mutation; a user-initiated retry is a new action.
+      await this.api.markNotificationsRead({ ids: [id], all: false }, this.createId());
+      if (epoch !== this.notificationEpoch) return true;
+      this.removeNotificationReadPending(id);
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      if (epoch !== this.notificationEpoch) return false;
+      this.handleFailure(apiError);
+      this.removeNotificationReadPending(id);
+
+      // A concurrent successful read-all is authoritative: do not resurrect
+      // an unread badge from a late single-read failure.
+      if (
+        generation === this.notificationReadGeneration &&
+        !this.state.notifications.readAllPending
+      ) {
+        const latest = this.state.notifications;
+        this.patch({
+          notifications: {
+            ...latest,
+            items: latest.items.map((entry) =>
+              entry.id === id ? { ...entry, read: false } : entry,
+            ),
+            unreadCount: latest.unreadCount + 1,
+            readError: apiError,
+          },
+        });
+      } else {
+        this.patch({
+          notifications: { ...this.state.notifications, readError: apiError },
+        });
+      }
+      return false;
+    }
+  }
+
+  private removeNotificationReadPending(id: string): void {
+    const latest = this.state.notifications;
+    this.patch({
+      notifications: {
+        ...latest,
+        readPendingIds: latest.readPendingIds.filter((entry) => entry !== id),
+      },
+    });
+  }
+
+  /** «Прочитать все»: one optimistic patch, full rollback on failure. */
+  async markAllNotificationsRead(): Promise<boolean> {
+    const current = this.state.notifications;
+    if (current.readAllPending) return false;
+    if (current.unreadCount === 0 && current.items.every((item) => item.read)) return true;
+
+    const epoch = this.notificationEpoch;
+    this.patch({
+      notifications: {
+        ...current,
+        items: current.items.map((entry) => ({ ...entry, read: true })),
+        unreadCount: 0,
+        readAllPending: true,
+        readError: null,
+      },
+    });
+
+    try {
+      await this.api.markNotificationsRead({ all: true }, this.createId());
+      if (epoch !== this.notificationEpoch) return true;
+      this.notificationReadGeneration += 1;
+      this.patch({
+        notifications: { ...this.state.notifications, readAllPending: false },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      if (epoch !== this.notificationEpoch) return false;
+      this.handleFailure(apiError);
+      this.patch({
+        notifications: {
+          ...this.state.notifications,
+          items: current.items,
+          unreadCount: current.unreadCount,
+          readAllPending: false,
+          readError: apiError,
+        },
+      });
+      return false;
+    }
+  }
+
+  clearNotificationReadError(): void {
+    if (!this.state.notifications.readError) return;
+    this.patch({
+      notifications: { ...this.state.notifications, readError: null },
+    });
+  }
+
+  async loadNotificationPreferences(options: { force?: boolean } = {}): Promise<void> {
+    if (!this.canLoadNotifications()) return;
+    if (this.preferencesPromise) return this.preferencesPromise;
+
+    const current = this.state.notificationPreferences;
+    if (current.status === 'ready' && options.force !== true) return;
+
+    const epoch = this.notificationEpoch;
+    this.patch({
+      notificationPreferences: {
+        ...current,
+        status: 'loading',
+        error: null,
+      },
+    });
+
+    this.preferencesPromise = (async () => {
+      try {
+        const response = await this.api.getNotificationPreferences();
+        if (epoch !== this.notificationEpoch) return;
+        this.patch({
+          notificationPreferences: {
+            ...this.state.notificationPreferences,
+            items: response.items,
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        const apiError = toApiError(error);
+        if (epoch !== this.notificationEpoch) return;
+        this.handleFailure(apiError);
+        this.patch({
+          notificationPreferences: {
+            ...this.state.notificationPreferences,
+            status: 'error',
+            error: apiError,
+          },
+        });
+      } finally {
+        this.preferencesPromise = null;
+      }
+    })();
+
+    return this.preferencesPromise;
+  }
+
+  /**
+   * PATCH /notification-preferences. The contract has no separate "create"
+   * operation: the server upserts by (chat_id, type, channel).
+   */
+  async saveNotificationPreference(
+    patch: NotificationPreferencePatch,
+  ): Promise<NotificationPreference | null> {
+    const current = this.state.notificationPreferences;
+    if (current.saving) return null;
+
+    const epoch = this.notificationEpoch;
+    this.patch({
+      notificationPreferences: { ...current, saving: true, saveError: null },
+    });
+
+    try {
+      const saved = await this.api.updateNotificationPreference(patch, this.createId());
+      if (epoch !== this.notificationEpoch) return null;
+      const latest = this.state.notificationPreferences;
+      const key = notificationPreferenceKey(saved);
+      const items = latest.items.some((item) => notificationPreferenceKey(item) === key)
+        ? latest.items.map((item) => (notificationPreferenceKey(item) === key ? saved : item))
+        : [...latest.items, saved];
+      this.patch({
+        notificationPreferences: {
+          ...latest,
+          items,
+          status: 'ready',
+          saving: false,
+          saveError: null,
+        },
+      });
+      return saved;
+    } catch (error) {
+      const apiError = toApiError(error);
+      if (epoch !== this.notificationEpoch) return null;
+      this.handleFailure(apiError);
+      this.patch({
+        notificationPreferences: {
+          ...this.state.notificationPreferences,
+          saving: false,
+          saveError: apiError,
+        },
+      });
+      return null;
+    }
+  }
+
+  clearPreferenceSaveError(): void {
+    if (!this.state.notificationPreferences.saveError) return;
+    this.patch({
+      notificationPreferences: {
+        ...this.state.notificationPreferences,
+        saveError: null,
+      },
+    });
+  }
+
+  setOnline(online: boolean): void {
+    if (this.state.online === online) return;
+    this.patch({ online });
+    if (!online) {
+      this.realtime?.suspend();
+      return;
+    }
+    if (this.realtime) {
+      // Reconnect order: GET /sync → new ticket → subscribe(last_seq).
+      this.realtime.resume();
+    } else {
+      void this.sync();
+    }
+  }
+
+  /** Manual "reconnect" action from the banner; still goes through /sync. */
+  reconnectRealtime(): void {
+    if (!this.state.online) return;
+    this.realtime?.reconnectNow();
+  }
+
+  /** Ephemeral typing signal; safe to call on every keystroke (server TTL 5 s). */
+  sendTyping(chatId: string): void {
+    if (!this.state.online) return;
+    this.realtime?.sendTyping(chatId);
+  }
+
+  async sync(): Promise<void> {
+    const { activeWorkspaceId, session, online, sessionStatus, onboardingRequired } = this.state;
+    const workspaceId = activeWorkspaceId ?? session?.workspace.id;
+    if (!workspaceId || !online || sessionStatus !== 'ready' || onboardingRequired) return;
+    if (this.syncPromise) return this.syncPromise;
+
+    this.syncPromise = this.runSync(workspaceId).finally(() => {
+      this.syncPromise = null;
+    });
+    return this.syncPromise;
+  }
+
+  private async runSync(workspaceId: string): Promise<void> {
+    this.patch({ syncStatus: 'syncing', syncError: null });
+    try {
+      const response = await this.api.sync(workspaceId);
+      const activeChatId = this.state.activeChatId;
+      const active = activeChatId ? this.state.slices[activeChatId] : undefined;
+      const remote = activeChatId
+        ? response.chats.find((chat) => chat.chat_id === activeChatId)
+        : undefined;
+
+      if (
+        activeChatId &&
+        active &&
+        remote &&
+        active.lastSeq > 0 &&
+        remote.last_seq > active.lastSeq
+      ) {
+        await this.catchUp(activeChatId, active.lastSeq);
+      }
+
+      this.applySync(response);
+      this.patch({
+        syncStatus: 'idle',
+        syncError: null,
+        lastSyncedAt: response.server_time,
+      });
+      // E6: every successful sync is a cheap refresh point for the bell. The
+      // shared promise prevents overlap with the message.created trigger.
+      void this.loadNotifications({ silent: true });
+      this.updateRealtimeSubscriptions();
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({ syncStatus: 'error', syncError: apiError });
+    }
+  }
+
+  private async catchUp(chatId: string, afterSeq: number): Promise<void> {
+    let cursor = afterSeq;
+    let mergedAny = false;
+
+    for (let pageIndex = 0; pageIndex < MAX_CATCH_UP_PAGES; pageIndex += 1) {
+      const query: ListMessagesQuery = { afterSeq: cursor, limit: 100 };
+      const page = await this.api.listMessages(chatId, query);
+      const current = this.state.slices[chatId];
+      if (!current) return;
+
+      const messages = mergeMessages(current.messages, page.items);
+      if (page.items.length > 0) mergedAny = true;
+      cursor = Math.max(cursor, maxSeq(page.items));
+      this.patchSlice(chatId, {
+        messages,
+        lastSeq: maxSeq(messages),
+        beforeSeq: minSeq(messages),
+      });
+      const newest = page.items[page.items.length - 1];
+      if (newest) {
+        this.updateChatSummary(chatId, {
+          last_seq: Math.max(this.chatLastSeq(chatId), newest.seq),
+          last_message_at: newest.created_at,
+        });
+      }
+
+      if (!page.page.has_more || page.items.length === 0) break;
+    }
+
+    // P1-03: REST catch-up (runSync and resume.gap) merges messages without a
+    // live frame, so it must also drive the E2EE pipeline. Otherwise a missed
+    // encrypted SESSION_RESET and E2EE texts stay unprocessed until reload.
+    // `decryptE2eeSlice` is idempotent and `e2eeDecrypting` guards re-entry.
+    if (mergedAny && this.e2eeBridge !== null) {
+      await this.decryptE2eeSlice(chatId);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* E3 realtime integration                                             */
+  /* ------------------------------------------------------------------ */
+
+  private startRealtime(): void {
+    if (!this.realtime) return;
+    if (
+      this.state.sessionStatus !== 'ready' ||
+      this.state.onboardingRequired ||
+      !this.state.online
+    ) {
+      return;
+    }
+    this.realtime.start();
+  }
+
+  private realtimeSubscriptions(): { chat_id: string; last_seq: number }[] {
+    const activeChatId = this.state.activeChatId;
+    const subscriptions: { chat_id: string; last_seq: number }[] = [];
+    for (const slice of Object.values(this.state.slices)) {
+      if (slice.status !== 'ready') continue;
+      subscriptions.push({ chat_id: slice.chatId, last_seq: slice.lastSeq });
+    }
+    // Active chat first; servers may impose an order/limit, and this keeps the
+    // visible conversation in the first replay window.
+    subscriptions.sort((a, b) => {
+      if (a.chat_id === activeChatId) return -1;
+      if (b.chat_id === activeChatId) return 1;
+      return 0;
+    });
+    return subscriptions;
+  }
+
+  private updateRealtimeSubscriptions(): void {
+    this.realtime?.updateSubscriptions();
+  }
+
+  private async syncForReconnect(): Promise<void> {
+    if (
+      this.state.sessionStatus !== 'ready' ||
+      this.state.onboardingRequired ||
+      !this.state.online
+    ) {
+      return;
+    }
+    await this.sync();
+  }
+
+  private handleRealtimeStatus(status: RealtimeStatus): void {
+    this.patch({
+      realtimeStatus: status,
+      ...(status === 'online' ? { realtimeIssue: null } : {}),
+    });
+  }
+
+  private handleRealtimeFailure(failure: RealtimeFailure): void {
+    this.patch({
+      realtimeIssue: {
+        kind: failure.kind,
+        message: failure.message,
+        ...(failure.code ? { code: failure.code } : {}),
+        ...(failure.status ? { status: failure.status } : {}),
+      },
+    });
+  }
+
+  private handleRealtimeServerError(frame: ErrorFrame): void {
+    const kind: RealtimeFailureKind =
+      frame.code === 'FORBIDDEN'
+        ? 'forbidden'
+        : frame.code === 'RATE_LIMITED'
+          ? 'rate_limited'
+          : 'protocol';
+    this.patch({
+      realtimeIssue: {
+        kind,
+        message: frame.message,
+        code: frame.code,
+        ...(frame.chat_id ? { status: 403 } : {}),
+      },
+    });
+  }
+
+  private handleRealtimeRevoked(reason: string): void {
+    const error = ApiError.client('SESSION_REVOKED', reason || 'Realtime session was revoked', 403);
+    this.patch({
+      realtimeStatus: 'revoked',
+      realtimeIssue: {
+        kind: 'revoked',
+        message: error.message,
+        code: error.code,
+        status: 403,
+      },
+      sessionStatus: 'error',
+      sessionError: error,
+      authExpired: true,
+    });
+  }
+
+  private handleSubscribed(frame: SubscribedFrame): void {
+    const rejected = frame.chats.filter((chat) => !chat.accepted);
+    if (rejected.length === 0) return;
+    const first = rejected[0];
+    this.patch({
+      realtimeIssue: {
+        kind: 'forbidden',
+        message: first?.reason
+          ? `Live subscription rejected: ${first.reason}`
+          : 'Live subscription rejected',
+        code: first?.reason ?? 'FORBIDDEN',
+        status: 403,
+      },
+    });
+  }
+
+  private rememberRealtimeEvent(eventId: string): boolean {
+    if (this.seenEventIdSet.has(eventId)) return false;
+    this.seenEventIdSet.add(eventId);
+    this.seenEventIds.push(eventId);
+    if (this.seenEventIds.length > 1_000) {
+      const oldest = this.seenEventIds.shift();
+      if (oldest) this.seenEventIdSet.delete(oldest);
+    }
+    return true;
+  }
+
+  private handleRealtimeEvent(frame: EventFrame): void {
+    // Dedupe by event_id before interpreting the event; at-least-once replay
+    // also relies on seq <= last_seq below.
+    if (!this.rememberRealtimeEvent(frame.event_id)) return;
+
+    if (frame.event === 'message.created') {
+      this.applyMessageCreated(frame);
+      // E6-D-04: no notification WS event in E6; fetch after the message event.
+      void this.loadNotifications({ silent: true });
+      return;
+    }
+    if (frame.event === 'message.receipt') {
+      this.applyMessageReceipt(frame);
+      return;
+    }
+    if (frame.event === 'chat.keys.changed') {
+      if (this.e2eeBridge !== null) {
+        this.e2eeBridge.invalidateChat(frame.chat_id);
+        void this.loadE2eeChat(frame.chat_id).then(() => this.decryptE2eeSlice(frame.chat_id));
+      }
+      return;
+    }
+    if (frame.event === 'device.list.changed') {
+      this.e2eeBridge?.invalidateChat();
+    }
+    // chat.member.changed / chat.pin.changed are outside the E3-F slice.
+  }
+
+  private applyMessageCreated(frame: EventFrame): void {
+    // ws-protocol §3 documents payload = Message object. Backend E3-B currently
+    // serialises the Message fields directly in payload; accept both shapes so
+    // live delivery does not depend on that envelope detail.
+    const message = readApiMessage(frame.payload.message) ?? readApiMessage(frame.payload);
+    if (!message || message.chat_id !== frame.chat_id) return;
+
+    const slice = this.state.slices[message.chat_id];
+    const summary = this.state.chats.find((chat) => chat.id === message.chat_id) ?? null;
+    if (!slice || slice.status !== 'ready') {
+      // Not loaded yet: keep the sidebar counter sane; history/sync fill the
+      // slice later. No optimistic UI exists for such a chat.
+      if (summary && message.seq > summary.last_seq) {
+        this.updateChatSummary(message.chat_id, {
+          last_seq: message.seq,
+          last_message_at: message.created_at,
+          unread_count: summary.unread_count + 1,
+        });
+      }
+      return;
+    }
+
+    // Contract §5: ignore seq <= last_seq; duplicates are also dropped by id.
+    if (message.seq <= slice.lastSeq) return;
+
+    const viewerId = this.viewerId();
+    const mine = Boolean(viewerId && message.sender_id === viewerId);
+    let outbox = slice.outbox;
+    if (mine) {
+      // Message DTO has no client_message_id; correlate the optimistic row by
+      // kind + payload. The later REST 201 is deduped by id.
+      const incomingAttachmentIds = (message.attachments ?? [])
+        .map((attachment) => attachment.id)
+        .sort()
+        .join(',');
+      const incomingStickerId = message.sticker_id ?? message.sticker?.id ?? null;
+      const clientId = message.client_message_id ?? null;
+      const match = outbox.find((entry) => {
+        if (clientId !== null) return entry.clientMessageId === clientId;
+        if ((entry.replyToId ?? null) !== (message.reply_to_id ?? null)) return false;
+        if (entry.kind === 'STICKER') {
+          return Boolean(incomingStickerId) && entry.sticker?.id === incomingStickerId;
+        }
+        return (
+          entry.text === (message.text ?? '') &&
+          entry.attachments
+            .map((attachment) => attachment.id)
+            .sort()
+            .join(',') === incomingAttachmentIds
+        );
+      });
+      if (match) {
+        outbox = outbox.filter((entry) => entry.clientMessageId !== match.clientMessageId);
+      }
+    }
+
+    const messages = mergeMessages(slice.messages, [message]);
+    const visible = this.isActiveChatVisible(message.chat_id);
+    const unread = mine || visible ? 0 : slice.unread + 1;
+
+    this.patchSlice(message.chat_id, {
+      messages,
+      outbox,
+      lastSeq: maxSeq(messages),
+      beforeSeq: minSeq(messages),
+      unread,
+    });
+    this.updateChatSummary(message.chat_id, {
+      last_seq: Math.max(this.chatLastSeq(message.chat_id), message.seq),
+      last_message_at: message.created_at,
+      unread_count: mine || visible ? 0 : (summary?.unread_count ?? 0) + 1,
+    });
+
+    if (this.e2eeBridge !== null) void this.decryptE2eeSlice(message.chat_id);
+    if (this.state.activeChatId === message.chat_id) {
+      this.realtime?.sendAck(message.seq);
+    }
+  }
+
+  private applyMessageReceipt(frame: EventFrame): void {
+    const userId = frame.payload.user_id;
+    const lastReadSeq = frame.payload.last_read_seq;
+    if (typeof userId !== 'string' || typeof lastReadSeq !== 'number') return;
+    if (!Number.isFinite(lastReadSeq) || lastReadSeq < 0) return;
+
+    const slice = this.state.slices[frame.chat_id];
+    if (!slice) return;
+    const current = slice.receipts[userId] ?? 0;
+    if (lastReadSeq <= current) return;
+
+    const receipts = { ...slice.receipts, [userId]: Math.floor(lastReadSeq) };
+    const self = userId === this.viewerId();
+    this.patchSlice(frame.chat_id, {
+      receipts,
+      ...(self ? { readSeq: Math.max(slice.readSeq, Math.floor(lastReadSeq)), unread: 0 } : {}),
+    });
+    if (self) {
+      this.updateChatSummary(frame.chat_id, { unread_count: 0 });
+    }
+  }
+
+  private handleTyping(frame: TypingFrame): void {
+    const userId = frame.user_id;
+    if (!userId || userId === this.viewerId()) return;
+    const slice = this.state.slices[frame.chat_id];
+    if (!slice) return;
+
+    const now = this.now();
+    const parsed = frame.expires_at ? Date.parse(frame.expires_at) : Number.NaN;
+    const expiresAt = Math.max(
+      now + 250,
+      Number.isFinite(parsed) ? parsed : now + this.config.typingTtlMs,
+    );
+    const displayName = this.displayNameFor(frame.chat_id, userId);
+    const current = (this.state.typing[frame.chat_id] ?? []).filter(
+      (entry) => entry.userId !== userId,
+    );
+    this.patch({
+      typing: {
+        ...this.state.typing,
+        [frame.chat_id]: [...current, { userId, displayName, expiresAt }],
+      },
+    });
+    this.scheduleEphemeralCleanup(`typing:${frame.chat_id}:${userId}`, expiresAt - now, () =>
+      this.removeTyping(frame.chat_id, userId, expiresAt),
+    );
+  }
+
+  private removeTyping(chatId: string, userId: string, expiresAt: number): void {
+    const current = this.state.typing[chatId];
+    if (!current) return;
+    const entry = current.find((item) => item.userId === userId);
+    if (!entry || entry.expiresAt !== expiresAt) return;
+    this.patch({
+      typing: {
+        ...this.state.typing,
+        [chatId]: current.filter((item) => item.userId !== userId),
+      },
+    });
+  }
+
+  private handlePresence(frame: PresenceFrame): void {
+    if (frame.user_id === this.viewerId()) return;
+    this.patch({
+      presence: {
+        ...this.state.presence,
+        [frame.user_id]: {
+          status: frame.status,
+          lastSeenAt: frame.last_seen_at ?? null,
+        },
+      },
+    });
+
+    const key = `presence:${frame.user_id}`;
+    this.clearTimer(key);
+    if (frame.status !== 'OFFLINE') {
+      this.scheduleEphemeralCleanup(key, this.config.presenceTtlMs, () => {
+        const current = this.state.presence[frame.user_id];
+        if (!current || current.status === 'OFFLINE') return;
+        this.patch({
+          presence: {
+            ...this.state.presence,
+            [frame.user_id]: { ...current, status: 'OFFLINE' },
+          },
+        });
+      });
+    }
+  }
+
+  private scheduleEphemeralCleanup(key: string, delayMs: number, run: () => void): void {
+    this.clearTimer(key);
+    const timer = setTimeout(
+      () => {
+        this.timers.delete(key);
+        if (!this.disposed) run();
+      },
+      Math.max(0, delayMs),
+    );
+    this.timers.set(key, timer);
+  }
+
+  private async handleResumeGap(frame: ResumeGapFrame): Promise<void> {
+    const slice = this.state.slices[frame.chat_id];
+    if (!slice || slice.status !== 'ready') return;
+    if (this.gapInFlight.has(frame.chat_id)) return;
+
+    this.gapInFlight.add(frame.chat_id);
+    try {
+      // REST catch-up is authoritative for the gap; live frames that race with
+      // it merge by seq/event_id without duplicates.
+      await this.catchUp(frame.chat_id, slice.lastSeq);
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({ syncStatus: 'error', syncError: apiError });
+    } finally {
+      this.gapInFlight.delete(frame.chat_id);
+    }
+  }
+
+  private isActiveChatVisible(chatId: string): boolean {
+    if (this.state.activeChatId !== chatId) return false;
+    if (typeof document === 'undefined') return true;
+    return document.visibilityState === 'visible';
+  }
+
+  private viewerId(): string | null {
+    return this.state.user?.id ?? this.state.session?.user.id ?? null;
+  }
+
+  private displayNameFor(chatId: string, userId: string): string | null {
+    const messages = this.state.slices[chatId]?.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.sender_id === userId && message.sender_display_name) {
+        return message.sender_display_name;
+      }
+    }
+    return null;
+  }
+
+  private chatLastSeq(chatId: string): number {
+    return this.state.chats.find((chat) => chat.id === chatId)?.last_seq ?? 0;
+  }
+
+  private applySync(response: SyncResponse): void {
+    const remoteByChat = new Map(response.chats.map((chat) => [chat.chat_id, chat]));
+    const slices = { ...this.state.slices };
+
+    for (const remote of response.chats) {
+      const slice = slices[remote.chat_id];
+      if (!slice) continue;
+      slices[remote.chat_id] = {
+        ...slice,
+        unread: slice.readSeq >= remote.last_seq ? 0 : remote.unread_count,
+      };
+    }
+
+    const activeChatId = this.state.activeChatId;
+    const activeReadSeq = activeChatId ? (slices[activeChatId]?.readSeq ?? 0) : 0;
+
+    const chats = this.state.chats.map((chat) => {
+      const remote = remoteByChat.get(chat.id);
+      if (!remote) return chat;
+      return {
+        ...chat,
+        last_seq: remote.last_seq,
+        unread_count:
+          chat.id === activeChatId && activeReadSeq >= remote.last_seq ? 0 : remote.unread_count,
+      };
+    });
+
+    this.patch({ slices, chats });
+  }
+}
+
+function readApiMessage(value: unknown): ApiMessage | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.id !== 'string' || candidate.id.length === 0) return null;
+  if (typeof candidate.chat_id !== 'string' || candidate.chat_id.length === 0) return null;
+  if (typeof candidate.seq !== 'number' || !Number.isFinite(candidate.seq)) return null;
+  if (typeof candidate.created_at !== 'string') return null;
+  if (typeof candidate.version !== 'number') return null;
+  if (candidate.type !== 'TEXT' && candidate.type !== 'STICKER' && candidate.type !== 'SYSTEM') {
+    return null;
+  }
+  return value as ApiMessage;
+}
+
+/** `(chat_id, type, channel)` is the natural key of a preference row. */
+export function notificationPreferenceKey(
+  preference: Pick<NotificationPreference, 'chat_id' | 'type' | 'channel'>,
+): string {
+  return `${preference.chat_id ?? 'global'}|${preference.type}|${preference.channel}`;
+}
+
+export function rateLimitSecondsLeft(state: AppState, now: number): number {
+  if (!state.rateLimitUntil) return 0;
+  return Math.max(0, Math.ceil((state.rateLimitUntil - now) / 1000));
+}
+
+function e2eeErrorLabel(error: unknown): string {
+  if (isE2eeError(error)) return error.code;
+  return 'E2EE_UNAVAILABLE';
+}
+
+function failureCode(error: unknown): string {
+  if (isE2eeError(error)) return error.code;
+  if (isApiError(error)) return error.code;
+  return 'UNKNOWN';
+}
+
+/** Server plaintext fields in an E2EE message are a security alert (§4.3 P2-13). */
+function hasServerPlaintext(message: ApiMessage): boolean {
+  if (typeof message.text === 'string' && message.text.length > 0) return true;
+  if (typeof message.reply_to_id === 'string' && message.reply_to_id.length > 0) return true;
+  if (message.sticker_id !== undefined && message.sticker_id !== null) return true;
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) return true;
+  return false;
+}
+
+export function createChatStore(deps: ChatStoreDeps): ChatStore {
+  return new ChatStore(deps);
+}

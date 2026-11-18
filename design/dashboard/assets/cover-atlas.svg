@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="220" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Обложка канала Атлас">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F8F3E6"/>
+      <stop offset="1" stop-color="#EDE4D0"/>
+    </linearGradient>
+    <linearGradient id="hill-a" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#DCE8C4"/>
+      <stop offset="1" stop-color="#B9D3A0"/>
+    </linearGradient>
+    <linearGradient id="hill-b" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#A9C88F"/>
+      <stop offset="1" stop-color="#7DA268"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#E8B65B" stop-opacity="0.75"/>
+      <stop offset="0.65" stop-color="#E8B65B" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#E8B65B" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="640" height="220" fill="url(#sky)"/>
+  <circle cx="516" cy="58" r="96" fill="url(#sun)"/>
+  <circle cx="516" cy="58" r="21" fill="#E0AC52" opacity="0.9"/>
+  <g fill="none" stroke="#7E9E68" stroke-opacity="0.38" stroke-width="1.1">
+    <path d="M-40 208 C 40 150 96 152 150 176 C 210 202 258 196 306 160 C 360 120 412 128 470 158"/>
+    <path d="M-30 236 C 50 176 108 178 166 202 C 226 226 274 220 324 186 C 380 148 434 156 500 186"/>
+    <path d="M8 254 C 78 200 132 198 190 222 C 250 246 300 240 350 206 C 404 170 456 176 522 206"/>
+    <path d="M-52 186 C 26 128 84 130 138 152 C 196 176 246 170 294 136 C 346 100 400 106 458 136"/>
+  </g>
+  <path d="M0 158 C 84 120 160 116 232 138 C 310 162 358 160 438 128 C 512 98 578 100 640 118 V220 H0 Z" fill="url(#hill-a)"/>
+  <path d="M0 186 C 78 154 148 152 214 172 C 288 194 340 192 414 166 C 480 142 552 142 640 164 V220 H0 Z" fill="url(#hill-b)" opacity="0.92"/>
+  <path d="M0 204 C 92 184 156 186 226 202 C 300 218 372 214 444 198 C 512 182 578 184 640 196 V220 H0 Z" fill="#5F8752" opacity="0.5"/>
+  <g fill="#F8F3E6" opacity="0.9">
+    <circle cx="82" cy="52" r="2.4"/>
+    <circle cx="136" cy="34" r="1.7"/>
+    <circle cx="206" cy="62" r="1.5"/>
+    <circle cx="292" cy="40" r="1.9"/>
+    <circle cx="356" cy="72" r="1.4"/>
+  </g>
+  <g transform="translate(486 118)">
+    <path d="M0 12 C 0 4 6 0 12 0 C 18 0 24 4 24 12 C 24 21 18 30 12 34 C 6 30 0 21 0 12Z" fill="#3C6B46"/>
+    <circle cx="12" cy="12" r="4" fill="#F8F3E6"/>
+  </g>
+</svg>

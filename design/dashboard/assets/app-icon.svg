@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 1024 1024" role="img" aria-label="Командные чаты">
+  <defs>
+    <linearGradient id="shell" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#24382C"/>
+      <stop offset="1" stop-color="#141A1B"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" fill="url(#shell)"/>
+  <path d="M296 236 H728 C810 236 876 302 876 384 V560 C876 642 810 708 728 708 H564 L384 864 V708 H296 C214 708 148 642 148 560 V384 C148 302 214 236 296 236 Z"
+        fill="#F3F7EE"/>
+  <circle cx="400" cy="472" r="42" fill="#2F7A38"/>
+  <circle cx="512" cy="472" r="42" fill="#2F7A38"/>
+  <circle cx="624" cy="472" r="42" fill="#2F7A38"/>
+</svg>

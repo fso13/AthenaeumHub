@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="128" viewBox="0 0 160 128" role="img" aria-label="График активности">
+  <rect width="160" height="128" fill="#FFFFFF"/>
+  <g stroke="#ECEDEA" stroke-width="1">
+    <path d="M16 32h128M16 56h128M16 80h128M16 104h128"/>
+    <path d="M16 20v84M48 20v84M80 20v84M112 20v84M144 20v84"/>
+  </g>
+  <path d="M16 92 L40 84 L58 90 L76 64 L94 70 L112 44 L130 52 L144 30 V104 H16 Z" fill="#65BD45" opacity="0.14"/>
+  <path d="M16 92 L40 84 L58 90 L76 64 L94 70 L112 44 L130 52 L144 30" fill="none" stroke="#4E9B3C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#FFFFFF" stroke="#4E9B3C" stroke-width="2.2">
+    <circle cx="76" cy="64" r="3.6"/>
+    <circle cx="112" cy="44" r="3.6"/>
+    <circle cx="144" cy="30" r="3.6"/>
+  </g>
+</svg>

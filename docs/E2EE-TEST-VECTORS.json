@@ -1,0 +1,1698 @@
+{
+  "meta": {
+    "title": "Krug E2EE 1:1 — known-answer test vectors",
+    "spec": "docs/E2EE-SPEC.md (protocol v1)",
+    "vector_set_version": 4,
+    "generated_at": "2026-11-16T15:00:00Z",
+    "status": "normative v4 (E7-S4 remediation of E2EE-REVIEW-03) for E7 client/server crypto and conformance tests; all values must match byte-for-byte",
+    "generator": {
+      "language": "Python 3.14.6",
+      "library": "cryptography 49.0.0",
+      "command": "Save gen_e2ee_vectors_s2.py (§9.1), gen_e2ee_vectors_s3.py (§10.2) and gen_e2ee_vectors_s4.py (§11.2); run: python3 gen_e2ee_vectors_s2.py && python3 gen_e2ee_vectors_s3.py && python3 gen_e2ee_vectors_s4.py (the S4 patch reads the committed v3 file, rewrites it to v4 and is deterministic)",
+      "verify_command": "Save verify_e2ee_vectors_s3.mjs from docs/E2EE-SPIKE-NOTES.md §10.3, then run: node verify_e2ee_vectors_s3.mjs docs/E2EE-TEST-VECTORS.json (expected: 273 checks, 0 failures)",
+      "cross_checked_with": "Node.js 24.20.0 (node:crypto X25519/Ed25519/HKDF + WebCrypto AES-256-GCM), independently of the Python generator; see docs/E2EE-SPIKE-NOTES.md §9"
+    },
+    "conventions": {
+      "hex": "lowercase, no 0x prefix",
+      "base64url": "RFC 4648 §5, unpadded, no '+'/'/'",
+      "integers": "big-endian unsigned in binary structures",
+      "strings_in_binary": "UTF-8, length-prefixed with u16 BE",
+      "uuid": "RFC 4122 bytes (16), big-endian",
+      "domains": {
+        "x3dh": "Krug/E2EE/v1/x3dh",
+        "session_id": "Krug/E2EE/v1/session-id",
+        "dr_root": "Krug/E2EE/v1/dr-root",
+        "aead_key": "Krug/E2EE/v1/aead-key",
+        "aead_nonce": "Krug/E2EE/v1/aead-nonce",
+        "ad": "Krug/E2EE/v1/ad",
+        "prekey": "Krug/E2EE/v1/prekey",
+        "prekey_signature": "Krug/E2EE/v1/prekey-signature",
+        "spk_signature": "Krug/E2EE/v1/spk-signature",
+        "fingerprint": "Krug/E2EE/v1/fingerprint",
+        "safety_number": "Krug/E2EE/v1/safety-number",
+        "verification": "Krug/E2EE/v1/verification",
+        "payload": "Krug/E2EE/v1/payload",
+        "ik_binding": "Krug/E2EE/v1/ik-binding"
+      },
+      "informative_domains": {
+        "sender_key": "Krug/E2EE/v1/sender-key",
+        "sender_ad": "Krug/E2EE/v1/sender-ad",
+        "sender_aead_key": "Krug/E2EE/v1/sender-aead-key",
+        "sender_aead_nonce": "Krug/E2EE/v1/sender-aead-nonce",
+        "note": "H-section only; NOT part of the v1 D_* registry and NOT E7 acceptance criteria."
+      },
+      "verification_hash_version": 2,
+      "signature_encoding": "Wire-sourced signing fields are base64url: b64u64 = 86 chars for 64 bytes. This includes `presented_*`/`pinned_identity_binding_signature` (I1-I3), `envelope_json.prekey.signature` (F1/M2/M3), `signed_prekey.signature` (B3) and `prekey.signature` (B4), i.e. `B3.expected.signature` and `B4.expected.signature` ARE wire values and MUST be b64u64. A wire-valid vector MUST NOT carry 128 hex chars in those fields. Internal byte-level KAT values are kept separately as `*_hex` (A2.expected.signature, B3/B4.expected.signature_hex, B5.expected.*_identity_binding_signature, meta.public_keys.*_identity_binding_signature) and never appear on the wire."
+    },
+    "ids": {
+      "alice_user_id": "00000000-0000-4000-8000-000000000001",
+      "alice_device_id": "00000000-0000-4000-8000-000000000011",
+      "bob_user_id": "00000000-0000-4000-8000-000000000002",
+      "bob_device_id": "00000000-0000-4000-8000-000000000021",
+      "chat_id": "00000000-0000-4000-8000-000000000100",
+      "alice_verifier_device_2_id": "00000000-0000-4000-8000-000000000012",
+      "bob_device_2_id": "00000000-0000-4000-8000-000000000022",
+      "bob_legacy_device_id": "00000000-0000-4000-8000-000000000023"
+    },
+    "test_seeds": {
+      "alice-ik-sig": "6a6ac150ca4aa51d943cb8acacca94a1f82497be498e8627e21856a866c8201b",
+      "alice-ik-dh": "d33ccc4204a0a301cf7e79f4f893e18e8b65a172cba8be244414c1adfaede032",
+      "alice-ek": "011efdc4a71b742f6db3411596643705f441c6de9779bfb560f04022785890ad",
+      "alice-ratchet-0": "e06def74ebd6156e37ffb023ce7d370fb64d7b3d335f06a29a02e7306294524b",
+      "alice-ratchet-1": "83d09cac677812552ce073fb95294eb359abc36d9787cab1ce93b5321aebc922",
+      "bob-ik-sig": "93d30ce4d66f16a7645b91401ac3775edf3f6999a6b3775b6e3c256ebb89290e",
+      "bob-ik-dh": "805f2732cd17148ddd8307660db2ea2454be22418ad70705cf42092d1a6a1b4b",
+      "bob-spk": "3e315592f9bb5a6dc5b4c999acdfa282dd1baeaea0a3af9b79578d0e1f37e0d5",
+      "bob-opk": "0c41917a6de5135bd9d646f39f2893671d6b422c00c362dc6a37361c4ad47b19",
+      "bob-ratchet-1": "aff8b0f3188e2231071916d33a309b7f491e2e2bc4f8d359f7bbc7887813a12c",
+      "bob-ratchet-2": "e690c31fb3789e0f858b77358c978521e9ee41586f5bc3d63972d623037981c1",
+      "sender-key-alice": "4f9788a331b7e5469bb11cc62141b947eac85babc1c1762e5b095056c678062b",
+      "alice2-ik-sig": "8dfb0e2bf15f49ce404c6b776101c385589c384ad19c2647a63bd92bc2baab33",
+      "alice2-ik-dh": "eb374881ea44b3c190d6e0ce39696835c0e9af2cba8dfb4d90534b7e5aa69fe5",
+      "mallory-ik-sig": "f443ad24911c450a274431239b4acb4818d6daeef8158dfa810ce47cad94a55b",
+      "mallory-ik-dh": "b5324468b001788015ebb018df6f7710df4b7abf881f83cc8542d23cbc53e329",
+      "mallory-ek": "d5fac0b471c2774007a13c8132a8bc3e76dd34416063d88231f75083a68b2f3c",
+      "mallory-ratchet-0": "a4bdf1637b492a926262154fb789a194e60f7cb053f16b28583a9203e839748e"
+    },
+    "public_keys": {
+      "alice_identity_signing_key": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+      "alice_identity_dh_key": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+      "alice_ephemeral_key": "3c3c4c0ba5f4c7dd335939655820aa9672d7e58fec4052cbc791ef3819349224",
+      "alice_fingerprint": "271774bc3354744005136603dd073b25fee8c6c013d431ee47198f39f0042071",
+      "alice_identity_binding_signature": "7c845f5d5c855a4efa5c8b9812a25f6a6605bc157bbeaa621ef1de19c0f682c5165c71f5e234be32933609e87b1def98cdb873bece57668d51a0e67c98724209",
+      "alice_verifier_device_2_identity_signing_key": "2fac433129ecd33ae00c1d71e9fa1899dc22a724aa5afa4b3309f1536b8fdcf4",
+      "alice_verifier_device_2_identity_dh_key": "f5e6fedaf407ee6ff4a4199334185021df4da857208bde8ac388da2f854f5222",
+      "alice_verifier_device_2_fingerprint": "3350066646c0741f0b1b4bd3d90cd3b969d973b5110279fde414cb5923b67ed6",
+      "bob_identity_signing_key": "8a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce",
+      "bob_identity_dh_key": "80d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba404",
+      "bob_signed_prekey": "080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a",
+      "bob_one_time_prekey": "6f94b7404c0c6f51cdd208bf52ec6b5e57cd9b2f8be61486b1b16b995bddd025",
+      "bob_fingerprint": "42a869331f9baacb3929fc44f4e8343d97296f0cf3d10bdae697ab8fa1b59668",
+      "bob_identity_binding_signature": "6af4ea3aee3ab5d2bac87789383c349ba985b5780f4625d6b4d4994fe00c0a559eadfa346d6c2b15b8760d2df9b9e57aff3eb5862c7b2cf71b8e7e2d98a49d05",
+      "attacker_identity_signing_key": "c2aa690fecb36a152a5c913e3f83ce887659f8786771b2f219d60d0c872a1fe3",
+      "attacker_identity_dh_key": "428615e5b8530234b41121dd40fcdb7c7fa8ff6d0c61ad96e9b473849ff1842f",
+      "attacker_fingerprint": "113cc64c9cc179936247e47d9c6c28fac561de627ea132eb950d0bc3770e5763"
+    },
+    "warning": "All private keys below are public test material. Never use them outside tests.",
+    "protocol_envelope_version": 1,
+    "supersedes": "vector_set_version 3 (43 vectors, 273 checks). Envelope wire format is unchanged (envelope.v=1, header.v=1, AD 163 B). B3/B4 `signature` fields were re-encoded from internal hex to the canonical wire b64u64 (same 64 bytes; hex kept as `signature_hex`), G2/G3 notes correct the safety-number entry size (64 B, not 80), L1 gained `failed_chain_dh` (P1-C window anchor) with recomputed framing, and M3 + L3b were added (P1-B-1, P1-C-1).",
+    "limits": {
+      "max_message_request_wire_bytes": 524288,
+      "max_envelopes_per_message": 10,
+      "max_inner_body_decoded_bytes": 32768,
+      "max_padded_plaintext_bytes": 33024,
+      "max_ciphertext_decoded_bytes": 33040,
+      "max_ciphertext_encoded_chars": 44054,
+      "min_ciphertext_encoded_chars": 363,
+      "per_envelope_form_cap_encoded_chars": 65536,
+      "envelope_json_overhead_bytes": 947,
+      "max_envelope_wire_bytes": 45001,
+      "request_wrapper_bytes": 89,
+      "nine_envelopes_wire_bytes": 405098,
+      "ten_envelopes_wire_bytes": 450099,
+      "nine_envelopes_kib": 395.6,
+      "ten_envelopes_kib": 439.5,
+      "wire_slack_nine_envelopes_bytes": 119190,
+      "wire_slack_ten_envelopes_bytes": 74189,
+      "fanout_budget_per_envelope_bytes": 45056,
+      "ten_envelopes_at_budget_bytes": 450649,
+      "decoded_sum_nine_envelopes_bytes": 297360,
+      "wire_if_decoded_sum_were_budget_bytes": 699051,
+      "max_envelopes_at_canonical_cap_that_fit": 11,
+      "max_envelopes_at_form_cap_that_fit": 7,
+      "review_measured_nine_envelopes_wire_bytes": 405129,
+      "arithmetic_note": "512 KiB is the WIRE (HTTP body) limit; the old §4.7 compared 512 KiB against the DECODED sum, which would allow ~683 KiB on the wire. 9 canonical envelopes = 396 KiB wire; 10 = 440 KiB. Per-envelope form cap 65536 encoded chars is NOT a fan-out budget: 10 x 65536 chars > 512 KiB. S4: the DB CHECK accepts only the canonical 33040 decoded bytes; the 65536 encoded-char form guard rejects oversized input before base64-decode and is not a delivery promise.",
+      "db_ciphertext_max_decoded_bytes": 33040,
+      "db_rejects_decoded_bytes_above": 33040,
+      "form_guard_encoded_chars": 65536
+    },
+    "checks": {
+      "generator": "internal assertions (assert) during generation + S4 patch length/shape assertions",
+      "verifier": "verify_e2ee_vectors_s4.mjs (= §10.3 verifier + §11.3 delta)",
+      "verifier_checks": 345,
+      "verifier_failures": 0
+    },
+    "new_in_v2": [
+      "B5-identity-binding-signature",
+      "G5-verification-per-device",
+      "I1-tofu-first-contact-no-pin",
+      "I2-tofu-identity-mismatch",
+      "J1-security-mode-downgrade-rejected",
+      "J2-e2ee-creation-with-flag-off",
+      "K1-client-message-id-same-sender-replay",
+      "K2-client-message-id-cross-user-conflict",
+      "L1-session-reset-payload",
+      "L2-session-reset-state-machine"
+    ],
+    "recomputed_in_v2": {
+      "G4-verification-hash": "VH v2: verifier_device_id is hashed; expected hash changed",
+      "E1-conversation-trace": "header objects in expected_steps now include v=1 (bytes unchanged; P2-3)",
+      "E2-skipped-key-trace": "header objects in expected.messages now include v=1 (bytes unchanged; P2-3)"
+    },
+    "review": {
+      "document": "docs/E2EE-REVIEW-03.md",
+      "verdict": "GO WITH CONDITIONS",
+      "addressed_in_this_set": [
+        "P1-A-1 (backfill/CHECK for degraded DIRECT)",
+        "P1-B-1 (coverage only e2ee_capable; M3)",
+        "P1-C-1 (reset retry window + receiver dedup; L3b)",
+        "P1-G-1 (never in-place MANAGED)",
+        "P1-I01-1 (contract handoff, §6.3.1)",
+        "P2-1 (envelope partition indexes 4, not 7)",
+        "P2-3 (key_verifications ownership/FK/RLS)",
+        "P2-4 (claim workspace check)",
+        "P2-5 (safety number 64 B)",
+        "P2-6 (B3/B4 wire b64u64)",
+        "P2-7 (ChatSummary.name nullable / Chat added)",
+        "P2-8 (prekey id patterns)",
+        "P2-9 (legacy DeviceRegistration rollout)",
+        "P2-10 (peer_has_e2ee_capable_devices)",
+        "P2-11 (canonical ciphertext cap in DB)"
+      ]
+    },
+    "new_in_v3": [
+      "I3-prekey-sender-identity-mismatch",
+      "J3-fresh-device-managed-mode-blocked",
+      "M1-peer-coverage-zero-rejected",
+      "M2-peer-partial-coverage-warning",
+      "L3-session-reset-multi-message",
+      "N1-revoked-identity-replay",
+      "N2-legacy-device-prekeys-rejected",
+      "R1-e2ee-reply-to-id-rejected",
+      "S1-fs-pcs-key-destruction"
+    ],
+    "recomputed_in_v3": {
+      "I1-tofu-first-contact-no-pin": "binding signature re-encoded hex->b64u64 (same 64 bytes); no other value changed",
+      "I2-tofu-identity-mismatch": "presented/pinned binding re-encoded hex->b64u64; decision unchanged"
+    },
+    "new_in_v4": [
+      "M3-peer-legacy-not-coverage",
+      "L3b-session-reset-partial-delivery-dedup"
+    ],
+    "recomputed_in_v4": {
+      "B3-SPK-signature": "expected.signature -> wire b64u64; byte-level KAT kept as expected.signature_hex",
+      "B4-prekey-preamble": "expected.signature -> wire b64u64; byte-level KAT kept as expected.signature_hex",
+      "L1-session-reset-payload": "body gained failed_chain_dh; raw/padded len, padding count, padded_hex and payload_sha256 recomputed (framing scheme unchanged)",
+      "G2-safety-number": "note only: entry is 64 B (16+16+32); values unchanged"
+    },
+    "normative_invariants": {
+      "direct_key": "Every type='DIRECT' chat has direct_key = least(A,B)::text||':'||greatest(A,B)::text over the SET of distinct chat_members.user_id, independent of member status (REMOVED/INVITED are still pair members). A DIRECT chat with != 2 distinct member rows is corrupt and the migration must stop with DIRECT_KEY_UNRESOLVED; a duplicate live pair stops it with DIRECT_PAIR_DUPLICATE. CHECKs are added NOT VALID and validated after backfill.",
+      "envelope_coverage": "peer_devices, self_devices, peer_covered and self_covered count ONLY devices with e2ee_capable=true (identity_key_alg='Ed25519+X25519', ACTIVE). An envelope addressed to a non-capable device is rejected 422 E2EE_LEGACY_DEVICE before Message/seq; a legacy device is never a candidate, never coverage, and never appears in uncovered_device_ids.",
+      "reset_retry_window": "SESSION_RESET carries failed_session_id, failed_chain_dh, failed_n, reason and retry_of_client_message_id. The sender re-encrypts only messages at/after retry_of_client_message_id in local send order (per-session), each with a new client_message_id and retry_of_client_message_id in the inner payload; the receiver discards a re-sent message whose retry_of_client_message_id it already decrypted.",
+      "ciphertext_cap": "Accepted E2EE ciphertext is canonical v1: decoded 16..33040 bytes (33024 padded + 16 tag) = at most 44054 b64u chars. The DB CHECK stores only canonical values; the API's 65536 encoded-char form guard is a pre-decode DoS bound, not a delivery promise. Anything above the canonical cap is 413 ENVELOPE_TOO_LARGE (details.reason='canonical').",
+      "claim_workspace": "auth.claim_one_time_prekey requires the chat to belong to ops.current_workspace_id() and the caller to be an ACTIVE member; a chat from another workspace yields UNKNOWN_DEVICE.",
+      "verification_ownership": "auth.key_verifications enforces verifier ownership with a composite FK (verifier_user_id, verifier_device_id) -> auth.devices(user_id, id) and FKs to chat/chat.chats/devices; a BEFORE INSERT trigger requires verifier and target to be ACTIVE members of the same chat in the current (non-deleted) workspace, while RLS stays a tenant boundary so revoke/soft-delete can still update revoked_at."
+    },
+    "new_in_e7_f2g": [
+      "O-kstorage-aad/O1 K_storage 50-byte AAD KAT (P1-07)",
+      "O-kstorage-aad/O2 nil/zero injectivity (P1-07)",
+      "O-kstorage-aad/O3 pin/keyChange/modePin AAD slots (P2-18)"
+    ]
+  },
+  "sections": [
+    {
+      "id": "A-primitives",
+      "title": "Published primitive known-answer tests",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "A1-X25519-RFC7748",
+          "kind": "x25519",
+          "source": "RFC 7748 §6.1 (X25519 Diffie-Hellman test vector)",
+          "inputs": {
+            "alice_private": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+            "alice_public": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+            "bob_private": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+            "bob_public": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"
+          },
+          "expected": {
+            "shared_secret": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+            "alice_public_derived": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+            "bob_public_derived": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f"
+          }
+        },
+        {
+          "id": "A2-Ed25519-RFC8032",
+          "kind": "ed25519",
+          "source": "RFC 8032 §7.1 TEST 1 (Ed25519, empty message)",
+          "inputs": {
+            "private_seed": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+            "message": ""
+          },
+          "expected": {
+            "public_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+            "signature": "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+          }
+        },
+        {
+          "id": "A3-HKDF-SHA256-RFC5869",
+          "kind": "hkdf_sha256",
+          "source": "RFC 5869 Test Case 1",
+          "inputs": {
+            "ikm": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "salt": "000102030405060708090a0b0c",
+            "info": "f0f1f2f3f4f5f6f7f8f9",
+            "length": 42
+          },
+          "expected": {
+            "okm": "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+          }
+        },
+        {
+          "id": "A4-AES256GCM-NIST",
+          "kind": "aes_256_gcm",
+          "source": "NIST CAVP gcmEncryptExtIV256, PT len 0 / AAD len 0, 96-bit IV, zero key",
+          "inputs": {
+            "key": "0000000000000000000000000000000000000000000000000000000000000000",
+            "nonce": "000000000000000000000000",
+            "plaintext": "",
+            "aad": ""
+          },
+          "expected": {
+            "ciphertext_including_tag": "530f8afbc74536b9a963b4f1c4cb738b",
+            "note": "AES-GCM output = ciphertext || 16-byte tag; empty plaintext yields tag only"
+          }
+        }
+      ]
+    },
+    {
+      "id": "B-x3dh",
+      "title": "X3DH handshake (4-DH with one-time prekey, and 3-DH fallback)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "B1-X3DH-4DH",
+          "kind": "x3dh",
+          "inputs": {
+            "alice_identity_dh_private": "d33ccc4204a0a301cf7e79f4f893e18e8b65a172cba8be244414c1adfaede032",
+            "alice_ephemeral_private": "011efdc4a71b742f6db3411596643705f441c6de9779bfb560f04022785890ad",
+            "bob_identity_dh_public": "80d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba404",
+            "bob_signed_prekey_public": "080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a",
+            "bob_one_time_prekey_public": "6f94b7404c0c6f51cdd208bf52ec6b5e57cd9b2f8be61486b1b16b995bddd025",
+            "salt": "0000000000000000000000000000000000000000000000000000000000000000",
+            "info": "Krug/E2EE/v1/x3dh"
+          },
+          "expected": {
+            "dh1": "f63a70cecf4fe69b3d5bb3f60058043b762bbb5a7efb0ccd41c3b849a1dd6c4e",
+            "dh2": "fbd3e63cd6080c59fd1e8b0594698e543d060d94b4a9bd302c0c279c07e96e66",
+            "dh3": "cab0e2e403ba0008c1ca6776fc4a3a852a2daa0c50298b5736b207ee0ebca953",
+            "dh4": "1824428a2a968da8a38a94870b6428d0d929cf550dc88a58e2a056fddff75f24",
+            "ikm": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff63a70cecf4fe69b3d5bb3f60058043b762bbb5a7efb0ccd41c3b849a1dd6c4efbd3e63cd6080c59fd1e8b0594698e543d060d94b4a9bd302c0c279c07e96e66cab0e2e403ba0008c1ca6776fc4a3a852a2daa0c50298b5736b207ee0ebca9531824428a2a968da8a38a94870b6428d0d929cf550dc88a58e2a056fddff75f24",
+            "sk": "bbaf23763ebebc2d1bc558bb9477e1b608e19d66282094873235b4f4d02bd9d5",
+            "session_id": "86c68f64d2c3be99fde4aabe857e1f5e"
+          }
+        },
+        {
+          "id": "B2-X3DH-3DH-otp-exhausted",
+          "kind": "x3dh",
+          "note": "No one-time prekey: DH4 omitted; IKM = F || DH1 || DH2 || DH3. Weaker forward secrecy; client must warn.",
+          "inputs": {
+            "alice_identity_dh_private": "d33ccc4204a0a301cf7e79f4f893e18e8b65a172cba8be244414c1adfaede032",
+            "alice_ephemeral_private": "011efdc4a71b742f6db3411596643705f441c6de9779bfb560f04022785890ad",
+            "bob_identity_dh_public": "80d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba404",
+            "bob_signed_prekey_public": "080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a",
+            "bob_one_time_prekey_public": null,
+            "salt": "0000000000000000000000000000000000000000000000000000000000000000",
+            "info": "Krug/E2EE/v1/x3dh"
+          },
+          "expected": {
+            "ikm": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff63a70cecf4fe69b3d5bb3f60058043b762bbb5a7efb0ccd41c3b849a1dd6c4efbd3e63cd6080c59fd1e8b0594698e543d060d94b4a9bd302c0c279c07e96e66cab0e2e403ba0008c1ca6776fc4a3a852a2daa0c50298b5736b207ee0ebca953",
+            "sk": "71e89276cdc2ad6aedc4df7452e5044b177b8cf4408fd62eb4e4f20588d17929",
+            "session_id": "5386845f680efbbc3b139b6f4eb2f73e"
+          }
+        },
+        {
+          "id": "B3-SPK-signature",
+          "kind": "ed25519_signature",
+          "note": "Signed prekey signature created by the device identity signing key at POST /devices. P2-6: `expected.signature` is the canonical WIRE value of `signed_prekey.signature` (base64url, 86 chars, 64 bytes); the byte-level KAT value is in `expected.signature_hex` and never appears on the wire.",
+          "inputs": {
+            "signing_seed": "93d30ce4d66f16a7645b91401ac3775edf3f6999a6b3775b6e3c256ebb89290e",
+            "signed_message": "4b7275672f453245452f76312f73706b2d7369676e617475726501000573706b2d31080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a",
+            "signed_message_ascii_prefix": "Krug/E2EE/v1/spk-signature",
+            "key_id": "spk-1",
+            "spk_public": "080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a"
+          },
+          "expected": {
+            "public_key": "8a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce",
+            "signature": "wjk09AvSyAHvcEINQckiWq4o1Jozkm9kLyxxUVF1PtoVQgmSxOjPU8rIY_Sa0kwgdxaPwl6pTAGusCf90_WdDw",
+            "signature_hex": "c23934f40bd2c801ef70420d41c9225aae28d49a33926f642f2c715151753eda15420992c4e8cf53cac863f49ad24c2077168fc25ea94c01aeb027fdd3f59d0f",
+            "signature_encoding": "b64u64 (86 chars, 64 bytes)"
+          }
+        },
+        {
+          "id": "B4-prekey-preamble",
+          "kind": "prekey_preamble",
+          "note": "Signed X3DH initial-message preamble. Binding: chat, both devices, both identities (signing + DH), all prekey material, session id. P2-6: `expected.signature` is the canonical WIRE value of `prekey.signature` (base64url, 86 chars, 64 bytes); the byte-level KAT value is in `expected.signature_hex` and never appears on the wire.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "sender_device_id": "00000000-0000-4000-8000-000000000011",
+            "recipient_device_id": "00000000-0000-4000-8000-000000000021",
+            "sender_identity_signing_key": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+            "sender_identity_dh_key": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+            "sender_ephemeral_key": "3c3c4c0ba5f4c7dd335939655820aa9672d7e58fec4052cbc791ef3819349224",
+            "recipient_identity_dh_key": "80d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba404",
+            "recipient_identity_signing_key": "8a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce",
+            "recipient_spk_id": "spk-1",
+            "recipient_spk_public": "080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a",
+            "recipient_opk_id": "opk-1",
+            "recipient_opk_public": "6f94b7404c0c6f51cdd208bf52ec6b5e57cd9b2f8be61486b1b16b995bddd025",
+            "session_id": "86c68f64d2c3be99fde4aabe857e1f5e"
+          },
+          "expected": {
+            "preamble": "4b7275672f453245452f76312f7072656b657901000000000000400080000000000001000000000000004000800000000000001100000000000040008000000000000021763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e629ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e3c3c4c0ba5f4c7dd335939655820aa9672d7e58fec4052cbc791ef381934922480d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba4048a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce000573706b2d31080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a0100056f706b2d316f94b7404c0c6f51cdd208bf52ec6b5e57cd9b2f8be61486b1b16b995bddd02586c68f64d2c3be99fde4aabe857e1f5e",
+            "preamble_sha256": "97fb9b738ab926ebb596fd274ad6fe770ec97c7103a033a535cbbbffaa4b67a6",
+            "signature": "Rj4RhxwlwK_CmZLayCo_vIKQYbs9tiLGKYPu-7A0HXFuRFJRK2s0L1YNqlbZXe3ce5YlMsISj9So7ikY-tMIBw",
+            "signature_hex": "463e11871c25c0afc29992dac82a3fbc829061bb3db622c62983eefbb0341d716e4452512b6b342f560daa56d95deddc7b962532c2128fd4a8ee2918fad30807",
+            "signature_encoding": "b64u64 (86 chars, 64 bytes)"
+          }
+        },
+        {
+          "id": "B5-identity-binding-signature",
+          "kind": "identity_binding_signature",
+          "note": "Self-signature binding IK_sig -> IK_dh (P1-2). Signed message = D_IKBIND || u8(1) || IK_dh_pub || IK_sig_pub (88 bytes). POST /devices stores it; the server verifies it; the client MUST re-verify it on every claim and on every key change, before trusting the bundle or updating the TOFU pin.",
+          "inputs": {
+            "domain": "Krug/E2EE/v1/ik-binding",
+            "version": 1,
+            "alice_ik_sig_public": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+            "alice_ik_dh_public": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+            "bob_ik_sig_public": "8a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce",
+            "bob_ik_dh_public": "80d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba404",
+            "alice_signed_message": "4b7275672f453245452f76312f696b2d62696e64696e67019ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+            "bob_signed_message": "4b7275672f453245452f76312f696b2d62696e64696e670180d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba4048a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce"
+          },
+          "expected": {
+            "alice_identity_binding_signature": "7c845f5d5c855a4efa5c8b9812a25f6a6605bc157bbeaa621ef1de19c0f682c5165c71f5e234be32933609e87b1def98cdb873bece57668d51a0e67c98724209",
+            "bob_identity_binding_signature": "6af4ea3aee3ab5d2bac87789383c349ba985b5780f4625d6b4d4994fe00c0a559eadfa346d6c2b15b8760d2df9b9e57aff3eb5862c7b2cf71b8e7e2d98a49d05",
+            "alice_binding_verifies": true,
+            "bob_binding_verifies": true,
+            "mismatched_ik_dh_verifies": false,
+            "wrong_signer_verifies": false,
+            "signed_message_len": 88
+          }
+        }
+      ]
+    },
+    {
+      "id": "C-kdf",
+      "title": "HKDF and Double Ratchet KDF chains",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "C1-HKDF-session-id",
+          "kind": "hkdf_sha256",
+          "inputs": {
+            "ikm": "bbaf23763ebebc2d1bc558bb9477e1b608e19d66282094873235b4f4d02bd9d5",
+            "salt": "0000000000000000000000000000000000000000000000000000000000000000",
+            "info": "Krug/E2EE/v1/session-id",
+            "length": 16
+          },
+          "expected": {
+            "okm": "86c68f64d2c3be99fde4aabe857e1f5e"
+          }
+        },
+        {
+          "id": "C2-DR-root-step-alice-initial",
+          "kind": "dr_root",
+          "note": "RatchetInitAlice: RK1||CKs = HKDF(ikm=DH(A0, SPK_B), salt=SK, info=dr-root, L=64).",
+          "inputs": {
+            "root_key": "bbaf23763ebebc2d1bc558bb9477e1b608e19d66282094873235b4f4d02bd9d5",
+            "dh_output": "07f72a4fd0664006d8ad423bf60ca1784c3ba62d1c95c2087e95d78c2c6d2b17",
+            "salt": "bbaf23763ebebc2d1bc558bb9477e1b608e19d66282094873235b4f4d02bd9d5",
+            "info": "Krug/E2EE/v1/dr-root",
+            "length": 64
+          },
+          "expected": {
+            "root_key_next": "ce86b3416e416f5b5cc22e25874fcfe5d58fbc39ce9d97173c2160dd46653933",
+            "chain_key_sending": "41a2c085ea4524041f9fa2b4332cf559986ac08569718f52665c2de3cbfd2f0e"
+          }
+        },
+        {
+          "id": "C3-DR-chain-3-messages",
+          "kind": "dr_chain",
+          "note": "KDF_CK: mk = HMAC-SHA256(ck, 0x01); ck' = HMAC-SHA256(ck, 0x02).",
+          "inputs": {
+            "chain_key": "41a2c085ea4524041f9fa2b4332cf559986ac08569718f52665c2de3cbfd2f0e"
+          },
+          "expected": [
+            {
+              "n": 0,
+              "message_key": "33cffccc3ed2a124b41e0635c6a9e6734468338de61351dd7030467344b58c65",
+              "next_chain_key": "35acab6e2d13fa7313872fc617adc008dd7aa12f4bee13f33f79c14bdb37c446"
+            },
+            {
+              "n": 1,
+              "message_key": "d85f68079fe8b414bf78dc7b211f262d75ad8c9f6462fee8322958105f08c04d",
+              "next_chain_key": "6512123d1475ae22124a8d906ebc34a5ad666ccf3d3b1cf38bfea0c47c5b4bc5"
+            },
+            {
+              "n": 2,
+              "message_key": "4fa94c7a45ff264c41f61f6b890540b3a95b4cd0760d79ff019faac6fe8b48d5",
+              "next_chain_key": "981747491c07a9a5c6fcefc58af1b744225be00cb7f3b06d524d98c76bf6e2e9"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "D-aead",
+      "title": "AEAD encryption, plaintext framing, padding and associated data",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "D1-inner-payload-framing",
+          "kind": "framing",
+          "note": "raw = domain||u8(1)||u8(1=TEXT_JSON)||u32be(len(body))||body; zero-pad to multiple of 256.",
+          "inputs": {
+            "body_utf8": "{\"text\":\"Привет, Боб!\",\"reply_to_id\":null}",
+            "body_hex": "7b2274657874223a22d09fd180d0b8d0b2d0b5d1822c20d091d0bed0b121222c227265706c795f746f5f6964223a6e756c6c7d",
+            "body_len": 51
+          },
+          "expected": {
+            "raw_len": 77,
+            "padded_len": 256,
+            "padding_zero_bytes": 179,
+            "padded_hex": "4b7275672f453245452f76312f7061796c6f61640101000000337b2274657874223a22d09fd180d0b8d0b2d0b5d1822c20d091d0bed0b121222c227265706c795f746f5f6964223a6e756c6c7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          }
+        },
+        {
+          "id": "D2-message-aead-m1",
+          "kind": "aead_message",
+          "note": "First message of the session (prekey envelope). AD is the 163-byte structure from §3.2.",
+          "inputs": {
+            "message_key": "33cffccc3ed2a124b41e0635c6a9e6734468338de61351dd7030467344b58c65",
+            "padded_plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000337b2274657874223a22d09fd180d0b8d0b2d0b5d1822c20d091d0bed0b121222c227265706c795f746f5f6964223a6e756c6c7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "ad_hex": "4b7275672f453245452f76312f61640101000000000000400080000000000001000000000000004000800000000000001100000001000000000000400080000000000000210000000186c68f64d2c3be99fde4aabe857e1f5e97fb9b738ab926ebb596fd274ad6fe770ec97c7103a033a535cbbbffaa4b67a601000000000000000000f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+            "ad_len": 163
+          },
+          "expected": {
+            "aead_key": "45594d11e5fea5057eb5c294894f3b536704f1ce47b917b58303cad582f4ba86",
+            "nonce": "400059460bf8b0fae3428c9a",
+            "ciphertext_including_tag": "f5111968ef143a66199beaa6662a503696a3a846cb01b81d0e99a6e2eb0e9732574d524b8c325124d8e99b85ff25ffb3afaa21302d1a25e8e12cf418edc2b18ebcbe98a596d36f125b46b2c71560135e1c9c119df06d91ecd97a9b9e46e8e82f2091305357e7c9986292cff901102e12ec4ae30e62d7cee1db23e7c08641a6bb46e7f06e6cf002b9bb920bc88c83d19e90ab0626f60a6ec3346442b089f698fca5fdfb1ed12d90d440e27c2b30cf15009cc59fa4c6c06c236cfd591e15d82b30332fd5b55f8fdc1b54f7ad9e3f692b5c1c1a0a63d0b8bddf3b1d5d35bfb002731159cea0198ba7eeb617852df455f4550dca22d53fe563545f63e8a7886b03ec19ad925ba485c40b64d90db658a6dbd7",
+            "ciphertext_len": 272
+          }
+        },
+        {
+          "id": "D3-message-aead-m2",
+          "kind": "aead_message",
+          "note": "Second message in the same sending chain, n=1, no prekey block.",
+          "inputs": {
+            "message_key": "d85f68079fe8b414bf78dc7b211f262d75ad8c9f6462fee8322958105f08c04d",
+            "padded_plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000337b2274657874223a22d09fd180d0b8d0b2d0b5d1822c20d091d0bed0b121222c227265706c795f746f5f6964223a6e756c6c7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "ad_hex": "4b7275672f453245452f76312f61640100000000000000400080000000000001000000000000004000800000000000001100000001000000000000400080000000000000210000000186c68f64d2c3be99fde4aabe857e1f5e000000000000000000000000000000000000000000000000000000000000000001000000000000000001f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+            "ad_len": 163
+          },
+          "expected": {
+            "aead_key": "98596cc687554babd5efc186c6133abca657d7dbb8a86bfa0e6826755a01d18f",
+            "nonce": "0a78c2170afef590b5111f74",
+            "ciphertext_including_tag": "d3d42812b36297f569d110c2d8617b8dddc84127733ffc6ae42874338684417f63f2e7bce216015183d751f9266652dad5f3eaef1e4e151a0e79137938f3eaadb9c8b6898db1c5c64b3dc6e4a26f797926d4fb1a53a64dbc09edc48154090bcb56b762c0a5984c1f36a45e9baf68b99864e0caafabd1e0ca3780d6492e32692f089f4a311eb388ad73dab069e82d287346a5a821e791e051a242cdcc9ba27d6fd930fefb8cc76820aba6d58f8e7457e028ecc95b7b7b47b9147e1d777ff89c02d25173d1055062890c55317c8fd01a8d5ad8188c1860dd645cc2ca509241b1e79453d4a0c0039246061f6d1e1012c0cae9b11f81323c257a1c8e77f61ed15765851123847199127bdbb9f6f840c40da1",
+            "ciphertext_len": 272
+          }
+        }
+      ]
+    },
+    {
+      "id": "E-double-ratchet",
+      "title": "Full Double Ratchet conversation (4 messages, 2 DH ratchet turns)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "E1-conversation-trace",
+          "kind": "double_ratchet",
+          "note": "Alice initiates with the prekey envelope (m1). Bob's initial ratchet private key is the signed prekey. After m1 Bob performs the first DH ratchet and replies with a fresh ratchet key. Counters: pn = messages sent in previous sending chain, n = index in current chain.",
+          "initial_state": {
+            "x3dh_sk": "bbaf23763ebebc2d1bc558bb9477e1b608e19d66282094873235b4f4d02bd9d5",
+            "session_id": "86c68f64d2c3be99fde4aabe857e1f5e",
+            "alice_ratchet_0_private": "e06def74ebd6156e37ffb023ce7d370fb64d7b3d335f06a29a02e7306294524b",
+            "alice_ratchet_0_public": "f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+            "bob_signed_prekey_private": "3e315592f9bb5a6dc5b4c999acdfa282dd1baeaea0a3af9b79578d0e1f37e0d5",
+            "bob_signed_prekey_public": "080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a",
+            "alice_ratchet_1_private": "83d09cac677812552ce073fb95294eb359abc36d9787cab1ce93b5321aebc922",
+            "alice_ratchet_1_public": "04f9488f597e1f817eaa0b47cf5e4c71792b6dc5a7d9817502aa1d637aeb311c",
+            "bob_ratchet_1_private": "aff8b0f3188e2231071916d33a309b7f491e2e2bc4f8d359f7bbc7887813a12c",
+            "bob_ratchet_1_public": "1605bc0c108808fb17751fa72a34ba371de96fa8fb237ee4c5e13d9eb0e0ba08",
+            "bob_ratchet_2_private": "e690c31fb3789e0f858b77358c978521e9ee41586f5bc3d63972d623037981c1",
+            "bob_ratchet_2_public": "c65eb6c83728a26f5142f2ef397aa243071a9521551c488558523d6b05895704",
+            "note_ratchet_derivation": "Both sides: RK_1||CK = HKDF(ikm=DH(ratchet, peer ratchet pub), salt=SK, info=dr-root, L=64)."
+          },
+          "expected_steps": [
+            {
+              "step": "A->B m1",
+              "message_key": "33cffccc3ed2a124b41e0635c6a9e6734468338de61351dd7030467344b58c65",
+              "header": {
+                "v": 1,
+                "dh": "f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+                "pn": 0,
+                "n": 0
+              },
+              "ad_hex": "4b7275672f453245452f76312f61640101000000000000400080000000000001000000000000004000800000000000001100000001000000000000400080000000000000210000000186c68f64d2c3be99fde4aabe857e1f5e97fb9b738ab926ebb596fd274ad6fe770ec97c7103a033a535cbbbffaa4b67a601000000000000000000f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+              "ciphertext": "f5111968ef143a66199beaa6662a503696a3a846cb01b81d0e99a6e2eb0e9732574d524b8c325124d8e99b85ff25ffb3afaa21302d1a25e8e12cf418edc2b18ebcbe98a596d36f125b46b2c71560135e1c9c119df06d91ecd97a9b9e46e8e82f2091305357e7c9986292cff901102e12ec4ae30e62d7cee1db23e7c08641a6bb46e7f06e6cf002b9bb920bc88c83d19e90ab0626f60a6ec3346442b089f698fca5fdfb1ed12d90d440e27c2b30cf15009cc59fa4c6c06c236cfd591e15d82b30332fd5b55f8fdc1b54f7ad9e3f692b5c1c1a0a63d0b8bddf3b1d5d35bfb002731159cea0198ba7eeb617852df455f4550dca22d53fe563545f63e8a7886b03ec19ad925ba485c40b64d90db658a6dbd7"
+            },
+            {
+              "step": "B->A r1",
+              "message_key": "40d3953f5add5c366fffec764855b4600dcf4baad0db61636a5afb63dc099e1a",
+              "header": {
+                "v": 1,
+                "dh": "1605bc0c108808fb17751fa72a34ba371de96fa8fb237ee4c5e13d9eb0e0ba08",
+                "pn": 0,
+                "n": 0
+              },
+              "ad_hex": "4b7275672f453245452f76312f61640100000000000000400080000000000001000000000000004000800000000000002100000001000000000000400080000000000000110000000186c68f64d2c3be99fde4aabe857e1f5e0000000000000000000000000000000000000000000000000000000000000000010000000000000000001605bc0c108808fb17751fa72a34ba371de96fa8fb237ee4c5e13d9eb0e0ba08",
+              "ciphertext": "1f9fd8b88068728fd0ec7ae819b38a362e3ea149b72ce5fea0959cd3f566f3fb67c9c5538feb5ea5e269f2275cece9cf0d47b78334f04ad92e801f1fde38bb5ed1320f2c6d626d548c95bc2af7b6eadd603358c5382d3ce62200d9ade16080a870596b144f86b49b2098479d3ebab0e33a99556eb9cbb3c7af075c551156c251c90131ad5eb56e6e1a86af641f628e1f5f3c5189b8aeec34d622c48886ef5675d2ab35bf734799dc8839820e5f797fb60553098ec0a97611333666c56cf2a87eb1c983f5a5adeb163b52536441023125731009e33c4a61ed71fee4b45e2d535e632bf05749a387fba9949bcd3fb57adec871c9ec5eea77a9d380329856105a6c8a721028d9d054e451a140eb4df12f9f",
+              "plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000377b2274657874223a22d09fd180d0b8d0b2d0b5d1822c20d090d0bbd0b8d181d0b021222c227265706c795f746f5f6964223a6e756c6c7d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            },
+            {
+              "step": "A->B m2",
+              "message_key": "f2979c49e1584959459b3ef933dcb4fdad880650bb9df5b6c08f4c4b5095883b",
+              "header": {
+                "v": 1,
+                "dh": "04f9488f597e1f817eaa0b47cf5e4c71792b6dc5a7d9817502aa1d637aeb311c",
+                "pn": 1,
+                "n": 0
+              },
+              "ad_hex": "4b7275672f453245452f76312f61640100000000000000400080000000000001000000000000004000800000000000001100000001000000000000400080000000000000210000000186c68f64d2c3be99fde4aabe857e1f5e00000000000000000000000000000000000000000000000000000000000000000100000000010000000004f9488f597e1f817eaa0b47cf5e4c71792b6dc5a7d9817502aa1d637aeb311c",
+              "ciphertext": "a77f4269e2b67af9a4d506fee4b327a12e4b31694f05e6660777000d9f54b81db9d2572f4d256f65e2dcf150c3b24782c6379fc3b884937fbc2638c29453a45f683dab6f05d17f8f6fb7985846f6424ee3965b957e43156599dde80cf53fb1ea4cf84a8ffbdc9aa2e83b7b5b80e324385c6d94aa725011db1ca4815dfd9740b4081fdb7708e4e192b5c913a0eca1a673aa213e008965908afa249f8d07afe6c5a5ecab6f1ae8ec1ad5a8338b62ff38579e6968608f57893c2b554c6c89687ad548b201df2b12782ab28bb90048a7371499f369c7f73a635cb2b1a1741d396b16a47aa9e7f6b413465e4845a4409218e9d0d8fe9aa500e03d1426f277fc381ce37581027968851bb28d20f5fec3fac9ca",
+              "plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000327b2274657874223a22d0a1d0bed0bed0b1d189d0b5d0bdd0b8d0b52032222c227265706c795f746f5f6964223a6e756c6c7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            },
+            {
+              "step": "B->A r2",
+              "message_key": "f56d399323e3be06c04dc8fdb4389d62c9dd80734b8d9b41554eb3ec43744dfc",
+              "header": {
+                "v": 1,
+                "dh": "c65eb6c83728a26f5142f2ef397aa243071a9521551c488558523d6b05895704",
+                "pn": 1,
+                "n": 0
+              },
+              "ad_hex": "4b7275672f453245452f76312f61640100000000000000400080000000000001000000000000004000800000000000002100000001000000000000400080000000000000110000000186c68f64d2c3be99fde4aabe857e1f5e000000000000000000000000000000000000000000000000000000000000000001000000000100000000c65eb6c83728a26f5142f2ef397aa243071a9521551c488558523d6b05895704",
+              "ciphertext": "43d52aced6ba23a5ebfdff8fa1120576c3223545c26a9157031074b0d5f05acf0750fe3109a729db04afc0115973be6d6601c9835f8b9a902a382d6084904cc99fb491c6817e13ef9beeb43ec7a5eeeb1e811a7fe54839f88ba8bad98a062414ee3263946b107e4c7d31d58886bb08b5a91f112cdf384fdc53ecd3973ac67d84b82befdbf2f15789b6f9174a6cf749d1ec900ed09a4ed8c5020abee3374eb167edda7898251a02c8826ee5235f46edafb9bb2e692f0bb7697cdd6d4f69894b49e7d76ae2594d615de1af0987aefcc497e5d37060f6b5cc2eb2cec7c7023340f1806187b7aabcf54f1308392e474438c64d1663dde2281e35d5e28ea3bc66d7dd335252b3ac4213531015551f656e0bd3",
+              "plaintext_hex": "4b7275672f453245452f76312f7061796c6f616401010000002a7b2274657874223a22d09ed182d0b2d0b5d1822032222c227265706c795f746f5f6964223a6e756c6c7d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "E2-skipped-keys",
+      "title": "Out-of-order delivery and skipped message keys",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "E2-skipped-key-trace",
+          "kind": "double_ratchet_skipped",
+          "note": "Post-handshake chain (no prekey). Receiver gets m1 (n=0), then m3 (n=2): it MUST derive and store the key for n=1, decrypt m3, and later decrypt m2 from the stored key. Duplicate n must be rejected; gap > MAX_SKIP (1000) must be rejected.",
+          "inputs": {
+            "session_id": "9bce8c99e7cce17e911c2a0be801032a",
+            "chain_key_0": "31c89db2faa0f7a46bca71f8974251e7da64ac33fe2dad212cabceceda6c68a3",
+            "ratchet_public": "f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "sender_device_id": "00000000-0000-4000-8000-000000000011",
+            "recipient_device_id": "00000000-0000-4000-8000-000000000021"
+          },
+          "expected": {
+            "messages": [
+              {
+                "n": 0,
+                "message_key": "a7838a46428c829ed5e3d1677e5ee1f1b1cc947057316fdaa784bc959b50e635",
+                "header": {
+                  "v": 1,
+                  "dh": "f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+                  "pn": 0,
+                  "n": 0
+                },
+                "ad_hex": "4b7275672f453245452f76312f6164010000000000000040008000000000000100000000000000400080000000000000110000000100000000000040008000000000000021000000019bce8c99e7cce17e911c2a0be801032a000000000000000000000000000000000000000000000000000000000000000001000000000000000000f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+                "ciphertext": "b965dc87f778e1c66bcbcd6ac18201029b88685d295803464e3fe2f91ceecfdb07f11680d8c698f1af93ca1f41d6a87c43ace91221a5cdd7a0cd9037e52ff86fa5507f6774b72a6dd613bda2b3203f00fac3d515206c2023bee277c05ccc06c2c4483b6c1f9ecf21d52dcac0f3534d63d8ae4dabb9dc49c2ec6b61ba1ee65e33989d81d6b770a2b9458c3cf99b85bd185014bd1ba3d88ed0299f9438526cde5def55b11aaadde797fdb0d05583a87cf2797fd51cd95741ab1c38f3d7ba2aae05605e1bd8feec05a12bd49e66d3f5dd11175e8c26f608ea5389628daeeed1e5004048a2a52b6c9459e1d126803132d9e13e320a4707c693150c04ddd6b096554b0c09eecf57497ec14b3cde92e0eb5634",
+                "plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000297b2274657874223a22736b697020746573742031222c227265706c795f746f5f6964223a6e756c6c7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+              },
+              {
+                "n": 1,
+                "message_key": "0b6a4533613a60dcc06531579916f9a8dc795daee4243a57300914df50bb0a2c",
+                "header": {
+                  "v": 1,
+                  "dh": "f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+                  "pn": 0,
+                  "n": 1
+                },
+                "ad_hex": "4b7275672f453245452f76312f6164010000000000000040008000000000000100000000000000400080000000000000110000000100000000000040008000000000000021000000019bce8c99e7cce17e911c2a0be801032a000000000000000000000000000000000000000000000000000000000000000001000000000000000001f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+                "ciphertext": "8671181e9d2e5831361901dd9fe4077ce23920f1a1b6aed2efaa00fc3af99d8f6a0802651b1457ac3c1e364e000f80ab7fef971580eddcd1516526d398ff383d135322992a07d46a04740b9e231336b57d90d701b7ad7bf3cd4cc1c543d80c6a14333d66ece3a3b3322b4cfecefda3bae90875030de96625fb688503016861a18116e16baa2687b329e8412f3440cd74f9652a9acd923c593cdcf235dc799c3c39595e56edae4efa7ef313cf213cfea0217a7e94e79b9948ad2ba94471ed9f9ce0f55e0bbfb81119da879bcedb56063bbd6cf0182f1f1c00f7f53c4ed35a0768f7fb7e5f89a00863872def5a1889cb17dbbf736498f8d549260b8025049a346980bd5ca22ca3da1869ae58df98537a89",
+                "plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000297b2274657874223a22736b697020746573742032222c227265706c795f746f5f6964223a6e756c6c7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+              },
+              {
+                "n": 2,
+                "message_key": "822851ba6a2ecbe45dbe9b527f6e6cc1cd3871a2118804e5ada781a6b3291192",
+                "header": {
+                  "v": 1,
+                  "dh": "f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+                  "pn": 0,
+                  "n": 2
+                },
+                "ad_hex": "4b7275672f453245452f76312f6164010000000000000040008000000000000100000000000000400080000000000000110000000100000000000040008000000000000021000000019bce8c99e7cce17e911c2a0be801032a000000000000000000000000000000000000000000000000000000000000000001000000000000000002f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+                "ciphertext": "9f0725b0ce2852396a5a8ab40cd1fd3a49a8ad3625c11d68125bab1e46a90dd6b18289ff2e4cf056ec96d60eea390eba37a47daf85cf25022f33a03f7a9a81bc8ba8ad86b3ea56cb17a52c3d579422cdc2f078cacbf578158ebb453a5682df1e0c2ba98d7b632e4baad00afbf8121a18d1009a57fbc642a9f8faf953941fb5a9a4d00de80f97839270caa77e4d221ce444404539f1d3d31543deaf0af97b340124f4d974c5cd6c493b45cabd285c905d7b2dc9821ba6765f2e8dff9701922f39fddc3ed6092acf433feea91e9330ba0e0c86c5714fcec4c8493ecffe83a2f597cf34587e3c390a5a9bfca9201b07d26775b922d9ddb95c533e80b34088288ab961db17c0952660d2b1ef3285c64c2aa1",
+                "plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000297b2274657874223a22736b697020746573742033222c227265706c795f746f5f6964223a6e756c6c7d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+              }
+            ],
+            "delivery_order": [
+              0,
+              2,
+              1
+            ],
+            "skipped_message_key_n1": "0b6a4533613a60dcc06531579916f9a8dc795daee4243a57300914df50bb0a2c",
+            "receiver_state_after_m3": {
+              "Nr": 3,
+              "stored_skipped": [
+                {
+                  "n": 1,
+                  "message_key": "0b6a4533613a60dcc06531579916f9a8dc795daee4243a57300914df50bb0a2c"
+                }
+              ]
+            },
+            "receiver_state_after_m2": {
+              "Nr": 3,
+              "stored_skipped": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "F-envelope",
+      "title": "Envelope JSON serialization",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "F1-envelope-prekey",
+          "kind": "envelope",
+          "note": "Wire object exactly as sent inside POST /messages envelopes[]. b64url values are unpadded. JSON text is illustrative; field values are normative.",
+          "expected": {
+            "envelope_json": "{\"v\":1,\"scheme\":\"PAIRWISE_X3DH_DR\",\"chat_id\":\"00000000-0000-4000-8000-000000000100\",\"sender_device_id\":\"00000000-0000-4000-8000-000000000011\",\"sender_key_generation\":1,\"recipient_device_id\":\"00000000-0000-4000-8000-000000000021\",\"recipient_key_generation\":1,\"session_id\":\"hsaPZNLDvpn95Kq-hX4fXg\",\"header\":{\"v\":1,\"dh\":\"-TrAwtuY_1u1fnmkvVMICLzgSqhwqEgx_3v8_rBObBk\",\"pn\":0,\"n\":0},\"ciphertext\":\"9REZaO8UOmYZm-qmZipQNpajqEbLAbgdDpmm4usOlzJXTVJLjDJRJNjpm4X_Jf-zr6ohMC0aJejhLPQY7cKxjry-mKWW028SW0ayxxVgE14cnBGd8G2R7Nl6m55G6OgvIJEwU1fnyZhiks_5ARAuEuxK4w5i187h2yPnwIZBprtG5_BubPACubuSC8iMg9GekKsGJvYKbsM0ZEKwifaY_KX9-x7RLZDUQOJ8KzDPFQCcxZ-kxsBsI2z9WR4V2CswMy_VtV-P3BtU962eP2krXBwaCmPQuL3fOx1dNb-wAnMRWc6gGYun7rYXhS30VfRVDcoi1T_lY1RfY-iniGsD7BmtklukhcQLZNkNtlim29c\",\"prekey\":{\"sender_identity_signing_key\":\"djQ2_H11EhPhoJ9Sjy1A15gAwRV7ALsbCWyjGT7YLmI\",\"sender_identity_dh_key\":\"n_dIUK4u8DZXOKn0vQbq36OKwko6ah9l_akxZCFFcT4\",\"sender_ephemeral_key\":\"PDxMC6X0x90zWTllWCCqlnLX5Y_sQFLLx5HvOBk0kiQ\",\"recipient_identity_dh_key\":\"gNQawPXrkUyR6Kekq9RAEHA9mCki-0D9QhwuOmZrpAQ\",\"spk_id\":\"spk-1\",\"spk_public\":\"CA4puJFgi4K5Jsi7SaGO1dK929yHxKUJ6N2uxRk7Dno\",\"opk_id\":\"opk-1\",\"opk_public\":\"b5S3QEwMb1HN0gi_UuxrXlfNmy-L5hSGsbFrmVvd0CU\",\"signature\":\"Rj4RhxwlwK_CmZLayCo_vIKQYbs9tiLGKYPu-7A0HXFuRFJRK2s0L1YNqlbZXe3ce5YlMsISj9So7ikY-tMIBw\"}}",
+            "envelope_len_bytes": 1310,
+            "decoded": {
+              "header_hex": "01000000000000000000f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+              "ad_hex": "4b7275672f453245452f76312f61640101000000000000400080000000000001000000000000004000800000000000001100000001000000000000400080000000000000210000000186c68f64d2c3be99fde4aabe857e1f5e97fb9b738ab926ebb596fd274ad6fe770ec97c7103a033a535cbbbffaa4b67a601000000000000000000f93ac0c2db98ff5bb57e79a4bd530808bce04aa870a84831ff7bfcfeb04e6c19",
+              "preamble_hex": "4b7275672f453245452f76312f7072656b657901000000000000400080000000000001000000000000004000800000000000001100000000000040008000000000000021763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e629ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e3c3c4c0ba5f4c7dd335939655820aa9672d7e58fec4052cbc791ef381934922480d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba4048a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce000573706b2d31080e29b891608b82b926c8bb49a18ed5d2bddbdc87c4a509e8ddaec5193b0e7a0100056f706b2d316f94b7404c0c6f51cdd208bf52ec6b5e57cd9b2f8be61486b1b16b995bddd02586c68f64d2c3be99fde4aabe857e1f5e",
+              "preamble_sha256": "97fb9b738ab926ebb596fd274ad6fe770ec97c7103a033a535cbbbffaa4b67a6",
+              "ciphertext_hex": "f5111968ef143a66199beaa6662a503696a3a846cb01b81d0e99a6e2eb0e9732574d524b8c325124d8e99b85ff25ffb3afaa21302d1a25e8e12cf418edc2b18ebcbe98a596d36f125b46b2c71560135e1c9c119df06d91ecd97a9b9e46e8e82f2091305357e7c9986292cff901102e12ec4ae30e62d7cee1db23e7c08641a6bb46e7f06e6cf002b9bb920bc88c83d19e90ab0626f60a6ec3346442b089f698fca5fdfb1ed12d90d440e27c2b30cf15009cc59fa4c6c06c236cfd591e15d82b30332fd5b55f8fdc1b54f7ad9e3f692b5c1c1a0a63d0b8bddf3b1d5d35bfb002731159cea0198ba7eeb617852df455f4550dca22d53fe563545f63e8a7886b03ec19ad925ba485c40b64d90db658a6dbd7",
+              "session_id_hex": "86c68f64d2c3be99fde4aabe857e1f5e"
+            }
+          }
+        },
+        {
+          "id": "F2-envelope-no-prekey",
+          "kind": "envelope",
+          "note": "No prekey block: flags bit0 = 0, preamble_hash = 32 zero bytes. Same session and chain (n=0 after ratchet).",
+          "expected": {
+            "envelope_json": "{\"v\":1,\"scheme\":\"PAIRWISE_X3DH_DR\",\"chat_id\":\"00000000-0000-4000-8000-000000000100\",\"sender_device_id\":\"00000000-0000-4000-8000-000000000011\",\"sender_key_generation\":1,\"recipient_device_id\":\"00000000-0000-4000-8000-000000000021\",\"recipient_key_generation\":1,\"session_id\":\"hsaPZNLDvpn95Kq-hX4fXg\",\"header\":{\"v\":1,\"dh\":\"BPlIj1l-H4F-qgtHz15McXkrbcWn2YF1AqodY3rrMRw\",\"pn\":1,\"n\":0},\"ciphertext\":\"p39CaeK2evmk1Qb-5LMnoS5LMWlPBeZmB3cADZ9UuB250lcvTSVvZeLc8VDDskeCxjefw7iEk3-8JjjClFOkX2g9q28F0X-Pb7eYWEb2Qk7jlluVfkMVZZnd6Az1P7HqTPhKj_vcmqLoO3tbgOMkOFxtlKpyUBHbHKSBXf2XQLQIH9t3COThkrXJE6DsoaZzqiE-AIllkIr6JJ-NB6_mxaXsq28a6Owa1agzi2L_OFeeaWhgj1eJPCtVTGyJaHrVSLIB3ysSeCqyi7kASKc3FJnzacf3OmNcsrGhdB05axakeqnn9rQTRl5IRaRAkhjp0Nj-mqUA4D0UJvJ3_Dgc43WBAnlohRuyjSD1_sP6yco\"}",
+            "envelope_len_bytes": 756,
+            "decoded": {
+              "header_hex": "0100000000010000000004f9488f597e1f817eaa0b47cf5e4c71792b6dc5a7d9817502aa1d637aeb311c",
+              "ad_hex": "4b7275672f453245452f76312f61640100000000000000400080000000000001000000000000004000800000000000001100000001000000000000400080000000000000210000000186c68f64d2c3be99fde4aabe857e1f5e00000000000000000000000000000000000000000000000000000000000000000100000000010000000004f9488f597e1f817eaa0b47cf5e4c71792b6dc5a7d9817502aa1d637aeb311c",
+              "ciphertext_hex": "a77f4269e2b67af9a4d506fee4b327a12e4b31694f05e6660777000d9f54b81db9d2572f4d256f65e2dcf150c3b24782c6379fc3b884937fbc2638c29453a45f683dab6f05d17f8f6fb7985846f6424ee3965b957e43156599dde80cf53fb1ea4cf84a8ffbdc9aa2e83b7b5b80e324385c6d94aa725011db1ca4815dfd9740b4081fdb7708e4e192b5c913a0eca1a673aa213e008965908afa249f8d07afe6c5a5ecab6f1ae8ec1ad5a8338b62ff38579e6968608f57893c2b554c6c89687ad548b201df2b12782ab28bb90048a7371499f369c7f73a635cb2b1a1741d396b16a47aa9e7f6b413465e4845a4409218e9d0d8fe9aa500e03d1426f277fc381ce37581027968851bb28d20f5fec3fac9ca"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "G-verification",
+      "title": "Fingerprints, safety number and verification metadata",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "G1-device-fingerprint",
+          "kind": "fingerprint",
+          "note": "FP = SHA-256(domain || IK_sig_pub || IK_dh_pub). 32 bytes.",
+          "inputs": {
+            "identity_signing_key": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+            "identity_dh_key": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+            "domain": "Krug/E2EE/v1/fingerprint"
+          },
+          "expected": {
+            "alice_fingerprint": "271774bc3354744005136603dd073b25fee8c6c013d431ee47198f39f0042071",
+            "bob_fingerprint": "42a869331f9baacb3929fc44f4e8343d97296f0cf3d10bdae697ab8fa1b59668"
+          }
+        },
+        {
+          "id": "G2-safety-number",
+          "kind": "safety_number",
+          "note": "Per device pair: two 64-byte entries (user_id(16)||device_id(16)||fingerprint(32)), sorted lexicographically; SHA-512; decimal mod 10^60, zero-padded; displayed as 12 groups of 5.",
+          "inputs": {
+            "entries": [
+              {
+                "user_id": "00000000-0000-4000-8000-000000000001",
+                "device_id": "00000000-0000-4000-8000-000000000011",
+                "fingerprint": "271774bc3354744005136603dd073b25fee8c6c013d431ee47198f39f0042071"
+              },
+              {
+                "user_id": "00000000-0000-4000-8000-000000000002",
+                "device_id": "00000000-0000-4000-8000-000000000021",
+                "fingerprint": "42a869331f9baacb3929fc44f4e8343d97296f0cf3d10bdae697ab8fa1b59668"
+              }
+            ]
+          },
+          "expected": {
+            "sha512": "2a57cdb66270475f466a2271a393c845d3105ab6aa363b8d87ea39f9ec147cdbc4e456ab68884536a44fd59d367e41dbf9ae3374eb77a17938ddded962955380",
+            "digits": "966641447817221341546560580530883495084093893634094867501952",
+            "display": "96664 14478 17221 34154 65605 80530 88349 50840 93893 63409 48675 01952",
+            "qr_payload": "krug://verify/v1?dev1=00000000-0000-4000-8000-000000000011&fp1=Jxd0vDNUdEAFE2YD3Qc7Jf7oxsAT1DHuRxmPOfAEIHE&dev2=00000000-0000-4000-8000-000000000021&fp2=QqhpMx-bqss5KfxE9Og0PZcpbwzz0Qva5perj6G1lmg"
+          }
+        },
+        {
+          "id": "G3-safety-number-after-key-change",
+          "kind": "safety_number",
+          "note": "Bob's device re-registered with a new identity signing key: digits MUST change; the old verification is invalid.",
+          "inputs": {
+            "entries": [
+              {
+                "user_id": "00000000-0000-4000-8000-000000000001",
+                "device_id": "00000000-0000-4000-8000-000000000011",
+                "fingerprint": "271774bc3354744005136603dd073b25fee8c6c013d431ee47198f39f0042071"
+              },
+              {
+                "user_id": "00000000-0000-4000-8000-000000000002",
+                "device_id": "00000000-0000-4000-8000-000000000021",
+                "fingerprint": "79824423e994d49c5473e79fa14ecf5eaa8f7b5ad7d8c810068880b5b33dbbc6"
+              }
+            ]
+          },
+          "expected": {
+            "sha512": "d4e8854de11c99a7245db0683a6dc2ca3b7cc2cd195169a94aa33641df87615d29c46538e56a49ebd6a53d56c5df3f2584f499c227181be98b446d55690570c0",
+            "digits": "573724070983238091796097932078185821452144785596632908787904",
+            "display": "57372 40709 83238 09179 60979 32078 18582 14521 44785 59663 29087 87904"
+          }
+        },
+        {
+          "id": "G4-verification-hash",
+          "kind": "verification_hash",
+          "note": "VH v2 (P0-1): the verifier's DEVICE is part of the hash. VH = SHA-256(D_VER || u8(2) || chat_id(16) || verifier_user_id(16) || verifier_device_id(16) || target_device_id(16) || u32(target_key_generation) || ascii(digits_60)). Rows created with u8(1) MUST be treated as unverified (migration: verifier_device_id IS NULL).",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "verifier_user_id": "00000000-0000-4000-8000-000000000001",
+            "verifier_device_id": "00000000-0000-4000-8000-000000000011",
+            "target_device_id": "00000000-0000-4000-8000-000000000021",
+            "target_key_generation": 1,
+            "safety_number_digits": "966641447817221341546560580530883495084093893634094867501952",
+            "vh_version": 2
+          },
+          "expected": {
+            "safety_number_hash": "6badfd8f77b750a8d7ef6451ea26a1de7b075f895dc8e6e396d12f5ed70b772c",
+            "vh_version": 2
+          }
+        },
+        {
+          "id": "G5-verification-per-device",
+          "kind": "verification_hash_per_device",
+          "note": "P0-1 regression: Alice has two devices (L1=...011, L2=...012). L1 verified Bob in this chat; L2 never did. The device-pair safety numbers differ (L2 has a different fingerprint/device_id), VH v2 binds the verifier device, and GET /chats/{id}/keys returned to L2 MUST report verified=null for Bob. A server-side boolean keyed only by user is a defect.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "verifier_user_id": "00000000-0000-4000-8000-000000000001",
+            "verifier_device_id_l1": "00000000-0000-4000-8000-000000000011",
+            "verifier_device_id_l2": "00000000-0000-4000-8000-000000000012",
+            "target_device_id": "00000000-0000-4000-8000-000000000021",
+            "target_key_generation": 1,
+            "l1_safety_number_digits": "966641447817221341546560580530883495084093893634094867501952",
+            "l2_safety_number_digits": "368573401529965321826981006324791674075106685477734276974256",
+            "l2_fingerprint": "3350066646c0741f0b1b4bd3d90cd3b969d973b5110279fde414cb5923b67ed6"
+          },
+          "expected": {
+            "l1_verification_hash": "6badfd8f77b750a8d7ef6451ea26a1de7b075f895dc8e6e396d12f5ed70b772c",
+            "l2_verification_hash": "d678a6ddab692dd3b560d9d0883cf43fc13786685524f00e42f0207e945010ea",
+            "hashes_differ": true,
+            "device_pair_digits_differ": true,
+            "server_verified_for_l1": true,
+            "server_verified_for_l2": null,
+            "l2_verified_at": null,
+            "verifier_device_bound_in_hash": true,
+            "l2_display": "36857 34015 29965 32182 69810 06324 79167 40751 06685 47773 42769 74256"
+          }
+        }
+      ]
+    },
+    {
+      "id": "H-sender-key",
+      "title": "Sender key chain (INFORMATIVE — groups are out of E7 scope, ADR-05)",
+      "normative": false,
+      "vectors": [
+        {
+          "id": "H1-sender-key-chain",
+          "kind": "sender_key",
+          "note": "NOT part of E7 acceptance. Same KDF_CK as DR; per-epoch chain; no PCS across epochs. Included so E7 vectors do not need revision when groups start.",
+          "inputs": {
+            "epoch_seed": "4f9788a331b7e5469bb11cc62141b947eac85babc1c1762e5b095056c678062b",
+            "domain": "Krug/E2EE/v1/sender-key",
+            "epoch": 0
+          },
+          "expected": {
+            "chain_key_0": "9505753ff3342a2decc5b3d1dd511fc0c208c4e905a8b7967ed3515172c9763a",
+            "message_key_0": "134e4457465e1490be715047477c0bbad3512d482ad95d835baa0f5586c0e1de",
+            "chain_key_1": "0392b657cbd0c723583dd592321b2d5a2e5de1a41d7a5b3981a23d1360ef54dc",
+            "message_key_1": "b77f179f46769ff634205f4c454c75f33d59925bfaf52ba159d816d099cf3683",
+            "chain_key_2": "694ff5e893eedcfaf828c6cfd7dafe934c3a092a6f7a9aa67e14020fcbede906"
+          }
+        },
+        {
+          "id": "H2-sender-key-aead",
+          "kind": "sender_key_message",
+          "note": "AD for sender-key messages (informative): domain||v||chat_id||sender_device_id||epoch||n. No recipient device id (one ciphertext for all).",
+          "inputs": {
+            "message_key": "134e4457465e1490be715047477c0bbad3512d482ad95d835baa0f5586c0e1de",
+            "plaintext_hex": "4b7275672f453245452f76312f7061796c6f61640101000000437b2274657874223a22d0b3d180d183d0bfd0bfd0bed0b2d0bed0b520d181d0bed0bed0b1d189d0b5d0bdd0b8d0b5222c227265706c795f746f5f6964223a6e756c6c7d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "ad_hex": "4b7275672f453245452f76312f73656e6465722d61640100000000000040008000000000000100000000000000400080000000000000210000000000000000"
+          },
+          "expected": {
+            "aead_key": "b55825bead0e9b61b9bb4e5ff10a9612d1f4a1e35ff63870ae793f77af9745d0",
+            "nonce": "b7c89cf941267d27ff9ba227",
+            "ciphertext": "ac560fd98e3b7678e1a6803c0dafcfbf027ff74f38fc439e8688cb1a63642f9150fdbb550cd2f86c2d532bb26f2bfbd815172685300f21a05518b94b6d75c7efb4b8e6992fa080b2a8a7b45c679ca2f577755fecf6e3d6ac347d41061891c30b85d9ee9b64e26d620c3c3aa947658fcfca11ebb477ca19151b2b4c931da82e58a2b054fcccc8ca69b9445bbc093581ab44232438ce32fe3bc65eb107bd268057462f906f78eeebc2a20ce609828e8007be091c6b97fc91e7fd3985f5bf7e77fc160e2e70b1369d203e627634d9228c6ebc10d057c2b25b4dd7aabcdd35f9afb3a6142668f242bd06ee3bee422f59de879a998a2f31d36b2eef6622e56f8f7049213a4c10bf60d968e987bcbe05450a83"
+          }
+        }
+      ]
+    },
+    {
+      "id": "I-tofu",
+      "title": "TOFU pinning of the sender identity per device_id (P0-2, negative test)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "I1-tofu-first-contact-no-pin",
+          "kind": "tofu_decision",
+          "note": "First contact: no pin for sender_device_id. The recipient verifies the preamble signature, then the IK_sig->IK_dh binding, then records the TOFU pin BEFORE showing the message. Acceptance is honest but the device is UNVERIFIED; the safety number must be compared out-of-band. This vector also demonstrates the residual TOFU window: keys substituted at first contact are not detected by pinning. P1-E: presented/pinned binding signatures are wire base64url (b64u64, 86 chars), not hex; a conforming client must parse them before TOFU.",
+          "inputs": {
+            "presented_device_id": "00000000-0000-4000-8000-000000000011",
+            "presented_user_id": "00000000-0000-4000-8000-000000000001",
+            "presented_ik_sig": "c2aa690fecb36a152a5c913e3f83ce887659f8786771b2f219d60d0c872a1fe3",
+            "presented_ik_dh": "428615e5b8530234b41121dd40fcdb7c7fa8ff6d0c61ad96e9b473849ff1842f",
+            "presented_fingerprint": "113cc64c9cc179936247e47d9c6c28fac561de627ea132eb950d0bc3770e5763",
+            "local_pin": null,
+            "presented_identity_binding_signature": "611ZRX0_txYgp3X0wgmmxMLh-arPr2tgDDK8T5lCcKuY7bEev_U-IxBzhC593MtXoJwCLyrunJilCzm0gdNCAA",
+            "identity_binding_source": "GET /chats/{id}/keys (device keys), not the envelope",
+            "envelope_json": "{\"v\":1,\"scheme\":\"PAIRWISE_X3DH_DR\",\"chat_id\":\"00000000-0000-4000-8000-000000000100\",\"sender_device_id\":\"00000000-0000-4000-8000-000000000011\",\"sender_key_generation\":1,\"recipient_device_id\":\"00000000-0000-4000-8000-000000000021\",\"recipient_key_generation\":1,\"session_id\":\"oQcZwQbwj2KtfLWyD-6tTA\",\"header\":{\"v\":1,\"dh\":\"s0vGAVglqtFjFKGa-KYmhgAdadENN06N5VwiQG_6nU8\",\"pn\":0,\"n\":0},\"ciphertext\":\"7NhrTqZ9oYs9yognQFJ_vurijO3VI68chGl0JjaaSGlJUZDiBUUXbHE7lzBJavn0xlGlQrVJj2UIpHeFJ9z13aPFm_vwAVAhzLKuzxoK8Azehj0EzygKbiPEjn9v_jaBd0Bbt9YTVF1euNaiDKbOQjUDFvs09iJUGDONJGf35TCQiYShJKa8o8YpQ9yfk-51CfBhgBSTSf5EG2JtbeHKSd0tKjXAbAn-HqPrvERgOYteJ2pgwk1nQnTXykBzEWIuu5D1yshwH6MpkaQQZ2uf318ZiuPP6MXHLQEqq1WWOPqZc-lGbvQpFihDsSQCq96juyfzSQVW0s1GkkDYGcl9XXVncQcBlF4TNWPdhDcknJQ\",\"prekey\":{\"sender_identity_signing_key\":\"wqppD-yzahUqXJE-P4POiHZZ-HhncbLyGdYNDIcqH-M\",\"sender_identity_dh_key\":\"QoYV5bhTAjS0ESHdQPzbfH-o_20MYa2W6bRzhJ_xhC8\",\"sender_ephemeral_key\":\"ZCM3tqZsYlhlrVDOL-NTvSVJ76UyGa1uQhhUkpsYwTc\",\"recipient_identity_dh_key\":\"gNQawPXrkUyR6Kekq9RAEHA9mCki-0D9QhwuOmZrpAQ\",\"spk_id\":\"spk-1\",\"spk_public\":\"CA4puJFgi4K5Jsi7SaGO1dK929yHxKUJ6N2uxRk7Dno\",\"opk_id\":\"opk-1\",\"opk_public\":\"b5S3QEwMb1HN0gi_UuxrXlfNmy-L5hSGsbFrmVvd0CU\",\"signature\":\"8oqEmEOWYCx1Vi1zov9hso_HRyW49yQNhZxnlXNI848UGMR_7rRd4ApTWxXxflGwT-uG3COKfHoYoe4fx_l2DA\"}}",
+            "recipient_ik_dh": "80d41ac0f5eb914c91e8a7a4abd44010703d982922fb40fd421c2e3a666ba404",
+            "recipient_ik_sig": "8a549d51a052bfc392b184ea23f5da317eafaa54f6635658733d05e538dcddce",
+            "presented_identity_binding_signature_encoding": "b64u64 (86 chars, 64 bytes)"
+          },
+          "expected": {
+            "preamble_signature_valid": true,
+            "identity_binding_present": true,
+            "identity_binding_verified": true,
+            "identity_binding_source": "GET /chats/{id}/keys (device keys), not the envelope",
+            "binding_prevents_substitution": false,
+            "identity_binding_required_for_new_devices": true,
+            "pin_created": true,
+            "pinned_identity_binding_signature": "611ZRX0_txYgp3X0wgmmxMLh-arPr2tgDDK8T5lCcKuY7bEev_U-IxBzhC593MtXoJwCLyrunJilCzm0gdNCAA",
+            "pinned_device_id": "00000000-0000-4000-8000-000000000011",
+            "pinned_fingerprint": "113cc64c9cc179936247e47d9c6c28fac561de627ea132eb950d0bc3770e5763",
+            "verified": false,
+            "warning": "TOFU_FIRST_CONTACT_UNVERIFIED",
+            "session_created": true,
+            "message_displayed": true,
+            "safety_number_digits": "181253404561674763700282722971429204119330509401683966461623",
+            "safety_number_differs_from_expected_peer": true,
+            "residual_risk": "TOFU window: attacker present at first contact is not detected by pinning",
+            "pinned_identity_binding_signature_encoding": "b64u64 (86 chars, 64 bytes)"
+          }
+        },
+        {
+          "id": "I2-tofu-identity-mismatch",
+          "kind": "tofu_decision",
+          "note": "P0-2 negative: the server substitutes the identity pair for an EXISTING device_id. The prekey envelope is wire-valid, the preamble signature verifies (Mallory's own keys), recipient keys/session_id/AD/AEAD all pass. Only the local pin (device_id -> IK_sig/IK_dh/fingerprint) detects the substitution. MUST be KEY_CHANGE_DETECTED: do not create/overwrite the session, do not display, do not consume the OPK, block sending until explicit user confirmation. P1-E: all signature fields are wire b64u64; the 64-byte binding is decoded, not hex-parsed.",
+          "inputs": {
+            "presented_device_id": "00000000-0000-4000-8000-000000000011",
+            "presented_ik_sig": "c2aa690fecb36a152a5c913e3f83ce887659f8786771b2f219d60d0c872a1fe3",
+            "presented_ik_dh": "428615e5b8530234b41121dd40fcdb7c7fa8ff6d0c61ad96e9b473849ff1842f",
+            "presented_fingerprint": "113cc64c9cc179936247e47d9c6c28fac561de627ea132eb950d0bc3770e5763",
+            "local_pin": {
+              "user_id": "00000000-0000-4000-8000-000000000001",
+              "device_id": "00000000-0000-4000-8000-000000000011",
+              "ik_sig": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+              "ik_dh": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+              "fingerprint": "271774bc3354744005136603dd073b25fee8c6c013d431ee47198f39f0042071",
+              "identity_binding_signature": "fIRfXVyFWk76XIuYEqJfamYFvBV7vqpiHvHeGcD2gsUWXHH14jS-MpM2Ceh7He-Yzbhzvs5XZo1RoOZ8mHJCCQ",
+              "key_generation": 1,
+              "verified": false,
+              "identity_binding_signature_encoding": "b64u64 (86 chars, 64 bytes)"
+            },
+            "presented_identity_binding_signature": "611ZRX0_txYgp3X0wgmmxMLh-arPr2tgDDK8T5lCcKuY7bEev_U-IxBzhC593MtXoJwCLyrunJilCzm0gdNCAA",
+            "envelope_json": "{\"v\":1,\"scheme\":\"PAIRWISE_X3DH_DR\",\"chat_id\":\"00000000-0000-4000-8000-000000000100\",\"sender_device_id\":\"00000000-0000-4000-8000-000000000011\",\"sender_key_generation\":1,\"recipient_device_id\":\"00000000-0000-4000-8000-000000000021\",\"recipient_key_generation\":1,\"session_id\":\"oQcZwQbwj2KtfLWyD-6tTA\",\"header\":{\"v\":1,\"dh\":\"s0vGAVglqtFjFKGa-KYmhgAdadENN06N5VwiQG_6nU8\",\"pn\":0,\"n\":0},\"ciphertext\":\"7NhrTqZ9oYs9yognQFJ_vurijO3VI68chGl0JjaaSGlJUZDiBUUXbHE7lzBJavn0xlGlQrVJj2UIpHeFJ9z13aPFm_vwAVAhzLKuzxoK8Azehj0EzygKbiPEjn9v_jaBd0Bbt9YTVF1euNaiDKbOQjUDFvs09iJUGDONJGf35TCQiYShJKa8o8YpQ9yfk-51CfBhgBSTSf5EG2JtbeHKSd0tKjXAbAn-HqPrvERgOYteJ2pgwk1nQnTXykBzEWIuu5D1yshwH6MpkaQQZ2uf318ZiuPP6MXHLQEqq1WWOPqZc-lGbvQpFihDsSQCq96juyfzSQVW0s1GkkDYGcl9XXVncQcBlF4TNWPdhDcknJQ\",\"prekey\":{\"sender_identity_signing_key\":\"wqppD-yzahUqXJE-P4POiHZZ-HhncbLyGdYNDIcqH-M\",\"sender_identity_dh_key\":\"QoYV5bhTAjS0ESHdQPzbfH-o_20MYa2W6bRzhJ_xhC8\",\"sender_ephemeral_key\":\"ZCM3tqZsYlhlrVDOL-NTvSVJ76UyGa1uQhhUkpsYwTc\",\"recipient_identity_dh_key\":\"gNQawPXrkUyR6Kekq9RAEHA9mCki-0D9QhwuOmZrpAQ\",\"spk_id\":\"spk-1\",\"spk_public\":\"CA4puJFgi4K5Jsi7SaGO1dK929yHxKUJ6N2uxRk7Dno\",\"opk_id\":\"opk-1\",\"opk_public\":\"b5S3QEwMb1HN0gi_UuxrXlfNmy-L5hSGsbFrmVvd0CU\",\"signature\":\"8oqEmEOWYCx1Vi1zov9hso_HRyW49yQNhZxnlXNI848UGMR_7rRd4ApTWxXxflGwT-uG3COKfHoYoe4fx_l2DA\"}}",
+            "presented_safety_number_digits": "181253404561674763700282722971429204119330509401683966461623",
+            "presented_identity_binding_signature_encoding": "b64u64 (86 chars, 64 bytes)"
+          },
+          "expected": {
+            "signature_valid": true,
+            "preamble_valid": true,
+            "recipient_keys_match": true,
+            "session_id_matches": true,
+            "aead_valid": true,
+            "identity_binding_verified": true,
+            "binding_prevents_substitution": false,
+            "pin_exists": true,
+            "pinned_fingerprint": "271774bc3354744005136603dd073b25fee8c6c013d431ee47198f39f0042071",
+            "presented_fingerprint": "113cc64c9cc179936247e47d9c6c28fac561de627ea132eb950d0bc3770e5763",
+            "pin_mismatch": true,
+            "decision": "KEY_CHANGE_DETECTED",
+            "session_created": false,
+            "session_overwritten": false,
+            "message_displayed": false,
+            "opk_consumed": false,
+            "send_blocked_until_confirmation": true,
+            "verified_reset": true,
+            "server_event_reason": "IDENTITY_KEY_CHANGED",
+            "requires_user_confirmation": true
+          }
+        },
+        {
+          "id": "I3-prekey-sender-identity-mismatch",
+          "kind": "prekey_identity_binding",
+          "note": "P0-2b negative: stolen bearer token without device private keys. The prekey block carries Mallory's IK_sig/IK_dh and EK for the EXISTING sender_device_id 011; the preamble signature verifies and Mallory's IK_sig->IK_dh binding is valid, but those keys are NOT the keys registered in auth.devices and NOT the keys in the claim bundle / GET /chats/{id}/keys. The server MUST reject 422 INVALID_ENVELOPE_FORMAT (409 KEY_CHANGED if generation moved); the recipient MUST reject KEY_HANDSHAKE_INVALID before creating a session, consuming the OPK or displaying the message. Binding verification alone is insufficient: it only proves that the presented IK_sig owns the presented IK_dh, not that the pair belongs to device_id 011. This is the exact gap that P0-2b closes; it is wire-valid and byte-identical to I1's envelope.",
+          "inputs": {
+            "sender_device_id": "00000000-0000-4000-8000-000000000011",
+            "sender_user_id": "00000000-0000-4000-8000-000000000001",
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "recipient_device_id": "00000000-0000-4000-8000-000000000021",
+            "registered_identity_signing_key": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+            "registered_identity_dh_key": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+            "bundle_identity_signing_key": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+            "bundle_identity_dh_key": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+            "prekey_sender_identity_signing_key": "c2aa690fecb36a152a5c913e3f83ce887659f8786771b2f219d60d0c872a1fe3",
+            "prekey_sender_identity_dh_key": "428615e5b8530234b41121dd40fcdb7c7fa8ff6d0c61ad96e9b473849ff1842f",
+            "presented_fingerprint": "113cc64c9cc179936247e47d9c6c28fac561de627ea132eb950d0bc3770e5763",
+            "presented_identity_binding_signature": "611ZRX0_txYgp3X0wgmmxMLh-arPr2tgDDK8T5lCcKuY7bEev_U-IxBzhC593MtXoJwCLyrunJilCzm0gdNCAA",
+            "presented_identity_binding_signature_encoding": "b64u64 (86 chars, 64 bytes)",
+            "preamble_signature_valid_for_presented_keys": true,
+            "binding_valid_for_presented_keys": true,
+            "prekey_matches_registered_device": false,
+            "prekey_matches_bundle": false,
+            "attacker_capability": "stolen bearer token only; no device private keys",
+            "envelope_json": "{\"v\":1,\"scheme\":\"PAIRWISE_X3DH_DR\",\"chat_id\":\"00000000-0000-4000-8000-000000000100\",\"sender_device_id\":\"00000000-0000-4000-8000-000000000011\",\"sender_key_generation\":1,\"recipient_device_id\":\"00000000-0000-4000-8000-000000000021\",\"recipient_key_generation\":1,\"session_id\":\"oQcZwQbwj2KtfLWyD-6tTA\",\"header\":{\"v\":1,\"dh\":\"s0vGAVglqtFjFKGa-KYmhgAdadENN06N5VwiQG_6nU8\",\"pn\":0,\"n\":0},\"ciphertext\":\"7NhrTqZ9oYs9yognQFJ_vurijO3VI68chGl0JjaaSGlJUZDiBUUXbHE7lzBJavn0xlGlQrVJj2UIpHeFJ9z13aPFm_vwAVAhzLKuzxoK8Azehj0EzygKbiPEjn9v_jaBd0Bbt9YTVF1euNaiDKbOQjUDFvs09iJUGDONJGf35TCQiYShJKa8o8YpQ9yfk-51CfBhgBSTSf5EG2JtbeHKSd0tKjXAbAn-HqPrvERgOYteJ2pgwk1nQnTXykBzEWIuu5D1yshwH6MpkaQQZ2uf318ZiuPP6MXHLQEqq1WWOPqZc-lGbvQpFihDsSQCq96juyfzSQVW0s1GkkDYGcl9XXVncQcBlF4TNWPdhDcknJQ\",\"prekey\":{\"sender_identity_signing_key\":\"wqppD-yzahUqXJE-P4POiHZZ-HhncbLyGdYNDIcqH-M\",\"sender_identity_dh_key\":\"QoYV5bhTAjS0ESHdQPzbfH-o_20MYa2W6bRzhJ_xhC8\",\"sender_ephemeral_key\":\"ZCM3tqZsYlhlrVDOL-NTvSVJ76UyGa1uQhhUkpsYwTc\",\"recipient_identity_dh_key\":\"gNQawPXrkUyR6Kekq9RAEHA9mCki-0D9QhwuOmZrpAQ\",\"spk_id\":\"spk-1\",\"spk_public\":\"CA4puJFgi4K5Jsi7SaGO1dK929yHxKUJ6N2uxRk7Dno\",\"opk_id\":\"opk-1\",\"opk_public\":\"b5S3QEwMb1HN0gi_UuxrXlfNmy-L5hSGsbFrmVvd0CU\",\"signature\":\"8oqEmEOWYCx1Vi1zov9hso_HRyW49yQNhZxnlXNI848UGMR_7rRd4ApTWxXxflGwT-uG3COKfHoYoe4fx_l2DA\"}}"
+          },
+          "expected": {
+            "prekey_matches_registered_device": false,
+            "prekey_matches_bundle": false,
+            "server_decision": "422 INVALID_ENVELOPE_FORMAT",
+            "server_rejected": true,
+            "http_status": 422,
+            "error_details_field": "prekey.sender_identity_signing_key",
+            "message_created": false,
+            "seq_allocated": false,
+            "client_decision": "KEY_HANDSHAKE_INVALID",
+            "session_created": false,
+            "session_overwritten": false,
+            "message_displayed": false,
+            "opk_consumed": false,
+            "tofu_pin_written": false,
+            "send_blocked": true,
+            "binding_alone_insufficient": true,
+            "test": "integration: device A with a bearer token but without its private keys cannot establish a prekey session as A"
+          }
+        }
+      ]
+    },
+    {
+      "id": "J-security-mode",
+      "title": "security_mode immutability and downgrade resistance (P0-3, P1-12)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "J1-security-mode-downgrade-rejected",
+          "kind": "security_mode_immutability",
+          "note": "A downgrade of an existing E2EE chat is an attack, not configuration. Server: immutable column + trigger (409 MODE_CHANGE_FORBIDDEN), no API to change the mode. Client: pins chat_id -> security_mode; if the server reports MANAGED for a pinned E2EE chat, it MUST NOT send plaintext and MUST show a security alert. Switching modes requires a NEW chat.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "workspace_security_mode_at_creation": "E2EE",
+            "chat_security_mode_at_creation": "E2EE",
+            "client_pinned_security_mode": "E2EE",
+            "server_reported_security_mode": "MANAGED",
+            "attempted_operation": "UPDATE chat.chats SET security_mode = 'MANAGED'"
+          },
+          "expected": {
+            "server_decision": "409 MODE_CHANGE_FORBIDDEN",
+            "db_guard": "trg_chats_security_mode_immutable",
+            "mode_changed": false,
+            "client_decision": "BLOCK_SEND_SECURITY_ALERT",
+            "plaintext_messages_sent": 0,
+            "plaintext_envelopes_accepted": 0,
+            "badge": "E2EE (pinned locally)",
+            "requires_new_chat": true,
+            "downgrade_is_attack": true
+          }
+        },
+        {
+          "id": "J2-e2ee-creation-with-flag-off",
+          "kind": "feature_flag_conformance",
+          "note": "P1-12: with e2ee.enabled=false the server MUST NOT create E2EE workspaces/chats and MUST NOT show the E2EE badge. Existing E2EE chats, if any, remain E2EE and MUST NOT accept plaintext; the flag only gates NEW E2EE surfaces.",
+          "inputs": {
+            "e2ee_enabled": false,
+            "operation": "POST /workspaces {security_mode: 'E2EE'}",
+            "existing_e2ee_chat_security_mode": "E2EE",
+            "plaintext_attempt": "POST /chats/{id}/messages {text: 'x'}"
+          },
+          "expected": {
+            "workspace_created": false,
+            "chat_created": false,
+            "http_status": 409,
+            "code": "E2EE_DISABLED",
+            "badge_shown": false,
+            "existing_e2ee_chat_plaintext": "422 E2EE_PLAINTEXT_FORBIDDEN",
+            "flag_off_closes_existing_mode": false
+          }
+        },
+        {
+          "id": "J3-fresh-device-managed-mode-blocked",
+          "kind": "security_mode_bootstrap",
+          "note": "P1-G: a new device or a cleared profile has no local chat_id->security_mode pin. A malicious/compromised server may answer MANAGED for a chat that has E2EE history and a peer with e2ee_capable devices. The client MUST NOT silently send plaintext: it blocks before any request, shows a security alert and requires an explicit mode decision / E2EE session. There is no server-side code for this case: a server that really says MANAGED would accept plaintext, so the control is client-side only. Honest residual risk: without a local pin and without server-signed mode attestation (v2) the client cannot prove the chat was E2EE.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "peer_user_id": "00000000-0000-4000-8000-000000000002",
+            "client_has_pin": false,
+            "local_security_mode_pin": null,
+            "chat_had_e2ee_history": true,
+            "peer_has_e2ee_capable_device": true,
+            "workspace_reported_security_mode": "MANAGED",
+            "server_reported_security_mode": "MANAGED",
+            "client_attempted_plaintext_send": true,
+            "mode_attestation": null
+          },
+          "expected": {
+            "client_decision": "BLOCK_SEND_SECURITY_ALERT",
+            "http_status": null,
+            "code": null,
+            "server_request_sent": false,
+            "client_blocks_before_request": true,
+            "plaintext_messages_sent": 0,
+            "send_blocked": true,
+            "requires_explicit_mode_confirmation": true,
+            "security_alert": true,
+            "mode_pinned": false,
+            "fallback_to_managed_allowed": false,
+            "e2ee_session_establish_offered": true,
+            "allow_after_user_confirmation": "E2EE_ONLY (or a NEW managed chat; never an in-place downgrade)",
+            "residual_risk": "no local pin and no server-signed mode attestation v1; the client cannot prove the chat was E2EE"
+          }
+        }
+      ]
+    },
+    {
+      "id": "K-client-message-id",
+      "title": "client_message_id uniqueness scope and cross-user replay (P1-10, D-07)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "K1-client-message-id-same-sender-replay",
+          "kind": "client_message_id_scope",
+          "note": "Scope is (chat_id, sender_id, client_message_id). A repeat by the SAME sender with the same body is an idempotent replay (same id/seq). The value MUST be echoed in Message and MUST NOT be included in AD.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "sender_user_id": "00000000-0000-4000-8000-000000000001",
+            "client_message_id": "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e10",
+            "existing_message_id": "8b0f3c1d-2e4a-4b6c-8d0e-1f2a3b4c5d6e",
+            "repeat_sender_user_id": "00000000-0000-4000-8000-000000000001",
+            "repeat_body": "same envelope bytes",
+            "unique_key": [
+              "chat_id",
+              "sender_id",
+              "client_message_id"
+            ]
+          },
+          "expected": {
+            "http_status": 201,
+            "code": null,
+            "idempotent_replay": true,
+            "same_message_id": true,
+            "same_seq": true,
+            "db_index": "ux_<partition>_chat_sender_client",
+            "unique_key": [
+              "chat_id",
+              "sender_id",
+              "client_message_id"
+            ],
+            "in_ad": false
+          }
+        },
+        {
+          "id": "K2-client-message-id-cross-user-conflict",
+          "kind": "client_message_id_scope",
+          "note": "A different sender using the same UUID in the same chat MUST NOT receive the first user's message as a replay. The lookup is sender-scoped; otherwise a 201 replay leaks another user's message. Expected: 409 CLIENT_MESSAGE_ID_CONFLICT.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "first": {
+              "sender_user_id": "00000000-0000-4000-8000-000000000001",
+              "client_message_id": "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e10",
+              "message_id": "8b0f3c1d-2e4a-4b6c-8d0e-1f2a3b4c5d6e"
+            },
+            "second": {
+              "sender_user_id": "00000000-0000-4000-8000-000000000002",
+              "client_message_id": "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e10"
+            },
+            "lookup_filter": [
+              "workspace_id",
+              "chat_id",
+              "sender_id",
+              "client_message_id"
+            ]
+          },
+          "expected": {
+            "http_status": 409,
+            "code": "CLIENT_MESSAGE_ID_CONFLICT",
+            "idempotent_replay": false,
+            "returns_other_users_message": false,
+            "sender_scoped": true,
+            "message_created": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "L-session-reset",
+      "title": "R-15: undecryptable-session signal (P1-1)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "L1-session-reset-payload",
+          "kind": "inner_payload_session_reset",
+          "note": "R-15 control payload: content_type=2 (SESSION_RESET) inside a NEW prekey envelope; not user-visible, no notification, not counted as a user message. S4 (P1-C): the body carries `failed_chain_dh` = header.dh of the failed message and `failed_n` = its header.n; together with `retry_of_client_message_id` they define the exact retry window (L3b). Unauthenticated WS events are NOT used for reset (spoofable).",
+          "inputs": {
+            "content_type": 2,
+            "content_type_name": "SESSION_RESET",
+            "failed_session_id": "hsaPZNLDvpn95Kq-hX4fXg",
+            "failed_chain_dh": "-TrAwtuY_1u1fnmkvVMICLzgSqhwqEgx_3v8_rBObBk",
+            "failed_n": 3,
+            "reason": "DECRYPT_FAILED",
+            "retry_of_client_message_id": "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04",
+            "body_utf8": "{\"failed_session_id\":\"hsaPZNLDvpn95Kq-hX4fXg\",\"failed_chain_dh\":\"-TrAwtuY_1u1fnmkvVMICLzgSqhwqEgx_3v8_rBObBk\",\"failed_n\":3,\"reason\":\"DECRYPT_FAILED\",\"retry_of_client_message_id\":\"3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04\"}",
+            "body_hex": "7b226661696c65645f73657373696f6e5f6964223a22687361505a4e4c4476706e39354b712d685834665867222c226661696c65645f636861696e5f6468223a222d547241777475595f317531666e6d6b76564d49434c7a6753716877714567785f3376385f72424f62426b222c226661696c65645f6e223a332c22726561736f6e223a22444543525950545f4641494c4544222c2272657472795f6f665f636c69656e745f6d6573736167655f6964223a2233663063346132652d386431622d346331612d396532662d326237613664356334653034227d",
+            "body_len": 217,
+            "domain": "Krug/E2EE/v1/payload"
+          },
+          "expected": {
+            "raw_len": 243,
+            "padded_len": 256,
+            "padding_zero_bytes": 13,
+            "padded_hex": "4b7275672f453245452f76312f7061796c6f61640102000000d97b226661696c65645f73657373696f6e5f6964223a22687361505a4e4c4476706e39354b712d685834665867222c226661696c65645f636861696e5f6468223a222d547241777475595f317531666e6d6b76564d49434c7a6753716877714567785f3376385f72424f62426b222c226661696c65645f6e223a332c22726561736f6e223a22444543525950545f4641494c4544222c2272657472795f6f665f636c69656e745f6d6573736167655f6964223a2233663063346132652d386431622d346331612d396532662d326237613664356334653034227d00000000000000000000000000",
+            "payload_sha256": "1e6a4d9880c710c9c1c4faae0913e78244d08c036a077b7fdae000e1cb87f4fe",
+            "user_visible": false,
+            "requires_prekey_session": true,
+            "transport": "prekey_envelope_content_type_2"
+          }
+        },
+        {
+          "id": "L2-session-reset-state-machine",
+          "kind": "session_reset_state_machine",
+          "note": "R-15 mitigation: the receiver never silently drops; it emits an encrypted reset signal, rate-limited to one per failed session, and the sender performs exactly one new prekey handshake. The retry is a NEW message with a NEW client_message_id (the old id already points at the old ciphertext); UI replaces the local pending copy, not duplicates it.",
+          "inputs": {
+            "trigger_errors": [
+              "KEY_HANDSHAKE_INVALID",
+              "UNKNOWN_SPK",
+              "DECRYPT_FAILED"
+            ],
+            "transport": "prekey_envelope_content_type_2",
+            "ws_event_used": false,
+            "cooldown_seconds": 300,
+            "max_resets_per_failed_session": 1
+          },
+          "expected": {
+            "recipient_emits_reset": true,
+            "reset_is_user_visible": false,
+            "reset_counts_as_user_message": false,
+            "sender_deletes_failed_session": true,
+            "sender_claims_new_bundle": true,
+            "resend_uses_new_client_message_id": true,
+            "old_client_message_id_reused": false,
+            "old_ciphertext_reused": false,
+            "ui_shows_retry_not_duplicate": true,
+            "metric": "e2ee_prekey_undecrypted_24h",
+            "max_reset_attempts": 1
+          }
+        },
+        {
+          "id": "L3-session-reset-multi-message",
+          "kind": "session_reset_state_machine",
+          "note": "P1-C: reset is a property of the failed SESSION, not of one message. A sent m1..m5 in one session; B was offline past the SPK window and decrypted none. One SESSION_RESET for that failed_session_id makes A re-encrypt ALL undelivered messages of the session into a new session, each with a NEW client_message_id/Idempotency-Key, in order, replacing the local pending copies (one retry group, no duplicates). Batch is capped at 20; the rest stay retry_pending with an explicit UI status. Empty outbox is a no-op (no new handshake).",
+          "inputs": {
+            "failed_session_id": "hsaPZNLDvpn95Kq-hX4fXg",
+            "old_client_message_ids": [
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e01",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e02",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e03",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e05"
+            ],
+            "delivered_before_reset": 0,
+            "reset_content_type": 2,
+            "max_batch": 20,
+            "cooldown_seconds": 300
+          },
+          "expected": {
+            "resend_count": 5,
+            "all_with_new_client_message_ids": true,
+            "new_client_message_ids_unique": true,
+            "order_preserved": true,
+            "duplicates_in_ui": 0,
+            "ui_retry_groups": 1,
+            "old_messages_status": "superseded",
+            "undelivered_left": 0,
+            "old_ciphertext_reused": false,
+            "old_client_message_id_reused": false,
+            "empty_outbox_is_noop": true,
+            "batch_overflow_status": "retry_pending",
+            "silent_drop": false
+          }
+        },
+        {
+          "id": "L3b-session-reset-partial-delivery-dedup",
+          "kind": "session_reset_state_machine",
+          "note": "P1-C-1: L3 covers the case where NOTHING was delivered (delivered_before_reset=0) and the whole session is re-encrypted. The dangerous case is partial delivery: B decrypted m1..m3 and failed on m4. Re-encrypting all five would duplicate m1..m3 in B's UI with brand-new client_message_ids (no way to correlate). S4 rule: the reset carries `failed_chain_dh` + `failed_n` (header.dh/header.n of the first message that failed) and `retry_of_client_message_id`; A re-encrypts only messages from that anchor onward in local send order (m4, m5), each with a NEW client_message_id AND `retry_of_client_message_id` inside the inner payload. Second line of defence: if a re-encrypted message points at a `retry_of_client_message_id` the receiver already decrypted, the receiver discards it silently (no UI duplicate, no unread, no notification) - this also covers a sender window bug. Both mechanisms are covered below; nothing is silently lost.",
+          "inputs": {
+            "failed_session_id": "hsaPZNLDvpn95Kq-hX4fXg",
+            "failed_chain_dh": "-TrAwtuY_1u1fnmkvVMICLzgSqhwqEgx_3v8_rBObBk",
+            "failed_n": 3,
+            "old_client_message_ids": [
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e01",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e02",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e03",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e05"
+            ],
+            "decrypted_client_message_ids": [
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e01",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e02",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e03"
+            ],
+            "failed_client_message_id": "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04",
+            "retry_window_rule": "local_send_index >= index(retry_of_client_message_id); chain/n are the wire labels",
+            "retry_anchor_field": "retry_of_client_message_id",
+            "retry_of_field": "inner_payload.retry_of_client_message_id",
+            "max_batch": 20,
+            "cooldown_seconds": 300,
+            "reset_content_type": 2
+          },
+          "expected": {
+            "resend_count": 2,
+            "resend_client_message_ids": [
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e05"
+            ],
+            "retried_client_message_ids": [
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e05"
+            ],
+            "not_resent_client_message_ids": [
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e01",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e02",
+              "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e03"
+            ],
+            "all_resends_carry_retry_of": true,
+            "all_resends_have_new_client_message_ids": true,
+            "new_client_message_ids_unique": true,
+            "duplicates_in_ui": 0,
+            "duplicate_guard_case": {
+              "why": "sender window bug: m3 (already decrypted) is re-sent as well",
+              "resent": [
+                "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e03",
+                "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e04",
+                "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e05"
+              ],
+              "discarded_by_receiver": 1,
+              "duplicates_in_ui": 0,
+              "unread_increment": 0,
+              "notification": false
+            },
+            "receiver_dedup_key": "retry_of_client_message_id",
+            "old_messages_status": "superseded",
+            "undelivered_left": 0,
+            "old_client_message_id_reused": false,
+            "old_ciphertext_reused": false,
+            "empty_outbox_is_noop": true,
+            "batch_overflow_status": "retry_pending",
+            "silent_drop": false,
+            "metric": "e2ee_reset_duplicates"
+          }
+        }
+      ]
+    },
+    {
+      "id": "M-envelope-coverage",
+      "title": "Peer coverage: candidates vs covered devices (P1-B)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "M1-peer-coverage-zero-rejected",
+          "kind": "envelope_coverage",
+          "note": "P1-B: peer_devices>0 but peer_covered==0. This happens when the recipient has capable devices but no usable SPK/bundle, so the sender only has a self-envelope or self-fan-out. The server MUST reject 409 E2EE_NO_PEER_ENVELOPE before creating the Message/seq; a 201 with no peer delivery is a silent loss. The client must also pre-check and not send when no peer bundle was obtained.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "peer_user_id": "00000000-0000-4000-8000-000000000002",
+            "peer_devices": 2,
+            "peer_devices_with_spk": 0,
+            "peer_covered": 0,
+            "self_devices": 1,
+            "self_covered": 1,
+            "envelopes_total": 1,
+            "envelopes_to_peer": 0,
+            "client_precheck": "NO_PEER_BUNDLE"
+          },
+          "expected": {
+            "http_status": 409,
+            "code": "E2EE_NO_PEER_ENVELOPE",
+            "message_created": false,
+            "seq_allocated": false,
+            "warning": null,
+            "client_must_not_send": true,
+            "ui_reason": "PEER_UNCOVERED",
+            "retry_after": "peer has an active SPK / a peer bundle is available"
+          }
+        },
+        {
+          "id": "M2-peer-partial-coverage-warning",
+          "kind": "envelope_coverage",
+          "note": "P1-B: one of two peer devices is covered. The message is accepted (at least one peer envelope exists) but the response MUST carry warning=PEER_DEVICE_UNCOVERED and list the uncovered device; the UI says the message is unavailable on some of the peer's devices. The envelope is the wire-valid F1 prekey envelope addressed to Bob's device 021; Bob's second device 022 has no envelope.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "peer_user_id": "00000000-0000-4000-8000-000000000002",
+            "peer_devices": 2,
+            "peer_covered": 1,
+            "self_devices": 1,
+            "self_covered": 1,
+            "uncovered_device_ids": [
+              "00000000-0000-4000-8000-000000000022"
+            ],
+            "envelope_json": "{\"v\":1,\"scheme\":\"PAIRWISE_X3DH_DR\",\"chat_id\":\"00000000-0000-4000-8000-000000000100\",\"sender_device_id\":\"00000000-0000-4000-8000-000000000011\",\"sender_key_generation\":1,\"recipient_device_id\":\"00000000-0000-4000-8000-000000000021\",\"recipient_key_generation\":1,\"session_id\":\"hsaPZNLDvpn95Kq-hX4fXg\",\"header\":{\"v\":1,\"dh\":\"-TrAwtuY_1u1fnmkvVMICLzgSqhwqEgx_3v8_rBObBk\",\"pn\":0,\"n\":0},\"ciphertext\":\"9REZaO8UOmYZm-qmZipQNpajqEbLAbgdDpmm4usOlzJXTVJLjDJRJNjpm4X_Jf-zr6ohMC0aJejhLPQY7cKxjry-mKWW028SW0ayxxVgE14cnBGd8G2R7Nl6m55G6OgvIJEwU1fnyZhiks_5ARAuEuxK4w5i187h2yPnwIZBprtG5_BubPACubuSC8iMg9GekKsGJvYKbsM0ZEKwifaY_KX9-x7RLZDUQOJ8KzDPFQCcxZ-kxsBsI2z9WR4V2CswMy_VtV-P3BtU962eP2krXBwaCmPQuL3fOx1dNb-wAnMRWc6gGYun7rYXhS30VfRVDcoi1T_lY1RfY-iniGsD7BmtklukhcQLZNkNtlim29c\",\"prekey\":{\"sender_identity_signing_key\":\"djQ2_H11EhPhoJ9Sjy1A15gAwRV7ALsbCWyjGT7YLmI\",\"sender_identity_dh_key\":\"n_dIUK4u8DZXOKn0vQbq36OKwko6ah9l_akxZCFFcT4\",\"sender_ephemeral_key\":\"PDxMC6X0x90zWTllWCCqlnLX5Y_sQFLLx5HvOBk0kiQ\",\"recipient_identity_dh_key\":\"gNQawPXrkUyR6Kekq9RAEHA9mCki-0D9QhwuOmZrpAQ\",\"spk_id\":\"spk-1\",\"spk_public\":\"CA4puJFgi4K5Jsi7SaGO1dK929yHxKUJ6N2uxRk7Dno\",\"opk_id\":\"opk-1\",\"opk_public\":\"b5S3QEwMb1HN0gi_UuxrXlfNmy-L5hSGsbFrmVvd0CU\",\"signature\":\"Rj4RhxwlwK_CmZLayCo_vIKQYbs9tiLGKYPu-7A0HXFuRFJRK2s0L1YNqlbZXe3ce5YlMsISj9So7ikY-tMIBw\"}}",
+            "envelope_wire_version": 1
+          },
+          "expected": {
+            "http_status": 201,
+            "message_created": true,
+            "delivered_to_peer": true,
+            "peer_covered": 1,
+            "warning": "PEER_DEVICE_UNCOVERED",
+            "uncovered_device_ids": [
+              "00000000-0000-4000-8000-000000000022"
+            ],
+            "ui": "unavailable on some of the peer's devices",
+            "self_warning_suppressed": true
+          }
+        },
+        {
+          "id": "M3-peer-legacy-not-coverage",
+          "kind": "envelope_coverage",
+          "note": "P1-B-1: coverage counts ONLY e2ee_capable devices. Bob has B1=...021 (capable) and B2=...023 (legacy ACTIVE, no keys, e2ee_capable=false). A crafted envelope addressed to the legacy device must be rejected 422 E2EE_LEGACY_DEVICE during per-envelope target validation, before Message/seq (no partial fan-out). Even if that gate were skipped, peer_covered would remain 0 because the legacy device is not capable -> 409 E2EE_NO_PEER_ENVELOPE. peer_devices (candidates) = 1 (capable only); the legacy device is not a candidate and is not listed in uncovered_device_ids (it is not a delivery target at all). Variant B (capable-only envelope) is accepted with peer_covered=1=peer_devices and warning=null, so the legacy device can never produce false coverage or a false warning. The embedded envelope is shape-valid v1 (no prekey: a legacy device has no SPK, so no real session can exist with it); the server rejects it on capability, not on crypto.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "peer_user_id": "00000000-0000-4000-8000-000000000002",
+            "peer_devices_total_active": 2,
+            "peer_devices_capable": 1,
+            "peer_devices_legacy": 1,
+            "peer_devices": 1,
+            "peer_capable_device_id": "00000000-0000-4000-8000-000000000021",
+            "legacy_device_id": "00000000-0000-4000-8000-000000000023",
+            "legacy_device_e2ee_capable": false,
+            "legacy_device_has_prekeys": false,
+            "coverage_counting_rule": "distinct recipient_device_id where device.e2ee_capable AND device.user_id = peer_user_id",
+            "envelopes": [
+              {
+                "recipient_device_id": "00000000-0000-4000-8000-000000000023",
+                "target_e2ee_capable": false,
+                "target_status": "ACTIVE",
+                "has_prekey": false
+              }
+            ],
+            "envelope_json": "{\"v\":1,\"scheme\":\"PAIRWISE_X3DH_DR\",\"chat_id\":\"00000000-0000-4000-8000-000000000100\",\"sender_device_id\":\"00000000-0000-4000-8000-000000000011\",\"sender_key_generation\":1,\"recipient_device_id\":\"00000000-0000-4000-8000-000000000023\",\"recipient_key_generation\":1,\"session_id\":\"hsaPZNLDvpn95Kq-hX4fXg\",\"header\":{\"v\":1,\"dh\":\"BPlIj1l-H4F-qgtHz15McXkrbcWn2YF1AqodY3rrMRw\",\"pn\":1,\"n\":0},\"ciphertext\":\"p39CaeK2evmk1Qb-5LMnoS5LMWlPBeZmB3cADZ9UuB250lcvTSVvZeLc8VDDskeCxjefw7iEk3-8JjjClFOkX2g9q28F0X-Pb7eYWEb2Qk7jlluVfkMVZZnd6Az1P7HqTPhKj_vcmqLoO3tbgOMkOFxtlKpyUBHbHKSBXf2XQLQIH9t3COThkrXJE6DsoaZzqiE-AIllkIr6JJ-NB6_mxaXsq28a6Owa1agzi2L_OFeeaWhgj1eJPCtVTGyJaHrVSLIB3ysSeCqyi7kASKc3FJnzacf3OmNcsrGhdB05axakeqnn9rQTRl5IRaRAkhjp0Nj-mqUA4D0UJvJ3_Dgc43WBAnlohRuyjSD1_sP6yco\"}",
+            "envelope_wire_version": 1,
+            "variant_b": {
+              "envelopes": [
+                {
+                  "recipient_device_id": "00000000-0000-4000-8000-000000000021",
+                  "target_e2ee_capable": true
+                }
+              ],
+              "peer_devices": 1,
+              "peer_covered": 1
+            }
+          },
+          "expected": {
+            "http_status": 422,
+            "code": "E2EE_LEGACY_DEVICE",
+            "details_field": "envelopes[0].recipient_device_id",
+            "server_rejected": true,
+            "message_created": false,
+            "seq_allocated": false,
+            "partial_fanout": false,
+            "peer_covered": 0,
+            "legacy_counts_as_peer_covered": false,
+            "legacy_counts_as_peer_device": false,
+            "legacy_in_uncovered_device_ids": false,
+            "fallback_if_target_check_skipped": "409 E2EE_NO_PEER_ENVELOPE",
+            "variant_b_http_status": 201,
+            "variant_b_peer_devices": 1,
+            "variant_b_peer_covered": 1,
+            "variant_b_warning": null,
+            "variant_b_uncovered_device_ids": [],
+            "ui": "legacy devices are not addressed by E2EE at all; no 'unavailable on some devices' warning"
+          }
+        }
+      ]
+    },
+    {
+      "id": "N-device-registration",
+      "title": "Device registration: revoked idempotency and legacy addressability (P1-6/P2-4/P2-5)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "N1-revoked-identity-replay",
+          "kind": "device_registration_idempotency",
+          "note": "P2-5: replaying the same IK pair after the device was REVOKED must not resurrect it. The REVOKED check runs BEFORE identity-key idempotency: 410 DEVICE_REVOKED, no reactivation, no new device row with the same keys. To participate in E2EE again the client registers a NEW device with a NEW identity pair (the global unique index excludes REVOKED, but the server still refuses to reuse tombstoned keys).",
+          "inputs": {
+            "identity_signing_key": "763436fc7d751213e1a09f528f2d40d79800c1157b00bb1b096ca3193ed82e62",
+            "identity_dh_key": "9ff74850ae2ef0365738a9f4bd06eadfa38ac24a3a6a1f65fda931642145713e",
+            "existing_status": "REVOKED",
+            "revoked_key_generation": 2,
+            "idempotency_key": "5c1e8d0a-4b2f-4a6e-9d1c-7e3f2a1b0c9d",
+            "body_same_keys": true
+          },
+          "expected": {
+            "http_status": 410,
+            "code": "DEVICE_REVOKED",
+            "device_reactivated": false,
+            "new_device_created": false,
+            "returns_revoked_device_as_active": false,
+            "key_generation_after": 2,
+            "idempotency_precedence": "revoked_check_before_ik_replay",
+            "client_action": "REGISTER_NEW_DEVICE_WITH_NEW_IDENTITY_KEYS"
+          }
+        },
+        {
+          "id": "N2-legacy-device-prekeys-rejected",
+          "kind": "device_registration_legacy",
+          "note": "P2-4: E2EE_LEGACY_DEVICE must be reachable. POST /devices cannot address an existing legacy device (no device_id in the body), so the code is returned by POST /devices/{deviceId}/prekeys for a legacy target: 422 E2EE_LEGACY_DEVICE with details.remedy=register_new_device. Claim still reports such a device as unavailable[reason=NO_KEYS]; the two codes have disjoint scopes.",
+          "inputs": {
+            "operation": "POST /devices/{deviceId}/prekeys",
+            "target_device_id": "00000000-0000-4000-8000-000000000011",
+            "status": "ACTIVE",
+            "e2ee_capable": false,
+            "identity_key_alg": "LEGACY",
+            "has_identity_keys": false
+          },
+          "expected": {
+            "http_status": 422,
+            "code": "E2EE_LEGACY_DEVICE",
+            "details": {
+              "device_id": "00000000-0000-4000-8000-000000000011",
+              "remedy": "register_new_device"
+            },
+            "prekeys_stored": false,
+            "device_upgraded_in_place": false,
+            "claim_reason_for_same_device": "NO_KEYS",
+            "server_error_500": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "R-plaintext-fields",
+      "title": "Plaintext fields in E2EE: reply_to_id and server-forged text (P1-F/P2-13)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "R1-e2ee-reply-to-id-rejected",
+          "kind": "plaintext_field_rejection",
+          "note": "P1-F: reply_to_id is allowed ONLY inside the encrypted inner payload. A top-level reply_to_id in MessageCreate for an E2EE chat leaks plaintext metadata and is rejected 422 E2EE_PLAINTEXT_FORBIDDEN (details.field=reply_to_id) before Message/seq creation; the DB CHECK ck_messages_e2ee_no_reply_to_id is the second line. reply_to_id is NOT part of AD and does not change the envelope wire format.",
+          "inputs": {
+            "chat_id": "00000000-0000-4000-8000-000000000100",
+            "chat_security_mode": "E2EE",
+            "client_message_id": "3f0c4a2e-8d1b-4c1a-9e2f-2b7a6d5c4e10",
+            "type": "TEXT",
+            "reply_to_id": "8b0f3c1d-2e4a-4b6c-8d0e-1f2a3b4c5d6e",
+            "envelopes_count": 1,
+            "envelope_source": "F1-envelope-prekey",
+            "reply_to_id_in_inner_payload_allowed": true,
+            "inner_payload_content_type": 1,
+            "ad_fields": [
+              "envelope.v",
+              "flags",
+              "chat_id",
+              "sender_device_id",
+              "sender_key_generation",
+              "recipient_device_id",
+              "recipient_key_generation",
+              "session_id",
+              "preamble_hash",
+              "header"
+            ]
+          },
+          "expected": {
+            "http_status": 422,
+            "code": "E2EE_PLAINTEXT_FORBIDDEN",
+            "details_field": "reply_to_id",
+            "message_created": false,
+            "seq_allocated": false,
+            "stored_reply_to_id": null,
+            "db_check": "ck_messages_e2ee_no_reply_to_id",
+            "reply_allowed_inside_inner_payload": true,
+            "ad_includes_reply_to_id": false,
+            "envelope_wire_version": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "S-fs-pcs",
+      "title": "FS/PCS window and key destruction (P1-D)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "S1-fs-pcs-key-destruction",
+          "kind": "fs_pcs_state",
+          "note": "P1-D: exactly one semantics for the FS window. SPK private retention is current + 2 previous = 3, window 90 days; '2 total / 60 days' is invalid. OPK private is destroyed immediately after successful AEAD; the old DHs_priv is destroyed right after the DH ratchet (only the current pair is kept); MKSKIPPED is TTL/limit bounded. PCS is only after a reply DH ratchet, not instant; SESSION_IDLE_TTL is GC, not an FS boundary. Zeroization is best-effort JS and is stated honestly.",
+          "inputs": {
+            "spk_current": 1,
+            "spk_previous": 2,
+            "spk_retain_private_total": 3,
+            "spk_ttl_days": 30,
+            "spk_retention_ttl_days": 90,
+            "spk_ttl_field_semantics": "rotation interval (legacy field name); private-SPK retention is spk_retain_window_days",
+            "spk_retain_window_days": 90,
+            "total_spk_rotations": 4,
+            "opk_private_destroy": "immediately_after_successful_aead",
+            "old_dhs_destroy": "immediately_after_dh_ratchet",
+            "dh_ratchet_history_retained": 0,
+            "mkskipped_ttl_days": 30,
+            "mkskipped_max_total": 2000,
+            "mkskipped_max_per_chain": 1000,
+            "session_idle_ttl_days": 90,
+            "pcs": "after_reply_dh_ratchet"
+          },
+          "expected": {
+            "spk_private_after_4_rotations": 3,
+            "oldest_spk_deleted": true,
+            "storage_contains_old_dhs": false,
+            "storage_contains_consumed_opk": false,
+            "prekey_with_deleted_spk": "KEY_HANDSHAKE_INVALID",
+            "prekey_with_deleted_spk_action": "SESSION_RESET",
+            "fs_window_days": 90,
+            "pcs_instant": false,
+            "session_idle_ttl_is_fs_boundary": false,
+            "zeroization": "best_effort (delete IndexedDB record, overwrite raw buffers, drop refs)",
+            "test": "storage scan after N ratchets/rotations + state-machine test"
+          }
+        }
+      ]
+    },
+    {
+      "id": "O-kstorage-aad",
+      "title": "K_storage 50-byte AAD layout, injectivity and pin scope (E7-F2G P1-07/P2-18)",
+      "normative": true,
+      "vectors": [
+        {
+          "id": "O1-kstorage-aad-kat",
+          "kind": "kstorage_aad_kat",
+          "note": "Normative fixed-width 50-byte AAD (docs/E2EE-SPEC.md §2.3.1): owner device UUID (RFC 4122 bytes) || session_id (16-byte protocol id, or 0x16 sentinel) || client_message_id UUID (or 0x16) || record_type u8 || LOCAL_RECORD_VERSION u8 (=1). Fixed AES-256-GCM key/nonce/plaintext; the expected ciphertext||tag must match byte-for-byte. The key is a public KAT value and must never be used by a client.",
+          "inputs": {
+            "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+            "owner_device_id": "11111111-1111-4111-8111-111111111111",
+            "session_id_b64u": "IiIiIiIiIiIiIiIiIiIiIg",
+            "client_message_id": "33333333-3333-4333-8333-333333333333",
+            "record_type": "session",
+            "record_type_code": 1,
+            "local_record_version": 1,
+            "nonce_hex": "000102030405060708090a0b",
+            "plaintext_utf8": "K_storage KAT v1"
+          },
+          "expected": {
+            "aad_len": 50,
+            "aad_offsets": {
+              "deviceId": 0,
+              "sessionId": 16,
+              "clientMessageId": 32,
+              "recordType": 48,
+              "version": 49
+            },
+            "aad_hex": "1111111111114111811111111111111122222222222222222222222222222222333333333333433383333333333333330101",
+            "ciphertext_hex_with_tag": "0c5da56faa97a37ce861dccae5c90e5cc22c1e5e0c3e4e636599666700217eae",
+            "plaintext_utf8": "K_storage KAT v1"
+          }
+        },
+        {
+          "id": "O2-kstorage-aad-injectivity",
+          "kind": "kstorage_aad_injectivity",
+          "note": "Absent optional ids are encoded as 16 zero bytes; a present id is never all-zero. buildKStorageAad rejects nil UUIDs and all-zero session/client ids, so the zero sentinel is unambiguous and two different logical scopes cannot produce the same 50-byte AAD.",
+          "inputs": {
+            "owner_device_id": "11111111-1111-4111-8111-111111111111",
+            "record_type": "localCopy",
+            "record_type_code": 3,
+            "local_record_version": 1
+          },
+          "expected": {
+            "absent_ids_aad_hex": "1111111111114111811111111111111100000000000000000000000000000000000000000000000000000000000000000301",
+            "zero_sentinel_hex": "00000000000000000000000000000000",
+            "nil_uuid_rejected": true,
+            "zero_session_id_rejected": true,
+            "nil_client_message_id_rejected": true,
+            "nil_owner_device_id_rejected": true,
+            "null_and_nil_share_aad": false
+          }
+        },
+        {
+          "id": "O3-pin-aad-scope",
+          "kind": "kstorage_pin_aad",
+          "note": "Normative pin AAD slots (docs/E2EE-SPEC.md §2.3.2, CR1b P2-18). The same 50-byte layout is reused: session_id carries the target device UUID and client_message_id the owner user UUID for pin/key-change; modePin carries the chat UUID and 0x16 for the user slot. record_type separates pin=4, keyChange=5, modePin=6.",
+          "inputs": {
+            "owner_device_id": "33333333-3333-4333-8333-333333333333",
+            "target_user_id": "22222222-2222-4222-8222-222222222222",
+            "target_device_id": "44444444-4444-4444-8444-444444444444",
+            "chat_id": "66666666-6666-4666-8666-666666666666",
+            "pin_record_type_code": 4,
+            "key_change_record_type_code": 5,
+            "mode_pin_record_type_code": 6,
+            "local_record_version": 1
+          },
+          "expected": {
+            "pin_aad_hex": "3333333333334333833333333333333344444444444444448444444444444444222222222222422282222222222222220401",
+            "key_change_aad_hex": "3333333333334333833333333333333344444444444444448444444444444444222222222222422282222222222222220501",
+            "mode_pin_aad_hex": "3333333333334333833333333333333366666666666646668666666666666666000000000000000000000000000000000601"
+          }
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "sections": 18,
+    "vectors": 48,
+    "normative_sections": [
+      "A-primitives",
+      "B-x3dh",
+      "C-kdf",
+      "D-aead",
+      "E-double-ratchet",
+      "E2-skipped-keys",
+      "F-envelope",
+      "G-verification",
+      "I-tofu",
+      "J-security-mode",
+      "K-client-message-id",
+      "L-session-reset",
+      "M-envelope-coverage",
+      "N-device-registration",
+      "R-plaintext-fields",
+      "S-fs-pcs",
+      "O-kstorage-aad"
+    ],
+    "informative_sections": [
+      "H-sender-key"
+    ]
+  }
+}

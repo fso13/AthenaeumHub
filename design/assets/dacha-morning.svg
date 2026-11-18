@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 480" width="720" height="480" role="img" aria-label="Утро на даче: туман, холмы, домик с терракотовой крышей и солнце">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F4E7D2"/>
+      <stop offset=".55" stop-color="#EDE3CE"/>
+      <stop offset="1" stop-color="#DDE2CE"/>
+    </linearGradient>
+    <linearGradient id="hill1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A8B79C"/>
+      <stop offset="1" stop-color="#8DA084"/>
+    </linearGradient>
+    <linearGradient id="hill2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6F8872"/>
+      <stop offset="1" stop-color="#5A7260"/>
+    </linearGradient>
+    <linearGradient id="hill3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#48604F"/>
+      <stop offset="1" stop-color="#354A3D"/>
+    </linearGradient>
+    <radialGradient id="sun" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#F8E3B8"/>
+      <stop offset=".55" stop-color="#EBCB92"/>
+      <stop offset="1" stop-color="#E5BF7F" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch" result="n"/>
+      <feColorMatrix in="n" type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.05"/></feComponentTransfer>
+    </filter>
+  </defs>
+
+  <rect width="720" height="480" fill="url(#sky)"/>
+  <circle cx="548" cy="126" r="128" fill="url(#sun)"/>
+  <circle cx="548" cy="126" r="42" fill="#F4DBA7" opacity=".9"/>
+
+  <!-- дальние холмы -->
+  <path d="M0 306c84-44 146-52 232-22 68 24 118 12 178-16 92-44 192-40 310 10v202H0Z" fill="url(#hill1)"/>
+  <!-- туман -->
+  <path d="M0 330c120-18 202-6 300 8 128 18 226 6 420-16v22c-180 22-290 32-424 14C186 342 110 334 0 352Z" fill="#F6EFE1" opacity=".55"/>
+
+  <!-- средний план -->
+  <path d="M0 366c96-38 168-32 252-6 74 22 142 18 228-10 84-28 156-24 240 6v124H0Z" fill="url(#hill2)"/>
+
+  <!-- дом -->
+  <g>
+    <rect x="300" y="300" width="118" height="72" rx="2" fill="#EFE2C9"/>
+    <path d="M288 302 359 256l71 46Z" fill="#A75A41"/>
+    <path d="M288 302 359 256l71 46" fill="none" stroke="#894330" stroke-width="2"/>
+    <rect x="327" y="330" width="26" height="42" rx="2" fill="#5B4433"/>
+    <rect x="372" y="322" width="24" height="21" rx="2" fill="#D9C9A8"/>
+    <path d="M384 322v21M372 332.5h24" stroke="#7A6249" stroke-width="1.2"/>
+    <rect x="392" y="270" width="12" height="26" fill="#8C6A4E"/>
+    <path d="M392 270c-10-8-2-18 5-22 8 9 10 17 7 22Z" fill="#D8C7A6" opacity=".7"/>
+  </g>
+
+  <!-- деревья -->
+  <g fill="#435B4A">
+    <path d="M126 414c-2-34-1-58 2-82m-2 26c-16-12-26-4-30 8 12 4 22 2 30-8Zm3-20c14-12 24-6 28 6-12 5-22 2-28-6Z" stroke="#3C5343" stroke-width="5" stroke-linecap="round" fill="none"/>
+    <circle cx="112" cy="290" r="30" opacity=".85"/>
+    <circle cx="144" cy="302" r="24" opacity=".7"/>
+    <circle cx="96" cy="318" r="20" opacity=".6"/>
+  </g>
+  <g fill="#4E6754" opacity=".9">
+    <path d="M612 420v-92" stroke="#435B4A" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="600" cy="316" r="26"/>
+    <circle cx="630" cy="328" r="22"/>
+    <circle cx="620" cy="298" r="18"/>
+  </g>
+
+  <!-- передний план -->
+  <path d="M0 420c120-22 210-18 320 0 132 22 250 20 400-4v64H0Z" fill="url(#hill3)"/>
+
+  <!-- забор -->
+  <g stroke="#D8C7A6" stroke-opacity=".55" stroke-width="2.4" stroke-linecap="round">
+    <path d="M456 414v-38M480 416v-40M504 418v-40M528 418v-38M552 420v-36"/>
+    <path d="M448 392h114M448 402h114"/>
+  </g>
+
+  <!-- дорожка -->
+  <path d="M356 430c30 18 88 20 140 4" fill="none" stroke="#D8C7A6" stroke-width="10" stroke-linecap="round" opacity=".22"/>
+
+  <!-- птицы -->
+  <g stroke="#6A6552" stroke-width="1.5" fill="none" opacity=".6" stroke-linecap="round">
+    <path d="M226 138c5-5 9-5 13 0 4-5 8-5 13 0"/>
+    <path d="M268 162c4-4 7-4 10 0 3-4 6-4 10 0"/>
+  </g>
+
+  <rect width="720" height="480" filter="url(#grain)" opacity=".9"/>
+</svg>

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 480" width="720" height="480" role="img" aria-label="Мудборд: тёплая композиция из терракотовой арки, зелёного прямоугольника и песка">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F3EBDD"/>
+      <stop offset="1" stop-color="#E4D8C4"/>
+    </linearGradient>
+    <linearGradient id="clay" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#C97C5C"/>
+      <stop offset="1" stop-color="#A6553C"/>
+    </linearGradient>
+    <linearGradient id="sage" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#59735F"/>
+      <stop offset="1" stop-color="#3B5547"/>
+    </linearGradient>
+    <linearGradient id="sand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E7CFA6"/>
+      <stop offset="1" stop-color="#D3B584"/>
+    </linearGradient>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch" result="noise"/>
+      <feColorMatrix in="noise" type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.055"/></feComponentTransfer>
+    </filter>
+  </defs>
+
+  <rect width="720" height="480" fill="url(#bg)"/>
+
+  <!-- крупные формы -->
+  <path d="M78 420V232c0-55 44-99 99-99s99 44 99 99v188Z" fill="url(#clay)"/>
+  <path d="M78 420V232c0-55 44-99 99-99" fill="none" stroke="#7E3E2B" stroke-opacity=".35" stroke-width="1.2"/>
+  <rect x="332" y="92" width="228" height="328" rx="26" fill="url(#sage)"/>
+  <circle cx="522" cy="164" r="56" fill="#EFE3CE" fill-opacity=".92"/>
+  <circle cx="522" cy="164" r="56" fill="none" stroke="#24362D" stroke-opacity=".15"/>
+
+  <rect x="332" y="318" width="228" height="102" fill="#2E463B" fill-opacity=".35"/>
+
+  <circle cx="621" cy="344" r="42" fill="url(#sand)"/>
+  <rect x="252" y="368" width="120" height="6" rx="3" fill="#2A3A32" fill-opacity=".75"/>
+  <rect x="252" y="388" width="76" height="6" rx="3" fill="#2A3A32" fill-opacity=".45"/>
+  <rect x="252" y="408" width="96" height="6" rx="3" fill="#2A3A32" fill-opacity=".25"/>
+
+  <path d="M596 92v56M596 92h56" stroke="#2A3A32" stroke-opacity=".4" stroke-width="1.4"/>
+  <circle cx="596" cy="148" r="2.6" fill="#2A3A32" fill-opacity=".5"/>
+  <circle cx="652" cy="92" r="2.6" fill="#2A3A32" fill-opacity=".5"/>
+
+  <path d="M272 206c38-24 58-24 96 0" fill="none" stroke="#E9D8BE" stroke-opacity=".55" stroke-width="1.3"/>
+  <path d="M272 218c38-24 58-24 96 0" fill="none" stroke="#E9D8BE" stroke-opacity=".3" stroke-width="1.3"/>
+
+  <rect width="720" height="480" filter="url(#grain)" opacity=".9"/>
+</svg>

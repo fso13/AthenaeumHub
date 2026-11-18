@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="128" viewBox="0 0 160 128" role="img" aria-label="Макет дизайн-системы">
+  <rect width="160" height="128" fill="#F4F0E3"/>
+  <g>
+    <rect x="14" y="14" width="34" height="34" rx="6" fill="#65BD45"/>
+    <rect x="54" y="14" width="34" height="34" rx="6" fill="#E8E0CD"/>
+    <rect x="94" y="14" width="52" height="34" rx="6" fill="#1C2A21"/>
+    <rect x="14" y="54" width="34" height="20" rx="5" fill="#E8E0CD"/>
+    <rect x="14" y="80" width="34" height="34" rx="6" fill="#D9A441"/>
+    <rect x="54" y="54" width="92" height="14" rx="7" fill="#DCD4C1"/>
+    <rect x="54" y="74" width="66" height="10" rx="5" fill="#CFC6B1"/>
+    <rect x="54" y="90" width="78" height="24" rx="6" fill="#FFFFFF"/>
+    <rect x="62" y="98" width="28" height="8" rx="4" fill="#65BD45"/>
+  </g>
+</svg>

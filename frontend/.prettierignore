@@ -1,0 +1,12 @@
+dist
+coverage
+node_modules
+package-lock.json
+public/mockServiceWorker.js
+playwright-report
+test-results
+.npm-cache
+.playwright-browsers
+.pw-tmp
+.pw-home
+src/api/schema.d.ts

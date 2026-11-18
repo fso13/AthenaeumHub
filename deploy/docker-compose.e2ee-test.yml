@@ -1,0 +1,15 @@
+# Test-only overlay: enables E2EE on backend and rebuilds the SPA with E2EE UI.
+# NEVER use this overlay in production.
+#
+#   docker compose --env-file .env \
+#     -f docker-compose.yml -f docker-compose.e2ee-test.yml up -d --build
+#
+# The base stack keeps KRUG_E2EE_ENABLED=false and VITE_E2EE_ENABLED=false.
+services:
+  backend:
+    environment:
+      KRUG_E2EE_ENABLED: "true"
+  frontend:
+    build:
+      args:
+        VITE_E2EE_ENABLED: "true"

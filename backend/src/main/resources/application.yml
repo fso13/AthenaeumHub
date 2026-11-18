@@ -1,0 +1,232 @@
+server:
+  port: ${SERVER_PORT:8081}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+spring:
+  application:
+    name: krug-backend
+  profiles:
+    # Local `mvn spring-boot:run` / `java -jar` uses the dev profile unless told otherwise.
+    default: dev
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/krug}
+    username: ${DB_USER:krug_app}
+    password: ${DB_PASSWORD:krug_app}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: 1
+      # The runtime role krug_app is created by the first Flyway migration, so the
+      # pool must not fail fast if it starts before the migration has run.
+      initialization-fail-timeout: -1
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    url: ${FLYWAY_URL:${DB_URL:jdbc:postgresql://localhost:5432/krug}}
+    user: ${FLYWAY_USER:krug_migrator}
+    password: ${FLYWAY_PASSWORD:krug_migrator}
+    locations: classpath:db/migration
+    clean-disabled: true
+    validate-on-migrate: true
+    baseline-on-migrate: false
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: always
+  # Auth BFF email TOTP. Dev uses Mailpit (compose: mailpit:1025, UI :8025).
+  # Prod must override with an external SMTP relay; credentials via SPRING_MAIL_*.
+  mail:
+    host: ${SPRING_MAIL_HOST:localhost}
+    port: ${SPRING_MAIL_PORT:1025}
+    username: ${SPRING_MAIL_USERNAME:}
+    password: ${SPRING_MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SPRING_MAIL_SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${SPRING_MAIL_SMTP_STARTTLS:false}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+  mvc:
+    throw-exception-if-no-handler-found: true
+  web:
+    resources:
+      add-mappings: false
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%X{request_id:-}] %logger{36} - %msg%n"
+  level:
+    root: INFO
+    ru.krug.backend: INFO
+    org.springframework.jdbc.core: WARN
+
+krug:
+  auth:
+    # HMAC-SHA256 dev key. MUST be replaced in prod (Keycloak resource server later).
+    jwt-secret: ${KRUG_AUTH_JWT_SECRET:dev-only-jwt-secret-change-me-32-bytes-min}
+    issuer: ${KRUG_AUTH_ISSUER:krug-dev}
+    audience: ${KRUG_AUTH_AUDIENCE:krug-api}
+    access-token-ttl: ${KRUG_AUTH_TTL:15m}
+  # Auth BFF: own login/register forms; browser never talks to Keycloak.
+  # The backend proxies Keycloak Admin API/token endpoint and sends email TOTP codes.
+  auth-bff:
+    registration-enabled: ${KRUG_AUTH_BFF_REGISTRATION_ENABLED:true}
+    # Only enable behind a trusted reverse proxy that overwrites X-Forwarded-For.
+    trust-forwarded-for: ${KRUG_AUTH_BFF_TRUST_XFF:false}
+    pending-session-ttl: ${KRUG_AUTH_BFF_PENDING_SESSION_TTL:15m}
+    keycloak:
+      # Blank in the keycloak/prod profile: derived from krug.oidc.issuer (internal URL).
+      base-url: ${KRUG_KEYCLOAK_URL:http://localhost:8180}
+      realm: ${KRUG_KEYCLOAK_REALM:krug}
+      admin-realm: ${KRUG_KEYCLOAK_ADMIN_REALM:master}
+      admin-username: ${KC_ADMIN_USER:admin}
+      admin-password: ${KC_ADMIN_PASSWORD:}
+      admin-client-id: ${KC_ADMIN_CLIENT_ID:admin-cli}
+      client-id: ${KRUG_AUTH_BFF_CLIENT_ID:krug-web}
+      connect-timeout: ${KRUG_KEYCLOAK_CONNECT_TIMEOUT:5s}
+      read-timeout: ${KRUG_KEYCLOAK_READ_TIMEOUT:10s}
+      admin-token-skew: ${KRUG_KEYCLOAK_ADMIN_TOKEN_SKEW:30s}
+    mail:
+      from: ${KRUG_MAIL_FROM:no-reply@krug.local}
+    code:
+      expiry: ${KRUG_AUTH_BFF_CODE_EXPIRY:10m}
+      resend-cooldown: ${KRUG_AUTH_BFF_RESEND_COOLDOWN:60s}
+      max-attempts: ${KRUG_AUTH_BFF_MAX_ATTEMPTS:5}
+      # RFC 6238 window: accept the previous/next N 30-second steps (±5 = 5 min).
+      window: ${KRUG_AUTH_BFF_TOTP_WINDOW:5}
+      # Dedicated key for the encrypted TOTP secret; falls back to the content key.
+      secret-key: ${KRUG_AUTH_BFF_EMAIL_SECRET_KEY:${KRUG_CONTENT_KEY:dev-only-content-key-change-me-32-bytes}}
+    rate-limit:
+      enabled: ${KRUG_AUTH_BFF_RATE_LIMIT_ENABLED:true}
+      register-per-email: ${KRUG_AUTH_BFF_REGISTER_PER_EMAIL:5}
+      register-email-window: ${KRUG_AUTH_BFF_REGISTER_EMAIL_WINDOW:1h}
+      register-per-ip: ${KRUG_AUTH_BFF_REGISTER_PER_IP:20}
+      register-ip-window: ${KRUG_AUTH_BFF_REGISTER_IP_WINDOW:1h}
+      login-per-email: ${KRUG_AUTH_BFF_LOGIN_PER_EMAIL:10}
+      login-email-window: ${KRUG_AUTH_BFF_LOGIN_EMAIL_WINDOW:1m}
+      login-per-ip: ${KRUG_AUTH_BFF_LOGIN_PER_IP:30}
+      login-ip-window: ${KRUG_AUTH_BFF_LOGIN_IP_WINDOW:1m}
+      resend-per-email: ${KRUG_AUTH_BFF_RESEND_PER_EMAIL:5}
+      resend-email-window: ${KRUG_AUTH_BFF_RESEND_EMAIL_WINDOW:10m}
+      resend-per-ip: ${KRUG_AUTH_BFF_RESEND_PER_IP:10}
+      resend-ip-window: ${KRUG_AUTH_BFF_RESEND_IP_WINDOW:10m}
+    cleanup:
+      enabled: ${KRUG_AUTH_BFF_CLEANUP_ENABLED:true}
+      poll-interval: ${KRUG_AUTH_BFF_CLEANUP_POLL_INTERVAL:10m}
+      initial-delay: ${KRUG_AUTH_BFF_CLEANUP_INITIAL_DELAY:2m}
+      batch-size: ${KRUG_AUTH_BFF_CLEANUP_BATCH_SIZE:200}
+      consumed-retention: ${KRUG_AUTH_BFF_CLEANUP_CONSUMED_RETENTION:24h}
+  content:
+    # AES-256-GCM key material for managed message bodies (hashed to 32 bytes).
+    # KMS envelope encryption is out of scope for B-01; this is the local stand-in.
+    key: ${KRUG_CONTENT_KEY:dev-only-content-key-change-me-32-bytes}
+  dev:
+    default-display-name: ${KRUG_DEV_DISPLAY_NAME:Дмитрий}
+    workspace-name: ${KRUG_DEV_WORKSPACE_NAME:Дев-воркспейс}
+    chat-name: ${KRUG_DEV_CHAT_NAME:Общий чат}
+  rate-limit:
+    enabled: ${KRUG_RATE_LIMIT_ENABLED:true}
+    send-per-user: ${KRUG_RATE_LIMIT_SEND_PER_USER:30}
+    send-user-window: ${KRUG_RATE_LIMIT_SEND_USER_WINDOW:10s}
+    send-per-chat: ${KRUG_RATE_LIMIT_SEND_PER_CHAT:5}
+    send-chat-window: ${KRUG_RATE_LIMIT_SEND_CHAT_WINDOW:1s}
+    # E7-B1F P1-01: POST /keys/claim is not idempotent (each call may consume one OPK).
+    # Windows are independent from the message-send windows.
+    claim-per-user: ${KRUG_RATE_LIMIT_CLAIM_PER_USER:60}
+    claim-user-window: ${KRUG_RATE_LIMIT_CLAIM_USER_WINDOW:60s}
+    claim-per-chat: ${KRUG_RATE_LIMIT_CLAIM_PER_CHAT:10}
+    claim-chat-window: ${KRUG_RATE_LIMIT_CLAIM_CHAT_WINDOW:60s}
+  outbox:
+    relay:
+      enabled: ${KRUG_OUTBOX_RELAY_ENABLED:true}
+      poll-interval: ${KRUG_OUTBOX_RELAY_POLL_INTERVAL:2s}
+      batch-size: ${KRUG_OUTBOX_RELAY_BATCH_SIZE:500}
+  # B-02 retention/GC. The stale in-progress timeout is also used by idempotency recovery.
+  retention:
+    enabled: ${KRUG_RETENTION_ENABLED:true}
+    poll-interval: ${KRUG_RETENTION_POLL_INTERVAL:10m}
+    batch-size: ${KRUG_RETENTION_BATCH_SIZE:500}
+    idempotency-in-progress-timeout: ${KRUG_RETENTION_IN_PROGRESS_TIMEOUT:1h}
+    outbox-retention: ${KRUG_RETENTION_OUTBOX:7d}
+    ticket-retention: ${KRUG_RETENTION_TICKETS:1d}
+  realtime:
+    # E3 single-node WebSocket slice. Behind a reverse proxy use wss://... here.
+    ws-url: "${KRUG_REALTIME_WS_URL:ws://localhost:8081/ws}"
+    # WS Origin allowlist (comma-separated). Never '*'; the Vite dev origin is allowed.
+    allowed-origins: "${KRUG_WS_ALLOWED_ORIGINS:http://localhost:5173}"
+    ticket-ttl: ${KRUG_REALTIME_TICKET_TTL:30s}
+    max-subscriptions: ${KRUG_REALTIME_MAX_SUBSCRIPTIONS:200}
+    replay-limit: ${KRUG_REALTIME_REPLAY_LIMIT:500}
+    outbound-queue-capacity: ${KRUG_REALTIME_OUTBOUND_QUEUE_CAPACITY:256}
+    heartbeat-interval: ${KRUG_REALTIME_HEARTBEAT_INTERVAL:25s}
+    heartbeat-timeout: ${KRUG_REALTIME_HEARTBEAT_TIMEOUT:60s}
+    typing-ttl: ${KRUG_REALTIME_TYPING_TTL:5s}
+    presence-ttl: ${KRUG_REALTIME_PRESENCE_TTL:60s}
+  # OIDC resource-server settings (keycloak/prod profiles). Blank here so the dev HMAC
+  # decoder is completely independent; the keycloak profile supplies local defaults and
+  # prod requires the environment variables (fail fast).
+  oidc:
+    issuer: ${KRUG_OIDC_ISSUER:}
+    jwk-set-uri: ${KRUG_OIDC_JWKS_URI:}
+    audience: ${KRUG_OIDC_AUDIENCE:krug-api}
+    authorized-party: ${KRUG_OIDC_AZP:krug-web}
+    clock-skew: ${KRUG_OIDC_CLOCK_SKEW:30s}
+  # E5-B: built-in sticker catalog. Stored URLs are relative paths served by the web
+  # client; set asset-base-url to a CDN prefix in a real deployment.
+  stickers:
+    asset-base-url: ${KRUG_STICKERS_ASSET_BASE_URL:}
+  # E7-B1: E2EE feature flag (G4 gate). Off: E2EE chat/send -> 409 E2EE_DISABLED;
+  # device key registration/prekeys/claim and read-only keys stay available.
+  e2ee:
+    enabled: ${KRUG_E2EE_ENABLED:false}
+    # E7-B3F3 P2-11: bounded retention for the V19 envelope quarantine. The runtime role
+    # can only execute the SECURITY DEFINER function; it has no table access.
+    quarantine-retention-enabled: ${KRUG_E2EE_QUARANTINE_RETENTION_ENABLED:true}
+    quarantine-retention-days: ${KRUG_E2EE_QUARANTINE_RETENTION_DAYS:90}
+    quarantine-retention-poll-interval: ${KRUG_E2EE_QUARANTINE_RETENTION_POLL_INTERVAL:24h}
+  # E6-B: in-app notifications. Body is never stored; email is a dev log stub.
+  notifications:
+    retention-enabled: ${KRUG_NOTIFICATIONS_RETENTION_ENABLED:true}
+    retention-days: ${KRUG_NOTIFICATIONS_RETENTION_DAYS:90}
+    retention-batch-size: ${KRUG_NOTIFICATIONS_RETENTION_BATCH_SIZE:500}
+    retention-poll-interval: ${KRUG_NOTIFICATIONS_RETENTION_POLL_INTERVAL:10m}
+  # E4-B: managed files. S3/MinIO is used for multipart objects; parts always go through
+  # the API. Downloads are presigned GET URLs with a 5 minute TTL.
+  files:
+    storage: ${S3_STORAGE:s3}               # s3 | memory (memory only for tests)
+    bucket: ${S3_BUCKET:krug}
+    region: ${S3_REGION:us-east-1}
+    endpoint: ${S3_ENDPOINT:http://localhost:9002}
+    # Public host used only for presigned GET URLs (browser-visible); blank = endpoint.
+    public-endpoint: ${S3_PUBLIC_ENDPOINT:}
+    access-key: ${S3_ACCESS_KEY:minioadmin}
+    secret-key: ${S3_SECRET_KEY:minioadmin}
+    path-style: ${S3_PATH_STYLE:true}
+    upload-ttl: ${KRUG_FILES_UPLOAD_TTL:24h}
+    download-ttl: ${KRUG_FILES_DOWNLOAD_TTL:5m}
+    scan-mode: ${S3_SCAN_MODE:noop}         # noop (dev) | clamav
+    noop-fail-marker: ${S3_SCAN_FAIL_MARKER:}
+    clamav-host: ${CLAMAV_HOST:localhost}
+    clamav-port: ${CLAMAV_PORT:3310}
+    scan-enabled: ${KRUG_FILES_SCAN_ENABLED:true}
+    scan-poll-interval: ${KRUG_FILES_SCAN_POLL_INTERVAL:2s}
+    scan-initial-delay: ${KRUG_FILES_SCAN_INITIAL_DELAY:3s}
+    scan-batch-size: ${KRUG_FILES_SCAN_BATCH_SIZE:50}
+    gc-enabled: ${KRUG_FILES_GC_ENABLED:true}
+    gc-poll-interval: ${KRUG_FILES_GC_POLL_INTERVAL:10m}
+    gc-initial-delay: ${KRUG_FILES_GC_INITIAL_DELAY:1m}
+    gc-batch-size: ${KRUG_FILES_GC_BATCH_SIZE:100}
+    reconcile-enabled: ${KRUG_FILES_RECONCILE_ENABLED:true}
+    reconcile-initial-delay: ${KRUG_FILES_RECONCILE_INITIAL_DELAY:1m}
+    reconcile-interval: ${KRUG_FILES_RECONCILE_INTERVAL:24h}
+    reconcile-batch-size: ${KRUG_FILES_RECONCILE_BATCH_SIZE:1000}

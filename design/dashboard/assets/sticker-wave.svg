@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-label="Стикер «Огурец машет»">
+  <defs>
+    <linearGradient id="st-body" x1="0.15" y1="0.05" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#B7EE8B"/>
+      <stop offset="0.45" stop-color="#6FC94A"/>
+      <stop offset="1" stop-color="#3E8E3E"/>
+    </linearGradient>
+    <linearGradient id="st-arm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5FB63F"/>
+      <stop offset="1" stop-color="#357E35"/>
+    </linearGradient>
+    <radialGradient id="st-blush" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F49B7B" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#F49B7B" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="104" cy="178" rx="52" ry="9" fill="#1C2A21" opacity="0.10"/>
+  <path d="M104 22 C 142 22 166 50 166 88 C 166 128 142 158 104 158 C 66 158 42 128 42 88 C 42 50 66 22 104 22 Z" fill="url(#st-body)"/>
+  <path d="M104 22 C 128 22 148 38 158 62 C 138 52 118 48 100 52 C 80 56 64 68 54 84 C 50 62 64 30 104 22 Z" fill="#FFFFFF" opacity="0.22"/>
+  <g fill="#D9FCA8" opacity="0.32">
+    <circle cx="72" cy="58" r="5"/>
+    <circle cx="138" cy="70" r="4"/>
+    <circle cx="66" cy="112" r="3.4"/>
+    <circle cx="142" cy="118" r="4.2"/>
+    <circle cx="100" cy="140" r="3"/>
+  </g>
+  <g>
+    <ellipse cx="84" cy="86" rx="8.5" ry="10" fill="#183020"/>
+    <ellipse cx="126" cy="86" rx="8.5" ry="10" fill="#183020"/>
+    <circle cx="87" cy="82" r="3" fill="#FFFFFF" opacity="0.95"/>
+    <circle cx="129" cy="82" r="3" fill="#FFFFFF" opacity="0.95"/>
+    <circle cx="81" cy="90" r="1.6" fill="#FFFFFF" opacity="0.5"/>
+    <circle cx="123" cy="90" r="1.6" fill="#FFFFFF" opacity="0.5"/>
+  </g>
+  <path d="M92 104 C 98 112 112 112 118 104" fill="none" stroke="#183020" stroke-width="4.4" stroke-linecap="round"/>
+  <ellipse cx="66" cy="103" rx="11" ry="7" fill="url(#st-blush)"/>
+  <ellipse cx="144" cy="103" rx="11" ry="7" fill="url(#st-blush)"/>
+  <path d="M44 96 C 28 98 20 108 18 120" fill="none" stroke="url(#st-arm)" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="17" cy="122" r="7" fill="#5FB63F"/>
+  <path d="M160 100 C 172 104 176 112 174 120" fill="none" stroke="url(#st-arm)" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="174" cy="122" r="7" fill="#5FB63F"/>
+  <path d="M172 44 C 180 34 194 38 194 48 C 194 58 182 66 172 74 C 162 66 150 58 150 48 C 150 38 164 34 172 44 Z" fill="#E85D4A"/>
+  <path d="M166 44 C 168 40 174 40 176 44" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+</svg>

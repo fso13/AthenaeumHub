@@ -1,0 +1,118 @@
+# Local PostgreSQL 16 for the Krug backend (B-01).
+#   docker compose up -d
+#   mvn spring-boot:run          # profile dev is the default
+#
+# The database is initialised by the `krug_migrator` superuser. Flyway creates the
+# unprivileged `krug_app` role used by the application at runtime (see V1 migration).
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: krug-postgres
+    environment:
+      POSTGRES_DB: krug
+      POSTGRES_USER: krug_migrator
+      POSTGRES_PASSWORD: krug_migrator
+      # Keep timestamps deterministic for humans reading the DB.
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - krug-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U krug_migrator -d krug"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Keycloak 26.2 for the `keycloak` backend profile (B-04); prompt=create needs 26.2+. The realm is imported on the
+  # first start from infra/keycloak/realm-export.json. Port 8080 inside the container is
+  # published as 8180 because 8080 is occupied by another project in this environment.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: krug-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      TZ: UTC
+    ports:
+      - "8180:8080"
+      - "9000:9000"
+    volumes:
+      - ../infra/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - krug-keycloak-data:/opt/keycloak/data
+    healthcheck:
+      # The Keycloak image has bash but not necessarily curl; /dev/tcp is enough.
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; cat <&3 | grep -q '200 OK'"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Auth BFF dev SMTP sink. Verification emails (6-digit TOTP) appear at
+  # http://localhost:8025; the backend defaults to localhost:1025.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: krug-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"   # web UI
+      - "1025:1025"   # SMTP
+    environment:
+      TZ: UTC
+
+  # E4-B managed files: S3-compatible object storage. Port 9000 inside the container is
+  # published as 9002 (API) and console as 9003 because 9000/9001 are used by other local
+  # services in this environment. Bucket `krug` is created by the one-shot minio-init.
+  #
+  # NOTE: MinIO periodically withdraws community Docker Hub tags. If this exact tag cannot
+  # be pulled, pin a released tag that is available in your registry; the backend contract
+  # (S3 multipart + presigned GET) is unchanged. LocalStack S3 also works as a drop-in for
+  # local verification.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: krug-minio
+    command: ["server", "/data", "--console-address", ":9003"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      TZ: UTC
+    ports:
+      - "9002:9000"
+      - "9003:9003"
+    volumes:
+      - krug-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Creates the `krug` bucket once MinIO is healthy. mc is a separate tiny image.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-22T22-12-26Z
+    container_name: krug-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-minioadmin} ${S3_SECRET_KEY:-minioadmin} &&
+      mc mb --ignore-existing local/krug &&
+      mc anonymous set none local/krug
+      "
+
+volumes:
+  krug-pgdata:
+  krug-keycloak-data:
+  krug-minio-data:

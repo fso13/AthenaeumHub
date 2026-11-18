@@ -1,0 +1,59 @@
+spring:
+  flyway:
+    clean-disabled: true
+
+krug:
+  auth:
+    jwt-secret: test-only-jwt-secret-please-change-32-bytes-min
+  content:
+    key: test-only-content-key-please-change-32-bytes
+  rate-limit:
+    enabled: true
+    # Generous defaults: dedicated RateLimitIT lowers them to assert 429.
+    send-per-user: 10000
+    send-per-chat: 10000
+  outbox:
+    relay:
+      enabled: false
+  retention:
+    # Tests call RetentionService/RealtimeTicketRetentionService explicitly.
+    enabled: false
+  notifications:
+    # NotificationRetentionIT calls the service directly; no background scheduler.
+    retention-enabled: false
+  e2ee:
+    enabled: false
+    # Retention is exercised directly; no background deletion during the shared-DB suite.
+    quarantine-retention-enabled: false
+  auth-bff:
+    # Dedicated tests call the cleanup service directly; no background scheduler.
+    cleanup:
+      enabled: false
+    # Generous defaults: AuthBffIT lowers specific windows to assert 429.
+    rate-limit:
+      enabled: true
+      register-per-email: 100
+      register-per-ip: 1000
+      login-per-email: 100
+      login-per-ip: 1000
+      resend-per-email: 100
+      resend-per-ip: 1000
+  files:
+    # No MinIO container in unit/integration tests: same multipart contract in memory.
+    storage: memory
+    scan-mode: noop
+    noop-fail-marker: infected
+    # Drain the SCANNING backlog quickly: tests that only need a download URL do not wait
+    # for the scanner, so FileContractIT's 8s quarantine wait must not queue behind them.
+    scan-poll-interval: 100ms
+    scan-initial-delay: 200ms
+    scan-batch-size: 1000
+    gc-enabled: false
+    reconcile-enabled: false
+    download-ttl: 5m
+
+logging:
+  level:
+    root: WARN
+    ru.krug.backend: INFO
+    org.testcontainers: WARN

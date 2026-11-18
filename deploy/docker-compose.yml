@@ -1,0 +1,342 @@
+# Krug — turnkey single-host deployment.
+#
+#   cp .env.example .env        # set secrets and PUBLIC_URL
+#   docker compose --env-file .env up -d --build
+#
+# Services: PostgreSQL 16, Keycloak 26.2, MinIO, Spring Boot backend,
+# nginx-served React SPA. Everything is same-origin behind the SPA host; only
+# MinIO (presigned downloads) and optionally Keycloak/Postgres are published.
+#
+# E2EE is intentionally disabled (KRUG_E2EE_ENABLED=false) until the external
+# crypto review / browser E2E gate is closed. Set it only after that review.
+
+name: krug
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: krug-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: krug
+      POSTGRES_USER: krug_migrator
+      POSTGRES_PASSWORD: ${KRUG_DB_PASSWORD:?set KRUG_DB_PASSWORD in deploy/.env}
+      TZ: UTC
+    ports:
+      # Local-only by default; remove the mapping if the DB must not be reachable
+      # from the host at all.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - krug-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U krug_migrator -d krug"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks: [krug]
+
+  # The V1 migration creates krug_app with a development default password.
+  # In the boxed stack the runtime role must use a generated password before
+  # the backend starts; this one-shot bootstrap is idempotent and also fixes an
+  # existing role. It runs before Flyway, so V1's CREATE ROLE is a no-op.
+  db-bootstrap:
+    image: postgres:16-alpine
+    container_name: krug-db-bootstrap
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${KRUG_DB_PASSWORD:?set KRUG_DB_PASSWORD in deploy/.env}
+      KRUG_APP_PASSWORD: ${KRUG_APP_PASSWORD:?set KRUG_APP_PASSWORD in deploy/.env}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        psql -h postgres -U krug_migrator -d krug -v ON_ERROR_STOP=1 <<SQL
+        DO \$\$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'krug_app') THEN
+            CREATE ROLE krug_app LOGIN PASSWORD '$${KRUG_APP_PASSWORD}';
+          ELSE
+            ALTER ROLE krug_app PASSWORD '$${KRUG_APP_PASSWORD}';
+          END IF;
+        END
+        \$\$;
+        SQL
+    networks: [krug]
+
+  # Dedicated PostgreSQL for Keycloak. Keep it separate from the application DB:
+  # realm/users survive app migrations and can be backed up independently.
+  keycloak-postgres:
+    image: postgres:16-alpine
+    container_name: krug-keycloak-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KC_DB_NAME:-keycloak}
+      POSTGRES_USER: ${KC_DB_USER:-keycloak}
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:?set KC_DB_PASSWORD in deploy/.env}
+      TZ: UTC
+    volumes:
+      - krug-keycloak-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks: [krug]
+
+  # Renders the Keycloak realm with the deployment URL. The source realm keeps a
+  # __PUBLIC_URL__ placeholder so the same image can serve any host name.
+  keycloak-realm-init:
+    image: alpine:3.20
+    container_name: krug-keycloak-realm-init
+    restart: "no"
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8088}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mkdir -p /import
+        if [ "$${PUBLIC_URL#https://}" != "$${PUBLIC_URL}" ]; then
+          sed "s|__PUBLIC_URL__|$${PUBLIC_URL}|g" /src/realm-export.json \
+            | sed 's/"sslRequired": "none"/"sslRequired": "external"/' \
+            > /import/realm-export.json
+        else
+          sed "s|__PUBLIC_URL__|$${PUBLIC_URL}|g" /src/realm-export.json \
+            > /import/realm-export.json
+        fi
+        test -s /import/realm-export.json
+    volumes:
+      - ./keycloak/realm-export.json:/src/realm-export.json:ro
+      - krug-keycloak-import:/import
+    networks: [krug]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: krug-keycloak
+    restart: unless-stopped
+    # Production start mode (not start-dev). Keycloak creates/updates its schema
+    # in the dedicated PostgreSQL database above; no H2/dev-file storage.
+    command: ["start", "--import-realm"]
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
+      keycloak-realm-init:
+        condition: service_completed_successfully
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/${KC_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${KC_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?set KC_DB_PASSWORD in deploy/.env}
+      KC_DB_POOL_INITIAL_SIZE: "5"
+      KC_DB_POOL_MIN_SIZE: "5"
+      KC_DB_POOL_MAX_SIZE: "20"
+
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?set KC_ADMIN_PASSWORD in deploy/.env}
+      KC_HEALTH_ENABLED: "true"
+      # Public URL is the SPA host: browser and backend both use /realms/krug.
+      # Browser app never talks to Keycloak; the admin console is bound to
+      # 127.0.0.1. The backend BFF uses the internal URL below.
+      KC_HOSTNAME: ${KC_PUBLIC_URL:-http://localhost:8180}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      # Single Keycloak instance in this compose; use an external cache for HA.
+      KC_CACHE: local
+      TZ: UTC
+    ports:
+      # Direct access for administration/debugging. Normal browser login goes
+      # through the SPA host (nginx proxies /realms, /resources, /admin).
+      - "127.0.0.1:8180:8080"
+    volumes:
+      - krug-keycloak-import:/opt/keycloak/data/import:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; cat <&3 | grep -q '200 OK'"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 40s
+    networks: [krug]
+
+  # MinIO (Chainguard community build; no AIStor license required).
+  # The bucket is created once by the mc sidecar; the backend also creates it
+  # lazily on the first upload. Downloads use presigned GET URLs.
+  minio:
+    image: chainguard/minio:latest
+    container_name: krug-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in deploy/.env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY in deploy/.env}
+      TZ: UTC
+    ports:
+      - "9000:9000"   # browser-visible S3 endpoint for presigned URLs
+      - "9001:9001"   # MinIO console
+    volumes:
+      - krug-minio-data:/data
+    networks: [krug]
+
+  # Chainguard images have no /bin/sh; invoke mc directly with MC_HOST_local.
+  # restart-on-failure covers the small startup race before MinIO listens.
+  createbuckets:
+    image: chainguard/minio-client:latest
+    container_name: krug-createbuckets
+    restart: on-failure:10
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MC_HOST_local: http://${S3_ACCESS_KEY:?set S3_ACCESS_KEY in deploy/.env}:${S3_SECRET_KEY:?set S3_SECRET_KEY in deploy/.env}@minio:9000
+    entrypoint: ["/usr/bin/mc"]
+    command: ["mb", "--ignore-existing", "local/${S3_BUCKET:-krug}"]
+    networks: [krug]
+
+  # Local SMTP sink for registration TOTP emails. UI: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: krug-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"   # web UI
+      - "1025:1025"   # SMTP
+    networks: [krug]
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: krug-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: keycloak
+      SERVER_PORT: "8081"
+      TZ: UTC
+
+      DB_URL: jdbc:postgresql://postgres:5432/krug
+      DB_USER: krug_app
+      DB_PASSWORD: ${KRUG_APP_PASSWORD:?set KRUG_APP_PASSWORD in deploy/.env}
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/krug
+      FLYWAY_USER: krug_migrator
+      FLYWAY_PASSWORD: ${KRUG_DB_PASSWORD:?set KRUG_DB_PASSWORD in deploy/.env}
+
+      # Production-like secrets: generate with `openssl rand -base64 48`.
+      KRUG_AUTH_JWT_SECRET: ${KRUG_AUTH_JWT_SECRET:?set KRUG_AUTH_JWT_SECRET in deploy/.env}
+      KRUG_CONTENT_KEY: ${KRUG_CONTENT_KEY:?set KRUG_CONTENT_KEY in deploy/.env}
+
+      # OIDC: browser sees PUBLIC_URL/realms/krug; backend validates iss against
+      # it and fetches JWKS over the internal Keycloak hostname.
+      KRUG_OIDC_ISSUER: ${KC_PUBLIC_URL:-http://localhost:8180}/realms/krug
+      KRUG_OIDC_JWKS_URI: http://keycloak:8080/realms/krug/protocol/openid-connect/certs
+      KRUG_KEYCLOAK_URL: http://keycloak:8080
+      KC_ADMIN_USER: ${KC_ADMIN_USER:-admin}
+      KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?set KC_ADMIN_PASSWORD in deploy/.env}
+      SPRING_MAIL_HOST: mailpit
+      SPRING_MAIL_PORT: "1025"
+      KRUG_MAIL_FROM: ${KRUG_MAIL_FROM:-no-reply@krug.local}
+      KRUG_OIDC_AUDIENCE: krug-api
+      KRUG_OIDC_AZP: krug-web
+
+      KRUG_WS_ALLOWED_ORIGINS: ${PUBLIC_URL:-http://localhost:8088}
+      KRUG_REALTIME_WS_URL: ${PUBLIC_WS_URL:-ws://localhost:8088/ws}
+
+      # Internal S3 API is MinIO; presigned URLs must use the published host.
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+      S3_BUCKET: ${S3_BUCKET:-krug}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in deploy/.env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in deploy/.env}
+      S3_PATH_STYLE: "true"
+      S3_SCAN_MODE: ${S3_SCAN_MODE:-noop}
+      CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+
+      # E2EE gate: keep false until the external crypto review / browser E2E.
+      KRUG_E2EE_ENABLED: ${KRUG_E2EE_ENABLED:-false}
+
+      # Single-node defaults. For a real multi-node setup replace the in-process
+      # rate limiter/WS hub with Redis/Kafka (see docs/ADR).
+      KRUG_RATE_LIMIT_ENABLED: "true"
+      KRUG_OUTBOX_RELAY_ENABLED: "true"
+      KRUG_RETENTION_ENABLED: "true"
+      JAVA_OPTS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [krug]
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_USE_MOCKS: "false"
+        VITE_AUTH_MODE: password
+        VITE_DEV_SESSION: "false"
+        VITE_DEVICE_NAME: "Pickle — браузер"
+        VITE_APP_VERSION: ${KRUG_APP_VERSION:-0.1.0}
+        VITE_REALTIME_ENABLED: "true"
+        VITE_MEDIA_ORIGINS: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}
+        VITE_E2EE_ENABLED: ${KRUG_E2EE_ENABLED:-false}
+    container_name: krug-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8088}:80"
+    networks: [krug]
+
+  # Optional malware scanner profile:
+  #   S3_SCAN_MODE=clamav docker compose --env-file .env --profile scan up -d --build
+  clamav:
+    image: clamav/clamav:stable
+    container_name: krug-clamav
+    profiles: ["scan"]
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+    volumes:
+      - krug-clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
+    networks: [krug]
+
+volumes:
+  krug-pgdata:
+  krug-keycloak-pgdata:
+  krug-keycloak-import:
+  krug-minio-data:
+  krug-clamav-data:
+
+networks:
+  krug:
+    driver: bridge

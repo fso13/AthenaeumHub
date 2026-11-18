@@ -1,0 +1,404 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "hello": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "session_id",
+        "server_time",
+        "heartbeat_ms",
+        "protocol"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "hello"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 3
+        },
+        "server_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "heartbeat_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "protocol": {
+          "const": "krug.ws.v1"
+        }
+      },
+      "additionalProperties": true
+    },
+    "subscribed": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "chats"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "subscribed"
+        },
+        "chats": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "chat_id",
+              "accepted",
+              "server_last_seq"
+            ],
+            "properties": {
+              "chat_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "accepted": {
+                "type": "boolean"
+              },
+              "server_last_seq": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "event_id",
+        "event",
+        "chat_id",
+        "seq",
+        "ts",
+        "payload"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "event"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "event": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "chat_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ephemeralEvent": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "event",
+        "chat_id",
+        "ts",
+        "payload"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "event"
+        },
+        "event": {
+          "enum": [
+            "typing",
+            "presence"
+          ]
+        },
+        "workspace_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "chat_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "resumeGap": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "chat_id",
+        "from_seq",
+        "to_seq",
+        "reason"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "resume.gap"
+        },
+        "chat_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "from_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "to_seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "pong": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "server_time"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "pong"
+        },
+        "server_time": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "code",
+        "message",
+        "request_id"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "error"
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "chat_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": true
+    },
+    "sessionRevoked": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "reason"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "session.revoked"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "keyChanged": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "event",
+        "chat_id",
+        "ts",
+        "payload"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "event"
+        },
+        "event": {
+          "const": "chat.keys.changed"
+        },
+        "workspace_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "chat_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "chat_id",
+            "reason"
+          ],
+          "properties": {
+            "chat_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "reason": {
+              "enum": [
+                "DEVICE_ADDED",
+                "DEVICE_REVOKED",
+                "IDENTITY_KEY_CHANGED",
+                "VERIFICATION_CHANGED",
+                "KEY_GENERATION_CHANGED"
+              ]
+            },
+            "device_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "key_generation": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "deviceListChanged": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "event",
+        "ts",
+        "payload"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "event"
+        },
+        "event": {
+          "const": "device.list.changed"
+        },
+        "workspace_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "device_id",
+            "status",
+            "key_generation"
+          ],
+          "properties": {
+            "device_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "status": {
+              "enum": [
+                "PENDING",
+                "ACTIVE",
+                "REVOKED"
+              ]
+            },
+            "key_generation": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
