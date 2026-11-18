@@ -1,5 +1,7 @@
 # Pickle — мессенджер для команд и близких кругов
 
+> **GitHub:** [код](https://github.com/fso13/AthenaeumHub) · [issues/status](https://github.com/fso13/AthenaeumHub/issues/58) · [wiki](https://github.com/fso13/AthenaeumHub/wiki) · [STATUS.md](STATUS.md)
+
 Концепция, бизнес-требования и интерактивный HTML-прототип. Бэкенд задуман на **Java 21 / Spring Boot**, фронтенд — на **TypeScript/JavaScript**; в прототипе — чистый JS без сборки и внешних зависимостей.
 
 > **Один продукт — два режима:** конфиденциальный (E2EE, сервер не читает сообщения) и управляемый (DLP, аудит, корпоративный поиск). Плюс роли в чатах, стикеры, файлы с понятными лимитами и плагины с моделью разрешений.
