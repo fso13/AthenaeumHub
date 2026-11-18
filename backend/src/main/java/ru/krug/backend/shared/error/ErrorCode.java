@@ -124,6 +124,10 @@ public final class ErrorCode {
     public static final String THREAD_NESTING_UNSUPPORTED = "THREAD_NESTING_UNSUPPORTED";
     public static final String THREADS_E2EE_UNSUPPORTED = "THREADS_E2EE_UNSUPPORTED";
 
+    // D1-BE2: managed attachment media metadata. Client supplied values are sanitized and
+    // bounded; the server never parses media bytes in this slice (D1.1).
+    public static final String MEDIA_METADATA_INVALID = "MEDIA_METADATA_INVALID";
+
     private ErrorCode() {
     }
 }

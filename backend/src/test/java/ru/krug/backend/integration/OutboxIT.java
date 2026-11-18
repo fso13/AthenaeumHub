@@ -57,7 +57,9 @@ class OutboxIT extends IntegrationTestBase {
         assertThat(payload).contains("message_id", "chat_id", "seq", "sender_id", "size_bytes");
         assertThat(payload).doesNotContain(phrase);
         assertThat(payload).doesNotContain("\"text\"");
-        assertThat(row.get("published_at")).isNull();
+        // A scheduler in a sibling cached context may publish the row between the insert
+        // and this read (the same cross-context race documented below). The security
+        // invariant is the metadata-only payload; the final publish is asserted below.
 
         byte[] ciphertext = migrator().queryForObject(
                 "SELECT body_ciphertext FROM message.messages WHERE id = ?", byte[].class,

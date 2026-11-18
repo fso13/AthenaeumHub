@@ -1,8 +1,8 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, type ReactNode, type RefObject } from 'react';
 import type { ApiMessage } from '../api/types';
 import { replyPreview } from '../domain/messages';
 import { t } from '../i18n/ru';
-import { CloseIcon, PaperclipIcon, SendIcon, StickerIcon } from './Icons';
+import { CloseIcon, MicIcon, PaperclipIcon, SendIcon, StickerIcon } from './Icons';
 
 export type SendBlockedReason = 'offline' | 'rate_limit' | 'e2ee_blocked' | null;
 
@@ -29,6 +29,14 @@ interface ComposerProps {
   stickersOpen: boolean;
   onToggleStickers: () => void;
   stickerButtonRef: RefObject<HTMLButtonElement | null>;
+  /** D1-FE2: voice recording is managed-only and never auto-starts. */
+  voiceButtonRef: RefObject<HTMLButtonElement | null>;
+  voiceDisabled: boolean;
+  voiceHint: string;
+  voiceActive: boolean;
+  onStartVoice: () => void;
+  /** Inline RecordingBar; rendered only while a take is active. */
+  voiceBar?: ReactNode;
 }
 
 const MAX_LENGTH = 8000;
@@ -54,6 +62,12 @@ export function Composer({
   stickersOpen,
   onToggleStickers,
   stickerButtonRef,
+  voiceButtonRef,
+  voiceDisabled,
+  voiceHint,
+  voiceActive,
+  onStartVoice,
+  voiceBar,
 }: ComposerProps) {
   const length = value.length;
   const canSend =
@@ -120,6 +134,8 @@ export function Composer({
         </div>
       ) : null}
 
+      {voiceBar}
+
       <div className="composer__field">
         <label className="visually-hidden" htmlFor="composer-input">
           {t('composer.label')}
@@ -134,6 +150,18 @@ export function Composer({
             title={attachHint}
           >
             <PaperclipIcon aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            ref={voiceButtonRef}
+            className={`icon-button composer__voice${voiceActive ? ' composer__voice--active' : ''}`}
+            onClick={onStartVoice}
+            disabled={voiceDisabled || disabled}
+            aria-label={t('voice.record')}
+            aria-pressed={voiceActive}
+            title={voiceHint}
+          >
+            <MicIcon aria-hidden="true" />
           </button>
           <button
             type="button"

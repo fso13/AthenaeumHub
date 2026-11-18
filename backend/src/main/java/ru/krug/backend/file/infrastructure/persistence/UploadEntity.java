@@ -1,6 +1,7 @@
 package ru.krug.backend.file.infrastructure.persistence;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -8,6 +9,10 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+import ru.krug.backend.file.domain.model.MediaMetadata;
 import ru.krug.backend.file.domain.model.Sha256;
 import ru.krug.backend.file.domain.model.Upload;
 import ru.krug.backend.file.domain.model.UploadStatus;
@@ -33,6 +38,11 @@ public class UploadEntity {
 
     @Column(name = "mime_type")
     private String mimeType;
+
+    /** D1-BE2: sanitized client media metadata; null for plain/legacy files. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "media", columnDefinition = "jsonb")
+    private Map<String, Object> media;
 
     @Column(name = "size_bytes", nullable = false)
     private Long sizeBytes;
@@ -84,6 +94,7 @@ public class UploadEntity {
         entity.userId = upload.userId();
         entity.filename = upload.filename();
         entity.mimeType = upload.mimeType();
+        entity.media = upload.media() == null ? null : upload.media().toMap();
         entity.sizeBytes = upload.sizeBytes();
         entity.sha256 = upload.sha256() == null ? null : upload.sha256().value();
         entity.encryptionMode = upload.encryptionMode();
@@ -102,9 +113,10 @@ public class UploadEntity {
 
     public Upload toDomain() {
         return Upload.reconstitute(id, workspaceId, chatId, userId, filename, mimeType,
-                sizeBytes, sha256 == null ? null : Sha256.of(sha256), encryptionMode, partSize,
-                totalParts, objectKey, storageUploadId, attachmentId, UploadStatus.valueOf(status),
-                expiresAt, createdAt, updatedAt, completedAt);
+                MediaMetadata.fromMap(media), sizeBytes,
+                sha256 == null ? null : Sha256.of(sha256), encryptionMode, partSize, totalParts,
+                objectKey, storageUploadId, attachmentId, UploadStatus.valueOf(status), expiresAt,
+                createdAt, updatedAt, completedAt);
     }
 
     public UUID getId() {
@@ -129,6 +141,10 @@ public class UploadEntity {
 
     public String getMimeType() {
         return mimeType;
+    }
+
+    public Map<String, Object> getMedia() {
+        return media;
     }
 
     public Long getSizeBytes() {

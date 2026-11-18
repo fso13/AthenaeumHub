@@ -361,7 +361,7 @@ function concatParts(upload: MockUpload): Uint8Array {
 
 function attachmentRef(
   id: string,
-  upload: Pick<MockUpload, 'filename' | 'size' | 'mime'>,
+  upload: Pick<MockUpload, 'filename' | 'size' | 'mime' | 'media'>,
   scanStatus: ApiAttachment['scan_status'],
 ): ApiAttachment {
   return {
@@ -370,6 +370,7 @@ function attachmentRef(
     size_bytes: upload.size,
     mime_type: upload.mime,
     scan_status: scanStatus,
+    media: upload.media ?? null,
   };
 }
 
@@ -2098,6 +2099,7 @@ export function createHandlers(db: MockDb) {
         filename: candidate.filename,
         size: candidate.size!,
         mime: candidate.mime ?? null,
+        media: candidate.media ?? null,
         declaredSha256: candidate.sha256 ?? null,
         partSize: PART_SIZE,
         totalParts,

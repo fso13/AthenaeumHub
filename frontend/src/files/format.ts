@@ -73,6 +73,21 @@ export function formatPercent(ratio: number): string {
   return `${percent} %`;
 }
 
+/**
+ * Media duration for cards and the recording timer. Fractional seconds are
+ * floored so a 0.9 s take still reads `0:00` (never a fake `0:01`), while
+ * `Math.max(0, …)` keeps malformed input from rendering `NaN`.
+ */
+export function formatDuration(durationMs: number | null | undefined): string {
+  if (durationMs === null || durationMs === undefined || !Number.isFinite(durationMs)) return '—';
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+}
+
 export function fileTypeLabel(mime: string | null | undefined, filename?: string | null): string {
   if (mime) {
     if (mime.startsWith('image/')) return 'Изображение';
@@ -124,4 +139,20 @@ export function isSupportedAudioMime(mime: string | null | undefined): boolean {
 export function extensionOf(filename: string | null | undefined): string {
   const extension = filename?.split('.').pop()?.trim();
   return extension && extension !== filename ? extension.toLowerCase() : '';
+}
+
+/**
+ * Only absolute http(s) URLs may feed `<img>/<video poster>`. This blocks
+ * `javascript:`, `data:` and `blob:` values that a hostile/BE value could
+ * otherwise smuggle into the markup. Local object URLs are created by our own
+ * artwork cache and never pass through this helper.
+ */
+export function safeHttpUrl(value: string | null | undefined): string | null {
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }

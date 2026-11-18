@@ -7038,3 +7038,275 @@ html[data-theme='dark'] .avatar--tone-7 {
     visibility: hidden;
   }
 }
+
+/* D1-FE2: voice recording, voice messages and song cards ------------------ */
+
+.composer__voice {
+  flex: none;
+  margin-top: 1px;
+}
+
+.composer__voice .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.composer__voice--active {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.recording-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+}
+
+.recording-bar--error {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: color-mix(in srgb, var(--danger-soft) 45%, var(--card));
+}
+
+.recording-bar__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.recording-bar__dot--live {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+  animation: recording-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.recording-bar__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recording-bar__label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.recording-bar__time {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.recording-bar__timer {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.recording-bar__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.recording-bar__actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.song-card {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.song-card__artwork {
+  grid-row: span 2;
+  overflow: hidden;
+  width: 64px;
+  height: 64px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+}
+
+.song-card__cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.song-card__cover--fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-strong);
+}
+
+.song-card__cover--fallback .icon {
+  width: 26px;
+  height: 26px;
+}
+
+.song-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.song-card__title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-card__artist {
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-card__meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-row--mine .song-card__meta {
+  color: var(--bubble-out-ink);
+}
+
+.song-card__duration {
+  color: var(--faint);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.song-card__audio {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.voice-message {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.voice-message__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.voice-message__badge {
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.msg-row--mine .voice-message__badge {
+  color: var(--bubble-out-ink);
+}
+
+.voice-message__duration {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-row--mine .voice-message__duration {
+  color: var(--bubble-out-ink);
+}
+
+.voice-message__wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 30px;
+  padding: 0 2px;
+}
+
+.voice-message__bar {
+  width: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.msg-row--mine .voice-message__bar {
+  background: color-mix(in srgb, var(--bubble-out-ink) 45%, transparent);
+}
+
+.attachment-card--voice .attachment-card__body,
+.attachment-card--voice .attachment-card__actions {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 390px) {
+  .recording-bar {
+    flex-wrap: wrap;
+  }
+
+  .recording-bar__actions {
+    width: 100%;
+  }
+
+  .recording-bar__actions .button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .song-card {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .song-card__artwork {
+    width: 52px;
+    height: 52px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording-bar__dot--live {
+    animation: none;
+  }
+}

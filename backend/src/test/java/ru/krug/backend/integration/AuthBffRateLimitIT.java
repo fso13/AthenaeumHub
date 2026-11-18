@@ -22,6 +22,11 @@ import ru.krug.backend.support.TestMailConfig;
 
 /** Per-email rate limits on the public auth endpoints return 429 + Retry-After. */
 @SpringBootTest(properties = {
+        // Test isolation: this profile does not load application-test.yml, so its
+        // noop scanner would otherwise mark files of sibling test contexts CLEAN.
+        "krug.files.scan-enabled=false",
+        "krug.files.gc-enabled=false",
+        "krug.files.reconcile-enabled=false",
         "krug.content.key=auth-bff-test-content-key-please-change-32",
         "krug.auth-bff.code.secret-key=auth-bff-test-email-secret-key-please-change-32",
         "krug.auth-bff.cleanup.enabled=false",

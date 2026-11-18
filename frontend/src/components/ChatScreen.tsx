@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import type { ApiMessage, StickerRef } from '../api/types';
 import { describeError } from '../domain/errors';
 import { chatDisplayName } from '../domain/chatLabel';
 import { useCountdown } from '../hooks/useCountdown';
+import { getVoiceSupport, useVoiceRecorder, type RecordedVoice } from '../hooks/useVoiceRecorder';
 import { t } from '../i18n/ru';
 import {
   useChatStore,
@@ -16,10 +17,12 @@ import type { OutgoingMessage } from '../store/chatStore';
 import { isActiveUpload } from '../store/filesStore';
 import { MAX_MESSAGE_ATTACHMENTS, effectiveMaxFileBytes, isStorageFull } from '../files/limits';
 import { formatBytes } from '../files/format';
+import { MAX_VOICE_DURATION_MS, planUploadMediaBatch } from '../files/media';
 import { RateLimitBanner, OfflineBanner, RealtimeBanner, SyncErrorBanner } from './Banners';
 import { ChatHeader } from './ChatHeader';
 import { Composer } from './Composer';
 import { E2eeBanner } from './E2eeBanner';
+import { RecordingBar } from './RecordingBar';
 import { SafetyNumberDialog } from './SafetyNumberDialog';
 import { ChatIcon, LockIcon, PaperclipIcon } from './Icons';
 import { MessageList } from './MessageList';
@@ -38,6 +41,7 @@ export function ChatScreen() {
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const stickerButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceButtonRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingSentAt = useRef(0);
   const dragDepth = useRef(0);
@@ -49,6 +53,8 @@ export function ChatScreen() {
   const stickersStore = useStickersStore();
   const stickersState = useStickersState();
   const activeChatId = state.activeChatId;
+  const activeChatIdRef = useRef(activeChatId);
+  activeChatIdRef.current = activeChatId;
   const slice = activeChatId ? (state.slices[activeChatId] ?? null) : null;
   const chatSummary = state.chats.find((chat) => chat.id === activeChatId) ?? null;
   const rateLimitSeconds = useCountdown(state.rateLimitUntil);
@@ -122,10 +128,68 @@ export function ChatScreen() {
           size: effectiveMax ? formatBytes(effectiveMax) : '—',
         });
 
+  // Voice is managed-only: in E2EE chats the mic stays visible but disabled
+  // with an honest explanation (never a silent no-op).
+  const voiceSupport = getVoiceSupport();
+  const voiceHint = isE2eeChat
+    ? t('voice.e2eeUnavailable')
+    : !voiceSupport.supported
+      ? t(voiceSupport.reasonKey ?? 'voice.unsupported')
+      : attachHint;
+
   const addFiles = (files: File[]) => {
     if (!activeChatId || !canAttach || files.length === 0) return;
-    void filesStore.addFiles(files, activeChatId);
+    const chatId = activeChatId;
+    void (async () => {
+      // ID3 probing only reads the tag prefix; a failure degrades to no media.
+      const plans = await planUploadMediaBatch(files);
+      if (!activeChatIdRef.current) return;
+      if (activeChatIdRef.current !== chatId) return;
+      await filesStore.addFiles(
+        files,
+        chatId,
+        plans.map((plan) => (plan ? { media: plan.media, artwork: plan.artwork } : null)),
+      );
+    })();
   };
+
+  const focusVoiceButton = useCallback(() => {
+    voiceButtonRef.current?.focus();
+  }, []);
+
+  const handleVoiceRecorded = useCallback(
+    (result: RecordedVoice) => {
+      const chatId = activeChatIdRef.current;
+      focusVoiceButton();
+      if (!chatId) return;
+      // A take recorded before switching to E2EE must never be uploaded there.
+      if (store.isE2eeChat(chatId)) return;
+      void (async () => {
+        const tasks = await filesStore.addFiles([result.file], chatId, [{ media: result.media }]);
+        const task = tasks[0];
+        if (!task || result.intent !== 'send') return;
+        const attachment = await filesStore.waitForReady(task.localId);
+        if (!attachment || activeChatIdRef.current !== chatId) return;
+        void store.send(chatId, '', null, [attachment]);
+      })();
+    },
+    [filesStore, focusVoiceButton, store],
+  );
+
+  const voice = useVoiceRecorder({
+    onRecorded: handleVoiceRecorded,
+    maxDurationMs: MAX_VOICE_DURATION_MS,
+  });
+  const voiceActive =
+    voice.status === 'requesting' || voice.status === 'recording' || voice.status === 'stopping';
+  const cancelVoiceRef = useRef(voice.cancel);
+  cancelVoiceRef.current = voice.cancel;
+  // Switching chats with an open microphone must release it immediately.
+  useEffect(() => {
+    return () => {
+      cancelVoiceRef.current();
+    };
+  }, [activeChatId]);
 
   const handleSend = () => {
     if (!activeChatId || !ready) return;
@@ -432,6 +496,36 @@ export function ChatScreen() {
               stickersOpen={stickerPickerOpen}
               onToggleStickers={handleToggleStickers}
               stickerButtonRef={stickerButtonRef}
+              voiceButtonRef={voiceButtonRef}
+              voiceDisabled={!canAttach || !voiceSupport.supported}
+              voiceHint={voiceHint}
+              voiceActive={voiceActive}
+              onStartVoice={() => {
+                if (voice.status === 'idle' || voice.status === 'error') {
+                  void voice.start('send');
+                }
+              }}
+              voiceBar={
+                voice.status !== 'idle' ? (
+                  <RecordingBar
+                    status={voice.status}
+                    elapsedMs={voice.elapsedMs}
+                    errorKey={voice.errorKey}
+                    maxDurationMs={MAX_VOICE_DURATION_MS}
+                    disabled={!canAttach}
+                    onCancel={() => {
+                      voice.cancel();
+                      focusVoiceButton();
+                    }}
+                    onSend={voice.stop}
+                    onRetry={() => void voice.start('send')}
+                    onDismiss={() => {
+                      voice.dismissError();
+                      focusVoiceButton();
+                    }}
+                  />
+                ) : undefined
+              }
             />
           </div>
         ) : null}

@@ -14,8 +14,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import ru.krug.backend.file.domain.exception.UploadNotFoundException;
 import ru.krug.backend.file.domain.model.Attachment;
+import ru.krug.backend.file.domain.model.MediaMetadata;
 import ru.krug.backend.file.domain.repository.AttachmentRepository;
 import ru.krug.backend.file.domain.repository.UploadRepository;
+import ru.krug.backend.message.application.model.AttachmentMediaView;
 import ru.krug.backend.message.application.model.MessageAttachmentView;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
 import ru.krug.backend.shared.application.model.Principal;
@@ -103,6 +105,21 @@ public class MessageAttachmentService implements MessageAttachmentPort {
 
     private static MessageAttachmentView view(Attachment attachment) {
         return new MessageAttachmentView(attachment.id(), attachment.filename(),
-                attachment.sizeBytes(), attachment.mimeType(), attachment.scanStatus().name());
+                attachment.sizeBytes(), attachment.mimeType(), attachment.scanStatus().name(),
+                media(attachment.media()));
+    }
+
+    /**
+     * Media exists only for MANAGED attachments. The API never fabricates it for E2EE: an
+     * E2EE message cannot bind attachment_ids at all, and the upload API rejects non-MANAGED
+     * modes before parsing the client payload.
+     */
+    private static AttachmentMediaView media(MediaMetadata media) {
+        if (media == null) {
+            return null;
+        }
+        return new AttachmentMediaView(media.kind().name(), media.durationMs(), media.width(),
+                media.height(), media.title(), media.artist(), media.album(), media.year(),
+                media.genre(), media.artworkUrl(), media.metadataSource().name());
     }
 }

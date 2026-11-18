@@ -8,6 +8,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import ru.krug.backend.message.application.event.MessageCreatedNotification;
 import ru.krug.backend.message.application.model.MessageView;
+import ru.krug.backend.realtime.application.model.AttachmentMediaSnapshot;
 import ru.krug.backend.realtime.application.model.AttachmentSnapshot;
 import ru.krug.backend.realtime.application.model.MessageSnapshot;
 import ru.krug.backend.realtime.application.model.StickerSnapshot;
@@ -54,7 +55,8 @@ public class RealtimeMessageCreatedListener {
                     view.attachments().stream()
                             .map(attachment -> new AttachmentSnapshot(attachment.id(),
                                     attachment.filename(), attachment.sizeBytes(),
-                                    attachment.mimeType(), attachment.scanStatus()))
+                                    attachment.mimeType(), attachment.scanStatus(),
+                                    media(attachment.media())))
                             .toList());
             publisher.publish(RealtimeEventFactory.messageCreated(snapshot,
                     notification.cryptoByDevice()));
@@ -62,5 +64,15 @@ public class RealtimeMessageCreatedListener {
             log.warn("realtime.message_fanout_failed message_id={}",
                     notification.message().id());
         }
+    }
+
+    private static AttachmentMediaSnapshot media(
+            ru.krug.backend.message.application.model.AttachmentMediaView media) {
+        if (media == null) {
+            return null;
+        }
+        return new AttachmentMediaSnapshot(media.kind(), media.durationMs(), media.width(),
+                media.height(), media.title(), media.artist(), media.album(), media.year(),
+                media.genre(), media.artworkUrl(), media.metadataSource());
     }
 }

@@ -118,7 +118,10 @@ class RealtimeFrameContractTest {
         MessageSnapshot snapshot = new MessageSnapshot(workspaceId, messageId, chatId, 8,
                 "TEXT", userId, "Test", null, null, NOW, null, null, 1, null, null,
                 List.of(new ru.krug.backend.realtime.application.model.AttachmentSnapshot(
-                        UUID.randomUUID(), "report.pdf", 1024, "application/pdf", "CLEAN")));
+                        UUID.randomUUID(), "song.mp3", 1024, "audio/mpeg", "CLEAN",
+                        new ru.krug.backend.realtime.application.model.AttachmentMediaSnapshot(
+                                "AUDIO", 245_000L, null, null, "Song", "Artist", "Album",
+                                "2024", "Rock", "https://example.com/cover.jpg", "ID3"))));
         RealtimeEvent event = RealtimeEventFactory.messageCreated(snapshot);
 
         String frame = codec.event(event);
@@ -130,8 +133,15 @@ class RealtimeFrameContractTest {
                 node.get("payload").get("attachments");
         assertThat(attachments).isNotNull();
         assertThat(attachments.size()).isEqualTo(1);
-        assertThat(attachments.get(0).get("filename").asText()).isEqualTo("report.pdf");
+        assertThat(attachments.get(0).get("filename").asText()).isEqualTo("song.mp3");
         assertThat(attachments.get(0).get("scan_status").asText()).isEqualTo("CLEAN");
+        com.fasterxml.jackson.databind.JsonNode media = attachments.get(0).get("media");
+        assertThat(media.get("kind").asText()).isEqualTo("AUDIO");
+        assertThat(media.get("duration_ms").asLong()).isEqualTo(245_000L);
+        assertThat(media.get("title").asText()).isEqualTo("Song");
+        assertThat(media.get("artwork_url").asText())
+                .isEqualTo("https://example.com/cover.jpg");
+        assertThat(media.get("metadata_source").asText()).isEqualTo("ID3");
     }
 
     @Test

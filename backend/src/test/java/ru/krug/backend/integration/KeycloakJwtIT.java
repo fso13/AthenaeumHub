@@ -43,6 +43,11 @@ import ru.krug.backend.support.OpenApiContract;
  * through the production decoder.
  */
 @SpringBootTest(properties = {
+        // Test isolation: this profile does not load application-test.yml, so its
+        // noop scanner would otherwise mark files of sibling test contexts CLEAN.
+        "krug.files.scan-enabled=false",
+        "krug.files.gc-enabled=false",
+        "krug.files.reconcile-enabled=false",
         "krug.content.key=keycloak-test-content-key-please-change-32-bytes"
 })
 @ActiveProfiles("keycloak")

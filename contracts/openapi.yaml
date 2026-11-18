@@ -1311,6 +1311,8 @@ paths:
           $ref: "#/components/responses/Conflict"
         "410":
           $ref: "#/components/responses/Gone"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/Unprocessable"
 
@@ -1747,6 +1749,8 @@ components:
         LAST_OWNER.
         D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND,
         THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED.
+        D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio
+        allowlist is 415 UNSUPPORTED_TYPE.
       properties:
         code: { type: string }
         message: { type: string }
@@ -2436,6 +2440,34 @@ components:
         mime: { type: string }
         encryption_mode: { type: string, enum: [MANAGED] }
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        media:
+          type: [object, "null"]
+          description: >
+            Optional sanitized media metadata for this upload (D1-BE2). Accepted only for
+            MANAGED uploads; the server rejects every non-MANAGED mode before parsing it.
+            A voice recording (audio/webm, audio/ogg) must be kind=AUDIO with a 1..600000
+            ms duration. complete copies the values to AttachmentRef.media. Strings are
+            trimmed, HTML/control-free and bounded; artwork_url is an absolute http(s) URL
+            with a hostname that the server never fetches (no server-side SSRF).
+          required: [kind, metadata_source]
+          properties:
+            kind: { type: string, enum: [AUDIO, VIDEO, IMAGE, FILE] }
+            duration_ms:
+              type: [integer, "null"]
+              minimum: 0
+              maximum: 604800000
+            width: { type: [integer, "null"], minimum: 1, maximum: 16384 }
+            height: { type: [integer, "null"], minimum: 1, maximum: 16384 }
+            title: { type: [string, "null"], maxLength: 255 }
+            artist: { type: [string, "null"], maxLength: 255 }
+            album: { type: [string, "null"], maxLength: 255 }
+            year: { type: [string, "null"], maxLength: 8, pattern: "^[0-9]{4}$" }
+            genre: { type: [string, "null"], maxLength: 64 }
+            artwork_url:
+              type: [string, "null"]
+              format: uri
+              maxLength: 2048
+            metadata_source: { type: string, enum: [ID3, SERVER, CLIENT, NONE] }
 
     UploadSession:
       type: object
@@ -2492,6 +2524,34 @@ components:
         mime_type: { type: [string, "null"] }
         scan_status:
           { type: string, enum: [PENDING, CLEAN, INFECTED, FAILED, SKIPPED] }
+        media:
+          type: [object, "null"]
+          description: >
+            Managed-only media metadata (D1-BE2). MVP: the client sends parsed ID3/fallback
+            values at upload init; the server sanitizes and stores them (server-side
+            extraction is D1.1). Strings are trimmed, HTML/control-free and bounded;
+            artwork_url is an absolute http(s) URL with a hostname that the server never
+            fetches (no server-side SSRF). Absent/null for plain files, legacy attachments
+            and E2EE — an E2EE message cannot carry attachments in this slice.
+          required: [kind, metadata_source]
+          properties:
+            kind: { type: string, enum: [AUDIO, VIDEO, IMAGE, FILE] }
+            duration_ms:
+              type: [integer, "null"]
+              minimum: 0
+              maximum: 604800000
+            width: { type: [integer, "null"], minimum: 1, maximum: 16384 }
+            height: { type: [integer, "null"], minimum: 1, maximum: 16384 }
+            title: { type: [string, "null"], maxLength: 255 }
+            artist: { type: [string, "null"], maxLength: 255 }
+            album: { type: [string, "null"], maxLength: 255 }
+            year: { type: [string, "null"], maxLength: 8, pattern: "^[0-9]{4}$" }
+            genre: { type: [string, "null"], maxLength: 64 }
+            artwork_url:
+              type: [string, "null"]
+              format: uri
+              maxLength: 2048
+            metadata_source: { type: string, enum: [ID3, SERVER, CLIENT, NONE] }
 
     DownloadUrl:
       type: object

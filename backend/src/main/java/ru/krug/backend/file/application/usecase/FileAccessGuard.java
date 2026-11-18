@@ -5,6 +5,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import ru.krug.backend.chat.application.model.ChatAccess;
 import ru.krug.backend.chat.application.port.ChatAccessPort;
 import ru.krug.backend.chat.application.port.ChatWorkspacePort;
 import ru.krug.backend.file.domain.exception.UploadNotFoundException;
@@ -60,10 +61,18 @@ public class FileAccessGuard {
     /** Activates RLS and verifies active membership + chat access. */
     @Transactional(readOnly = true)
     public UUID requireChatAccess(Principal principal, UUID chatId) {
+        return requireChat(principal, chatId).workspaceId();
+    }
+
+    /**
+     * Like {@link #requireChatAccess} but also exposes the chat access result, so a caller
+     * can enforce security-mode-specific rules (D1-BE2: no plaintext media in E2EE chats).
+     */
+    @Transactional(readOnly = true)
+    public ChatAccess requireChat(Principal principal, UUID chatId) {
         Principal scoped = scopeToChat(principal, chatId);
         tenantContext.activate(scoped);
-        chatAccess.requireActiveChat(scoped.workspaceId(), chatId, scoped.userId());
-        return scoped.workspaceId();
+        return chatAccess.requireActiveChat(scoped.workspaceId(), chatId, scoped.userId());
     }
 
     /** Activates RLS and verifies workspace membership for a path workspace. */

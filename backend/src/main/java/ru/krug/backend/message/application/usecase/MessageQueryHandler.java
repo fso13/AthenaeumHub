@@ -231,7 +231,11 @@ public class MessageQueryHandler {
         Map<UUID, StickerRefView> stickers = stickerIds.isEmpty() ? Map.of()
                 : stickerCatalog.findForMessage(viewerId, stickerIds);
         return views.stream()
-                .map(view -> view.withAttachments(byMessage.getOrDefault(view.id(), List.of()))
+                // D1-BE2 defense-in-depth: an E2EE message must never expose a managed
+                // attachment (and therefore its plaintext media metadata), even if a row
+                // was created by a bug or direct SQL outside the API guards.
+                .map(view -> view.withAttachments(view.isE2ee() ? List.of()
+                                : byMessage.getOrDefault(view.id(), List.of()))
                         .withSticker(view.stickerId() == null ? null
                                 : stickers.get(view.stickerId())))
                 .toList();

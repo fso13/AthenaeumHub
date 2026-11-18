@@ -100,7 +100,7 @@ public class FileUploadController {
         UploadSessionResponse response = FileApiMapper.toResponse(initUploadHandler.init(
                 new InitUploadCommand(principal, key, request.chatId(), request.filename(),
                         request.sizeOrZero(), request.mime(), request.sha256(),
-                        request.encryptionMode())));
+                        request.encryptionMode(), FileApiMapper.toInput(request.media()))));
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 

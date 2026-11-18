@@ -311,7 +311,7 @@ src/
 - `src/components/RealtimeChat.test.tsx` (5) — live-сообщение без reload, live STICKER без пузыря, «Прочитано», typing TTL и aria-live, reconnect-баннер без блокировки composer, 401/403 ticket banners.
 - `src/mocks/realtime.test.ts` (3) — mock WS: replay по `seq`, live fan-out, `resume.gap` при окне >500, одноразовый ticket/4401.
 - `src/files/hash.test.ts` (6) — SHA-256 векторы, incremental/streaming, Blob/File fallback, progress.
-- `src/files/format.test.ts` (6) — байты/проценты, MIME, raster allowlist (SVG/HTML не preview), media-codec allowlist, PDF/video.
+- `src/files/format.test.ts` (8) — байты/проценты, MIME, raster allowlist (SVG/HTML не preview), media-codec allowlist, PDF/video.
 - `src/files/limits.test.ts` (4) — used+reserved, 80/95/100 %, guest cap, zero limit.
 - `src/store/filesStore.test.ts` (14) — preflight allow/deny/409/422/404, upload parts+progress, complete/scan, quarantine 423, resume с `GET /uploads/{id}` и теми же `upload_id/part_no`, pause/resume, cancel+abort, TTL presigned URL, attachment-only send, `ATTACHMENT_NOT_READY`, cross-chat 403.
 - `src/components/FilesChat.test.tsx` (11) — picker+upload+send+card+download, per-file 413, `TOO_MANY_FILES`, pause/resume UI, retry, quarantine, text restore на 409, 423 download, limits 80/95/100, drag&drop, image preview/SVG.
@@ -1042,3 +1042,56 @@ AUTH_UNAVAILABLE` — «изменения не применены», кнопк
 Полный `npm run check` — **769** тестов (73 файла), `contract:check` —
 **47 paths / 55 operations / 87 schemas**, `vite build` зелёный. Отчёт:
 [`D1-FE3-REPORT.md`](D1-FE3-REPORT.md).
+
+## D1-FE2 — voice / audio / video / song UI + ID3
+
+Managed-only медиа-метаданные из D1-BE2: `AttachmentRef.media` и
+`UploadInitRequest.media` используются через сгенерированные типы, без правок
+`contracts/**` и `schema.d.ts`. E2EE-флаг `false`; в E2EE голос/вложения честно
+выключены (managed-only), plaintext-медиа не отправляется.
+
+### Голос
+
+- `useVoiceRecorder` + `RecordingBar`: разрешение микрофона только по клику,
+  таймер, отмена, stop&send, авто-stop на 10 минуте, освобождение треков на
+  cancel/error/смене чата/unmount. Проверяются secure context,
+  `MediaRecorder` и `getUserMedia`; нет доступа/микрофона/браузера — конкретная
+  русская ошибка, а не тихий no-op.
+- MIME выбирается из `audio/webm[;codecs=opus]`/`audio/ogg[;codecs=opus]`;
+  `duration_ms` измеряется локально (1..600000) и уходит в upload init как
+  `{kind: AUDIO, metadata_source: CLIENT}`. После `READY` вложение отправляется
+  автоматически (`waitForReady → POST /messages`), ошибки остаются в `UploadTray`.
+
+### ID3 и песни
+
+- `src/files/id3.ts` — чистый TS ID3v2.3/2.4: `TIT2/TPE1/TALB/TYER|TDRC/TCON/TLEN`,
+  `APIC`, кодировки latin1/UTF-16/UTF-8, unsynchronisation, extended header.
+  Лимиты: тег ≤8 МиБ, обложка ≤2 МиБ, текстовый кадр ≤64 КиБ, строки ≤255
+  (genre ≤64), year 4 цифры; malformed/oversized → безопасный fallback без
+  исключений. Читается только prefix файла, не весь MP3.
+- `planUploadMedia` кладёт санитизированные ID3-поля в `media`
+  (`metadata_source: ID3`), без тегов — `NONE`; обычные файлы `media` не шлют.
+  Обложка (`APIC`) не загружается на сервер: байты кэшируются локально в
+  IndexedDB (`krug-media`) и показываются в `SongCard`; `artwork_url` из API имеет
+  приоритет, server-side extraction — D1.1.
+- `SongCard` — обложка/дефолтная иконка, title, artist, album, year, genre,
+  duration, player. Без ID3 — fallback «имя файла + Неизвестный исполнитель +
+  Без альбома + дефолтная обложка». Значения тегов рендерятся только как текст
+  (React escaping + серверный запрет HTML), XSS-тесты в suite.
+
+### Карточки
+
+- `VoiceMessage` (длительность + waveform + audio), `AudioAttachment`,
+  `VideoAttachment` (`poster` только из валидированного http(s) `artwork_url`,
+  без autoplay), `SongCard`; image-lightbox, presigned download, scan/quarantine
+  и retry сохранены. Duration/размеры берутся из `media` либо `loadedmetadata`.
+
+### Тесты и отчёт
+
+`files/id3.test.ts` (15), `files/media.test.ts` (10),
+`hooks/useVoiceRecorder.test.tsx` (11), `components/MediaMessages.test.tsx` (5),
+`components/VoiceRecording.test.tsx` (6); MSW хранит `media` в
+upload/attachment/message и проверяет реальный путь init→complete→message.
+Полный `npm run check` — **832** тестов (79 файлов), `contract:check` —
+**47 paths / 55 operations / 87 schemas**. Отчёт:
+[`D1-FE2-REPORT.md`](D1-FE2-REPORT.md).

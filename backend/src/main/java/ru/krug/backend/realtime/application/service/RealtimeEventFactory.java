@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import ru.krug.backend.realtime.application.model.AttachmentMediaSnapshot;
 import ru.krug.backend.realtime.application.model.EphemeralEvent;
 import ru.krug.backend.realtime.application.model.MessageSnapshot;
 import ru.krug.backend.realtime.application.model.PresenceStatus;
@@ -63,12 +64,32 @@ public final class RealtimeEventFactory {
             item.put("size_bytes", attachment.sizeBytes());
             item.put("mime_type", attachment.mimeType());
             item.put("scan_status", attachment.scanStatus());
+            item.put("media", media(attachment.media()));
             return item;
         }).toList());
         // The message id is the stable event id: replay and live delivery of the same fact
         // must dedupe to one event on the client.
         return new RealtimeEvent(message.id(), MESSAGE_CREATED, message.workspaceId(),
                 message.chatId(), message.seq(), message.createdAt(), payload, cryptoByDevice);
+    }
+
+    private static Map<String, Object> media(AttachmentMediaSnapshot media) {
+        if (media == null) {
+            return null;
+        }
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("kind", media.kind());
+        item.put("duration_ms", media.durationMs());
+        item.put("width", media.width());
+        item.put("height", media.height());
+        item.put("title", media.title());
+        item.put("artist", media.artist());
+        item.put("album", media.album());
+        item.put("year", media.year());
+        item.put("genre", media.genre());
+        item.put("artwork_url", media.artworkUrl());
+        item.put("metadata_source", media.metadataSource());
+        return item;
     }
 
     private static Map<String, Object> sticker(StickerSnapshot sticker) {

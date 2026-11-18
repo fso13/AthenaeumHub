@@ -9,15 +9,19 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import ru.krug.backend.chat.application.model.ChatAccess;
 import ru.krug.backend.file.application.command.InitUploadCommand;
+import ru.krug.backend.file.application.model.MediaMetadataInput;
 import ru.krug.backend.file.application.model.UploadView;
 import ru.krug.backend.file.application.port.FileSettingsPort;
 import ru.krug.backend.file.application.port.ObjectStoragePort;
 import ru.krug.backend.file.application.port.WorkspaceQuotaPort;
 import ru.krug.backend.file.domain.exception.FileTooLargeException;
+import ru.krug.backend.file.domain.exception.MediaMetadataInvalidException;
 import ru.krug.backend.file.domain.exception.UploadExpiredException;
 import ru.krug.backend.file.domain.exception.UploadNotFoundException;
 import ru.krug.backend.file.domain.model.FileTypePolicy;
+import ru.krug.backend.file.domain.model.MediaMetadata;
 import ru.krug.backend.file.domain.model.Sha256;
 import ru.krug.backend.file.domain.model.Upload;
 import ru.krug.backend.file.domain.model.UploadStatus;
@@ -82,8 +86,15 @@ public class InitUploadHandler {
                     Map.of("encryption_mode", command.encryptionMode()));
         }
         Principal scoped = accessGuard.scopeToChat(command.principal(), command.chatId());
-        UUID workspaceId = accessGuard.requireChatAccess(scoped, command.chatId());
+        ChatAccess access = accessGuard.requireChat(scoped, command.chatId());
+        UUID workspaceId = access.workspaceId();
         scoped = scoped.withWorkspace(workspaceId);
+        // D1-BE2: media metadata is plaintext. Even a MANAGED-mode upload into an E2EE
+        // chat must not parse or persist it; reject before sanitizeMedia() runs.
+        if (command.media() != null && "E2EE".equals(access.securityMode())) {
+            throw new MediaMetadataInvalidException("media", "e2ee_plaintext_forbidden",
+                    Map.of());
+        }
 
         WorkspaceLimits limits = quota.limits(workspaceId);
         boolean guest = accessGuard.isGuest(workspaceId, scoped.userId());
@@ -102,9 +113,12 @@ public class InitUploadHandler {
             throw new ru.krug.backend.file.domain.exception.UnsupportedFileTypeException(
                     command.mime(), FileTypePolicy.allowedExamples());
         }
+        // D1-BE2: MANAGED only. The non-MANAGED branch above already threw before this
+        // point, so an E2EE upload never parses or stores client media metadata.
+        MediaMetadata media = sanitizeMedia(command);
 
         Sha256 declaredSha = command.sha256() == null ? null : Sha256.of(command.sha256());
-        byte[] requestHash = requestHash(command, scoped);
+        byte[] requestHash = requestHash(command, scoped, media);
 
         IdempotencyReservation reservation = idempotency.reserve(scoped,
                 InitUploadCommand.IDEMPOTENCY_SCOPE, command.idempotencyKey().toString(),
@@ -116,8 +130,8 @@ public class InitUploadHandler {
         Instant now = clock.now();
         Instant expiresAt = now.plus(settings.uploadTtl());
         Upload upload = Upload.create(UUID.randomUUID(), workspaceId, command.chatId(),
-                scoped.userId(), command.filename(), command.mime(), command.size(), declaredSha,
-                now, expiresAt);
+                scoped.userId(), command.filename(), command.mime(), media, command.size(),
+                declaredSha, now, expiresAt);
         uploadRepository.save(upload);
 
         // The reservation FK points at the upload, so the row must exist first. Both writes
@@ -145,7 +159,29 @@ public class InitUploadHandler {
         return UploadView.from(upload, received);
     }
 
-    private byte[] requestHash(InitUploadCommand command, Principal principal) {
+    /**
+     * Validates/sanitizes the optional client media object and enforces the voice MIME
+     * allowlist. A voice recording ({@code audio/webm}/{@code audio/ogg}) must carry a
+     * duration; other media kinds must match their MIME family.
+     */
+    private static MediaMetadata sanitizeMedia(InitUploadCommand command) {
+        MediaMetadataInput input = command.media();
+        if (input == null) {
+            if (MediaMetadata.isVoiceMime(command.mime())) {
+                throw new MediaMetadataInvalidException("media", "required_for_voice",
+                        Map.of("mime", MediaMetadata.normalizeMime(command.mime())));
+            }
+            return null;
+        }
+        MediaMetadata media = MediaMetadata.sanitize(input.kind(), input.durationMs(),
+                input.width(), input.height(), input.title(), input.artist(), input.album(),
+                input.year(), input.genre(), input.artworkUrl(), input.metadataSource());
+        media.assertCompatibleWith(command.mime());
+        return media;
+    }
+
+    private byte[] requestHash(InitUploadCommand command, Principal principal,
+                               MediaMetadata media) {
         Map<String, Object> canonical = new LinkedHashMap<>();
         canonical.put("workspace_id", principal.workspaceId());
         canonical.put("chat_id", command.chatId());
@@ -154,6 +190,10 @@ public class InitUploadHandler {
         canonical.put("mime", command.mime());
         canonical.put("sha256", command.sha256());
         canonical.put("encryption_mode", command.encryptionMode());
+        // Legacy requests without media keep the pre-D1 hash (additive idempotency).
+        if (media != null) {
+            canonical.put("media", media.toMap());
+        }
         return canonicalizer.sha256("POST\n/api/v1/uploads\n"
                 + canonicalizer.canonicalize(canonical));
     }

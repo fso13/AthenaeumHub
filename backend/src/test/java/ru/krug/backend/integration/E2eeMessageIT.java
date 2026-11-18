@@ -232,6 +232,11 @@ class E2eeMessageIT extends IntegrationTestBase {
                 UUID.randomUUID().toString());
         assertPlaintext(fixture.alice(), a1, chatId, valid, "attachment_ids",
                 List.of(UUID.randomUUID().toString()));
+        // D1-BE2: rejected E2EE sends never create managed attachments or media rows, so
+        // no plaintext media metadata can be exposed for an E2EE message.
+        assertThat(migrator().queryForObject("""
+                SELECT count(*) FROM file.attachments WHERE chat_id = ?
+                """, Integer.class, chatId)).isZero();
         assertPlaintext(fixture.alice(), a1, chatId, valid, "reply_to_id",
                 UUID.randomUUID().toString());
 

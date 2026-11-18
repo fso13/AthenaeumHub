@@ -15,6 +15,7 @@ import ru.krug.backend.message.domain.model.Message;
 import ru.krug.backend.message.domain.model.MessageEnvelope;
 import ru.krug.backend.message.domain.repository.MessageEnvelopeRepository;
 import ru.krug.backend.message.domain.repository.MessageRepository;
+import ru.krug.backend.realtime.application.model.AttachmentMediaSnapshot;
 import ru.krug.backend.realtime.application.model.AttachmentSnapshot;
 import ru.krug.backend.realtime.application.model.MessageSnapshot;
 import ru.krug.backend.realtime.application.model.StickerSnapshot;
@@ -119,7 +120,18 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                 attachments.stream()
                         .map(attachment -> new AttachmentSnapshot(attachment.id(),
                                 attachment.filename(), attachment.sizeBytes(),
-                                attachment.mimeType(), attachment.scanStatus()))
+                                attachment.mimeType(), attachment.scanStatus(),
+                                media(attachment.media())))
                         .toList());
+    }
+
+    private static AttachmentMediaSnapshot media(
+            ru.krug.backend.message.application.model.AttachmentMediaView media) {
+        if (media == null) {
+            return null;
+        }
+        return new AttachmentMediaSnapshot(media.kind(), media.durationMs(), media.width(),
+                media.height(), media.title(), media.artist(), media.album(), media.year(),
+                media.genre(), media.artworkUrl(), media.metadataSource());
     }
 }

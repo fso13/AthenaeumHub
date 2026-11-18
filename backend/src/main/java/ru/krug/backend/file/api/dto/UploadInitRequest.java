@@ -8,7 +8,8 @@ public record UploadInitRequest(
         Long size,
         String mime,
         String encryptionMode,
-        String sha256) {
+        String sha256,
+        MediaMetadataRequest media) {
 
     public long sizeOrZero() {
         return size == null ? 0 : size;

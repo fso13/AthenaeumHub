@@ -6,6 +6,7 @@ import type {
   DownloadUrl,
   PreflightFile,
   UploadInitRequest,
+  UploadMediaMetadata,
   UploadSession,
   WorkspaceLimits,
   WorkspaceRole,
@@ -15,6 +16,8 @@ import { newUuid } from '../lib/ids';
 import { fileError, isFileRetryable, preflightDecisionError } from '../files/errors';
 import { readBlobArrayBuffer, sha256Buffer, sha256File } from '../files/hash';
 import { MAX_MESSAGE_ATTACHMENTS, effectiveMaxFileBytes } from '../files/limits';
+import { putLocalArtwork } from '../files/artworkCache';
+import type { Id3Artwork } from '../files/id3';
 
 const PART_RETRIES = 3;
 const DOWNLOAD_URL_SAFETY_MS = 30_000;
@@ -41,6 +44,10 @@ export interface UploadTask {
   name: string;
   size: number;
   mime: string;
+  /** D1-FE2: sanitized metadata sent with upload init (managed-only). */
+  media: UploadMediaMetadata | null;
+  /** Local-only ID3 artwork; saved to IndexedDB once the attachment exists. */
+  artwork: Id3Artwork | null;
   status: UploadTaskStatus;
   progress: number;
   uploadedBytes: number;
@@ -58,6 +65,13 @@ export interface UploadTask {
   abortKey: string;
   attempts: number;
   createdAt: number;
+}
+
+export interface UploadMediaOptions {
+  /** Sanitized managed media metadata for this file (D1-FE2). */
+  media?: UploadMediaMetadata | null;
+  /** Local-only ID3 artwork, cached after upload instead of being sent. */
+  artwork?: Id3Artwork | null;
 }
 
 export interface FilesState {
@@ -221,16 +235,70 @@ export class FilesStore {
     return this.state.tasks.filter((task) => task.chatId === chatId);
   }
 
+  private attachmentFromTask(task: UploadTask): ApiAttachment {
+    return {
+      id: task.attachmentId!,
+      filename: task.name,
+      size_bytes: task.size,
+      mime_type: task.mime || null,
+      scan_status: 'CLEAN',
+      ...(task.media ? { media: { ...task.media } } : {}),
+    };
+  }
+
   readyAttachments(chatId: string | null): ApiAttachment[] {
     return this.tasksFor(chatId)
       .filter((task) => task.status === 'ready' && task.attachmentId)
-      .map((task) => ({
-        id: task.attachmentId!,
-        filename: task.name,
-        size_bytes: task.size,
-        mime_type: task.mime || null,
-        scan_status: 'CLEAN',
-      }));
+      .map((task) => this.attachmentFromTask(task));
+  }
+
+  /**
+   * Resolve one upload to its ready attachment (voice "stop and send").
+   * Resolves `null` on denial/error/cancel/quarantine/timeout, so callers
+   * never wait forever and never send a half-uploaded attachment.
+   */
+  waitForReady(localId: string, timeoutMs = 180_000): Promise<ApiAttachment | null> {
+    const initial = this.getTask(localId);
+    if (!initial) return Promise.resolve(null);
+    if (initial.status === 'ready' && initial.attachmentId) {
+      return Promise.resolve(this.attachmentFromTask(initial));
+    }
+    const terminal: ReadonlySet<UploadTaskStatus> = new Set([
+      'denied',
+      'error',
+      'canceled',
+      'expired',
+      'quarantined',
+    ]);
+    if (terminal.has(initial.status)) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let unsubscribe: () => void = () => {};
+      const finish = (value: ApiAttachment | null) => {
+        if (settled) return;
+        settled = true;
+        unsubscribe();
+        if (timer !== null) clearTimeout(timer);
+        resolve(value);
+      };
+      const evaluate = () => {
+        const task = this.getTask(localId);
+        if (!task) {
+          finish(null);
+          return;
+        }
+        if (task.status === 'ready' && task.attachmentId) {
+          finish(this.attachmentFromTask(task));
+        } else if (terminal.has(task.status)) {
+          finish(null);
+        }
+      };
+      unsubscribe = this.subscribe(evaluate);
+      timer = setTimeout(() => finish(null), Math.max(0, timeoutMs));
+      evaluate();
+    });
   }
 
   /** Remove tasks bound to a successfully created message. */
@@ -244,8 +312,12 @@ export class FilesStore {
     });
   }
 
-  async addFiles(files: readonly File[], chatId: string): Promise<void> {
-    if (this.disposed || files.length === 0) return;
+  async addFiles(
+    files: readonly File[],
+    chatId: string,
+    mediaOptions: readonly (UploadMediaOptions | null)[] = [],
+  ): Promise<UploadTask[]> {
+    if (this.disposed || files.length === 0) return [];
     const maxAttachments = Math.min(
       MAX_MESSAGE_ATTACHMENTS,
       this.state.limits?.max_attachments ?? MAX_MESSAGE_ATTACHMENTS,
@@ -259,7 +331,9 @@ export class FilesStore {
       effectiveMaxFileBytes(this.state.limits, this.state.role) ?? this.config.uploadMaxFileBytes,
     );
 
-    const created: UploadTask[] = files.map((file) => this.newTask(file, chatId, clientMax));
+    const created: UploadTask[] = files.map((file, index) =>
+      this.newTask(file, chatId, clientMax, mediaOptions[index] ?? null),
+    );
     const eligible = created.filter((task) => task.status === 'queued');
     const batch = eligible.slice(0, slots);
     const overflow = eligible.slice(slots);
@@ -289,6 +363,7 @@ export class FilesStore {
         chatId,
       );
     }
+    return normalized;
   }
 
   async retryTask(localId: string): Promise<void> {
@@ -471,7 +546,12 @@ export class FilesStore {
     return this.state.tasks.find((task) => task.localId === localId);
   }
 
-  private newTask(file: File, chatId: string, maxFileBytes: number): UploadTask {
+  private newTask(
+    file: File,
+    chatId: string,
+    maxFileBytes: number,
+    mediaOptions: UploadMediaOptions | null = null,
+  ): UploadTask {
     const base: UploadTask = {
       localId: this.createId(),
       chatId,
@@ -479,6 +559,8 @@ export class FilesStore {
       name: file.name || 'file',
       size: file.size,
       mime: file.type || '',
+      media: mediaOptions?.media ? { ...mediaOptions.media } : null,
+      artwork: mediaOptions?.artwork ?? null,
       status: 'queued',
       progress: 0,
       uploadedBytes: 0,
@@ -632,6 +714,7 @@ export class FilesStore {
           size: task.size,
           ...(task.mime ? { mime: task.mime } : {}),
           encryption_mode: 'MANAGED',
+          ...(task.media ? { media: { ...task.media } } : {}),
         };
         let session: UploadSession;
         try {
@@ -702,6 +785,8 @@ export class FilesStore {
         error: null,
         retryable: false,
       });
+      // D1-FE2: keep ID3 artwork local-only, keyed by the final attachment id.
+      if (task.artwork) void putLocalArtwork(session.attachment_id, task.artwork);
       void this.refreshLimits();
       return;
     }

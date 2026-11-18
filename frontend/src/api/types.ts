@@ -110,11 +110,17 @@ export type PreflightRequest = components['schemas']['PreflightRequest'];
 export type PreflightDecision = components['schemas']['PreflightDecision'];
 export type PreflightResponse = components['schemas']['PreflightResponse'];
 export type UploadInitRequest = components['schemas']['UploadInitRequest'];
+/** D1-FE2: managed-only media metadata sent with upload init. */
+export type UploadMediaMetadata = NonNullable<UploadInitRequest['media']>;
+export type MediaKind = UploadMediaMetadata['kind'];
+export type MediaMetadataSource = UploadMediaMetadata['metadata_source'];
 export type UploadSession = components['schemas']['UploadSession'];
 export type UploadSessionStatus = UploadSession['status'];
 export type UploadPart = components['schemas']['UploadPart'];
 export type UploadCompleteRequest = components['schemas']['UploadCompleteRequest'];
 export type ApiAttachment = components['schemas']['AttachmentRef'];
+/** D1-FE2: sanitized managed media metadata (absent/null for plain files). */
+export type AttachmentMedia = NonNullable<ApiAttachment['media']>;
 export type AttachmentScanStatus = ApiAttachment['scan_status'];
 export type DownloadUrl = components['schemas']['DownloadUrl'];
 

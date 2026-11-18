@@ -3,6 +3,7 @@ import {
   extensionOf,
   fileTypeLabel,
   formatBytes,
+  formatDuration,
   formatPercent,
   isAudioMime,
   isPdfMime,
@@ -10,6 +11,7 @@ import {
   isSupportedAudioMime,
   isSupportedVideoMime,
   isVideoMime,
+  safeHttpUrl,
 } from './format';
 
 describe('file formatting', () => {
@@ -71,5 +73,27 @@ describe('file formatting', () => {
     expect(isSupportedAudioMime('audio/wav')).toBe(true);
     expect(isSupportedAudioMime('audio/svg+xml')).toBe(false);
     expect(isSupportedAudioMime('video/mp4')).toBe(false);
+  });
+});
+
+describe('media formatting helpers', () => {
+  it('formats durations for voice and song cards', () => {
+    expect(formatDuration(0)).toBe('0:00');
+    expect(formatDuration(999)).toBe('0:00');
+    expect(formatDuration(7_000)).toBe('0:07');
+    expect(formatDuration(65_000)).toBe('1:05');
+    expect(formatDuration(3_600_000)).toBe('1:00:00');
+    expect(formatDuration(Number.NaN)).toBe('—');
+    expect(formatDuration(null)).toBe('—');
+  });
+
+  it('accepts only absolute http(s) URLs for remote artwork/posters', () => {
+    expect(safeHttpUrl('https://cdn.example/cover.jpg')).toBe('https://cdn.example/cover.jpg');
+    expect(safeHttpUrl('http://cdn.example/cover.jpg')).toBe('http://cdn.example/cover.jpg');
+    expect(safeHttpUrl('javascript:alert(1)')).toBeNull();
+    expect(safeHttpUrl('data:image/svg+xml,<svg/>')).toBeNull();
+    expect(safeHttpUrl('blob:http://localhost/x')).toBeNull();
+    expect(safeHttpUrl('/relative.jpg')).toBeNull();
+    expect(safeHttpUrl('')).toBeNull();
   });
 });

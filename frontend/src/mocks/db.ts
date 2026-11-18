@@ -139,6 +139,8 @@ export interface MockUpload {
   filename: string;
   size: number;
   mime: string | null;
+  /** D1-BE2/FE2: sanitized client metadata, copied to the attachment. */
+  media: UploadInitRequest['media'];
   declaredSha256: string | null;
   partSize: number;
   totalParts: number;

@@ -5,17 +5,24 @@ import { describeError } from '../domain/errors';
 import {
   fileTypeLabel,
   formatBytes,
+  formatDuration,
   isPdfMime,
   isSafePreviewImage,
   isSupportedAudioMime,
   isSupportedVideoMime,
   isVideoMime,
+  safeHttpUrl,
 } from '../files/format';
+import { isVoiceMedia, songDisplay } from '../files/media';
 import { t, type MessageKey } from '../i18n/ru';
 import { useFilesStore } from '../store/ChatProvider';
+import { AudioAttachment } from './AudioAttachment';
 import { ErrorDetails } from './ErrorDetails';
 import { AlertIcon, DownloadIcon, FileIcon } from './Icons';
 import { MediaLightbox } from './MediaLightbox';
+import { SongCard } from './SongCard';
+import { VideoAttachment } from './VideoAttachment';
+import { VoiceMessage } from './VoiceMessage';
 
 const SCAN_LABEL: Record<AttachmentScanStatus, MessageKey> = {
   PENDING: 'files.scanStatus.PENDING',
@@ -91,8 +98,10 @@ export function AttachmentCard({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [downloadError, setDownloadError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [elementDurationMs, setElementDurationMs] = useState<number | null>(null);
 
   const name = attachment.filename?.trim() || t('attachments.attachmentOnly');
+  const media = attachment.media ?? null;
   const image = isSafePreviewImage(attachment.mime_type);
   const video = isSupportedVideoMime(attachment.mime_type);
   const audio = isSupportedAudioMime(attachment.mime_type);
@@ -108,8 +117,29 @@ export function AttachmentCard({
       ? t('attachments.quarantinedBlocked')
       : t('attachments.scanPending');
 
+  // D1-FE2: media metadata only decorates an already-allowed attachment.
+  const song = audio ? songDisplay(media) : null;
+  const voiceVariant = audio && isVoiceMedia(media, attachment.filename);
+  // An untagged MP3 (metadata_source NONE) still gets the song-card fallback
+  // (filename + unknown artist + default cover); legacy attachments without
+  // any `media` keep the original audio card unchanged.
+  const songVariant =
+    audio &&
+    media?.kind === 'AUDIO' &&
+    !voiceVariant &&
+    (song !== null || media.metadata_source === 'NONE');
+  const poster = video ? safeHttpUrl(media?.artwork_url) : null;
+  const durationMs = elementDurationMs ?? media?.duration_ms ?? null;
+  const dimensions =
+    media?.width && media?.height
+      ? t('attachments.dimensions', { width: media.width, height: media.height })
+      : null;
+  const showDuration = (audio || video) && durationMs !== null && durationMs > 0;
+  const durationLabel = showDuration ? formatDuration(durationMs) : null;
+
   const closeLightbox = useCallback(() => setLightboxOpen(false), []);
   const showPlayer = (video || audio) && Boolean(mediaUrl) && !mediaFailed;
+  const onPlayerDuration = useCallback((value: number) => setElementDurationMs(value), []);
 
   useEffect(() => {
     let active = true;
@@ -173,7 +203,41 @@ export function AttachmentCard({
     pdf || isVideoMime(attachment.mime_type) ? t('attachments.open') : t('attachments.download');
   const cardClass = `attachment-card${outgoing ? ' attachment-card--outgoing' : ''}${
     showPlayer ? ' attachment-card--player' : ''
-  }${scanBlocked ? ' attachment-card--blocked' : ''}`;
+  }${songVariant ? ' attachment-card--song' : ''}${voiceVariant ? ' attachment-card--voice' : ''}${
+    scanBlocked ? ' attachment-card--blocked' : ''
+  }`;
+
+  const songCard =
+    songVariant && media ? (
+      <SongCard
+        attachment={attachment}
+        media={media}
+        src={mediaFailed ? null : mediaUrl}
+        durationMs={durationMs}
+        onError={() => setMediaFailed(true)}
+        onDuration={onPlayerDuration}
+      />
+    ) : null;
+
+  const genericBody = (
+    <div className="attachment-card__body">
+      <span className="attachment-card__name" title={name}>
+        {name}
+      </span>
+      <span className="attachment-card__meta">
+        {fileTypeLabel(attachment.mime_type, attachment.filename)} ·{' '}
+        {formatBytes(attachment.size_bytes)}
+        {durationLabel ? ` · ${durationLabel}` : ''}
+        {dimensions ? ` · ${dimensions}` : ''}
+      </span>
+      <span
+        className={`scan-badge scan-badge--${attachment.scan_status.toLowerCase()}`}
+        title={scanLabel}
+      >
+        {scanLabel}
+      </span>
+    </div>
+  );
 
   return (
     <div className={cardClass}>
@@ -191,6 +255,8 @@ export function AttachmentCard({
                 className="attachment-card__image"
                 src={mediaUrl}
                 alt={t('attachments.imageAlt', { name })}
+                width={media?.width ?? undefined}
+                height={media?.height ?? undefined}
                 loading="lazy"
                 referrerPolicy="no-referrer"
                 onError={() => setMediaFailed(true)}
@@ -204,7 +270,9 @@ export function AttachmentCard({
         </div>
       ) : null}
 
-      {!image && !showPlayer ? (
+      {songCard}
+
+      {!image && !songVariant && !showPlayer ? (
         <div className="attachment-card__media">
           <span className="attachment-card__icon" aria-hidden="true">
             <FileIcon />
@@ -213,48 +281,35 @@ export function AttachmentCard({
       ) : null}
 
       {video && showPlayer ? (
-        <div className="attachment-card__player">
-          {/* No poster and no autoplay: playback starts only on user action. */}
-          <video
-            className="attachment-card__video"
-            src={mediaUrl ?? undefined}
-            controls
-            preload="metadata"
-            playsInline
-            aria-label={t('attachments.videoPlayer', { name })}
-            onError={() => setMediaFailed(true)}
-          />
-        </div>
+        <VideoAttachment
+          name={name}
+          src={mediaUrl!}
+          poster={poster}
+          onError={() => setMediaFailed(true)}
+          onDuration={onPlayerDuration}
+        />
       ) : null}
 
-      {audio && showPlayer ? (
-        <div className="attachment-card__player">
-          <audio
-            className="attachment-card__audio"
-            src={mediaUrl ?? undefined}
-            controls
-            preload="metadata"
-            aria-label={t('attachments.audioPlayer', { name })}
-            onError={() => setMediaFailed(true)}
-          />
-        </div>
+      {voiceVariant && showPlayer ? (
+        <VoiceMessage
+          name={name}
+          src={mediaUrl!}
+          durationMs={media?.duration_ms ?? elementDurationMs}
+          onError={() => setMediaFailed(true)}
+          onDuration={onPlayerDuration}
+        />
       ) : null}
 
-      <div className="attachment-card__body">
-        <span className="attachment-card__name" title={name}>
-          {name}
-        </span>
-        <span className="attachment-card__meta">
-          {fileTypeLabel(attachment.mime_type, attachment.filename)} ·{' '}
-          {formatBytes(attachment.size_bytes)}
-        </span>
-        <span
-          className={`scan-badge scan-badge--${attachment.scan_status.toLowerCase()}`}
-          title={scanLabel}
-        >
-          {scanLabel}
-        </span>
-      </div>
+      {audio && !songVariant && !voiceVariant && showPlayer ? (
+        <AudioAttachment
+          name={name}
+          src={mediaUrl!}
+          onError={() => setMediaFailed(true)}
+          onDuration={onPlayerDuration}
+        />
+      ) : null}
+
+      {songVariant ? null : genericBody}
 
       <div className="attachment-card__actions">
         <button

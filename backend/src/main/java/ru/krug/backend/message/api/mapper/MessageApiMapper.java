@@ -2,6 +2,7 @@ package ru.krug.backend.message.api.mapper;
 
 import java.util.List;
 
+import ru.krug.backend.message.api.dto.AttachmentMediaResponse;
 import ru.krug.backend.message.api.dto.AttachmentRefResponse;
 import ru.krug.backend.message.api.dto.EnvelopeCoverageResponse;
 import ru.krug.backend.message.api.dto.MessagePageInfo;
@@ -9,6 +10,7 @@ import ru.krug.backend.message.api.dto.MessagePageResponse;
 import ru.krug.backend.message.api.dto.MessageResponse;
 import ru.krug.backend.message.api.dto.MessageStickerResponse;
 import ru.krug.backend.message.api.dto.ThreadSummaryResponse;
+import ru.krug.backend.message.application.model.AttachmentMediaView;
 import ru.krug.backend.message.application.model.EnvelopeCoverageView;
 import ru.krug.backend.message.application.model.MessagePageView;
 import ru.krug.backend.message.application.model.MessageStickerView;
@@ -44,7 +46,7 @@ public final class MessageApiMapper {
         List<AttachmentRefResponse> attachments = view.attachments().stream()
                 .map(attachment -> new AttachmentRefResponse(attachment.id(),
                         attachment.filename(), attachment.sizeBytes(), attachment.mimeType(),
-                        attachment.scanStatus()))
+                        attachment.scanStatus(), media(attachment.media())))
                 .toList();
         return new MessageResponse(view.id(), view.chatId(), view.seq(), view.type(),
                 view.senderId(), view.senderDisplayName(), view.text(), view.replyToId(),
@@ -60,6 +62,15 @@ public final class MessageApiMapper {
                 .toList();
         return new MessagePageResponse(items,
                 new MessagePageInfo(view.nextCursor(), view.hasMore()));
+    }
+
+    private static AttachmentMediaResponse media(AttachmentMediaView media) {
+        if (media == null) {
+            return null;
+        }
+        return new AttachmentMediaResponse(media.kind(), media.durationMs(), media.width(),
+                media.height(), media.title(), media.artist(), media.album(), media.year(),
+                media.genre(), media.artworkUrl(), media.metadataSource());
     }
 
     private static EnvelopeCoverageResponse coverage(EnvelopeCoverageView coverage) {

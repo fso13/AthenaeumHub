@@ -126,7 +126,8 @@ public class CompleteUploadHandler {
 
         Attachment attachment = Attachment.uploaded(UUID.randomUUID(), upload.workspaceId(),
                 upload.chatId(), upload.id(), upload.userId(), upload.filename(),
-                upload.mimeType(), upload.sizeBytes(), expected, upload.objectKey(), now);
+                upload.mimeType(), upload.media(), upload.sizeBytes(), expected,
+                upload.objectKey(), now);
         attachmentRepository.save(attachment);
         Upload scanning = upload.markScanning(attachment.id(), now);
         if (upload.sha256() == null) {

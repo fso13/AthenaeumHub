@@ -7,5 +7,6 @@ public record AttachmentRefResponse(
         String filename,
         long sizeBytes,
         String mimeType,
-        String scanStatus) {
+        String scanStatus,
+        AttachmentMediaResponse media) {
 }

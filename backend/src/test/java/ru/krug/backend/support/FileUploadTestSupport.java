@@ -71,6 +71,19 @@ public abstract class FileUploadTestSupport extends IntegrationTestBase {
 
     protected MvcResult init(SessionResponse session, UUID chatId, String filename, byte[] data,
                              String mime, String idempotencyKey) throws Exception {
+        return init(session, chatId, filename, data, mime, null, "MANAGED", idempotencyKey);
+    }
+
+    /** D1-BE2: optional sanitized client media metadata travels with the upload init. */
+    protected MvcResult init(SessionResponse session, UUID chatId, String filename, byte[] data,
+                             String mime, Map<String, Object> media) throws Exception {
+        return init(session, chatId, filename, data, mime, media, "MANAGED",
+                UUID.randomUUID().toString());
+    }
+
+    protected MvcResult init(SessionResponse session, UUID chatId, String filename, byte[] data,
+                             String mime, Map<String, Object> media, String encryptionMode,
+                             String idempotencyKey) throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("chat_id", chatId.toString());
         body.put("filename", filename);
@@ -78,8 +91,11 @@ public abstract class FileUploadTestSupport extends IntegrationTestBase {
         if (mime != null) {
             body.put("mime", mime);
         }
-        body.put("encryption_mode", "MANAGED");
+        body.put("encryption_mode", encryptionMode);
         body.put("sha256", Sha256.ofBytes(data).value());
+        if (media != null) {
+            body.put("media", media);
+        }
         return mockMvc.perform(authed(post("/api/v1/uploads"), session)
                 .header("Idempotency-Key", idempotencyKey)
                 .contentType(MediaType.APPLICATION_JSON)

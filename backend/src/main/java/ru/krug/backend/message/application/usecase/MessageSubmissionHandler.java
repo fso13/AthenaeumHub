@@ -17,6 +17,7 @@ import ru.krug.backend.chat.application.port.ChatAccessPort;
 import ru.krug.backend.chat.application.port.SeqAllocator;
 import ru.krug.backend.message.application.command.SendMessageCommand;
 import ru.krug.backend.message.application.event.MessageCreatedNotification;
+import ru.krug.backend.message.application.model.AttachmentMediaView;
 import ru.krug.backend.message.application.model.E2eeSendPlan;
 import ru.krug.backend.message.application.model.EnvelopeBatch;
 import ru.krug.backend.message.application.model.MessageAttachmentView;
@@ -360,6 +361,25 @@ public class MessageSubmissionHandler {
                 Map.of("flag", "e2ee.enabled"));
     }
 
+    private static Map<String, Object> mediaMap(AttachmentMediaView media) {
+        if (media == null) {
+            return null;
+        }
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("kind", media.kind());
+        item.put("duration_ms", media.durationMs());
+        item.put("width", media.width());
+        item.put("height", media.height());
+        item.put("title", media.title());
+        item.put("artist", media.artist());
+        item.put("album", media.album());
+        item.put("year", media.year());
+        item.put("genre", media.genre());
+        item.put("artwork_url", media.artworkUrl());
+        item.put("metadata_source", media.metadataSource());
+        return item;
+    }
+
     private static Map<String, Object> payload(MessageCreatedEvent event, MessageView view) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("message_id", event.messageId());
@@ -386,6 +406,7 @@ public class MessageSubmissionHandler {
             item.put("size_bytes", attachment.sizeBytes());
             item.put("mime_type", attachment.mimeType());
             item.put("scan_status", attachment.scanStatus());
+            item.put("media", mediaMap(attachment.media()));
             return item;
         }).toList());
         return payload;

@@ -1,6 +1,7 @@
 package ru.krug.backend.file.infrastructure.persistence;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -8,8 +9,12 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import ru.krug.backend.file.domain.model.Attachment;
 import ru.krug.backend.file.domain.model.AttachmentStatus;
+import ru.krug.backend.file.domain.model.MediaMetadata;
 import ru.krug.backend.file.domain.model.ScanStatus;
 import ru.krug.backend.file.domain.model.Sha256;
 
@@ -40,6 +45,11 @@ public class AttachmentEntity {
 
     @Column(name = "mime_type")
     private String mimeType;
+
+    /** D1-BE2: sanitized client media metadata; null for plain/legacy files. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "media", columnDefinition = "jsonb")
+    private Map<String, Object> media;
 
     @Column(name = "size_bytes", nullable = false)
     private Long sizeBytes;
@@ -78,6 +88,7 @@ public class AttachmentEntity {
         entity.messageId = attachment.messageId();
         entity.filename = attachment.filename();
         entity.mimeType = attachment.mimeType();
+        entity.media = attachment.media() == null ? null : attachment.media().toMap();
         entity.sizeBytes = attachment.sizeBytes();
         entity.sha256 = attachment.sha256().value();
         entity.objectKey = attachment.objectKey();
@@ -91,9 +102,9 @@ public class AttachmentEntity {
 
     public Attachment toDomain() {
         return Attachment.reconstitute(id, workspaceId, chatId, uploadId, userId, messageId,
-                filename, mimeType, sizeBytes, Sha256.of(sha256), objectKey,
-                AttachmentStatus.valueOf(status), ScanStatus.valueOf(scanStatus), createdAt,
-                updatedAt, deletedAt);
+                filename, mimeType, MediaMetadata.fromMap(media), sizeBytes,
+                Sha256.of(sha256), objectKey, AttachmentStatus.valueOf(status),
+                ScanStatus.valueOf(scanStatus), createdAt, updatedAt, deletedAt);
     }
 
     public UUID getId() {
@@ -126,6 +137,10 @@ public class AttachmentEntity {
 
     public String getMimeType() {
         return mimeType;
+    }
+
+    public Map<String, Object> getMedia() {
+        return media;
     }
 
     public Long getSizeBytes() {

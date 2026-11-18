@@ -66,6 +66,11 @@
 `krug.e2ee.enabled=false` live- и replay-кадры E2EE не публикуются: ни `message.created`, ни
 `crypto` (P2-03 review-06); managed-события не затронуты.
 
+`payload.attachments[]` — объекты `AttachmentRef` из OpenAPI; с D1-BE2 managed-вложение
+несёт `media` (или `null`) с теми же sanitized-полями, что и REST. Для E2EE `attachments`
+всегда пуст: E2EE-сообщение не может нести attachment_ids, поэтому plaintext-метаданные
+медиа в WS не попадают. Сервер не парсит медиа-байты и не запрашивает `artwork_url`.
+
 `chat.keys.changed.reason`: `DEVICE_ADDED | DEVICE_REVOKED | IDENTITY_KEY_CHANGED |
 VERIFICATION_CHANGED | KEY_GENERATION_CHANGED`. Событие несёт только метаданные ключей/устройств,
 не содержимое сообщений; клиент на него перечитывает `GET /chats/{id}/keys`, на reconnect — всегда.

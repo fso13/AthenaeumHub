@@ -24,6 +24,7 @@ public final class Attachment {
     private final UUID messageId;
     private final String filename;
     private final String mimeType;
+    private final MediaMetadata media;
     private final long sizeBytes;
     private final Sha256 sha256;
     private final String objectKey;
@@ -34,8 +35,8 @@ public final class Attachment {
     private final Instant deletedAt;
 
     private Attachment(UUID id, UUID workspaceId, UUID chatId, UUID uploadId, UUID userId,
-                       UUID messageId, String filename, String mimeType, long sizeBytes,
-                       Sha256 sha256, String objectKey, AttachmentStatus status,
+                       UUID messageId, String filename, String mimeType, MediaMetadata media,
+                       long sizeBytes, Sha256 sha256, String objectKey, AttachmentStatus status,
                        ScanStatus scanStatus, Instant createdAt, Instant updatedAt,
                        Instant deletedAt) {
         this.id = Objects.requireNonNull(id, "id");
@@ -46,6 +47,7 @@ public final class Attachment {
         this.messageId = messageId;
         this.filename = Objects.requireNonNull(filename, "filename");
         this.mimeType = mimeType;
+        this.media = media;
         this.sizeBytes = sizeBytes;
         this.sha256 = Objects.requireNonNull(sha256, "sha256");
         this.objectKey = Objects.requireNonNull(objectKey, "objectKey");
@@ -63,20 +65,29 @@ public final class Attachment {
                                       UUID userId, String filename, String mimeType,
                                       long sizeBytes, Sha256 sha256, String objectKey,
                                       Instant now) {
+        return uploaded(id, workspaceId, chatId, uploadId, userId, filename, mimeType, null,
+                sizeBytes, sha256, objectKey, now);
+    }
+
+    public static Attachment uploaded(UUID id, UUID workspaceId, UUID chatId, UUID uploadId,
+                                      UUID userId, String filename, String mimeType,
+                                      MediaMetadata media, long sizeBytes, Sha256 sha256,
+                                      String objectKey, Instant now) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, null, filename, mimeType,
-                sizeBytes, sha256, objectKey, AttachmentStatus.READY, ScanStatus.PENDING, now,
-                now, null);
+                media, sizeBytes, sha256, objectKey, AttachmentStatus.READY, ScanStatus.PENDING,
+                now, now, null);
     }
 
     public static Attachment reconstitute(UUID id, UUID workspaceId, UUID chatId, UUID uploadId,
                                           UUID userId, UUID messageId, String filename,
-                                          String mimeType, long sizeBytes, Sha256 sha256,
-                                          String objectKey, AttachmentStatus status,
-                                          ScanStatus scanStatus, Instant createdAt,
-                                          Instant updatedAt, Instant deletedAt) {
+                                          String mimeType, MediaMetadata media, long sizeBytes,
+                                          Sha256 sha256, String objectKey,
+                                          AttachmentStatus status, ScanStatus scanStatus,
+                                          Instant createdAt, Instant updatedAt,
+                                          Instant deletedAt) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, messageId, filename,
-                mimeType, sizeBytes, sha256, objectKey, status, scanStatus, createdAt, updatedAt,
-                deletedAt);
+                mimeType, media, sizeBytes, sha256, objectKey, status, scanStatus, createdAt,
+                updatedAt, deletedAt);
     }
 
     public Attachment markClean(Instant now) {
@@ -102,8 +113,8 @@ public final class Attachment {
 
     public Attachment markDeleted(Instant now) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, messageId, filename,
-                mimeType, sizeBytes, sha256, objectKey, AttachmentStatus.DELETED, scanStatus,
-                createdAt, now, now);
+                mimeType, media, sizeBytes, sha256, objectKey, AttachmentStatus.DELETED,
+                scanStatus, createdAt, now, now);
     }
 
     /**
@@ -151,8 +162,8 @@ public final class Attachment {
     private Attachment with(AttachmentStatus nextStatus, ScanStatus nextScan, Instant now,
                             UUID nextMessageId) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, nextMessageId, filename,
-                mimeType, sizeBytes, sha256, objectKey, nextStatus, nextScan, createdAt, now,
-                deletedAt);
+                mimeType, media, sizeBytes, sha256, objectKey, nextStatus, nextScan, createdAt,
+                now, deletedAt);
     }
 
     public UUID id() {
@@ -185,6 +196,10 @@ public final class Attachment {
 
     public String mimeType() {
         return mimeType;
+    }
+
+    public MediaMetadata media() {
+        return media;
     }
 
     public long sizeBytes() {

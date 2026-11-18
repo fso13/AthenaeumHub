@@ -20,6 +20,7 @@ public final class Upload {
     private final UUID userId;
     private final String filename;
     private final String mimeType;
+    private final MediaMetadata media;
     private final long sizeBytes;
     private final Sha256 sha256;
     private final String encryptionMode;
@@ -35,7 +36,8 @@ public final class Upload {
     private final Instant completedAt;
 
     private Upload(UUID id, UUID workspaceId, UUID chatId, UUID userId, String filename,
-                   String mimeType, long sizeBytes, Sha256 sha256, String encryptionMode,
+                   String mimeType, MediaMetadata media, long sizeBytes, Sha256 sha256,
+                   String encryptionMode,
                    int partSize, int totalParts, String objectKey, String storageUploadId,
                    UUID attachmentId, UploadStatus status, Instant expiresAt, Instant createdAt,
                    Instant updatedAt, Instant completedAt) {
@@ -45,6 +47,7 @@ public final class Upload {
         this.userId = Objects.requireNonNull(userId, "userId");
         this.filename = requireFilename(filename);
         this.mimeType = mimeType;
+        this.media = media;
         this.sizeBytes = sizeBytes;
         this.sha256 = sha256;
         this.encryptionMode = encryptionMode;
@@ -69,30 +72,38 @@ public final class Upload {
     public static Upload create(UUID id, UUID workspaceId, UUID chatId, UUID userId,
                                 String filename, String mimeType, long sizeBytes, Sha256 sha256,
                                 Instant now, Instant expiresAt) {
+        return create(id, workspaceId, chatId, userId, filename, mimeType, null, sizeBytes, sha256,
+                now, expiresAt);
+    }
+
+    public static Upload create(UUID id, UUID workspaceId, UUID chatId, UUID userId,
+                                String filename, String mimeType, MediaMetadata media,
+                                long sizeBytes, Sha256 sha256, Instant now, Instant expiresAt) {
         FileSize size = FileSize.of(sizeBytes);
         int partSize = FileSize.DEFAULT_PART_SIZE;
         int totalParts = size.totalParts(partSize);
         String objectKey = "workspaces/" + workspaceId + "/files/" + id;
-        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, sizeBytes, sha256,
-                "MANAGED", partSize, totalParts, objectKey, null, null, UploadStatus.INIT,
-                expiresAt, now, now, null);
+        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, media, sizeBytes,
+                sha256, "MANAGED", partSize, totalParts, objectKey, null, null,
+                UploadStatus.INIT, expiresAt, now, now, null);
     }
 
     public static Upload reconstitute(UUID id, UUID workspaceId, UUID chatId, UUID userId,
-                                      String filename, String mimeType, long sizeBytes,
-                                      Sha256 sha256, String encryptionMode, int partSize,
-                                      int totalParts, String objectKey, String storageUploadId,
-                                      UUID attachmentId, UploadStatus status, Instant expiresAt,
-                                      Instant createdAt, Instant updatedAt, Instant completedAt) {
-        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, sizeBytes, sha256,
-                encryptionMode, partSize, totalParts, objectKey, storageUploadId, attachmentId,
-                status, expiresAt, createdAt, updatedAt, completedAt);
+                                      String filename, String mimeType, MediaMetadata media,
+                                      long sizeBytes, Sha256 sha256, String encryptionMode,
+                                      int partSize, int totalParts, String objectKey,
+                                      String storageUploadId, UUID attachmentId,
+                                      UploadStatus status, Instant expiresAt, Instant createdAt,
+                                      Instant updatedAt, Instant completedAt) {
+        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, media, sizeBytes,
+                sha256, encryptionMode, partSize, totalParts, objectKey, storageUploadId,
+                attachmentId, status, expiresAt, createdAt, updatedAt, completedAt);
     }
 
     public Upload withStorageUploadId(String storageUploadId, Instant now) {
-        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, sizeBytes, sha256,
-                encryptionMode, partSize, totalParts, objectKey, storageUploadId, attachmentId,
-                status, expiresAt, createdAt, now, completedAt);
+        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, media, sizeBytes,
+                sha256, encryptionMode, partSize, totalParts, objectKey, storageUploadId,
+                attachmentId, status, expiresAt, createdAt, now, completedAt);
     }
 
     public Upload markUploading(Instant now) {
@@ -113,9 +124,9 @@ public final class Upload {
     }
 
     public Upload markScanning(UUID attachmentIdValue, Instant now) {
-        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, sizeBytes, sha256,
-                encryptionMode, partSize, totalParts, objectKey, storageUploadId, attachmentIdValue,
-                UploadStatus.SCANNING, expiresAt, createdAt, now, now);
+        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, media, sizeBytes,
+                sha256, encryptionMode, partSize, totalParts, objectKey, storageUploadId,
+                attachmentIdValue, UploadStatus.SCANNING, expiresAt, createdAt, now, now);
     }
 
     public Upload markReady(Instant now) {
@@ -178,15 +189,15 @@ public final class Upload {
     }
 
     public Upload withSha(Sha256 value, Instant now) {
-        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, sizeBytes, value,
-                encryptionMode, partSize, totalParts, objectKey, storageUploadId, attachmentId,
-                status, expiresAt, createdAt, now, completedAt);
+        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, media, sizeBytes,
+                value, encryptionMode, partSize, totalParts, objectKey, storageUploadId,
+                attachmentId, status, expiresAt, createdAt, now, completedAt);
     }
 
     private Upload withStatus(UploadStatus next, Instant now, Instant completed) {
-        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, sizeBytes, sha256,
-                encryptionMode, partSize, totalParts, objectKey, storageUploadId, attachmentId,
-                next, expiresAt, createdAt, now, completed);
+        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, media, sizeBytes,
+                sha256, encryptionMode, partSize, totalParts, objectKey, storageUploadId,
+                attachmentId, next, expiresAt, createdAt, now, completed);
     }
 
     private static String requireFilename(String filename) {
@@ -218,6 +229,10 @@ public final class Upload {
 
     public String mimeType() {
         return mimeType;
+    }
+
+    public MediaMetadata media() {
+        return media;
     }
 
     public long sizeBytes() {

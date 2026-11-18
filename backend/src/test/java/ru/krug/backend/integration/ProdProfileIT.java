@@ -16,6 +16,11 @@ import org.springframework.test.web.servlet.MvcResult;
 import ru.krug.backend.support.IntegrationTestBase;
 
 @SpringBootTest(properties = {
+        // Test isolation: the prod profile does not load application-test.yml; its
+        // noop scanner would otherwise mark files of sibling test contexts CLEAN.
+        "krug.files.scan-enabled=false",
+        "krug.files.gc-enabled=false",
+        "krug.files.reconcile-enabled=false",
         "krug.auth.jwt-secret=prod-test-jwt-secret-please-change-32-bytes",
         "krug.content.key=prod-test-content-key-please-change-32-bytes",
         "krug.oidc.issuer=http://localhost:8180/realms/krug",
