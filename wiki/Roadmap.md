@@ -1,0 +1,51 @@
+# Roadmap и статус
+
+Статус ведётся в GitHub Issues и [ROADMAP #58](https://github.com/fso13/AthenaeumHub/issues/58).
+
+## Сделано
+
+Managed MVP: auth BFF, чаты, файлы, стикеры, realtime, уведомления, admin (users/chats/storage/actions/audit),
+workspace members, DIRECT, LDAP guide, media, бренд Pickle, deploy, QA.
+
+E2EE: backend B1–B4, client F1–F6, F7A browser KAT, F7B two-device, F8 P1 closure, G4 review.
+Флаг **false**.
+
+## Очередь
+
+### E2EE pilot (P0)
+
+- #29 clean-stack F7B fixture
+- #30 durable retry/drain
+- #31 negative key-change/TOFU live
+- #32 receiver R-15 v1.1 или PM acceptance
+- #33 Safari/iOS gate
+- #34 vectors v1.1
+- #35 CI/checklist/release
+- #36 legacy sendOrder/supersededAt
+- #37 kill-switch/retention/rollout
+- #38 enable flag (blocked)
+
+### Hardening
+
+- #39 HttpOnly refresh cookie
+- #40 Keycloak service account
+- #41 real SMTP
+- #42 V19/V20 runbook
+- #43 backup/restore
+- #44 TLS/reverse proxy
+- #45 workspace invitations
+
+### D1 Dashboard v1.0
+
+- #46 epic, #47–#56 implementation, #57 D1.1.
+
+## Milestones
+
+- MVP delivered
+- E2EE pilot
+- D1 Dashboard v1.0
+- Hardening v1.1
+
+## Правило
+
+`status: done` + closed — только с evidence; `blocked` — с указанием blocker.
