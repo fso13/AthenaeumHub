@@ -27,11 +27,17 @@ public class ChatEntity {
     @Column(name = "name")
     private String name;
 
+    @Column(name = "description")
+    private String description;
+
     @Column(name = "created_by")
     private UUID createdBy;
 
     @Column(name = "last_message_at")
     private Instant lastMessageAt;
+
+    @Column(name = "created_at")
+    private Instant createdAt;
 
     @Column(name = "deleted_at")
     private Instant deletedAt;
@@ -62,12 +68,20 @@ public class ChatEntity {
         return name;
     }
 
+    public String getDescription() {
+        return description;
+    }
+
     public UUID getCreatedBy() {
         return createdBy;
     }
 
     public Instant getLastMessageAt() {
         return lastMessageAt;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
     }
 
     public Instant getDeletedAt() {

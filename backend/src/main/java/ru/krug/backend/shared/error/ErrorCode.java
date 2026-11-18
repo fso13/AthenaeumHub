@@ -128,6 +128,9 @@ public final class ErrorCode {
     // bounded; the server never parses media bytes in this slice (D1.1).
     public static final String MEDIA_METADATA_INVALID = "MEDIA_METADATA_INVALID";
 
+    // D1-BE3: chat settings PATCH. E2EE exposes only a name label, not a description.
+    public static final String CHAT_SETTINGS_E2EE_UNSUPPORTED = "CHAT_SETTINGS_E2EE_UNSUPPORTED";
+
     private ErrorCode() {
     }
 }

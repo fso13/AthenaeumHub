@@ -9,6 +9,7 @@ import type {
   Chat,
   ChatCreateRequest,
   ChatSummary,
+  ChatUpdateRequest,
   Device,
   MeResponse,
   MeUser,
@@ -303,6 +304,32 @@ export function createEmptyWorkspaceMemberAdminState(): WorkspaceMemberAdminStat
   };
 }
 
+/**
+ * D1-FE5 chat settings. There is no optimistic chat update: the dialog keeps
+ * the typed draft while the `PATCH` is in flight, and `chats`/`ChatHeader` only
+ * change after the server returns the full `Chat`.
+ */
+export interface ChatSettingsState {
+  chatId: string | null;
+  status: 'idle' | 'saving' | 'saved' | 'error';
+  error: ApiError | null;
+}
+
+export function createEmptyChatSettingsState(): ChatSettingsState {
+  return { chatId: null, status: 'idle', error: null };
+}
+
+/** D1-FE5 profile device projection (`GET /devices`, no keys rendered). */
+export interface DevicesState {
+  items: Device[];
+  status: LoadStatus;
+  error: ApiError | null;
+}
+
+export function createEmptyDevicesState(): DevicesState {
+  return { items: [], status: 'idle', error: null };
+}
+
 export interface AppState {
   sessionStatus: 'idle' | 'loading' | 'ready' | 'error';
   /** Dev-profile session (F-01). Null in password/Auth BFF mode. */
@@ -360,6 +387,10 @@ export interface AppState {
   workspaceMembers: WorkspaceMembersState;
   /** E12-F: add/role/remove feedback; rows change only on server success. */
   workspaceMemberAdmin: WorkspaceMemberAdminState;
+  /** D1-FE5: server-confirmed `PATCH /chats/{chatId}` state. */
+  chatSettings: ChatSettingsState;
+  /** D1-FE5: `GET /devices` for the profile modal. */
+  devices: DevicesState;
 }
 
 export interface ChatStoreDeps {
@@ -459,11 +490,33 @@ export function toChatSummary(chat: Chat): ChatSummary {
   return {
     id: chat.id,
     name: chat.name ?? null,
+    description: chat.description ?? null,
     type: chat.type,
     security_mode: chat.security_mode,
     peer_id: chat.peer_id ?? null,
     peer_has_e2ee_capable_devices: chat.peer_has_e2ee_capable_devices ?? false,
     last_message_at: null,
+    unread_count: chat.unread_count,
+    last_seq: chat.last_seq,
+  };
+}
+
+/**
+ * `PATCH /chats/{chatId}` returns `Chat`, which has no `last_message_at`.
+ * Keep the list preview timestamp from the previous summary instead of
+ * dropping it on every settings save.
+ */
+function chatSummaryFromChat(chat: Chat, previous: ChatSummary | undefined): ChatSummary {
+  return {
+    ...(previous ?? toChatSummary(chat)),
+    id: chat.id,
+    name: chat.name ?? null,
+    description: chat.description ?? null,
+    type: chat.type,
+    security_mode: chat.security_mode,
+    peer_has_e2ee_capable_devices:
+      chat.peer_has_e2ee_capable_devices ?? previous?.peer_has_e2ee_capable_devices ?? false,
+    last_message_at: previous?.last_message_at ?? null,
     unread_count: chat.unread_count,
     last_seq: chat.last_seq,
   };
@@ -517,6 +570,8 @@ export class ChatStore {
   private membersToken = 0;
   private membersInFlight: Promise<void> | null = null;
   private membersLoadMoreInFlight = false;
+  /** D1-FE5: dedupes profile device reads; reset on workspace switch. */
+  private devicesInFlight: Promise<void> | null = null;
   /** Guards a single-read rollback that races with a successful read-all. */
   private notificationReadGeneration = 0;
   /** Invalidates in-flight notification responses across logout/workspace switch. */
@@ -583,6 +638,8 @@ export class ChatStore {
       chatCreateError: null,
       workspaceMembers: createEmptyWorkspaceMembersState(),
       workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
+      chatSettings: createEmptyChatSettingsState(),
+      devices: createEmptyDevicesState(),
     };
 
     this.ops = createOpsStore({ api: deps.api });
@@ -959,7 +1016,10 @@ export class ChatStore {
       chatCreateError: null,
       workspaceMembers: createEmptyWorkspaceMembersState(),
       workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
+      chatSettings: createEmptyChatSettingsState(),
+      devices: createEmptyDevicesState(),
     });
+    this.devicesInFlight = null;
     void this.loadChatLimits();
 
     try {
@@ -1473,6 +1533,113 @@ export class ChatStore {
     }
   }
 
+  clearChatSettings(): void {
+    const settings = this.state.chatSettings;
+    if (settings.chatId !== null || settings.status !== 'idle' || settings.error !== null) {
+      this.patch({ chatSettings: createEmptyChatSettingsState() });
+    }
+  }
+
+  /**
+   * D1-FE5: `PATCH /chats/{chatId}`. The server is the only source of truth:
+   * no optimistic chat/header update, and the list is re-read after a `200` so
+   * a concurrent rename by another OWNER/ADMIN cannot leave a stale sidebar.
+   */
+  async saveChatSettings(chatId: string, patch: ChatUpdateRequest): Promise<boolean> {
+    if (this.state.chatSettings.status === 'saving') return false;
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) {
+      this.patch({
+        chatSettings: {
+          chatId,
+          status: 'error',
+          error: ApiError.client('WORKSPACE_REQUIRED', 'No active workspace', 409),
+        },
+      });
+      return false;
+    }
+    const body: ChatUpdateRequest = {};
+    if (patch.name !== undefined) body.name = patch.name;
+    if (patch.description !== undefined) body.description = patch.description;
+    if (Object.keys(body).length === 0) {
+      this.patch({
+        chatSettings: {
+          chatId,
+          status: 'error',
+          error: ApiError.client(
+            'VALIDATION_FAILED',
+            'At least one chat setting is required',
+            422,
+            { reason: 'empty_patch' },
+          ),
+        },
+      });
+      return false;
+    }
+
+    this.patch({ chatSettings: { chatId, status: 'saving', error: null } });
+    try {
+      const updated = await this.api.updateChat(chatId, body);
+      if (this.currentWorkspaceId() !== workspaceId) {
+        this.patch({ chatSettings: createEmptyChatSettingsState() });
+        return false;
+      }
+      let chats = this.state.chats.map((chat) =>
+        chat.id === chatId ? chatSummaryFromChat(updated, chat) : chat,
+      );
+      // The response is already authoritative; the extra read is best-effort
+      // and keeps `last_message_at`/description consistent with the server.
+      try {
+        const list = await this.api.listChats(workspaceId);
+        if (this.currentWorkspaceId() === workspaceId) {
+          chats = list.items.some((chat) => chat.id === chatId)
+            ? list.items
+            : chats.map((chat) => (chat.id === chatId ? chatSummaryFromChat(updated, chat) : chat));
+        }
+      } catch {
+        // Keep the server-confirmed summary.
+      }
+      this.patch({
+        chats,
+        workspaceUnread: this.withActiveWorkspaceUnread(chats),
+        chatSettings: { chatId, status: 'saved', error: null },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.currentWorkspaceId() !== workspaceId) return false;
+      this.patch({
+        chatSettings: { chatId, status: 'error', error: apiError },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** D1-FE5 profile: one deduped `GET /devices` read (no keys are rendered). */
+  async loadDevices(force = false): Promise<void> {
+    if (!force && this.state.devices.status === 'ready') return;
+    if (this.devicesInFlight) return this.devicesInFlight;
+    this.patch({ devices: { ...this.state.devices, status: 'loading', error: null } });
+    this.devicesInFlight = (async () => {
+      try {
+        const list = await this.api.listDevices();
+        this.patch({ devices: { items: list.items, status: 'ready', error: null } });
+      } catch (error) {
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          devices: { items: this.state.devices.items, status: 'error', error: apiError },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        this.devicesInFlight = null;
+      }
+    })();
+    return this.devicesInFlight;
+  }
+
   async createChat(
     nameOrRequest: string | ChatCreateInput,
     idempotencyKey: string,
@@ -1707,7 +1874,10 @@ export class ChatStore {
       chatCreateError: null,
       workspaceMembers: createEmptyWorkspaceMembersState(),
       workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
+      chatSettings: createEmptyChatSettingsState(),
+      devices: createEmptyDevicesState(),
     });
+    this.devicesInFlight = null;
     this.e2eeBridge?.invalidateChat();
     this.pendingResets.clear();
   }

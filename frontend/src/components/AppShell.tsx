@@ -15,6 +15,8 @@ import { SecurityPage } from './pages/SecurityPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { Sidebar } from './Sidebar';
 import { SpaceRail } from './SpaceRail';
+import { ChatSettingsDialog } from './ChatSettingsDialog';
+import { ProfileDialog } from './ProfileDialog';
 import { ChatIcon, CloseIcon, MenuIcon } from './Icons';
 
 interface AppShellProps {
@@ -54,6 +56,10 @@ export function AppShell({
   const view = parseView(location);
   const { theme, setTheme } = useTheme();
   const [navOpen, setNavOpen] = useState(false);
+  const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const activeChat =
+    currentState.chats.find((chat) => chat.id === currentState.activeChatId) ?? null;
 
   const spaces = useMemo(() => railSpaces(currentState), [currentState]);
   const unread = useMemo(() => workspaceUnreadTotals(currentState), [currentState]);
@@ -138,6 +144,7 @@ export function AppShell({
           onCreateChat={onCreateChat}
           onOpenAdmin={onOpenAdmin}
           onOpenMembers={onOpenMembers}
+          onOpenProfile={() => setProfileOpen(true)}
         />
       </div>
 
@@ -159,7 +166,7 @@ export function AppShell({
           <span className="app__mobilebar-space">{workspaceName}</span>
         </div>
         {page === null ? (
-          <ChatScreen />
+          <ChatScreen onOpenChatSettings={() => setChatSettingsOpen(true)} />
         ) : page === 'overview' ? (
           <OverviewPage
             onBack={() => go('chat')}
@@ -176,6 +183,7 @@ export function AppShell({
             onBack={() => go('chat')}
             onOpenAdmin={onOpenAdmin}
             onOpenMembers={() => onOpenMembers?.()}
+            onOpenProfile={() => setProfileOpen(true)}
             onLogout={onLogout}
           />
         ) : page === 'plugins' ? (
@@ -184,6 +192,23 @@ export function AppShell({
           <SecurityPage onBack={() => go('chat')} onOpenChat={() => go('chat')} />
         )}
       </div>
+
+      <ChatSettingsDialog
+        open={chatSettingsOpen}
+        chat={activeChat}
+        onClose={() => setChatSettingsOpen(false)}
+        onOpenMembers={() => {
+          setChatSettingsOpen(false);
+          onOpenMembers?.();
+        }}
+      />
+      <ProfileDialog
+        open={profileOpen}
+        theme={theme}
+        onThemeChange={setTheme}
+        onClose={() => setProfileOpen(false)}
+        onLogout={onLogout}
+      />
     </div>
   );
 }

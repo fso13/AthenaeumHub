@@ -169,6 +169,18 @@ function validateThreadRoot(chat: ChatLike, rootId: string): Response | null {
   return null;
 }
 
+/** Mirrors D1-BE3 plain-text rules (no control chars except LF/TAB in description). */
+function hasDisallowedControl(value: string, allowed: ReadonlySet<number>): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if ((code < 0x20 || code === 0x7f) && !allowed.has(code)) return true;
+  }
+  return false;
+}
+
+const NO_CONTROL = new Set<number>();
+const DESCRIPTION_CONTROL_ALLOWED = new Set<number>([0x09, 0x0a]);
+
 function slugify(value: string): string {
   const base = value
     .toLowerCase()
@@ -1414,6 +1426,13 @@ export function createHandlers(db: MockDb) {
       return HttpResponse.json(device, { status: 201 });
     }),
 
+    /** D1-FE5: own devices for the profile modal (contract `DeviceList`). */
+    http.get(`${API}/devices`, ({ request }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      return HttpResponse.json({ items: db.devices });
+    }),
+
     http.post(`${API}/workspaces`, async ({ request }) => {
       const unauthorized = requireAuth(request);
       if (unauthorized) return unauthorized;
@@ -1487,6 +1506,114 @@ export function createHandlers(db: MockDb) {
           .filter((chat) => chat.workspaceId === workspace.id)
           .map((chat) => chat.summary),
       });
+    }),
+
+    /**
+     * D1-FE5: `PATCH /chats/{chatId}` (D1-BE3). Mirrors the server contract:
+     * workspace OWNER/ADMIN only, MEMBER/GUEST -> 403, unknown/foreign -> 404,
+     * E2EE description -> 422 CHAT_SETTINGS_E2EE_UNSUPPORTED, name 1..120,
+     * description <=500, plain text, empty patch -> 422. No optimistic state:
+     * the returned Chat is the only accepted update.
+     */
+    http.patch(`${API}/chats/:chatId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      const workspace = record
+        ? db.me.workspaces.find((item) => item.id === record.workspaceId)
+        : undefined;
+      if (!record || !workspace) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      db.chatSettingsRequests.push({
+        chatId,
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.chatSettingsDelayMs > 0) await delay(db.chatSettingsDelayMs);
+      if (db.forceChatSettingsError) {
+        const forced = db.forceChatSettingsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      if (workspace.role !== 'OWNER' && workspace.role !== 'ADMIN') {
+        return errorResponse(403, 'FORBIDDEN', 'Not a workspace owner/admin');
+      }
+
+      const hasName = body.name !== undefined && body.name !== null;
+      const hasDescription = body.description !== undefined && body.description !== null;
+      if (!hasName && !hasDescription) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'At least one field is required', {
+          details: { reason: 'empty_patch' },
+        });
+      }
+      if (record.summary.security_mode === 'E2EE' && hasDescription) {
+        return errorResponse(
+          422,
+          'CHAT_SETTINGS_E2EE_UNSUPPORTED',
+          'Description is not available in an E2EE chat',
+        );
+      }
+
+      const next = { ...record.summary };
+      if (hasName) {
+        if (typeof body.name !== 'string') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'name must be a string', {
+            details: { field: 'name' },
+          });
+        }
+        const normalized = body.name.trim().replace(/\s+/g, ' ');
+        const length = Array.from(normalized).length;
+        if (
+          length < 1 ||
+          length > 120 ||
+          /[<>]/.test(normalized) ||
+          hasDisallowedControl(normalized, NO_CONTROL)
+        ) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'name is invalid', {
+            details: { field: 'name', max_length: 120 },
+          });
+        }
+        next.name = normalized;
+      }
+      if (hasDescription) {
+        if (typeof body.description !== 'string') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'description must be a string', {
+            details: { field: 'description' },
+          });
+        }
+        const normalized = body.description.replace(/\r\n?/g, '\n').trim();
+        if (
+          Array.from(normalized).length > 500 ||
+          /[<>]/.test(normalized) ||
+          hasDisallowedControl(normalized, DESCRIPTION_CONTROL_ALLOWED)
+        ) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'description is invalid', {
+            details: { field: 'description', max_length: 500 },
+          });
+        }
+        next.description = normalized.length === 0 ? null : normalized;
+      }
+
+      record.summary = next;
+      const chat: Chat = {
+        id: next.id,
+        type: next.type,
+        security_mode: next.security_mode,
+        peer_id: next.peer_id ?? null,
+        peer_has_e2ee_capable_devices: next.peer_has_e2ee_capable_devices ?? false,
+        name: next.name,
+        description: next.description ?? null,
+        last_seq: next.last_seq,
+        unread_count: next.unread_count,
+        created_at: new Date().toISOString(),
+      };
+      return HttpResponse.json(chat);
     }),
 
     /**

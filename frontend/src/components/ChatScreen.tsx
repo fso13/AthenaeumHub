@@ -33,7 +33,12 @@ import { TypingIndicator } from './TypingIndicator';
 import { LimitsBar } from './LimitsBar';
 import { UploadTray } from './UploadTray';
 
-export function ChatScreen() {
+interface ChatScreenProps {
+  /** D1-FE5: opens the chat settings dialog from the header. */
+  onOpenChatSettings?: () => void;
+}
+
+export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
   const store = useChatStore();
   const state = useChatState();
   const [draft, setDraft] = useState('');
@@ -381,6 +386,7 @@ export function ChatScreen() {
           chat={chatSummary}
           onRefresh={() => void store.sync()}
           onOpenSafety={() => setSafetyOpen(true)}
+          onOpenSettings={onOpenChatSettings}
         />
 
         {activeChatId ? (

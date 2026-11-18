@@ -31,6 +31,7 @@
     "playwright.e2ee-real.config.ts",
     "playwright.real.config.ts",
     "playwright.auth.config.ts",
+    "playwright.dashboard.config.ts",
     "playwright.ws.config.ts"
   ],
   "exclude": ["node_modules", "dist", "playwright-report", "test-results"]

@@ -11,7 +11,7 @@
 | Admin: users/chats/storage/actions/audit/members | **DONE** |
 | LDAP/AD/FreeIPA guide | **DONE** |
 | E2EE | **GO WITH CONDITIONS** для Chromium/Firefox pilot; флаг **false** |
-| D1 Message Dashboard v1.0 | **QUEUED**, P1/XL |
+| D1 Message Dashboard v1.0 (MVP) | **DONE**; D1.1 queued |
 | Auth/Ops hardening | **NEXT** |
 
 ## Тесты и контракт
@@ -29,7 +29,8 @@
 
 - E2EE pilot: #29–#38.
 - Hardening: #39–#45.
-- D1 Dashboard v1.0: #46–#57.
+- D1 MVP: #46–#56 closed; D1.1: #57.
+- E2EE pilot: #29–#38.
 
 ## Репозиторий
 

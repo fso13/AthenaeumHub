@@ -8,6 +8,7 @@ export default defineConfig({
     /admin\.spec\.ts/,
     /e2ee-browser\.spec\.ts/,
     /e2ee\.real\.spec\.ts/,
+    /d1-.*\.spec\.ts/,
   ],
   fullyParallel: false,
   workers: 1,

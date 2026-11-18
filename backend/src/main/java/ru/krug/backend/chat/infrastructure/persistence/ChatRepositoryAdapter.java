@@ -13,6 +13,7 @@ import org.springframework.stereotype.Repository;
 import ru.krug.backend.chat.domain.model.Chat;
 import ru.krug.backend.chat.domain.model.ChatCounter;
 import ru.krug.backend.chat.domain.model.ChatMember;
+import ru.krug.backend.chat.domain.model.ChatSettingsScope;
 import ru.krug.backend.chat.domain.model.ChatSummary;
 import ru.krug.backend.chat.domain.repository.ChatRepository;
 import ru.krug.backend.chat.domain.service.DirectPairKey;
@@ -96,6 +97,7 @@ public class ChatRepositoryAdapter implements ChatRepository {
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT c.id,
                                c.name,
+                               c.description,
                                c.type,
                                c.security_mode,
                                c.last_message_at,
@@ -141,14 +143,15 @@ public class ChatRepositoryAdapter implements ChatRepository {
         return rows.stream().map(row -> new ChatSummary(
                 (UUID) row[0],
                 (String) row[1],
-                Chat.Type.valueOf((String) row[2]),
-                Chat.SecurityMode.valueOf((String) row[3]),
-                instant(row[4]),
+                (String) row[2],
+                Chat.Type.valueOf((String) row[3]),
+                Chat.SecurityMode.valueOf((String) row[4]),
+                instant(row[5]),
+                ((Number) row[7]).longValue(),
                 ((Number) row[6]).longValue(),
-                ((Number) row[5]).longValue(),
-                (UUID) row[7],
-                Boolean.TRUE.equals(row[8]),
-                instant(row[9]))).toList();
+                (UUID) row[8],
+                Boolean.TRUE.equals(row[9]),
+                instant(row[10]))).toList();
     }
 
     @Override
@@ -186,6 +189,39 @@ public class ChatRepositoryAdapter implements ChatRepository {
                 .setParameter(2, workspaceId)
                 .setParameter(3, Timestamp.from(at))
                 .executeUpdate();
+    }
+
+    @Override
+    public Optional<ChatSettingsScope> findSettingsScope(UUID chatId, UUID userId) {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT workspace_id, workspace_role
+                          FROM chat.settings_scope(CAST(?1 AS uuid), CAST(?2 AS uuid))
+                        """)
+                .setParameter(1, chatId)
+                .setParameter(2, userId)
+                .getResultList();
+        return rows.stream().findFirst()
+                .map(row -> new ChatSettingsScope((UUID) row[0], (String) row[1]));
+    }
+
+    @Override
+    public boolean updateDetails(Chat chat) {
+        int updated = entityManager.createNativeQuery("""
+                        UPDATE chat.chats
+                           SET name = ?3,
+                               description = ?4,
+                               updated_at = now()
+                         WHERE id = ?1
+                           AND workspace_id = ?2
+                           AND deleted_at IS NULL
+                        """)
+                .setParameter(1, chat.id())
+                .setParameter(2, chat.workspaceId())
+                .setParameter(3, chat.name())
+                .setParameter(4, chat.description())
+                .executeUpdate();
+        return updated > 0;
     }
 
     @Override

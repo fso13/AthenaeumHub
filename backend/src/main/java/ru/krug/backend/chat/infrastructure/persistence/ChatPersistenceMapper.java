@@ -11,6 +11,7 @@ public final class ChatPersistenceMapper {
         return Chat.reconstitute(entity.getId(), entity.getWorkspaceId(),
                 Chat.Type.valueOf(entity.getType()),
                 Chat.SecurityMode.valueOf(entity.getSecurityMode()),
-                entity.getName(), entity.getCreatedBy(), entity.getLastMessageAt());
+                entity.getName(), entity.getDescription(), entity.getCreatedBy(),
+                entity.getLastMessageAt(), entity.getCreatedAt());
     }
 }

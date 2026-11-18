@@ -8,6 +8,7 @@ import java.util.UUID;
 import ru.krug.backend.chat.domain.model.Chat;
 import ru.krug.backend.chat.domain.model.ChatCounter;
 import ru.krug.backend.chat.domain.model.ChatMember;
+import ru.krug.backend.chat.domain.model.ChatSettingsScope;
 import ru.krug.backend.chat.domain.model.ChatSummary;
 
 public interface ChatRepository {
@@ -28,6 +29,18 @@ public interface ChatRepository {
     void saveCounter(ChatCounter counter);
 
     void touchLastMessageAt(UUID workspaceId, UUID chatId, Instant at);
+
+    /**
+     * D1-BE3: resolves the workspace of a live chat for an ACTIVE workspace member via
+     * {@code chat.settings_scope}. Chat membership is intentionally not required.
+     */
+    Optional<ChatSettingsScope> findSettingsScope(UUID chatId, UUID userId);
+
+    /**
+     * Persists name/description (D1-BE3). {@code false} when the live chat disappeared
+     * concurrently or belongs to another workspace.
+     */
+    boolean updateDetails(Chat chat);
 
     void markRead(UUID workspaceId, UUID chatId, UUID userId, long lastSeq, Instant at);
 

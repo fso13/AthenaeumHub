@@ -35,6 +35,8 @@ interface SidebarProps {
   onCreateChat?: () => void;
   onOpenAdmin?: () => void;
   onOpenMembers?: () => void;
+  /** D1-FE5: opens the profile modal from the signed-in user row. */
+  onOpenProfile?: () => void;
 }
 
 export function Sidebar({
@@ -48,6 +50,7 @@ export function Sidebar({
   onCreateChat,
   onOpenAdmin,
   onOpenMembers,
+  onOpenProfile,
 }: SidebarProps) {
   const loading = state.sessionStatus === 'loading' || state.sessionStatus === 'idle';
   const session = state.session;
@@ -226,16 +229,39 @@ export function Sidebar({
       <div className="sidebar__foot">
         {user ? (
           <div className="me">
-            <Avatar name={user.display_name} seed={user.id} />
-            <div className="me__text">
-              <span className="me__name">{user.display_name}</span>
-              <span
-                className={`me__status${state.online ? '' : ' me__status--offline'}`}
-                role="status"
+            {onOpenProfile ? (
+              <button
+                type="button"
+                className="me__identity"
+                onClick={onOpenProfile}
+                aria-label={t('profile.open')}
+                title={t('profile.open')}
               >
-                {t(state.online ? 'sidebar.online' : 'sidebar.offline')}
-              </span>
-            </div>
+                <Avatar name={user.display_name} seed={user.id} />
+                <span className="me__text">
+                  <span className="me__name">{user.display_name}</span>
+                  <span
+                    className={`me__status${state.online ? '' : ' me__status--offline'}`}
+                    role="status"
+                  >
+                    {t(state.online ? 'sidebar.online' : 'sidebar.offline')}
+                  </span>
+                </span>
+              </button>
+            ) : (
+              <div className="me__identity">
+                <Avatar name={user.display_name} seed={user.id} />
+                <div className="me__text">
+                  <span className="me__name">{user.display_name}</span>
+                  <span
+                    className={`me__status${state.online ? '' : ' me__status--offline'}`}
+                    role="status"
+                  >
+                    {t(state.online ? 'sidebar.online' : 'sidebar.offline')}
+                  </span>
+                </div>
+              </div>
+            )}
             {isAdmin && onOpenAdmin ? (
               <button
                 type="button"

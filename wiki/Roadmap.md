@@ -37,7 +37,8 @@ E2EE: backend B1–B4, client F1–F6, F7A browser KAT, F7B two-device, F8 P1 cl
 
 ### D1 Dashboard v1.0
 
-- #46 epic, #47–#56 implementation, #57 D1.1.
+- MVP #46–#56 — **DONE**: threads, rail/99+, pages, voice/media/ID3, settings/profile, e2e.
+- #57 D1.1 — queued: E2EE threads, server media extraction, player/playlists.
 
 ## Milestones
 

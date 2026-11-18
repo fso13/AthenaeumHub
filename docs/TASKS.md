@@ -711,16 +711,16 @@ cd ../frontend && npm run --silent contract:check
 
 | ID | Задача | Роль | Оценка | Зависимости | Статус |
 |---|---|---|---|---|---|
-| D1 | Epic: Dashboard v1.0 (рейл/99+, треды, голос/аудио/видео, песни, страницы) | FE+BE | 35–45 d | contract I-01, E4, E6, E12, E7 flag off | **READY / queued** |
+| D1 | Epic: Dashboard v1.0 (рейл/99+, треды, голос/аудио/видео, песни, страницы) | FE+BE | 35–45 d | contract I-01, E4, E6, E12, E7 flag off | **MVP DONE**; D1.1 #57 |
 | D1-C1 | Contract: threads, `AttachmentRef.media`, `PATCH /chats/{id}` | PM/BE | 2 d | I-01 | pending |
 | D1-BE1 | Threads schema/API/summary/WS/RLS/idempotency | BE | 6 d | D1-C1 | **DONE** (467 tests) |
 | D1-BE2 | Media metadata/artwork/MIME/limits | BE | 4 d | D1-C1, E4 | **DONE** (486 tests) |
-| D1-BE3 | Chat settings PATCH + audit + members | BE | 3 d | D1-C1, E12 | pending |
+| D1-BE3 | Chat settings PATCH + audit + members | BE | 3 d | D1-C1, E12 | **DONE** (498 tests) |
 | D1-FE1 | Shell: rail/sidebar/pages/routing/themes | FE | 5 d | D1-C1 | pending |
 | D1-FE2 | Flat feed + voice/audio/video/song + ID3 | FE | 6 d | D1-BE2 | in progress |
 | D1-FE3 | Threads UI + realtime + mobile | FE | 4 d | D1-BE1 | in progress |
-| D1-FE4 | Overview/Files + limits + empty/error | FE | 4 d | D1-BE1/BE2 | pending |
-| D1-FE5 | Profile/Chat settings modals | FE | 3 d | D1-BE3 | pending |
-| D1-QA1 | E2E/a11y/responsive/contract | QA | 3 d | all | pending |
+| D1-FE4 | Overview/Files + limits + empty/error | FE | 4 d | D1-BE1/BE2 | **DONE** (в FE1) |
+| D1-FE5 | Profile/Chat settings modals | FE | 3 d | D1-BE3 | **DONE** (852 tests) |
+| D1-QA1 | E2E/a11y/responsive/contract | QA | 3 d | all | in progress |
 
 **Порядок:** C1 → BE1/BE2/BE3 → FE1/FE2/FE3/FE4/FE5 → QA1. E2EE threads/E2EE media metadata — D1.1, не MVP. D1 не включает звонки, marketplace, DLP-движок, изменение криптопротокола.

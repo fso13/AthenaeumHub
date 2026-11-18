@@ -3,7 +3,7 @@ import { chatDisplayName } from '../domain/chatLabel';
 import { formatTime } from '../domain/messages';
 import { t, type MessageKey } from '../i18n/ru';
 import type { AppState } from '../store/chatStore';
-import { LockIcon, RefreshIcon } from './Icons';
+import { LockIcon, RefreshIcon, SettingsIcon } from './Icons';
 
 interface ChatHeaderProps {
   state: AppState;
@@ -11,6 +11,8 @@ interface ChatHeaderProps {
   onRefresh: () => void;
   /** E7-F5: opens the per-device safety number dialog. */
   onOpenSafety?: () => void;
+  /** D1-FE5: opens the chat settings dialog ("О чате"). */
+  onOpenSettings?: () => void;
 }
 
 const REALTIME_LABEL: Record<AppState['realtimeStatus'], MessageKey> = {
@@ -22,7 +24,13 @@ const REALTIME_LABEL: Record<AppState['realtimeStatus'], MessageKey> = {
   revoked: 'chat.realtimeRevoked',
 };
 
-export function ChatHeader({ state, chat, onRefresh, onOpenSafety }: ChatHeaderProps) {
+export function ChatHeader({
+  state,
+  chat,
+  onRefresh,
+  onOpenSafety,
+  onOpenSettings,
+}: ChatHeaderProps) {
   const name = chatDisplayName(
     chat,
     state.workspaceMembers.items,
@@ -72,6 +80,17 @@ export function ChatHeader({ state, chat, onRefresh, onOpenSafety }: ChatHeaderP
       </div>
 
       <div className="chat-head__actions">
+        {onOpenSettings ? (
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onOpenSettings}
+            aria-label={t('chatSettings.open')}
+            title={t('chatSettings.open')}
+          >
+            <SettingsIcon aria-hidden="true" />
+          </button>
+        ) : null}
         {securityMode === 'E2EE' && onOpenSafety ? (
           <button
             type="button"

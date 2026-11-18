@@ -18,9 +18,11 @@ import type {
   ChangeWorkspaceMemberRoleRequest,
   Chat,
   ChatCreateRequest,
+  ChatUpdateRequest,
   ChatList,
   CreateWorkspaceRequest,
   Device,
+  DeviceList,
   DeviceRegistration,
   DownloadUrl,
   MeResponse,
@@ -136,9 +138,13 @@ export interface ChatApi {
   listAdminAudit(query?: ListAdminAuditQuery): Promise<AdminAuditPage>;
 
   registerDevice(body: DeviceRegistration, idempotencyKey: string): Promise<Device>;
+  /** D1-FE5: profile device list (id/name/platform/status only in the UI). */
+  listDevices(): Promise<DeviceList>;
   createWorkspace(body: CreateWorkspaceRequest, idempotencyKey: string): Promise<WorkspaceSummary>;
   /** E8: GROUP creation is idempotent by `Idempotency-Key`; DIRECT needs `peer_id`. */
   createChat(workspaceId: string, body: ChatCreateRequest, idempotencyKey: string): Promise<Chat>;
+  /** D1-FE5: `PATCH /chats/{chatId}` (workspace OWNER/ADMIN; no optimistic lock). */
+  updateChat(chatId: string, body: ChatUpdateRequest): Promise<Chat>;
   listChats(workspaceId: string): Promise<ChatList>;
   listMessages(chatId: string, query?: ListMessagesQuery): Promise<MessagePage>;
   sendMessage(
@@ -414,6 +420,13 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       });
     },
 
+    listDevices() {
+      return withReauth(async () => {
+        const response = await client.get<DeviceList>('/devices');
+        return response.data;
+      });
+    },
+
     createWorkspace(body, idempotencyKey) {
       return withReauth(async () => {
         const response = await client.post<WorkspaceSummary>('/workspaces', body, {
@@ -430,6 +443,13 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
           body,
           { idempotencyKey },
         );
+        return response.data;
+      });
+    },
+
+    updateChat(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<Chat>(`/chats/${encodeURIComponent(chatId)}`, body);
         return response.data;
       });
     },

@@ -1468,6 +1468,54 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /chats/{chatId}:
+    patch:
+      tags: [chats]
+      operationId: updateChat
+      summary: Обновить название и/или описание чата (workspace OWNER/ADMIN)
+      description: >
+        Merged-патч настроек чата: `name` и/или `description`. Вызывающий должен быть
+        ACTIVE-участником воркспейса чата с ролью `OWNER` или `ADMIN` (роли чата не
+        используются). `MEMBER`/`GUEST` получают `403 FORBIDDEN`; неизвестный, удалённый
+        или чужой чат — `404` без раскрытия существования. Тело без `name` и
+        `description` — `422 VALIDATION_FAILED`. `name` после trim/collapse пробелов —
+        1..120 символов, `description` — до 500 символов, `description: ""` очищает
+        описание в `null`. Строки — plain text: управляющие символы (кроме `\n`/`\t` в
+        описании) и `<`/`>` отклоняются `422 VALIDATION_FAILED`; сервер ничего не
+        экранирует и не интерпретирует как HTML. В E2EE-чате разрешён только `name`:
+        `description` (включая очистку) отклоняется `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`
+        без частичного применения. `security_mode` неизменяем. Идемпотентность и
+        оптимистическая блокировка не требуются; успешный запрос пишет audit
+        `chat.updated` (metadata — только имена изменённых полей, без значений).
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatUpdateRequest"
+      responses:
+        "200":
+          description: Настройки обновлены; возвращается полный Chat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Chat"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
   /chats/{chatId}/keys:
     get:
       tags: [devices]
@@ -1751,6 +1799,9 @@ components:
         THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED.
         D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio
         allowlist is 415 UNSUPPORTED_TYPE.
+        D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an
+        E2EE chat; invalid/empty name or description and an empty patch are
+        VALIDATION_FAILED (422).
       properties:
         code: { type: string }
         message: { type: string }
@@ -2619,6 +2670,12 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: [string, "null"] }
+        description:
+          type: [string, "null"]
+          maxLength: 500
+          description: >
+            Plain-text chat description (D1-BE3, additive). Null when unset, cleared, or
+            not readable; never contains HTML.
         type: { type: string, enum: [DIRECT, GROUP] }
         security_mode: { type: string, enum: [MANAGED, E2EE] }
         peer_id: { type: [string, "null"], format: uuid }
@@ -3083,6 +3140,31 @@ components:
         peer_id: { type: [string, "null"], format: uuid }
         name: { type: [string, "null"], maxLength: 120 }
 
+    ChatUpdateRequest:
+      type: object
+      additionalProperties: false
+      description: >
+        `PATCH /chats/{chatId}` (D1-BE3). Both fields are optional, but at least one must
+        be present and non-null. `name` is trimmed and internal whitespace is collapsed;
+        it must be 1..120 characters. `description` is trimmed, must be at most 500
+        characters, and `""` clears it to `null`. Names/descriptions are plain text:
+        `<`, `>` and control characters (except `\n`/`\t` in description) are rejected.
+        In an E2EE chat `description` is rejected with
+        `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`; `name` is allowed. `security_mode` is
+        immutable and is never accepted in the body.
+      properties:
+        name:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 120
+          description: New chat name; optional. Null is treated as "not provided".
+        description:
+          type: [string, "null"]
+          maxLength: 500
+          description: >
+            New description; optional. Null is treated as "not provided"; an empty string
+            after trim clears the description.
+
     Chat:
       type: object
       required: [id, type, security_mode, last_seq, unread_count, created_at]
@@ -3093,6 +3175,10 @@ components:
         peer_id: { type: [string, "null"], format: uuid }
         peer_has_e2ee_capable_devices: { type: boolean }
         name: { type: [string, "null"] }
+        description:
+          type: [string, "null"]
+          maxLength: 500
+          description: Plain-text description (D1-BE3); null when empty or not a managed setting.
         key_epoch: { type: [integer, "null"], minimum: 0 }
         last_seq: { type: integer, format: int64, minimum: 0 }
         unread_count: { type: integer, minimum: 0 }

@@ -6,6 +6,7 @@ import java.util.UUID;
 public record ChatSummaryResponse(
         UUID id,
         String name,
+        String description,
         String type,
         String securityMode,
         UUID peerId,

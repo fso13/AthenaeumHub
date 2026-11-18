@@ -28,6 +28,8 @@ export type WorkspaceRole = WorkspaceSummary['role'];
 export type CreateWorkspaceRequest = components['schemas']['CreateWorkspaceRequest'];
 export type DeviceRegistration = components['schemas']['DeviceRegistration'];
 export type Device = components['schemas']['Device'];
+/** D1-FE5: `GET /devices` projection for the profile modal (no secrets). */
+export type DeviceList = components['schemas']['DeviceList'];
 /** E3: one-time WebSocket ticket; `ws_url` is the server-advertised endpoint. */
 export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 
@@ -57,6 +59,8 @@ export type TestEmailRequest = components['schemas']['TestEmailRequest'];
 export type TestEmailResponse = components['schemas']['TestEmailResponse'];
 export type Chat = components['schemas']['Chat'];
 export type ChatCreateRequest = components['schemas']['ChatCreateRequest'];
+/** D1-FE5: merged settings patch for `PATCH /chats/{chatId}` (name/description only). */
+export type ChatUpdateRequest = components['schemas']['ChatUpdateRequest'];
 
 /* ------------------------------------------------------------------------- */
 /* E11-F: admin actions (suspend/activate/soft-delete) and the audit view     */

@@ -142,7 +142,7 @@ public class ChatCreateService {
         boolean peerCapable = chatRepository.peerHasE2eeCapableDevices(workspaceId, chat.id(),
                 principal.userId());
         return new CreateChatResult(201, new ChatView(chat.id(), "DIRECT", mode, peerId,
-                peerCapable, null, null, 0, 0, clock.now()), false);
+                peerCapable, null, null, null, 0, 0, clock.now()), false);
     }
 
     private CreateChatResult createGroup(Principal principal, UUID workspaceId, String mode,
@@ -173,7 +173,7 @@ public class ChatCreateService {
         idempotency.complete(scoped, scope, idempotencyKey.toString(), requestHash, 201,
                 chat.id());
         return new CreateChatResult(201, new ChatView(chat.id(), "GROUP", mode, null, false,
-                chat.name(), null, 0, 0, clock.now()), false);
+                chat.name(), chat.description(), null, 0, 0, clock.now()), false);
     }
 
     private void enforceChatLimits(UUID workspaceId, UUID userId) {
@@ -194,11 +194,12 @@ public class ChatCreateService {
         if (summary != null) {
             return new ChatView(summary.id(), summary.type().name(),
                     summary.securityMode().name(), summary.peerId(),
-                    summary.peerHasE2eeCapableDevices(), summary.name(), null,
-                    summary.lastSeq(), summary.unreadCount(), summary.createdAt());
+                    summary.peerHasE2eeCapableDevices(), summary.name(),
+                    summary.description(), null, summary.lastSeq(), summary.unreadCount(),
+                    summary.createdAt());
         }
         return new ChatView(chat.id(), chat.type().name(), chat.securityMode().name(), null,
-                false, chat.name(), null, 0, 0, null);
+                false, chat.name(), chat.description(), null, 0, 0, null);
     }
 
     private static Chat.Type parseType(String value) {

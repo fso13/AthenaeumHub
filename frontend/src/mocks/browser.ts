@@ -1,5 +1,11 @@
 import { setupWorker } from 'msw/browser';
-import type { AdminUser, Notification, WorkspaceLimits, WorkspaceSummary } from '../api/types';
+import type {
+  AdminUser,
+  Notification,
+  WorkspaceLimits,
+  WorkspaceRole,
+  WorkspaceSummary,
+} from '../api/types';
 import {
   createMockDb,
   insertMockMessage,
@@ -72,6 +78,10 @@ export interface KrugMockControls {
     setMaxChatsPerWorkspace(limit: number): void;
     forceCreateError(error: ForcedSendError | null): void;
   };
+  /** D1-FE5 profile: clear the device list for the honest empty state. */
+  devices: {
+    clear(): void;
+  };
   reset(): void;
 }
 
@@ -90,6 +100,10 @@ declare global {
     __krugAdminUsersSeed?: number;
     /** E11-F E2E: seed N audit events (contract fields only, no metadata). */
     __krugAuditSeed?: number;
+    /** D1-QA1 E2E: per-chat unread overrides applied before the first read. */
+    __krugUnreadCounts?: Record<string, number>;
+    /** D1-QA1 E2E: boot with a specific workspace role (read-only settings). */
+    __krugWorkspaceRole?: WorkspaceRole;
   }
 }
 
@@ -209,6 +223,12 @@ export function installMockControls(): void {
         mockDb.forceChatCreateError = error;
       },
     },
+    devices: {
+      clear() {
+        mockDb.devices.length = 0;
+        mockDb.deviceRequests.clear();
+      },
+    },
     reset() {
       dropMockRealtimeConnections(1000, 'mock reset');
       resetMockRealtime();
@@ -227,6 +247,20 @@ export async function startMockWorker(): Promise<MockDb> {
   }
   if (window.__krugEmptyWorkspaces) {
     setMockWorkspaces(mockDb, []);
+  }
+  if (window.__krugWorkspaceRole) {
+    const role = window.__krugWorkspaceRole;
+    mockDb.me = {
+      ...mockDb.me,
+      workspaces: mockDb.me.workspaces.map((workspace) => ({ ...workspace, role })),
+    };
+  }
+  if (window.__krugUnreadCounts) {
+    for (const [chatId, count] of Object.entries(window.__krugUnreadCounts)) {
+      const chat = mockDb.chats[chatId];
+      if (!chat || !Number.isFinite(count)) continue;
+      chat.summary.unread_count = Math.max(0, Math.floor(count));
+    }
   }
   if (typeof window.__krugAdminUsersSeed === 'number' && window.__krugAdminUsersSeed > 0) {
     // E2E/R-05: deterministic rows; the admin directory filters/paginates them

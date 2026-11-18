@@ -1,6 +1,6 @@
 # «Круг» — frontend F-01 + F-04 (Auth BFF) + E3-F + E4-F + E5-F + E6-F + E9-F + E10-F + E11-F + E12-F
 
-Managed-чат по контракту `contracts/openapi.yaml`: история с пагинацией, optimistic send, retry с идемпотентностью, read receipts, reconnect через `GET /sync`. Срез **F-04** добавляет собственные формы входа/регистрации/подтверждения email (Auth BFF: `/auth/login`, `/auth/register`, `/auth/verify-email`, `/auth/resend-email-code`, `/auth/refresh`, `/auth/logout`), `/me`, регистрацию устройства, onboarding первого workspace и auth guard. Браузер не ходит в Keycloak и не использует OIDC-редирект. Срез **E3-F** добавляет WebSocket-клиент: `POST /realtime/ticket`, `hello`/`subscribe`/`ack`/`ping`/`typing`, live `message.created`/`message.receipt`, replay по `last_seq`, `resume.gap` → REST, typing/presence TTL, backoff 1–30 с + jitter и индикатор online/reconnecting/offline. Срез **E4-F** добавляет managed-файлы: preflight и лимиты, picker/drag&drop, chunked upload 8 МиБ с прогрессом и resume, `attachment_ids` в сообщении, карточки вложений с presigned URL TTL 5 минут и scan status. Срез **E5-F** добавляет встроенные стикеры managed-чата: picker с наборами, поиском по alt, избранным и локальными недавними, отправку `type=STICKER` с optimistic UI, рендер `<img>` без пузыря и PNG-ассеты 2×8. Срез **E6-F** добавляет in-app уведомления: колокольчик с unread badge, панель со списком и cursor-пагинацией, optimistic read one/all с rollback, настройки per-chat/type/channel/mode и E2EE-безопасный рендер (`body=null` → generic title + «контент скрыт»). Срез **E12-F** добавляет управление участниками пространства (R-09): список с поиском/refresh, добавление существующего пользователя по email с ролью, смена роли и удаление с подтверждением; OWNER/ADMIN-контролы, read-only для остальных, серверные 403/404/409 без потери строки. Dev-режим F-01 (`POST /dev/session`) сохранён как fallback.
+Managed-чат по контракту `contracts/openapi.yaml`: история с пагинацией, optimistic send, retry с идемпотентностью, read receipts, reconnect через `GET /sync`. Срез **F-04** добавляет собственные формы входа/регистрации/подтверждения email (Auth BFF: `/auth/login`, `/auth/register`, `/auth/verify-email`, `/auth/resend-email-code`, `/auth/refresh`, `/auth/logout`), `/me`, регистрацию устройства, onboarding первого workspace и auth guard. Браузер не ходит в Keycloak и не использует OIDC-редирект. Срез **E3-F** добавляет WebSocket-клиент: `POST /realtime/ticket`, `hello`/`subscribe`/`ack`/`ping`/`typing`, live `message.created`/`message.receipt`, replay по `last_seq`, `resume.gap` → REST, typing/presence TTL, backoff 1–30 с + jitter и индикатор online/reconnecting/offline. Срез **E4-F** добавляет managed-файлы: preflight и лимиты, picker/drag&drop, chunked upload 8 МиБ с прогрессом и resume, `attachment_ids` в сообщении, карточки вложений с presigned URL TTL 5 минут и scan status. Срез **E5-F** добавляет встроенные стикеры managed-чата: picker с наборами, поиском по alt, избранным и локальными недавними, отправку `type=STICKER` с optimistic UI, рендер `<img>` без пузыря и PNG-ассеты 2×8. Срез **E6-F** добавляет in-app уведомления: колокольчик с unread badge, панель со списком и cursor-пагинацией, optimistic read one/all с rollback, настройки per-chat/type/channel/mode и E2EE-безопасный рендер (`body=null` → generic title + «контент скрыт»). Срез **E12-F** добавляет управление участниками пространства (R-09): список с поиском/refresh, добавление существующего пользователя по email с ролью, смена роли и удаление с подтверждением; OWNER/ADMIN-контролы, read-only для остальных, серверные 403/404/409 без потери строки. Срез **D1-FE5** добавляет модалки настроек чата (`PATCH /chats/{chatId}`: name/description, роли, E2EE-политика, без оптимистичных обновлений) и профиля (`/me`, `GET /devices`, тема, уведомления, подтверждённый logout, честно выключенные 2FA/сессии). Dev-режим F-01 (`POST /dev/session`) сохранён как fallback.
 
 Контракт — единственный источник API-форм. `backend/**`, `infra/**`, `docs/**`, `design/**` и `contracts/**` не изменяются.
 
@@ -148,7 +148,7 @@ src/
     store.ts         # packs/favorites/recent/disabled, optimistic favorite + rollback
   realtime/          # protocol v1, close codes/backoff, RealtimeClient, socket adapter
   hooks/             # bootstrap, online/offline, reconnect, debounce read
-  components/        # AppShell, SpaceRail, Sidebar, ChatScreen, MessageList, Composer, pages/*, ThreadPanel, StickerPicker, AttachmentCard, LimitsBar, UploadTray, NotificationBell/Panel/Preferences, WorkspaceMembersDialog, auth/*
+  components/        # AppShell, SpaceRail, Sidebar, ChatScreen, MessageList, Composer, pages/*, ThreadPanel, StickerPicker, AttachmentCard, LimitsBar, UploadTray, NotificationBell/Panel/Preferences, WorkspaceMembersDialog, ChatSettingsDialog, ProfileDialog, auth/*
   router/views.ts    # D1-FE1: ?view=… section routing helpers
   theme/             # D1-FE1: explicit light/dark preference (localStorage, no auth data)
   mocks/             # MSW handlers (files, stickers, notifications/preferences, workspace members) + in-process mock WS server
@@ -330,6 +330,7 @@ PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npx playwright install chromium
 PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npx playwright install firefox webkit  # E7-F7A matrix
 PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e        # dev F-01 + files + stickers + notifications + WS
 PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:auth   # Auth BFF mock (password)
+PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:d1     # D1-QA1 dashboard/threads/settings/profile/media (password mock)
 PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:ws    # real E3 WS (gated)
 E4_FILE_REAL=1 PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:files:real  # real E4 files (backend 8081 + S3 9002)
 E6_NOTIFY_REAL=1 PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:notifications:real  # real E6 notifications (seeded)
@@ -343,6 +344,7 @@ PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:e2ee:real  # E7
 - `e2e/auth.spec.ts` (Auth BFF mock): guard → `/login` → register → verify (код `123456`) → чат → logout; invalid credentials; unverified login → `/verify` → wrong code (attempts) → correct code; onboarding без workspace. axe WCAG AA на login/register/verify/onboarding/чате.
 - `e2e/files.spec.ts` (mock): picker → upload → send → карточка вложения → download-url TTL 5 мин; preflight 413 до загрузки; axe WCAG AA на composer/tray. **2 passed** на mock-контуре.
 - `e2e/media.spec.ts` (mock): picker → upload PNG → send → превью → lightbox (`role=dialog`, Esc, focus return) → backdrop; axe WCAG AA в light/dark. **1 passed** на mock-контуре.
+- `e2e/d1-dashboard.spec.ts`, `d1-threads.spec.ts`, `d1-settings-profile.spec.ts`, `d1-media.spec.ts` (D1-QA1, password mock): login → rail/`99+` с точным числом в `aria-label`, `?view=overview|files|settings` + back-to-chat, треды (root → panel → reply → счётчик, Esc/focus, 390 sheet), настройки чата (owner save, read-only MEMBER, disabled danger zone), профиль (`/me`, устройства, empty state), media (ID3-обложка, fallback без тегов, voice disabled/recording/cancel/send); axe light/dark на 390/768/1440 + no horizontal scroll. Подробности — `D1-QA1-REPORT.md`. **18 passed** на mock-контуре.
 - `e2e/stickers.spec.ts` (mock): history-стикер после reload, picker → поиск → favorite → send STICKER без пузыря → reload; disabled pack 409 скрывает набор и блокирует отправку; axe WCAG AA на picker/чате. **2 passed** на mock-контуре.
 - `e2e/stickers.real.spec.ts` (real E5-B): picker → favorite PUT/DELETE → send STICKER (`type=STICKER`, `sticker_id`, пустые text/attachments) → история после reload → PNG 512×512 по `/stickers/**`; **1 passed**. Gated disabled pack — **1 passed** с `E5_DISABLED_PACK=1` (см. долг E5-F).
 - `e2e/notifications.spec.ts` (mock): bell badge → панель с E2EE-safe строками → «Прочитать все» → настройки prefs (MUTE) → axe WCAG AA; ошибка read-all → rollback badge → retry; axe в dark theme. **3 passed** на mock-контуре.
@@ -1095,3 +1097,70 @@ upload/attachment/message и проверяет реальный путь init�
 Полный `npm run check` — **832** тестов (79 файлов), `contract:check` —
 **47 paths / 55 operations / 87 schemas**. Отчёт:
 [`D1-FE2-REPORT.md`](D1-FE2-REPORT.md).
+
+## D1-FE5 — chat settings + profile modals
+
+Срез **D1-FE5** закрывает §3.4/§4.6 `docs/TASKS-DASHBOARD-V1.md` на контракте
+D1-BE3 (`PATCH /chats/{chatId}`, `Chat.description`, `ChatSummary.description`).
+E2EE-флаг остаётся `false`; `schema.d.ts` не редактировался вручную.
+
+### Настройки чата
+
+- Открываются из `ChatHeader` кнопкой «О чате» (`ChatSettingsDialog`). Поля:
+  название 1..120 и описание ≤500 code points; `PATCH` отправляется только при
+  изменении, после trim/collapse пробелов и CRLF→LF. Пустое описание уходит как
+  `""` и очищает значение на сервере.
+- Роль берётся из активного workspace: `OWNER`/`ADMIN` получают контролы,
+  `MEMBER`/`GUEST` — read-only поля и объяснение; серверный `403` показывается
+  отдельным текстом. `404` (чат исчез), `409` (конкурентное изменение) и `422`
+  (`VALIDATION_FAILED`/`CHAT_SETTINGS_E2EE_UNSUPPORTED`, `details.field`) имеют
+  переведённые сообщения; черновик при ошибке не теряется.
+- **Нет оптимистичных обновлений**: заголовок и список чатов меняются только после
+  `200 Chat`; успешный `PATCH` дополнительно перечитывает
+  `GET /workspaces/{id}/chats`, чтобы не затереть чужое переименование. Store:
+  `chatSettings` + `saveChatSettings`/`clearChatSettings`; поля `description`
+  добавлены в `toChatSummary`.
+- **E2EE**: описание `disabled` с честным текстом (сервер не хранит plaintext),
+  название разрешено (D1-BE3); в запрос не попадает `description`. При устаревшем
+  UI-состоянии серверный `422 CHAT_SETTINGS_E2EE_UNSUPPORTED` показывается как
+  ошибка, а не как успех.
+- **Участники**: кнопка открывает существующий `WorkspaceMembersDialog` (E12);
+  API участников не дублируется, отдельного chat-members эндпоинта нет.
+- **Опасная зона**: archive/leave/delete — только `disabled`-кнопки и явное
+  «Недоступно: в этом срезе нет API…»; destructive-запросы не отправляются и не
+  имитируются. `AdminConfirmDialog` используется в профиле для logout.
+- Модалка: `role="dialog"`, `aria-modal`, labelled/described, focus trap, `Esc`,
+  возврат фокуса, блокировка скролла и `390/768/1440`-layout.
+
+### Профиль
+
+- `ProfileDialog` открывается из строки пользователя в `Sidebar` и из страницы
+  «Настройки». Имя/email/платформенный админ — из `/me`; workspace/роль — из
+  активного членства. `GET /devices` (новый typed-метод `listDevices`) показывает
+  id/name/platform/status/created/last_seen; ключи, отпечатки и E2EE-материалы не
+  рендерятся.
+- 2FA и управление сессиями в контракте отсутствуют — это честные
+  `aria-disabled`-строки без фиктивных переключателей. Тема использует
+  существующий `useTheme`, уведомления — существующий
+  `NotificationPreferencesDialog`, logout — подтверждение и текущий
+  `PasswordAuthProvider.signOut` (refresh отзывается, E2EE-состояние чистится).
+- Focus trap/`Esc`/возврат фокуса и мобильный layout общие с диалогом участников;
+  вложенные уведомления/подтверждение владеют фокусом, пока открыты.
+
+### API, MSW и тесты
+
+- `ChatApi.updateChat(chatId, {name?, description?})` и `listDevices()` — только
+  контрактные поля; `updateChat` не изобретает `Idempotency-Key`/`version`.
+- MSW `PATCH /chats/:chatId` повторяет D1-BE3: workspace OWNER/ADMIN, E2EE-reject,
+  trim/границы/plain text, `empty_patch`; `GET /devices` отдаёт `DeviceList`.
+  Добавлены mock-ручки `chatSettingsRequests`, `chatSettingsDelayMs`,
+  `forceChatSettingsError`.
+- `src/components/ChatSettings.test.tsx` (14): сохранение/trim/refresh header+list,
+  отсутствие оптимистичного апдейта, клиентская валидация 1..120/≤500/`<>`,
+  E2EE (name-only), read-only MEMBER, 403/404/409/422, E2EE 422, интеграция с E12,
+  disabled danger zone, focus/Esc/return, axe.
+- `src/components/Profile.test.tsx` (6): `/me`-поля, устройства, honest 2FA/сессии,
+  тема + вложенные уведомления, подтверждённый logout, focus/Esc/return, axe.
+- Полный `npm run check` — **852** теста (81 файл), `contract:check` —
+  **48 paths / 56 operations / 88 schemas**, `vite build` зелёный. Отчёт:
+  [`D1-FE5-REPORT.md`](D1-FE5-REPORT.md).

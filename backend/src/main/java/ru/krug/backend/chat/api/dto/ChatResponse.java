@@ -11,6 +11,7 @@ public record ChatResponse(
         UUID peerId,
         boolean peerHasE2eeCapableDevices,
         String name,
+        String description,
         Integer keyEpoch,
         long lastSeq,
         long unreadCount,

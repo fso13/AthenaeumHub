@@ -253,6 +253,13 @@ export interface MockMemberRemoveRequestRecord {
   deviceId: string | null;
 }
 
+/** D1-FE5: `PATCH /chats/{chatId}` body observed by the mock. */
+export interface MockChatSettingsRequestRecord {
+  chatId: string;
+  body: Record<string, unknown>;
+  deviceId: string | null;
+}
+
 export interface MockAttachment {
   ref: ApiAttachment;
   uploadId: string;
@@ -370,6 +377,10 @@ export interface MockDb {
   forceMemberAddError: ForcedSendError | null;
   forceMemberRoleError: ForcedSendError | null;
   forceMemberRemoveError: ForcedSendError | null;
+  /** D1-FE5: chat settings requests and injectable failures. */
+  chatSettingsRequests: MockChatSettingsRequestRecord[];
+  chatSettingsDelayMs: number;
+  forceChatSettingsError: ForcedSendError | null;
   chats: Record<string, ChatRecord>;
   idempotency: Map<string, IdempotencyRecord>;
   readReceipts: Record<string, number>;
@@ -534,6 +545,9 @@ export function createMockDb(): MockDb {
     forceMemberAddError: null,
     forceMemberRoleError: null,
     forceMemberRemoveError: null,
+    chatSettingsRequests: [],
+    chatSettingsDelayMs: 0,
+    forceChatSettingsError: null,
     chats: buildChats(),
     idempotency: new Map(),
     readReceipts: {},
@@ -642,6 +656,9 @@ export function resetMockDb(db: MockDb): void {
   db.forceMemberAddError = null;
   db.forceMemberRoleError = null;
   db.forceMemberRemoveError = null;
+  db.chatSettingsRequests = [];
+  db.chatSettingsDelayMs = 0;
+  db.forceChatSettingsError = null;
   db.chats = fresh.chats;
   db.idempotency.clear();
   db.readReceipts = {};

@@ -6,6 +6,7 @@ import jakarta.validation.Valid;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,11 +17,14 @@ import org.springframework.web.bind.annotation.RestController;
 import ru.krug.backend.chat.api.dto.ChatCreateRequest;
 import ru.krug.backend.chat.api.dto.ChatListResponse;
 import ru.krug.backend.chat.api.dto.ChatResponse;
+import ru.krug.backend.chat.api.dto.ChatUpdateRequest;
 import ru.krug.backend.chat.api.dto.ReadRequest;
 import ru.krug.backend.chat.api.mapper.ChatApiMapper;
 import ru.krug.backend.chat.application.model.CreateChatResult;
 import ru.krug.backend.chat.application.usecase.ChatCreateService;
+import ru.krug.backend.chat.application.command.ChatUpdateCommand;
 import ru.krug.backend.chat.application.usecase.ChatQueryService;
+import ru.krug.backend.chat.application.usecase.ChatUpdateService;
 import ru.krug.backend.chat.application.usecase.MarkReadService;
 import ru.krug.backend.shared.api.RequestHeaders;
 import ru.krug.backend.shared.application.model.Principal;
@@ -32,12 +36,15 @@ public class ChatController {
     private final ChatQueryService chatQueryService;
     private final MarkReadService markReadService;
     private final ChatCreateService chatCreateService;
+    private final ChatUpdateService chatUpdateService;
 
     public ChatController(ChatQueryService chatQueryService, MarkReadService markReadService,
-                          ChatCreateService chatCreateService) {
+                          ChatCreateService chatCreateService,
+                          ChatUpdateService chatUpdateService) {
         this.chatQueryService = chatQueryService;
         this.markReadService = markReadService;
         this.chatCreateService = chatCreateService;
+        this.chatUpdateService = chatUpdateService;
     }
 
     @GetMapping("/workspaces/{workspaceId}/chats")
@@ -62,6 +69,14 @@ public class ChatController {
                         request.name()), key);
         return ResponseEntity.status(result.status())
                 .body(ChatApiMapper.toResponse(result.chat()));
+    }
+
+    @PatchMapping("/chats/{chatId}")
+    public ChatResponse updateChat(@PathVariable UUID chatId,
+                                   @RequestBody ChatUpdateRequest request,
+                                   Principal principal) {
+        return ChatApiMapper.toResponse(chatUpdateService.update(principal, chatId,
+                new ChatUpdateCommand(request.name(), request.description())));
     }
 
     @PostMapping("/chats/{chatId}/read")

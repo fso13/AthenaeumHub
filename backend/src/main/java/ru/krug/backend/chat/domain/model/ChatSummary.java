@@ -11,6 +11,7 @@ import java.util.UUID;
 public record ChatSummary(
         UUID id,
         String name,
+        String description,
         Chat.Type type,
         Chat.SecurityMode securityMode,
         Instant lastMessageAt,

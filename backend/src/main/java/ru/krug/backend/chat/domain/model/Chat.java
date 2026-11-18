@@ -23,18 +23,22 @@ public final class Chat {
     private final Type type;
     private final SecurityMode securityMode;
     private final String name;
+    private final String description;
     private final UUID createdBy;
     private final Instant lastMessageAt;
+    private final Instant createdAt;
 
     private Chat(UUID id, UUID workspaceId, Type type, SecurityMode securityMode, String name,
-                 UUID createdBy, Instant lastMessageAt) {
+                 String description, UUID createdBy, Instant lastMessageAt, Instant createdAt) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
         this.type = Objects.requireNonNull(type, "type");
         this.securityMode = Objects.requireNonNull(securityMode, "securityMode");
         this.name = name;
+        this.description = description;
         this.createdBy = Objects.requireNonNull(createdBy, "createdBy");
         this.lastMessageAt = lastMessageAt;
+        this.createdAt = createdAt;
     }
 
     /**
@@ -63,19 +67,36 @@ public final class Chat {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("Group chat name must not be blank");
         }
-        return new Chat(id, workspaceId, Type.GROUP, securityMode, name.strip(), createdBy, null);
+        return new Chat(id, workspaceId, Type.GROUP, securityMode, name.strip(), null,
+                createdBy, null, null);
     }
 
-    /** DIRECT has no server-side name; the client derives a display name (D-S4-02). */
+    /**
+     * DIRECT has no server-side name at creation; the client derives a display name
+     * (D-S4-02). D1-BE3 may later set an explicit server-side override via PATCH.
+     */
     public static Chat createDirect(UUID id, UUID workspaceId, UUID createdBy,
                                     SecurityMode securityMode) {
         requireSupportedType(securityMode, Type.DIRECT);
-        return new Chat(id, workspaceId, Type.DIRECT, securityMode, null, createdBy, null);
+        return new Chat(id, workspaceId, Type.DIRECT, securityMode, null, null, createdBy, null,
+                null);
     }
 
     public static Chat reconstitute(UUID id, UUID workspaceId, Type type, SecurityMode securityMode,
-                                    String name, UUID createdBy, Instant lastMessageAt) {
-        return new Chat(id, workspaceId, type, securityMode, name, createdBy, lastMessageAt);
+                                    String name, String description, UUID createdBy,
+                                    Instant lastMessageAt, Instant createdAt) {
+        return new Chat(id, workspaceId, type, securityMode, name, description, createdBy,
+                lastMessageAt, createdAt);
+    }
+
+    /**
+     * Copy with new editable settings. Validation/normalisation is the caller's job (see
+     * {@code ChatSettingsPolicy}); the domain keeps the invariant that a DIRECT chat may
+     * have no name while a named chat uses a trimmed 1..120 string.
+     */
+    public Chat withSettings(String name, String description) {
+        return new Chat(id, workspaceId, type, securityMode, name, description, createdBy,
+                lastMessageAt, createdAt);
     }
 
     public UUID id() {
@@ -98,11 +119,19 @@ public final class Chat {
         return name;
     }
 
+    public String description() {
+        return description;
+    }
+
     public UUID createdBy() {
         return createdBy;
     }
 
     public Instant lastMessageAt() {
         return lastMessageAt;
+    }
+
+    public Instant createdAt() {
+        return createdAt;
     }
 }

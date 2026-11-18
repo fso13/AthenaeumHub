@@ -14,6 +14,8 @@ interface SettingsPageProps {
   onBack: () => void;
   onOpenAdmin?: () => void;
   onOpenMembers: () => void;
+  /** D1-FE5: opens the profile modal over the settings page. */
+  onOpenProfile?: () => void;
   onLogout?: () => void;
 }
 
@@ -29,6 +31,7 @@ export function SettingsPage({
   onBack,
   onOpenAdmin,
   onOpenMembers,
+  onOpenProfile,
   onLogout,
 }: SettingsPageProps) {
   const state = useChatState();
@@ -84,6 +87,13 @@ export function SettingsPage({
               <dd>{roleLabel(workspace?.role ?? null)}</dd>
             </div>
           </dl>
+          {onOpenProfile ? (
+            <div className="page-card__actions">
+              <button type="button" className="button button--secondary" onClick={onOpenProfile}>
+                {t('settings.openProfile')}
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <section className="page-card" aria-labelledby="settings-appearance">

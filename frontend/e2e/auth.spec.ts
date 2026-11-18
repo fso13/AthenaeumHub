@@ -126,6 +126,10 @@ test('password auth: first login without workspaces opens onboarding', async ({ 
   await page.getByRole('button', { name: 'Создать пространство' }).click();
 
   await expect(page.getByRole('heading', { name: 'Общий чат' })).toBeVisible();
-  await expect(page.getByText('Тестовое пространство')).toBeVisible();
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Пространство и чаты' })
+      .getByText('Тестовое пространство'),
+  ).toBeVisible();
   await expect(page.getByLabel('Текст сообщения')).toBeVisible();
 });

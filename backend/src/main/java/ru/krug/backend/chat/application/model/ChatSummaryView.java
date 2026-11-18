@@ -6,6 +6,7 @@ import java.util.UUID;
 public record ChatSummaryView(
         UUID id,
         String name,
+        String description,
         String type,
         String securityMode,
         Instant lastMessageAt,

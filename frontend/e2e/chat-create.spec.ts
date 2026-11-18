@@ -77,6 +77,8 @@ test('chat creation: DIRECT via member picker at 390 px', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Команда «Восход»' })).toBeVisible();
 
+  // D1-FE1: at 390 px the sidebar lives in the drawer.
+  await page.getByRole('button', { name: 'Открыть навигацию' }).click();
   await page.getByRole('button', { name: 'Создать чат' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Новый групповой чат' })).toBeVisible();

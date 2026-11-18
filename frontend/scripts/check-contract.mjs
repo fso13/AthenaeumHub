@@ -76,6 +76,7 @@ const operations = {
   'POST /admin/users/{userId}/suspend': spec.paths?.['/admin/users/{userId}/suspend']?.post,
   'POST /admin/users/{userId}/activate': spec.paths?.['/admin/users/{userId}/activate']?.post,
   'DELETE /admin/chats/{chatId}': spec.paths?.['/admin/chats/{chatId}']?.delete,
+  'PATCH /chats/{chatId}': spec.paths?.['/chats/{chatId}']?.patch,
   'GET /admin/audit': spec.paths?.['/admin/audit']?.get,
   'GET /me': spec.paths?.['/me']?.get,
   'POST /devices': spec.paths?.['/devices']?.post,
@@ -578,18 +579,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 47,
-  'Contract must expose exactly 47 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12)',
+  Object.keys(spec.paths ?? {}).length === 48,
+  'Contract must expose exactly 48 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 55,
-  'Contract check must cover exactly 55 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12)',
+  Object.keys(operations).length === 56,
+  'Contract check must cover exactly 56 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1)',
 );
 check(
-  Object.keys(schemas).length === 87,
-  'Contract must expose exactly 87 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12)',
+  Object.keys(schemas).length === 88,
+  'Contract must expose exactly 88 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1)',
 );
 
 check(
