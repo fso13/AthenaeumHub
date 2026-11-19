@@ -170,6 +170,8 @@ public class ChatCreateService {
                 name, Chat.SecurityMode.valueOf(mode));
         chatRepository.saveChat(chat, ru.krug.backend.chat.domain.model.ChatMember.owner(
                 chat.id(), principal.userId()), ChatCounter.newCounter(chat.id()));
+        // A workspace channel is visible to every ACTIVE member from its first message.
+        chatRepository.addActiveWorkspaceMembers(workspaceId, chat.id());
         idempotency.complete(scoped, scope, idempotencyKey.toString(), requestHash, 201,
                 chat.id());
         return new CreateChatResult(201, new ChatView(chat.id(), "GROUP", mode, null, false,

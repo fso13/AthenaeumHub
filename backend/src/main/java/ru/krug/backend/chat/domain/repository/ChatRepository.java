@@ -47,6 +47,9 @@ public interface ChatRepository {
     /** Idempotent upsert used by dev bootstrap and workspace onboarding. */
     void saveChat(Chat chat, ChatMember owner, ChatCounter counter);
 
+    /** Adds every ACTIVE workspace member to a new GROUP channel (idempotent). */
+    void addActiveWorkspaceMembers(UUID workspaceId, UUID chatId);
+
     /**
      * Creates a DIRECT chat with both participant rows and its counter.
      *

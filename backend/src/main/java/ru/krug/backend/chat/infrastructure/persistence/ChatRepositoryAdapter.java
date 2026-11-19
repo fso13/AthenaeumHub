@@ -473,4 +473,20 @@ public class ChatRepositoryAdapter implements ChatRepository {
         }
         throw new IllegalStateException("Unsupported timestamp type: " + value.getClass());
     }
+
+    @Override
+    public void addActiveWorkspaceMembers(java.util.UUID workspaceId, java.util.UUID chatId) {
+        entityManager.createNativeQuery("""
+                        INSERT INTO chat.chat_members
+                            (chat_id, workspace_id, user_id, role, status, joined_at, updated_at)
+                        SELECT ?2, ?1, wm.user_id, 'MEMBER', 'ACTIVE', now(), now()
+                          FROM workspace.memberships wm
+                         WHERE wm.workspace_id = ?1
+                           AND wm.status = 'ACTIVE'
+                        ON CONFLICT (chat_id, user_id) DO NOTHING
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, chatId)
+                .executeUpdate();
+    }
 }
