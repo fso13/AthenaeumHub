@@ -472,10 +472,10 @@ function validateVectorFile(file: BrowserKatVectorFile): void {
   if (!file || typeof file !== 'object' || !Array.isArray(file.sections)) {
     throw new KatFailure('KAT_SOURCE_INVALID', 'vector file must be a JSON object with sections');
   }
-  if (file.meta?.vector_set_version !== 4) {
+  if (file.meta?.vector_set_version !== 5) {
     throw new KatFailure(
       'KAT_SOURCE_INVALID',
-      `meta.vector_set_version must be 4, got ${String(file.meta?.vector_set_version)}`,
+      `meta.vector_set_version must be 5, got ${String(file.meta?.vector_set_version)}`,
     );
   }
   const seen = new Set<string>();

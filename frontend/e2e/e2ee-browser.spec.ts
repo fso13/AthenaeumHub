@@ -316,7 +316,7 @@ test.describe('E2EE browser WebCrypto matrix (F7A)', () => {
       expectedSha256,
     );
     expect(evidence.bytes).toBe(committed.byteLength);
-    expect(evidence.vectorSetVersion).toBe(4);
+    expect(evidence.vectorSetVersion).toBe(5);
     expect(evidence.sectionCounts).toMatchObject({
       'A-primitives': 4,
       'B-x3dh': 5,

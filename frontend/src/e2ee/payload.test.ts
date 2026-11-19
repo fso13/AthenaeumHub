@@ -149,6 +149,30 @@ describe('TEXT_JSON body validation', () => {
     });
   });
 
+  it('round-trips the v1.1 retry marker only when present', () => {
+    const retryOf = '00000000-0000-4000-8000-000000000002';
+    const withMarker = serializeTextBody({
+      text: 'hi',
+      replyToId: null,
+      retryOfClientMessageId: retryOf,
+    });
+    expect(parseTextBody(withMarker)).toEqual({
+      text: 'hi',
+      replyToId: null,
+      retryOfClientMessageId: retryOf,
+    });
+    expect(parseTextBody(new TextEncoder().encode('{"text":"hi"}'))).not.toHaveProperty(
+      'retryOfClientMessageId',
+    );
+    expect(() =>
+      serializeTextBody({
+        text: 'hi',
+        replyToId: null,
+        retryOfClientMessageId: 'not-a-uuid',
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'INVALID_PAYLOAD' }));
+  });
+
   it('rejects malformed bodies and forbidden E2EE v1 fields', () => {
     const invalid = [
       'not json',

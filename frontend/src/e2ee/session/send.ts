@@ -69,7 +69,13 @@ export interface E2eeRecipientPlan {
 }
 
 export type E2eeSendBody =
-  | { readonly type: 'TEXT_JSON'; readonly text: string; readonly replyToId?: string | null }
+  | {
+      readonly type: 'TEXT_JSON';
+      readonly text: string;
+      readonly replyToId?: string | null;
+      /** v1.1 R-15 marker, omitted for normal messages. */
+      readonly retryOfClientMessageId?: string | null;
+    }
   | { readonly type: 'SESSION_RESET'; readonly reset: SessionResetBody };
 
 export interface E2eeSendInput {
@@ -313,7 +319,14 @@ function buildSendPayload(body: E2eeSendBody): {
   if (body.type === 'TEXT_JSON') {
     const text = validateText(body.text);
     const replyToId = body.replyToId ?? null;
-    const frame = buildInnerPayload(CONTENT_TYPE_TEXT_JSON, serializeTextBody({ text, replyToId }));
+    const frame = buildInnerPayload(
+      CONTENT_TYPE_TEXT_JSON,
+      serializeTextBody({
+        text,
+        replyToId,
+        retryOfClientMessageId: body.retryOfClientMessageId ?? null,
+      }),
+    );
     return { payload: frame, contentType: CONTENT_TYPE_TEXT_JSON, text };
   }
   const frame = buildInnerPayload(

@@ -2801,6 +2801,32 @@ export class ChatStore {
               replyToId: null,
             };
           } else if (outcome.kind === 'message') {
+            // v1.1 L3b: a re-encrypted replacement carries the original
+            // client_message_id inside the sealed TEXT. If the original was
+            // already decrypted, hide the replacement instead of rendering a
+            // duplicate; if the original was a failed placeholder, replace it.
+            const retryOf = outcome.retryOfClientMessageId ?? null;
+            if (retryOf !== null) {
+              const original = current.messages.find(
+                (candidate) => candidate.client_message_id === retryOf,
+              );
+              if (original !== undefined && original.id !== message.id) {
+                const originalView = views[original.id] ?? current.e2ee[original.id];
+                if (originalView?.status === 'decrypted' || originalView?.status === 'superseded') {
+                  views[message.id] = {
+                    status: 'superseded',
+                    text: null,
+                    replyToId: null,
+                  };
+                  continue;
+                }
+                views[original.id] = {
+                  status: 'superseded',
+                  text: null,
+                  replyToId: null,
+                };
+              }
+            }
             views[message.id] = {
               status: 'decrypted',
               text: outcome.text,

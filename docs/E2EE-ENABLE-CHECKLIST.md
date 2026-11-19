@@ -44,9 +44,9 @@ enablement itself. Condition 1 is tracked outside that set.
 | 2 | Clean-stack F7B fixture (B via BFF/Mailpit, destructive opt-in) | [#29](https://github.com/fso13/AthenaeumHub/issues/29) | **OPEN** | REVIEW-13 P2-01/P2-02 |
 | 3 | Durable retry/drain (no duplicate / silent loss after reload) | [#30](https://github.com/fso13/AthenaeumHub/issues/30) | **OPEN** | REVIEW-13 P2-16/P2-21 |
 | 4 | Negative key-change/TOFU live + verified reset | [#31](https://github.com/fso13/AthenaeumHub/issues/31) | **CLOSED 2026-11-19** | closed issue #31 |
-| 5 | Receiver R-15 v1.1 or explicit PM acceptance of v1 limits | [#32](https://github.com/fso13/AthenaeumHub/issues/32) | **OPEN** | REVIEW-13 P1-05/§5.5 |
+| 5 | Receiver R-15 v1.1 | [#32](https://github.com/fso13/AthenaeumHub/issues/32) | **DONE** | optional marker in TEXT; store dedupe |
 | 6 | Safari/iOS + WebKit app-level UI | [#33](https://github.com/fso13/AthenaeumHub/issues/33) | **OPEN** | ADR-26; P2-08/P2-11 |
-| 7 | Vectors v1.1 (`normative_invariants`, bump `vector_set_version`) | [#34](https://github.com/fso13/AthenaeumHub/issues/34) | **OPEN** | REVIEW-13 P2-05 |
+| 7 | Vectors v1.1 (`272..33040`, version 5) | [#34](https://github.com/fso13/AthenaeumHub/issues/34) | **DONE** | `vector_set_version=5` |
 | 8 | Release CI/artifact, log-capture, full backend suite, this checklist, clean rebuild with digests | [#35](https://github.com/fso13/AthenaeumHub/issues/35) | **IN PROGRESS** — artifacts in tree; GitHub run + git tag pending | `.github/workflows/ci.yml`, `e2ee-gated.yml`, `scripts/release-check.sh`, `docs/E2EE-CI-REPORT.md` |
 | 9 | Legacy/local state migration (`sendOrder`, `supersededAt`, `serverMessageId`) | [#36](https://github.com/fso13/AthenaeumHub/issues/36) | **OPEN** | REVIEW-13 P2-04/P2-17 |
 | 10 | Kill-switch/retention/rollout rehearsed | [#37](https://github.com/fso13/AthenaeumHub/issues/37) | **OPEN** | REVIEW-13 P2-09 |

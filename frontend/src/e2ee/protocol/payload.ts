@@ -90,6 +90,11 @@ export function parseInnerPayload(padded: Uint8Array): InnerPayload {
 export interface TextPayload {
   readonly text: string;
   readonly replyToId: string | null;
+  /**
+   * v1.1 R-15 marker: the `client_message_id` of the message this TEXT
+   * replaces. Omitted for normal v1 messages, so their bytes stay unchanged.
+   */
+  readonly retryOfClientMessageId?: string | null;
 }
 
 const FORBIDDEN_CODEPOINT_RANGES: ReadonlyArray<readonly [number, number]> = [
@@ -130,8 +135,17 @@ export function serializeTextBody(payload: TextPayload): Uint8Array {
   if (payload.replyToId !== null && !isUuid(payload.replyToId)) {
     throw invalid('INVALID_PAYLOAD', 'reply_to_id must be null or a canonical UUID');
   }
-  // v1 schema: exactly these two keys; `mentions` is reserved and omitted when empty.
-  const body = utf8(JSON.stringify({ text: payload.text, reply_to_id: payload.replyToId }));
+  const retryOf = payload.retryOfClientMessageId ?? null;
+  if (retryOf !== null && !isUuid(retryOf)) {
+    throw invalid('INVALID_PAYLOAD', 'retry_of_client_message_id must be null or a canonical UUID');
+  }
+  // v1 schema: two keys; v1.1 adds the optional retry marker only when present.
+  const record: Record<string, unknown> = {
+    text: payload.text,
+    reply_to_id: payload.replyToId,
+  };
+  if (retryOf !== null) record.retry_of_client_message_id = retryOf;
+  const body = utf8(JSON.stringify(record));
   if (body.length > MAX_INNER_BODY_BYTES) {
     throw new E2eeError('MESSAGE_TOO_LONG', `text body exceeds ${MAX_INNER_BODY_BYTES} bytes`);
   }
@@ -175,5 +189,12 @@ export function parseTextBody(body: Uint8Array): TextPayload {
     throw invalid('INVALID_PAYLOAD', 'attachment_refs are forbidden in E2EE v1');
   }
 
-  return { text, replyToId };
+  const retryValue = record.retry_of_client_message_id;
+  if (retryValue === undefined || retryValue === null) {
+    return { text, replyToId };
+  }
+  if (!isUuid(retryValue)) {
+    throw invalid('INVALID_PAYLOAD', 'retry_of_client_message_id must be a canonical UUID');
+  }
+  return { text, replyToId, retryOfClientMessageId: retryValue };
 }

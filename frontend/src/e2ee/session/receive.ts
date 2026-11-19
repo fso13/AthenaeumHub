@@ -73,6 +73,8 @@ export interface OpenedIncomingE2eeMessage {
   readonly contentType: ContentType;
   readonly text: string | null;
   readonly replyToId: string | null;
+  /** v1.1 R-15 marker from the inner TEXT body; null for normal messages. */
+  readonly retryOfClientMessageId: string | null;
   readonly reset: SessionResetBody | null;
   readonly prekey: boolean;
   readonly dhRatchet: boolean;
@@ -286,11 +288,13 @@ export async function openIncomingE2eeMessage(
   const inner = parseInnerPayload(step.plaintext);
   let text: string | null = null;
   let replyToId: string | null = null;
+  let retryOfClientMessageId: string | null = null;
   let reset: SessionResetBody | null = null;
   if (inner.contentType === 1) {
     const parsed = parseTextBody(inner.body);
     text = parsed.text;
     replyToId = parsed.replyToId;
+    retryOfClientMessageId = parsed.retryOfClientMessageId ?? null;
   } else {
     reset = parseSessionResetBody(inner.body);
   }
@@ -303,6 +307,7 @@ export async function openIncomingE2eeMessage(
     contentType: inner.contentType,
     text,
     replyToId,
+    retryOfClientMessageId,
     reset,
     prekey,
     dhRatchet: step.dhRatchet,

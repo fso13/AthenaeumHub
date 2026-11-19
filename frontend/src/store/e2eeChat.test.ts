@@ -954,4 +954,41 @@ describe('G4e #30 durable retry after reload', () => {
     expect([...bridge.outgoing.keys()].filter((id) => id === replacementId)).toHaveLength(1);
     expect(bridge.sends.filter((send) => send.text === 'первое')).toHaveLength(1);
   });
+
+  it('dedupes a v1.1 retried replacement when the original was already decrypted', async () => {
+    const original = insertMockMessage(mockDb, CHAT, 'x');
+    original.text = null;
+    original.client_message_id = newUuid();
+    original.crypto = makeEnvelope(CHAT, PEER_DEVICE, BASE_SNAPSHOT.selfDeviceId as string);
+    const replacement = insertMockMessage(mockDb, CHAT, 'x');
+    replacement.text = null;
+    replacement.client_message_id = newUuid();
+    replacement.crypto = makeEnvelope(CHAT, PEER_DEVICE, BASE_SNAPSHOT.selfDeviceId as string);
+
+    const { store } = await bootstrapped({}, {}, (fake) => {
+      fake.receiveQueue.push({
+        kind: 'message',
+        localMessageId: newUuid(),
+        sessionId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+        text: 'оригинал',
+        replyToId: null,
+      });
+      fake.receiveQueue.push({
+        kind: 'message',
+        localMessageId: newUuid(),
+        sessionId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+        text: 'повтор',
+        replyToId: null,
+        retryOfClientMessageId: original.client_message_id,
+      });
+    });
+
+    await waitFor(
+      () => store.getSnapshot().slices[CHAT]?.e2ee[original.id]?.status === 'decrypted',
+    );
+    await waitFor(
+      () => store.getSnapshot().slices[CHAT]?.e2ee[replacement.id]?.status === 'superseded',
+    );
+    expect(store.getSnapshot().slices[CHAT]?.e2ee[original.id]?.text).toBe('оригинал');
+  });
 });

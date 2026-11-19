@@ -2,7 +2,7 @@
   "meta": {
     "title": "Krug E2EE 1:1 — known-answer test vectors",
     "spec": "docs/E2EE-SPEC.md (protocol v1)",
-    "vector_set_version": 4,
+    "vector_set_version": 5,
     "generated_at": "2026-11-16T15:00:00Z",
     "status": "normative v4 (E7-S4 remediation of E2EE-REVIEW-03) for E7 client/server crypto and conformance tests; all values must match byte-for-byte",
     "generator": {
@@ -199,7 +199,7 @@
       "direct_key": "Every type='DIRECT' chat has direct_key = least(A,B)::text||':'||greatest(A,B)::text over the SET of distinct chat_members.user_id, independent of member status (REMOVED/INVITED are still pair members). A DIRECT chat with != 2 distinct member rows is corrupt and the migration must stop with DIRECT_KEY_UNRESOLVED; a duplicate live pair stops it with DIRECT_PAIR_DUPLICATE. CHECKs are added NOT VALID and validated after backfill.",
       "envelope_coverage": "peer_devices, self_devices, peer_covered and self_covered count ONLY devices with e2ee_capable=true (identity_key_alg='Ed25519+X25519', ACTIVE). An envelope addressed to a non-capable device is rejected 422 E2EE_LEGACY_DEVICE before Message/seq; a legacy device is never a candidate, never coverage, and never appears in uncovered_device_ids.",
       "reset_retry_window": "SESSION_RESET carries failed_session_id, failed_chain_dh, failed_n, reason and retry_of_client_message_id. The sender re-encrypts only messages at/after retry_of_client_message_id in local send order (per-session), each with a new client_message_id and retry_of_client_message_id in the inner payload; the receiver discards a re-sent message whose retry_of_client_message_id it already decrypted.",
-      "ciphertext_cap": "Accepted E2EE ciphertext is canonical v1: decoded 16..33040 bytes (33024 padded + 16 tag) = at most 44054 b64u chars. The DB CHECK stores only canonical values; the API's 65536 encoded-char form guard is a pre-decode DoS bound, not a delivery promise. Anything above the canonical cap is 413 ENVELOPE_TOO_LARGE (details.reason='canonical').",
+      "ciphertext_cap": "Accepted E2EE ciphertext is canonical v1: decoded 272..33040 bytes (33024 padded + 16 tag) = at most 44054 b64u chars. The DB CHECK stores only canonical values; the API's 65536 encoded-char form guard is a pre-decode DoS bound, not a delivery promise. Anything above the canonical cap is 413 ENVELOPE_TOO_LARGE (details.reason='canonical').",
       "claim_workspace": "auth.claim_one_time_prekey requires the chat to belong to ops.current_workspace_id() and the caller to be an ACTIVE member; a chat from another workspace yields UNKNOWN_DEVICE.",
       "verification_ownership": "auth.key_verifications enforces verifier ownership with a composite FK (verifier_user_id, verifier_device_id) -> auth.devices(user_id, id) and FKs to chat/chat.chats/devices; a BEFORE INSERT trigger requires verifier and target to be ACTIVE members of the same chat in the current (non-deleted) workspace, while RLS stays a tenant boundary so revoke/soft-delete can still update revoked_at."
     },

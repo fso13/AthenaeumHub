@@ -125,6 +125,8 @@ export interface E2eeReceivedMessage {
   readonly sessionId: string;
   readonly text: string;
   readonly replyToId: string | null;
+  /** v1.1 R-15 marker; null for normal messages. */
+  readonly retryOfClientMessageId?: string | null;
 }
 
 export interface E2eeIncomingReset {

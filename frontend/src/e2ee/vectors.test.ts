@@ -288,8 +288,8 @@ interface G5Expected {
 const file = loadVectorFile();
 
 describe('vector set', () => {
-  it('is the v4 normative set with the E7-F2G addendum (48 unique vectors, 18 sections)', () => {
-    expect(file.meta.vector_set_version).toBe(4);
+  it('is the v5 normative set with the E7-F2G addendum (48 unique vectors, 18 sections)', () => {
+    expect(file.meta.vector_set_version).toBe(5);
     expect(file.sections).toHaveLength(18);
     const vectors = allVectors(file);
     expect(vectors).toHaveLength(48);

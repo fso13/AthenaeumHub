@@ -541,6 +541,7 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
             type: 'TEXT_JSON',
             text: (input as E2eeSendTextInput).text,
             replyToId: (input as E2eeSendTextInput).replyToId ?? null,
+            retryOfClientMessageId: (input as E2eeSendTextInput).retryOfClientMessageId ?? null,
           }
         : { type: 'SESSION_RESET', reset: (input as E2eeSendResetInput).reset };
 
@@ -782,6 +783,7 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
           sessionId: received.sessionId,
           text: received.text ?? '',
           replyToId: received.replyToId,
+          retryOfClientMessageId: received.retryOfClientMessageId,
         };
       } catch (error) {
         if (!isE2eeError(error)) throw error;
