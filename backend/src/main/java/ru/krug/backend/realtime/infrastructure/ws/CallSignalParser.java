@@ -1,6 +1,8 @@
 package ru.krug.backend.realtime.infrastructure.ws;
 
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -60,6 +62,27 @@ public class CallSignalParser {
         }
         Map<String, Object> candidate = candidate(payload.get("candidate"), maxCandidateBytes);
 
+        JsonNode conferenceNode = payload.get("conference");
+        boolean conference = false;
+        if (conferenceNode != null && !conferenceNode.isNull()) {
+            if (!conferenceNode.isBoolean()) {
+                throw CallSignalRejectedException.malformed(
+                        "payload.conference must be a boolean");
+            }
+            conference = conferenceNode.booleanValue();
+        }
+        JsonNode recipientsNode = payload.get("recipients");
+        List<UUID> recipients = recipients(recipientsNode);
+        boolean recipientsPresent = recipientsNode != null && !recipientsNode.isNull();
+        if (recipientsPresent && !conference) {
+            throw CallSignalRejectedException.malformed(
+                    "payload.recipients requires payload.conference=true");
+        }
+        if (conference && recipients.isEmpty()) {
+            throw CallSignalRejectedException.malformed(
+                    "payload.recipients is required when payload.conference=true");
+        }
+
         switch (kind) {
             case OFFER, ANSWER -> {
                 if (sdp == null) {
@@ -89,7 +112,39 @@ public class CallSignalParser {
             }
             default -> throw CallSignalRejectedException.malformed("unsupported kind");
         }
-        return new CallSignal(callId, kind, video, sdp, candidate);
+        return new CallSignal(callId, kind, video, sdp, candidate, conference, recipients);
+    }
+
+    /**
+     * GROUP recipient list: 1..50 canonical UUIDs, no duplicates. Absent/null means "no
+     * recipients", which the service interprets per chat type (DIRECT-only vs GROUP error).
+     */
+    private static List<UUID> recipients(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return List.of();
+        }
+        if (!node.isArray()) {
+            throw CallSignalRejectedException.malformed(
+                    "payload.recipients must be an array of UUIDs");
+        }
+        if (node.size() < 1 || node.size() > CallSignal.MAX_RECIPIENTS) {
+            throw CallSignalRejectedException.malformed(
+                    "payload.recipients must contain 1.." + CallSignal.MAX_RECIPIENTS
+                            + " UUIDs");
+        }
+        LinkedHashSet<UUID> unique = new LinkedHashSet<>();
+        for (JsonNode item : node) {
+            UUID recipient = item.isTextual() ? parseUuid(item.textValue()) : null;
+            if (recipient == null) {
+                throw CallSignalRejectedException.malformed(
+                        "payload.recipients entries must be canonical UUIDs");
+            }
+            if (!unique.add(recipient)) {
+                throw CallSignalRejectedException.malformed(
+                        "payload.recipients must not contain duplicates");
+            }
+        }
+        return List.copyOf(unique);
     }
 
     /** Strict canonical UUID: rejects the legacy short forms accepted by UUID.fromString. */

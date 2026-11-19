@@ -1,6 +1,6 @@
 package ru.krug.backend.realtime.application.model;
 
-/** Client signalling kinds for a 1:1 call. The wire value is the lowercase name. */
+/** Client signalling kinds for DIRECT and GROUP calls. The wire value is the lowercase name. */
 public enum CallKind {
     OFFER("offer"),
     ANSWER("answer"),

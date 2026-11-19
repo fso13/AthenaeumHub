@@ -1,7 +1,6 @@
 package ru.krug.backend.realtime.application.usecase;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.slf4j.Logger;
@@ -23,12 +22,17 @@ import ru.krug.backend.realtime.domain.exception.RealtimeSessionRevokedException
 import ru.krug.backend.shared.application.port.ClockPort;
 
 /**
- * Authorises and relays one 1:1 signalling frame. There is no call registry: the server
- * does not allocate call ids, inspect SDP, persist state, send push notifications, or queue
- * for offline peers. The only server-side decision is who may receive the frame now.
+ * Authorises and relays one call-signalling frame.
+ *
+ * <p>DIRECT keeps the original 1:1 semantics. GROUP is a server-side fan-out of mesh
+ * signalling: the caller names up to {@value CallSignal#MAX_RECIPIENTS} ACTIVE chat members,
+ * the frame is relayed only to their live sessions, and no conference state, mixing, SFU,
+ * persistence, push notification or offline queue exists. The media mesh itself is built by
+ * the clients. A busy/hangup from one participant is just a signal to the recipients it
+ * names; the server never tears a conference down.
  *
  * <p>Never log {@code signal}; its record {@code toString()} is redacted and this class logs
- * only the call id/kind and peer-session count.
+ * only the call id/kind, chat type, recipient count and delivered-session count.
  */
 @Service
 public class CallSignalingService {
@@ -63,35 +67,50 @@ public class CallSignalingService {
         if (!devicePort.isActiveDeviceOfUser(session.deviceId(), session.userId())) {
             throw new RealtimeSessionRevokedException("DEVICE_REVOKED");
         }
+        // The caller can never be its own recipient: this is a client error independent of
+        // chat type, so reject before touching membership.
+        if (signal.recipients().contains(session.userId())) {
+            throw CallSignalRejectedException.malformed(
+                    "payload.recipients must not include the caller");
+        }
 
         RealtimeCallAccess access = callAccess.check(session.workspaceId(), chatId,
-                session.userId(), "realtime:" + session.sessionId());
+                session.userId(), signal.conference(), Set.copyOf(signal.recipients()),
+                "realtime:" + session.sessionId());
         if (!access.accepted()) {
-            if (RealtimeCallAccess.NOT_DIRECT.equals(access.reason())) {
-                throw CallSignalRejectedException.notSupported();
-            }
-            throw CallSignalRejectedException.forbidden();
+            throw rejectionFor(access.reason());
         }
 
-        List<UUID> peers = new ArrayList<>(access.memberUserIds());
-        peers.removeIf(userId -> userId.equals(session.userId()));
-        // A DIRECT chat has exactly one peer. More active members means a corrupted chat:
-        // fail closed instead of broadcasting a 1:1 call to a group.
-        if (peers.size() > 1) {
-            throw CallSignalRejectedException.notSupported();
-        }
-        if (peers.isEmpty()) {
+        // The adapter already resolved the exact target users: exactly one peer for DIRECT,
+        // or the validated explicit subset for GROUP. Never replace this with "all members".
+        Set<UUID> recipients = access.recipientUserIds();
+        if (recipients.isEmpty()) {
             return CallSignalOutcome.UNAVAILABLE;
         }
 
         int delivered = callSignalPort.relay(new CallSignalRelay(access.workspaceId(), chatId,
-                java.util.Set.copyOf(peers), session.userId(), session.deviceId(), signal,
-                clock.now()), session.sessionId());
+                recipients, session.userId(), session.deviceId(), signal, clock.now()),
+                session.sessionId());
         if (log.isDebugEnabled()) {
-            log.debug("call.signal session_id={} chat_id={} call_id={} kind={} peer_sessions={}",
-                    session.sessionId(), chatId, signal.callId(), signal.kind(), delivered);
+            log.debug("call.signal session_id={} chat_id={} call_id={} kind={} chat_type={}"
+                            + " conference={} recipients={} recipient_sessions={}",
+                    session.sessionId(), chatId, signal.callId(), signal.kind(),
+                    access.chatType(), signal.conference(), recipients.size(), delivered);
         }
         return delivered == 0 ? CallSignalOutcome.UNAVAILABLE : CallSignalOutcome.RELAYED;
+    }
+
+    private static CallSignalRejectedException rejectionFor(String reason) {
+        if (RealtimeCallAccess.NOT_SUPPORTED.equals(reason)) {
+            return CallSignalRejectedException.notSupported();
+        }
+        if (RealtimeCallAccess.CONFERENCE_NOT_ALLOWED.equals(reason)) {
+            return CallSignalRejectedException.directConference();
+        }
+        if (RealtimeCallAccess.RECIPIENTS_REQUIRED.equals(reason)) {
+            return CallSignalRejectedException.recipientsRequired();
+        }
+        return CallSignalRejectedException.forbidden();
     }
 
     /** Drops rate-limit state for a closed session. */

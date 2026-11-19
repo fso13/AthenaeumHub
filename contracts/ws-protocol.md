@@ -59,7 +59,7 @@
 | `device.list.changed` | `device_id`, `status`, `key_generation` (свои устройства)                                 |
 | `typing`              | `user_id`, `expires_at`                                                                   |
 | `presence`            | `user_id`, `status`, `last_seen_at`                                                       |
-| `call.signal`         | `payload`: `call_id`, `kind`, `video`, `sdp?`, `candidate?`; кадр: `from_user_id`, `from_device_id` |
+| `call.signal`         | `payload`: `call_id`, `kind`, `video`, `sdp?`, `candidate?`, `conference?`, `recipients?`; кадр: `from_user_id`, `from_device_id` |
 | `call.unavailable`    | `call_id`, `kind`, `reason` (`PEER_OFFLINE`)                                              |
 
 `message.created` payload — `Message` из OpenAPI. Для E2EE-сообщения `payload.text=null`, а
@@ -135,7 +135,7 @@ generation при этом не меняется) плюс `device.list.changed`
 | `ack`       | `last_seq`                              | Для backpressure/метрик; не является read receipt |
 | `ping`      | `client_time`                           | Heartbeat                                         |
 | `typing`    | `chat_id`                               | Эфемерно; сервер ставит TTL 5 с                   |
-| `call.signal` | `chat_id`, `call_id`, `kind`, `video`, `sdp?`, `candidate?` | 1:1 DIRECT; эфемерный relay |
+| `call.signal` | `chat_id`, `call_id`, `kind`, `video`, `sdp?`, `candidate?`, `conference?`, `recipients?` | DIRECT или GROUP (`conference:true` + 1..50 `recipients`); эфемерный relay |
 
 ```json
 {"v":1,"type":"subscribe","chats":[{"chat_id":"...","last_seq":41}],"presence":true}
@@ -198,12 +198,15 @@ generation при этом не меняется) плюс `device.list.changed`
 - `call.signal`/`call.unavailable` — эфемерные, без истории, без offline-очереди и без
   серверных записей звонка.
 
-## 9. 1:1 звонки: signaling (audio/video)
+## 9. Звонки: signaling (audio/video)
 
 Срез — **только WebRTC signalling** через существующий WS-канал. Сервер не проксирует медиа,
 не парсит SDP, не хранит звонки и ничего не пишет в БД. `call.state` не вводится: состояние
 звонка (ringing/connected/ended) клиент выводит из `call.signal` и `call.unavailable`.
 REST-записей звонка нет.
+
+§9.1–9.4 описывают 1:1 DIRECT-звонки без изменений. §9.5 добавляет GROUP-звонки (mesh,
+без SFU): тот же кадр `call.signal` с дополнительными `conference`/`recipients`.
 
 ### 9.1 Клиент → сервер: `call.signal`
 
@@ -288,13 +291,115 @@ DIRECT-чата в том же workspace, добавляя `from_user_id`, `from
 
 - Только ACTIVE-участник чата; неизвестный/чужой чат → `error` `FORBIDDEN`, `status:403`
   (существование чата не раскрывается).
-- Только живой DIRECT-чат; GROUP → `error` `CALL_NOT_SUPPORTED`, `status:422`.
+- DIRECT: только живой DIRECT-чат с одним peer; `conference:true` или непустые
+  `recipients` в DIRECT запрещены → `error` `WS_FRAME_INVALID`, `status:400`.
+- GROUP: только с `conference:true` и `recipients` (1..50); GROUP без них →
+  `error` `CALL_NOT_SUPPORTED`, `status:422`. Подробности — §9.5.
 - Лимиты payload: SDP ≤ 32 KiB (32768 байт UTF-8), `candidate` ≤ 4 KiB (4096 байт JSON),
-  весь WS-кадр ≤ 64 KiB. Превышение → `error` `CALL_PAYLOAD_TOO_LARGE`, `status:413`.
+  `recipients` ≤ 50 UUID, весь WS-кадр ≤ 64 KiB. Превышение SDP/candidate →
+  `error` `CALL_PAYLOAD_TOO_LARGE`, `status:413`; остальные нарушения формы →
+  `WS_FRAME_INVALID`, `status:400`.
 - Rate limit — на сессию: по умолчанию 120 кадров `call.signal` за 60 с
   (`krug.realtime.call-signal-limit` / `call-signal-window`). Превышение → `error`
   `RATE_LIMITED`, `status:429`; кадр отбрасывается, соединение остаётся живым.
 - Любая ошибка `call.signal` (400/403/413/422/429) **не закрывает WS**: остальные кадры
   (`typing`, `presence`, сообщения) продолжают работать.
 - Сервер не логирует `sdp`, `candidate` и IP-адреса; в debug-логе допустимы только
-  `call_id`, `kind` и число получателей. SDP передаётся как есть только в relay-кадре.
+  `call_id`, `kind`, `chat_type` и число получателей. SDP передаётся как есть только в
+  relay-кадре.
+
+### 9.5 Групповые звонки: GROUP + conference (mesh, без SFU)
+
+Групповой звонок — это набор попарных WebRTC-соединений (mesh). Сервер остаётся
+**stateless relay**: у него нет конференций, участников, микшера, SFU, TURN, записи звонка
+или истории. Каждый клиент сам устанавливает `RTCPeerConnection` с каждым получателем.
+
+#### 9.5.1 Клиент → сервер: GROUP `call.signal`
+
+Каждый GROUP-кадр (включая `answer`, `ice`, `hangup`, `busy`) обязан содержать
+`conference:true` и явный список `recipients`:
+
+```json
+{
+  "v": 1,
+  "type": "call.signal",
+  "chat_id": "uuid",
+  "payload": {
+    "call_id": "uuid",
+    "kind": "offer",
+    "video": true,
+    "conference": true,
+    "recipients": ["uuid-bob", "uuid-carol"],
+    "sdp": "v=0\r\n...",
+    "candidate": {"candidate": "candidate:...", "sdp_mid": "0", "sdp_mline_index": 0}
+  }
+}
+```
+
+- `conference` — boolean; для GROUP обязателен `true`. `false` эквивалентно отсутствию:
+  такой кадр считается обычным (не групповым) и в GROUP отклоняется.
+- `recipients` — непустой массив 1..50 **канонических UUID** без дублей. Это пользователи
+  чата, которым адресован именно этот кадр; caller в списке запрещён.
+- `recipients` без `conference:true` → 400. `conference:true` без `recipients` → 400.
+- `call_id`, `kind`, `video`, `sdp`/`candidate` и правила по kind — те же, что в §9.1.
+- В DIRECT `conference:true` или непустые `recipients` запрещены → 400;
+  `conference:false` эквивалентно отсутствию. DIRECT-поведение не изменилось.
+
+#### 9.5.2 Сервер → клиент: relay
+
+Сервер проверяет, что caller — ACTIVE-участник GROUP-чата, а **каждый** `recipient` —
+ACTIVE-участник того же чата (не удалён, не INVITED, не чужой workspace). Затем кадр
+уходит только живым WS-сессиям перечисленных пользователей:
+
+```json
+{
+  "v": 1,
+  "type": "event",
+  "event": "call.signal",
+  "workspace_id": "uuid",
+  "chat_id": "uuid",
+  "ts": "2026-11-19T10:00:00Z",
+  "from_user_id": "uuid-alice",
+  "from_device_id": "uuid-device",
+  "payload": {
+    "call_id": "uuid",
+    "kind": "offer",
+    "video": true,
+    "conference": true,
+    "recipients": ["uuid-bob", "uuid-carol"],
+    "sdp": "v=0\r\n..."
+  }
+}
+```
+
+- Relay идёт **только** указанным `recipients`; остальные участники чата кадр не получают.
+- Caller не получает эхо собственного кадра; его собственные сессии исключены всегда.
+- Подписка на `chat_id` не требуется: достаточно live-сессии получателя.
+- Кадр получают все live-сессии каждого получателя.
+- Offline-получатели просто пропускаются: offline-очереди, push и повторов нет.
+- `busy`/`hangup` — обычные сигналы. `busy` от одного участника не завершает конференцию
+  на сервере: сервер не хранит состояние, а UI caller сам решает, продолжать ли звонок.
+
+#### 9.5.3 `call.unavailable` для GROUP
+
+Если **ни один** получатель кадра не имеет live-сессии, вызывающая сессия получает
+`call.unavailable` с `reason:"PEER_OFFLINE"` (как в §9.3). Если доставлен хотя бы один —
+ошибки и события нет: частичная доставка в MVP не является ошибкой.
+
+#### 9.5.4 Ошибки GROUP
+
+| Ситуация | Ответ |
+| --- | --- |
+| caller не ACTIVE-участник / чужой или неизвестный чат | `FORBIDDEN`, 403 |
+| `recipient` не ACTIVE-участник этого чата, чужой/неизвестный UUID | `FORBIDDEN`, 403 |
+| `recipient` равен caller | `WS_FRAME_INVALID`, 400 |
+| GROUP без `conference`/`recipients` | `CALL_NOT_SUPPORTED`, 422 |
+| DIRECT с `conference:true` или непустыми `recipients` | `WS_FRAME_INVALID`, 400 |
+| `recipients` пуст, >50, с дублями, не UUID или без `conference:true` | `WS_FRAME_INVALID`, 400 |
+| `conference:true` без `recipients` | `WS_FRAME_INVALID`, 400 |
+| SDP > 32 KiB / candidate > 4 KiB | `CALL_PAYLOAD_TOO_LARGE`, 413 |
+| весь кадр > 64 KiB (транспортный лимит) | `WS_FRAME_INVALID`, 400 |
+| rate limit сессии исчерпан | `RATE_LIMITED`, 429 |
+
+Любая из этих ошибок **не закрывает WS**; соединение остаётся пригодным для сообщений,
+`typing`, `presence` и следующих звонков.

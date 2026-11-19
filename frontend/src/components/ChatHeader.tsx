@@ -29,10 +29,15 @@ interface ChatHeaderProps {
   /** D1 UX: right details panel toggle. */
   detailsOpen: boolean;
   onToggleDetails: () => void;
-  /** §9: start an audio (`false`) or video (`true`) 1:1 call. */
+  /** §9/#77: start an audio (`false`) or video (`true`) call. */
   onStartCall?: (video: boolean) => void;
   /** A call is already ringing/connected, so a second attempt is disabled. */
   callActive?: boolean;
+  /**
+   * #77: fully translated reason calls are unavailable (E2EE, offline, busy).
+   * `undefined` lets the header derive the usual DIRECT/GROUP rules.
+   */
+  callDisabledReason?: string | null;
 }
 
 const REALTIME_LABEL: Record<AppState['realtimeStatus'], MessageKey> = {
@@ -56,6 +61,7 @@ export function ChatHeader({
   onToggleDetails,
   onStartCall,
   callActive = false,
+  callDisabledReason,
 }: ChatHeaderProps) {
   const name = chatDisplayName(
     chat,
@@ -73,18 +79,17 @@ export function ChatHeader({
   ).length;
   const membersCount = state.workspaceMembers.items.length;
   const realtimeLabel = t(REALTIME_LABEL[state.realtimeStatus]);
-  const callsAvailable =
-    chat?.type === 'DIRECT' &&
-    state.realtimeStatus === 'online' &&
-    !callActive &&
-    Boolean(onStartCall);
-  const callsDisabledReason = callActive
+  const callableChat = chatType === 'DIRECT' || chatType === 'GROUP';
+  const derivedCallReason = callActive
     ? t('calls.alreadyActive')
-    : chat?.type !== 'DIRECT'
+    : !callableChat
       ? t('calls.directOnly')
       : state.realtimeStatus !== 'online'
         ? t('calls.realtimeRequired')
         : null;
+  const callsDisabledReason =
+    callDisabledReason === undefined ? derivedCallReason : callDisabledReason;
+  const callsAvailable = callableChat && callsDisabledReason === null && Boolean(onStartCall);
   const callTitle = callsDisabledReason ?? t('chat.call');
   const videoCallTitle = callsDisabledReason ?? t('chat.videoCall');
 

@@ -6,6 +6,10 @@ Scope: backend WebSocket signalling for 1:1 (DIRECT) audio/video calls. WebRTC m
 peer-to-peer and is not handled by the server. Frontend work, TURN/STUN deployment, push
 notifications, and multi-node fan-out are out of scope.
 
+> **Additive extension:** GROUP (mesh conference) calls are documented separately in
+> [`GROUP-CALLS-REPORT.md`](GROUP-CALLS-REPORT.md) and in `contracts/ws-protocol.md` §9.5.
+> DIRECT behaviour described below is unchanged.
+
 ## 1. What was built
 
 The existing WS protocol now has a client frame `call.signal` and two server events:

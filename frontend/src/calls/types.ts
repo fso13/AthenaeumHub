@@ -1,10 +1,12 @@
 /**
- * 1:1 call signalling types (contracts/ws-protocol.md §9).
+ * Call signalling types (contracts/ws-protocol.md §9 and §9.5).
  *
- * The server is a dumb relay: it validates `call_id`/`kind`/`video` and the
- * per-kind SDP/candidate rules, then forwards the payload byte-for-byte. There
- * is no `call.state`, no call id allocation and no persistence, so every piece
- * of UI state below is derived locally from the WS frames.
+ * The server is a dumb relay: it validates `call_id`/`kind`/`video`, the
+ * per-kind SDP/candidate rules and, for GROUP, `conference:true` plus the
+ * explicit `recipients` list, then forwards the payload byte-for-byte. There is
+ * no `call.state`, no call id allocation and no persistence, so every piece of
+ * UI state below is derived locally from the WS frames. 1:1 frames omit the
+ * GROUP extension entirely.
  */
 
 /** Server-side bounds from §9.4; enforced client-side for an early, honest error. */
@@ -31,6 +33,13 @@ export interface CallSignalPayload {
   kind: CallSignalKind;
   /** `false` is an audio-only call; never inferred from the presence of `sdp`. */
   video: boolean;
+  /**
+   * GROUP mesh extension (task #77): `true` marks a conference frame. DIRECT
+   * 1:1 frames omit it entirely so the original contract stays byte-identical.
+   */
+  conference?: boolean;
+  /** Conference routing: the peer(s) this particular frame is addressed to. */
+  recipients?: string[];
   sdp?: string;
   candidate?: CallIceCandidate;
 }
@@ -43,7 +52,7 @@ export interface IncomingCallSignal {
   payload: CallSignalPayload;
 }
 
-/** `call.unavailable` is delivered only to the caller's session (§9.3). */
+/** `call.unavailable` is delivered only to the calling session (§9.3/§9.5.3). */
 export interface CallUnavailableSignal {
   chat_id: string;
   payload: {
@@ -57,6 +66,17 @@ export type CallDirection = 'outgoing' | 'incoming';
 
 /** Active-call lifecycle. `idle` means no overlay and no media resources. */
 export type CallPhase = 'idle' | 'outgoing' | 'incoming' | 'connecting' | 'connected';
+
+/**
+ * One remote leg of a GROUP mesh conference. Each participant has its own
+ * `RTCPeerConnection`; `stream` is the remote media and `connectionState` is
+ * the browser's peer-connection state (`new` until the offer/answer settles).
+ */
+export interface CallParticipant {
+  userId: string;
+  stream: MediaStream | null;
+  connectionState: RTCPeerConnectionState;
+}
 
 /**
  * User-facing failure reasons. `CallOverlay` owns the RU copy; the controller
@@ -98,6 +118,15 @@ export interface CallState {
   startedAt: number | null;
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  /**
+   * #77: GROUP mesh conference. `false` for every 1:1 call, so existing UI and
+   * tests keep their exact single-peer behavior.
+   */
+  conference: boolean;
+  /** Remote legs of a conference (empty for 1:1). */
+  participants: CallParticipant[];
+  /** Peer ids chosen in the picker (outgoing) or ringing callers (incoming). */
+  selectedPeerIds: string[];
   /** Transient result of the previous call; shown as a dismissible notice. */
   notice: CallNotice | null;
 }
@@ -116,6 +145,9 @@ export function idleCallState(): CallState {
     startedAt: null,
     localStream: null,
     remoteStream: null,
+    conference: false,
+    participants: [],
+    selectedPeerIds: [],
     notice: null,
   };
 }

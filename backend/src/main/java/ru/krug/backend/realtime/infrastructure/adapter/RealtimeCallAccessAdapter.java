@@ -2,6 +2,7 @@ package ru.krug.backend.realtime.infrastructure.adapter;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.stereotype.Component;
@@ -17,14 +18,16 @@ import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.TenantContext;
 
 /**
- * Call gate over the chat context: ACTIVE membership plus a live DIRECT chat. Denials are
- * returned as values (never thrown) so the WS transport can answer without a rollback-only
- * read transaction and without revealing whether the chat exists or is a GROUP.
+ * Call gate over the chat context: ACTIVE membership plus a live DIRECT/GROUP chat. Denials
+ * are returned as values (never thrown) so the WS transport can answer without a
+ * rollback-only read transaction and without revealing whether the chat exists or its type.
+ *
+ * <p>DIRECT keeps the original 1:1 semantics and yields exactly one peer. GROUP yields only
+ * the validated requested recipients — never all active members — after checking every one
+ * of them against the ACTIVE membership of the same chat.
  */
 @Component
 public class RealtimeCallAccessAdapter implements RealtimeCallAccessPort {
-
-    private static final String DIRECT = "DIRECT";
 
     private final ChatAccessPort chatAccess;
     private final ChatWorkspacePort chatWorkspace;
@@ -42,12 +45,13 @@ public class RealtimeCallAccessAdapter implements RealtimeCallAccessPort {
     @Override
     @Transactional(readOnly = true)
     public RealtimeCallAccess check(UUID workspaceId, UUID chatId, UUID userId,
+                                    boolean conference, Set<UUID> requestedRecipients,
                                     String requestId) {
         UUID resolvedWorkspace = workspaceId;
         if (resolvedWorkspace == null) {
             Optional<UUID> found = chatWorkspace.findWorkspaceForChat(chatId, userId);
             if (found.isEmpty()) {
-                return RealtimeCallAccess.forbidden(null);
+                return RealtimeCallAccess.forbidden(null, null);
             }
             resolvedWorkspace = found.get();
         }
@@ -57,12 +61,41 @@ public class RealtimeCallAccessAdapter implements RealtimeCallAccessPort {
 
         Optional<ChatAccess> access = chatAccess.findActiveChat(workspace, chatId, userId);
         if (access.isEmpty()) {
-            return RealtimeCallAccess.forbidden(workspace);
+            return RealtimeCallAccess.forbidden(workspace, null);
         }
-        if (!DIRECT.equals(access.get().chatType())) {
-            return RealtimeCallAccess.notDirect(workspace);
+        String chatType = access.get().chatType();
+        List<UUID> activeMemberIds = chatRepository.findActiveMemberIds(workspace, chatId);
+
+        if (RealtimeCallAccess.DIRECT.equals(chatType)) {
+            if (conference || (requestedRecipients != null && !requestedRecipients.isEmpty())) {
+                return RealtimeCallAccess.conferenceNotAllowed(workspace, chatType);
+            }
+            List<UUID> peers = activeMemberIds.stream()
+                    .filter(memberId -> !memberId.equals(userId))
+                    .toList();
+            // A DIRECT chat has exactly one peer. More active members means a corrupted
+            // chat: fail closed instead of broadcasting a 1:1 call to a group.
+            if (peers.size() > 1) {
+                return RealtimeCallAccess.notSupported(workspace, chatType);
+            }
+            return RealtimeCallAccess.accepted(workspace, chatType, Set.copyOf(peers));
         }
-        List<UUID> members = chatRepository.findActiveMemberIds(workspace, chatId);
-        return RealtimeCallAccess.accepted(workspace, members);
+
+        if (RealtimeCallAccess.GROUP.equals(chatType)) {
+            if (!conference || requestedRecipients == null || requestedRecipients.isEmpty()) {
+                return RealtimeCallAccess.recipientsRequired(workspace, chatType);
+            }
+            Set<UUID> activeMembers = Set.copyOf(activeMemberIds);
+            // One generic denial for "not a member", "caller in recipients" and "unknown
+            // user id": the client must not be able to probe chat membership.
+            if (requestedRecipients.contains(userId)
+                    || !activeMembers.containsAll(requestedRecipients)) {
+                return RealtimeCallAccess.forbidden(workspace, chatType);
+            }
+            return RealtimeCallAccess.accepted(workspace, chatType,
+                    Set.copyOf(requestedRecipients));
+        }
+
+        return RealtimeCallAccess.notSupported(workspace, chatType);
     }
 }

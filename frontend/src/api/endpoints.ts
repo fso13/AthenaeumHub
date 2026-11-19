@@ -227,6 +227,8 @@ export interface ChatApi {
    */
   listPlugins(): Promise<PluginList>;
   listChatPlugins(chatId: string): Promise<ChatPluginStateList>;
+  /** #77: active chat member ids for the group-call picker. */
+  listChatMembers(chatId: string): Promise<{ user_ids: string[] }>;
   updateChatPlugin(
     chatId: string,
     pluginId: string,
@@ -703,6 +705,15 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       return withReauth(async () => {
         // Catalog is global and authenticated; no chat/workspace is required.
         const response = await client.get<PluginList>('/plugins');
+        return response.data;
+      });
+    },
+
+    listChatMembers(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<{ user_ids: string[] }>(
+          `/chats/${encodeURIComponent(chatId)}/members`,
+        );
         return response.data;
       });
     },

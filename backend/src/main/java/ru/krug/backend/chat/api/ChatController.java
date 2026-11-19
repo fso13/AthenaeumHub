@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import ru.krug.backend.chat.api.dto.ChatCreateRequest;
 import ru.krug.backend.chat.api.dto.ChatListResponse;
+import ru.krug.backend.chat.api.dto.ChatMemberIdsResponse;
 import ru.krug.backend.chat.api.dto.ChatResponse;
 import ru.krug.backend.chat.api.dto.ChatUpdateRequest;
 import ru.krug.backend.chat.api.dto.ReadRequest;
@@ -24,6 +25,7 @@ import ru.krug.backend.chat.application.model.CreateChatResult;
 import ru.krug.backend.chat.application.usecase.ChatCreateService;
 import ru.krug.backend.chat.application.command.ChatUpdateCommand;
 import ru.krug.backend.chat.application.usecase.ChatQueryService;
+import ru.krug.backend.chat.application.usecase.ChatMembersQueryService;
 import ru.krug.backend.chat.application.usecase.ChatUpdateService;
 import ru.krug.backend.chat.application.usecase.MarkReadService;
 import ru.krug.backend.shared.api.RequestHeaders;
@@ -37,14 +39,17 @@ public class ChatController {
     private final MarkReadService markReadService;
     private final ChatCreateService chatCreateService;
     private final ChatUpdateService chatUpdateService;
+    private final ChatMembersQueryService chatMembersQueryService;
 
     public ChatController(ChatQueryService chatQueryService, MarkReadService markReadService,
                           ChatCreateService chatCreateService,
-                          ChatUpdateService chatUpdateService) {
+                          ChatUpdateService chatUpdateService,
+                          ChatMembersQueryService chatMembersQueryService) {
         this.chatQueryService = chatQueryService;
         this.markReadService = markReadService;
         this.chatCreateService = chatCreateService;
         this.chatUpdateService = chatUpdateService;
+        this.chatMembersQueryService = chatMembersQueryService;
     }
 
     @GetMapping("/workspaces/{workspaceId}/chats")
@@ -77,6 +82,11 @@ public class ChatController {
                                    Principal principal) {
         return ChatApiMapper.toResponse(chatUpdateService.update(principal, chatId,
                 new ChatUpdateCommand(request.name(), request.description())));
+    }
+
+    @GetMapping("/chats/{chatId}/members")
+    public ChatMemberIdsResponse listMembers(@PathVariable UUID chatId, Principal principal) {
+        return new ChatMemberIdsResponse(chatMembersQueryService.list(principal, chatId));
     }
 
     @PostMapping("/chats/{chatId}/read")

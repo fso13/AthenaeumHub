@@ -34,7 +34,7 @@ describe('E6-F notifications', () => {
     expect(mockDb.notificationListRequests[0]?.limit).toBe(30);
     expect(within(panel).getAllByText('Новое сообщение')).toHaveLength(2);
     expect(within(panel).getByText('Новое упоминание')).toBeVisible();
-    expect(within(panel).getByText('Добро пожаловать в Сову')).toBeVisible();
+    expect(within(panel).getByText('Добро пожаловать в Pickle')).toBeVisible();
 
     // body=null (E2EE and the default-privacy shape): never render a message text.
     expect(within(panel).getAllByText(/Текст скрыт/).length).toBe(3);

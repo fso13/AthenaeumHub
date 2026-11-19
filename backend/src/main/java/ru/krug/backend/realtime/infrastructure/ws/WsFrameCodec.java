@@ -143,6 +143,10 @@ public class WsFrameCodec {
     /**
      * Ephemeral {@code call.signal}: the validated payload is relayed byte-for-byte plus
      * the authenticated sender ids. No event_id/seq, no persistence, no replay.
+     *
+     * <p>A GROUP conference frame additionally carries {@code conference=true} and the
+     * validated recipient list; a DIRECT frame keeps the original payload shape and omits
+     * both keys, so existing 1:1 clients are unaffected.
      */
     public String callSignal(CallSignalRelay relay) {
         ObjectNode node = base("event");
@@ -156,6 +160,13 @@ public class WsFrameCodec {
         payload.put("call_id", relay.signal().callId().toString());
         payload.put("kind", relay.signal().kind().wire());
         payload.put("video", relay.signal().video());
+        if (relay.signal().conference()) {
+            payload.put("conference", true);
+            ArrayNode recipients = payload.putArray("recipients");
+            for (UUID recipient : relay.signal().recipients()) {
+                recipients.add(recipient.toString());
+            }
+        }
         if (relay.signal().sdp() != null) {
             payload.put("sdp", relay.signal().sdp());
         }
@@ -165,7 +176,10 @@ public class WsFrameCodec {
         return write(node);
     }
 
-    /** Caller-only, ephemeral: no live session of the other DIRECT member. */
+    /**
+     * Caller-only, ephemeral: zero live sessions among the frame's recipients (the DIRECT
+     * peer, or every named GROUP recipient). A partial GROUP delivery is not an error.
+     */
     public String callUnavailable(UUID workspaceId, UUID chatId, UUID callId, CallKind kind,
                                   String reason, Instant ts) {
         ObjectNode node = base("event");

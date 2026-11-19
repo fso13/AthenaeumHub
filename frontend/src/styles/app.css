@@ -1,5 +1,5 @@
 /* ==========================================================================
-   «Сова» — F-01 managed chat screen.
+   «Pickle» — F-01 managed chat screen.
    Own tokens and components inspired by design/ (not imported from prototype).
    ========================================================================== */
 
@@ -14191,6 +14191,435 @@ html[data-theme='dark'] .recent-thumb--video {
 @media (prefers-reduced-motion: reduce) {
   .call-stage__remote,
   .call-button {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   #77 GROUP mesh calls — participant picker and video/avatar grid.
+   ========================================================================== */
+
+.call-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 125;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(6, 11, 9, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.call-picker {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+  max-height: min(720px, calc(100dvh - 36px));
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: var(--card);
+  color: var(--text);
+  box-shadow: var(--shadow-lg, 0 24px 70px -28px rgba(0, 0, 0, 0.5));
+  outline: none;
+}
+
+.call-picker:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.call-picker__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 10px;
+}
+
+.call-picker__title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.call-picker__lead {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.call-picker__kind {
+  display: flex;
+  gap: 6px;
+  margin: 4px 18px 10px;
+  padding: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2, rgba(0, 0, 0, 0.05));
+}
+
+.call-picker__kind-button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.call-picker__kind-button .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.call-picker__kind-button.is-active {
+  background: var(--card);
+  color: var(--text);
+  box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.18);
+}
+
+.call-picker__kind-button:focus-visible,
+.call-picker__select-all:focus-visible,
+.call-picker__retry:focus-visible,
+.call-picker__more:focus-visible,
+.call-picker__cancel:focus-visible,
+.call-picker__submit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.call-picker__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 18px 8px;
+}
+
+.call-picker__select-all {
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.call-picker__select-all:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.call-picker__count {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.call-picker__list {
+  flex: 1;
+  min-height: 120px;
+  margin: 0;
+  padding: 4px 12px;
+  overflow-y: auto;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.call-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.call-picker__row:hover {
+  background: var(--surface-2, rgba(0, 0, 0, 0.04));
+}
+
+.call-picker__row.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.call-picker__row input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.call-picker__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.call-picker__state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 110px;
+  margin: 0;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.call-picker__state p {
+  margin: 0;
+}
+
+.call-picker__retry,
+.call-picker__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.call-picker__more {
+  display: flex;
+  margin: 8px auto 10px;
+}
+
+.call-picker__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 18px calc(14px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line);
+}
+
+.call-picker__hint {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.call-picker__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.call-picker__cancel,
+.call-picker__submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 8px 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.call-picker__submit {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+.call-picker__submit:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.call-picker__submit .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* Mesh stage grid: 1 / 2 / 3+ remote tiles (plus the local preview tile). */
+.call-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 10px;
+  padding: 64px 16px 84px;
+  overflow-y: auto;
+  align-content: stretch;
+}
+
+.call-grid--1 {
+  grid-template-columns: minmax(0, 720px);
+  justify-content: center;
+}
+
+.call-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.call-grid--3 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.call-tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 100% at 20% 0%, rgba(40, 96, 78, 0.45), transparent 62%), #0c1311;
+}
+
+.call-tile--local {
+  border-color: rgba(95, 201, 207, 0.5);
+}
+
+.call-tile__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.call-tile.is-video .call-tile__video {
+  opacity: 1;
+}
+
+.call-tile--local .call-tile__video {
+  transform: scaleX(-1);
+}
+
+.call-tile__identity {
+  display: grid;
+  place-items: center;
+  transition: opacity 120ms ease;
+}
+
+.call-tile.is-video .call-tile__identity {
+  opacity: 0;
+}
+
+.call-tile__identity .avatar {
+  width: 64px;
+  height: 64px;
+  font-size: 24px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+}
+
+.call-tile__meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 22px 12px 9px;
+  background: linear-gradient(transparent, rgba(4, 8, 7, 0.8));
+  color: #f4faf7;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+}
+
+.call-tile__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-tile__state {
+  flex: none;
+  color: rgba(238, 245, 241, 0.72);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.call-tile__state--error {
+  color: #ffb4ad;
+}
+
+.call-tile__camera-off {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: rgba(4, 8, 7, 0.62);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .call-picker-backdrop {
+    padding: 0;
+  }
+
+  .call-picker {
+    width: 100%;
+    max-height: 100dvh;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .call-grid {
+    gap: 8px;
+    padding: 58px 10px 78px;
+  }
+
+  .call-grid--2,
+  .call-grid--3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-tile__video,
+  .call-tile__identity {
     transition: none;
   }
 }

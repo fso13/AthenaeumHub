@@ -1722,6 +1722,16 @@ export function createHandlers(db: MockDb) {
       });
     }),
 
+    http.get(`${API}/chats/:chatId/members`, ({ params }) => {
+      const chat = db.chats[String(params.chatId)];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const ids =
+        chat.summary.type === 'DIRECT' && chat.summary.peer_id
+          ? [db.session.user.id, chat.summary.peer_id]
+          : db.workspaceMembers.map((member) => member.user_id);
+      return HttpResponse.json({ user_ids: ids });
+    }),
+
     http.get(`${API}/chats/:chatId/plugins`, async ({ request, params }) => {
       const unauthorized = requireAuth(request);
       if (unauthorized) return unauthorized;

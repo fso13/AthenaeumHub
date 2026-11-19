@@ -2398,6 +2398,27 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /chats/{chatId}/members:
+    get:
+      tags: [chat]
+      summary: List active chat member ids
+      description: Active membership only; no display names or profile data. Used by group-call participant selection.
+      operationId: listChatMembers
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+      responses:
+        '200':
+          description: Active member ids
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMemberIds'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 components:
   securitySchemes:
     bearerAuth:
@@ -2486,6 +2507,17 @@ components:
       schema: { type: string, pattern: "^[a-f0-9]{64}$" }
 
   schemas:
+    ChatMemberIds:
+      type: object
+      required: [user_ids]
+      properties:
+        user_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 1000
     Error:
       type: object
       required: [code, message, request_id]

@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import type { CallRingtone } from '../calls/ringtone';
 
 /**
  * Deterministic getUserMedia/RTCPeerConnection fakes for the §9 call suite.
@@ -174,4 +175,45 @@ export function createFakeCallMedia(options: FakeCallMediaOptions = {}): FakeCal
 /** DOMException-shaped media error without relying on jsdom's DOMException. */
 export function fakeMediaError(name: string, message = name): { name: string; message: string } {
   return { name, message };
+}
+
+export interface FakeRingtone extends CallRingtone {
+  readonly outgoingStarts: number;
+  readonly incomingStarts: number;
+  readonly stops: number;
+  readonly disposedCount: number;
+}
+
+/** Deterministic stand-in for the WebAudio loop (#77 ringback/ringtone tests). */
+export function createFakeRingtone(): FakeRingtone {
+  let outgoingStarts = 0;
+  let incomingStarts = 0;
+  let stops = 0;
+  let disposedCount = 0;
+  return {
+    get outgoingStarts() {
+      return outgoingStarts;
+    },
+    get incomingStarts() {
+      return incomingStarts;
+    },
+    get stops() {
+      return stops;
+    },
+    get disposedCount() {
+      return disposedCount;
+    },
+    startOutgoing() {
+      outgoingStarts += 1;
+    },
+    startIncoming() {
+      incomingStarts += 1;
+    },
+    stop() {
+      stops += 1;
+    },
+    dispose() {
+      disposedCount += 1;
+    },
+  };
 }

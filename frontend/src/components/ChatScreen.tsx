@@ -12,7 +12,7 @@ import { describeError } from '../domain/errors';
 import { chatDisplayName } from '../domain/chatLabel';
 import { useCountdown } from '../hooks/useCountdown';
 import { getVoiceSupport, useVoiceRecorder, type RecordedVoice } from '../hooks/useVoiceRecorder';
-import { t } from '../i18n/ru';
+import { t, type MessageKey } from '../i18n/ru';
 import {
   useChatStore,
   useChatState,
@@ -33,6 +33,7 @@ import { ChatDetails } from './ChatDetails';
 import { ChatHeader } from './ChatHeader';
 import { Composer } from './Composer';
 import { E2eeBanner } from './E2eeBanner';
+import { GroupCallPicker } from './GroupCallPicker';
 import { RecordingBar } from './RecordingBar';
 import { SafetyNumberDialog } from './SafetyNumberDialog';
 import { ChatIcon, CloseIcon, LockIcon, PaperclipIcon, SearchIcon } from './Icons';
@@ -92,6 +93,8 @@ export function ChatScreen({
     panel: 'polls' | 'tasks';
     nonce: number;
   } | null>(null);
+  /** #77: GROUP calls first open the participant picker. */
+  const [callPicker, setCallPicker] = useState<{ chatId: string; video: boolean } | null>(null);
   const pluginPanelNonce = useRef(0);
 
   const filesStore = useFilesStore();
@@ -126,6 +129,7 @@ export function ChatScreen({
     setPollDialogOpen(false);
     setTaskDialogOpen(false);
     setPluginPanelRequest(null);
+    setCallPicker(null);
     lastTypingSentAt.current = 0;
   }, [activeChatId]);
 
@@ -162,6 +166,22 @@ export function ChatScreen({
         ? ('e2ee_blocked' as const)
         : null;
   const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
+  const callsBlockedKey = store.callDisabledReason(activeChatId);
+  const callsDisabledReason = callsBlockedKey ? t(callsBlockedKey as MessageKey) : null;
+  const startCall = useCallback(
+    (chatId: string, video: boolean) => {
+      const chat = state.chats.find((item) => item.id === chatId) ?? null;
+      if (!chat || callsBlockedKey !== null) return;
+      if (chat.type === 'DIRECT') {
+        store.startCall(chatId, video);
+        return;
+      }
+      if (chat.type === 'GROUP' && !store.isE2eeChat(chatId)) {
+        setCallPicker({ chatId, video });
+      }
+    },
+    [callsBlockedKey, state.chats, store],
+  );
   const threadsAvailable = activeChatId ? store.threadsAvailable(activeChatId) : false;
   const isGroupChat = chatSummary?.type === 'GROUP';
   const pluginGate = usePluginGate(activeChatId, isE2eeChat);
@@ -516,9 +536,10 @@ export function ChatScreen({
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onStartCall={(video) => {
-              if (activeChatId) store.startCall(activeChatId, video);
+              if (activeChatId) startCall(activeChatId, video);
             }}
             callActive={state.call.phase !== 'idle'}
+            callDisabledReason={callsDisabledReason}
           />
 
           {searchOpen ? (
@@ -743,19 +764,27 @@ export function ChatScreen({
           }}
           pluginPanelRequest={pluginPanelRequest}
           onStartCall={
-            activeChatId && chatSummary?.type === 'DIRECT'
-              ? () => store.startCall(activeChatId, false)
+            activeChatId && (chatSummary?.type === 'DIRECT' || chatSummary?.type === 'GROUP')
+              ? (video) => startCall(activeChatId, video)
               : undefined
           }
-          callDisabledReason={
-            !chatSummary || chatSummary.type !== 'DIRECT'
-              ? t('calls.directOnly')
-              : state.realtimeStatus !== 'online'
-                ? t('calls.realtimeRequired')
-                : state.call.phase !== 'idle'
-                  ? t('calls.alreadyActive')
-                  : null
+          callDisabledReason={callsDisabledReason}
+        />
+      ) : null}
+
+      {callPicker ? (
+        <GroupCallPicker
+          key={callPicker.chatId}
+          chatId={callPicker.chatId}
+          chatName={
+            chatDisplayName(
+              state.chats.find((item) => item.id === callPicker.chatId) ?? null,
+              state.workspaceMembers.items,
+              state.session?.chat.name ?? null,
+            ) || t('calls.groupCall')
           }
+          initialVideo={callPicker.video}
+          onClose={() => setCallPicker(null)}
         />
       ) : null}
 

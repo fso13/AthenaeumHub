@@ -5,7 +5,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
-/** One validated signal together with its authenticated sender and DIRECT-chat recipients. */
+/**
+ * One validated signal together with its authenticated sender and the exact recipient
+ * user ids resolved by the access gate (one peer for DIRECT, the named subset for GROUP).
+ */
 public record CallSignalRelay(
         UUID workspaceId,
         UUID chatId,

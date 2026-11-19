@@ -157,9 +157,12 @@ public class InMemoryRealtimeHub
     }
 
     /**
-     * 1:1 call relay. Recipients are the live sessions of the other DIRECT-chat member in
-     * the same workspace; chat subscription is deliberately not required, so a ringing call
-     * reaches a peer whose UI has not opened that chat. Ephemeral frame, best-effort count.
+     * Call relay for DIRECT and GROUP (mesh conference) frames. Recipients are the live
+     * sessions of the users resolved by the access gate — the single DIRECT peer, or the
+     * explicit GROUP recipient subset — in the same workspace. Chat subscription is
+     * deliberately not required, so a ringing call reaches a peer whose UI has not opened
+     * that chat. The sender's own session is always excluded, so there is no echo.
+     * Ephemeral frame, best-effort count; offline recipients are simply skipped.
      */
     @Override
     public int relay(CallSignalRelay relay, String excludeSessionId) {

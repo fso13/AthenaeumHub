@@ -140,6 +140,33 @@ class RealtimeFrameContractTest {
         assertThat(node.get("from_user_id").asText()).isEqualTo(userId.toString());
         assertThat(node.get("from_device_id").asText()).isEqualTo(fromDeviceId.toString());
         assertThat(payload.get("sdp").asText()).contains("v=0");
+        // DIRECT payload shape is unchanged: no GROUP-only keys.
+        assertThat(payload.has("conference")).isFalse();
+        assertThat(payload.has("recipients")).isFalse();
+    }
+
+    @Test
+    void groupCallSignalMatchesContractWithConferenceAndRecipients() throws Exception {
+        UUID callId = UUID.randomUUID();
+        UUID fromDeviceId = UUID.randomUUID();
+        UUID bob = UUID.randomUUID();
+        UUID carol = UUID.randomUUID();
+        CallSignal signal = new CallSignal(callId, CallKind.OFFER, true,
+                "v=0\r\no=- 1 2 IN IP4 0.0.0.0\r\n", null, true, List.of(bob, carol));
+        CallSignalRelay relay = new CallSignalRelay(workspaceId, chatId, Set.of(bob, carol),
+                userId, fromDeviceId, signal, NOW);
+
+        String frame = codec.callSignal(relay);
+        WsFrameContract.assertValid("callSignal", frame);
+        JsonNode node = mapper.readTree(frame);
+        JsonNode payload = node.get("payload");
+        assertThat(node.has("seq")).isFalse();
+        assertThat(node.has("event_id")).isFalse();
+        assertThat(payload.get("conference").asBoolean()).isTrue();
+        assertThat(payload.get("recipients")).hasSize(2);
+        assertThat(payload.get("recipients").get(0).asText()).isEqualTo(bob.toString());
+        assertThat(payload.get("recipients").get(1).asText()).isEqualTo(carol.toString());
+        assertThat(node.get("from_user_id").asText()).isEqualTo(userId.toString());
     }
 
     @Test

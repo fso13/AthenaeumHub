@@ -77,6 +77,7 @@ import type { WireCryptoEnvelope } from '../e2ee/api/deviceKeys';
 import type { OutboxEntry, OutboxSendResult } from '../e2ee/outbox/types';
 import type { SessionResetBody } from '../e2ee/session/reset';
 import { CallController } from '../calls/CallController';
+import type { CallRingtone } from '../calls/ringtone';
 import { idleCallState, type CallState } from '../calls/types';
 import {
   RealtimeClient,
@@ -463,10 +464,12 @@ export interface ChatStoreDeps {
   e2eeBridge?: E2eeBridge | null;
   /** Test seam for the feature flag; defaults to `VITE_E2EE_ENABLED`. */
   e2eeEnabled?: boolean;
-  /** Test seam: getUserMedia for 1:1 calls (defaults to navigator.mediaDevices). */
+  /** Test seam: getUserMedia for calls (defaults to navigator.mediaDevices). */
   callMediaDevices?: Pick<MediaDevices, 'getUserMedia'>;
-  /** Test seam: RTCPeerConnection factory for 1:1 calls. */
+  /** Test seam: RTCPeerConnection factory for calls. */
   callCreatePeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
+  /** #77: test seam for ringback/ringtone (defaults to a WebAudio loop). */
+  callRingtone?: CallRingtone;
 }
 
 const MAX_TEXT_LENGTH = 8000;
@@ -790,6 +793,7 @@ export class ChatStore {
       now: () => this.now(),
       mediaDevices: deps.callMediaDevices,
       createPeerConnection: deps.callCreatePeerConnection,
+      ringtone: deps.callRingtone,
     });
   }
 
@@ -1075,7 +1079,7 @@ export class ChatStore {
 
     const device = await this.api.registerDevice(
       {
-        name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
+        name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
         platform: 'WEB',
         app_version: this.config.appVersion.slice(0, 40),
       },
@@ -3115,7 +3119,7 @@ export class ChatStore {
       try {
         const self = await this.e2eeBridge!.initialize({
           userId,
-          name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
+          name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
           appVersion: this.config.appVersion.slice(0, 40),
         });
         this.patchE2ee({
@@ -5047,18 +5051,18 @@ export class ChatStore {
   }
 
   /* ---------------------------------------------------------------------- */
-  /* §9 1:1 calls                                                            */
+  /* §9 + #77 calls                                                          */
   /* ---------------------------------------------------------------------- */
 
   /**
-   * Start an outgoing 1:1 call. DIRECT only; the server rejects GROUP with
-   * `CALL_NOT_SUPPORTED`, so the guard here mirrors that rule for an honest UI.
-   * No media is requested until the user presses the header button.
+   * Start an outgoing 1:1 call. DIRECT only; GROUP uses `startGroupCall`.
+   * Calls stay managed-only: E2EE chats never expose a call attempt.
    */
   startCall(chatId: string, video: boolean): void {
     if (this.state.call.phase !== 'idle') return;
     const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
     if (!chat || chat.type !== 'DIRECT') return;
+    if (this.isE2eeChat(chatId)) return;
     if (this.state.realtimeStatus !== 'online') {
       this.patch({
         call: { ...idleCallState(), notice: { code: 'signaling_failed' } },
@@ -5066,6 +5070,34 @@ export class ChatStore {
       return;
     }
     this.calls.start(chatId, chat.peer_id ?? null, video);
+  }
+
+  /**
+   * #77: start a GROUP mesh conference with the peers selected in the picker.
+   * Returns false when the call cannot start (idle/live/managed/selection), so
+   * the modal can stay open with an honest state instead of vanishing.
+   */
+  async listChatMembers(chatId: string): Promise<string[]> {
+    const response = await this.api.listChatMembers(chatId);
+    return response.user_ids;
+  }
+
+  startGroupCall(chatId: string, peerUserIds: readonly string[], video: boolean): boolean {
+    if (this.state.call.phase !== 'idle') return false;
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    if (!chat || chat.type !== 'GROUP') return false;
+    if (this.isE2eeChat(chatId)) return false;
+    const selfId = this.viewerId();
+    const peers = [...new Set(peerUserIds)].filter((id) => id.length > 0 && id !== selfId);
+    if (peers.length === 0) return false;
+    if (this.state.realtimeStatus !== 'online') {
+      this.patch({
+        call: { ...idleCallState(), notice: { code: 'signaling_failed' } },
+      });
+      return false;
+    }
+    this.calls.startConference(chatId, peers, video);
+    return true;
   }
 
   acceptIncomingCall(): void {
@@ -5093,16 +5125,27 @@ export class ChatStore {
     this.calls.dismissNotice();
   }
 
+  /** Why calls are unavailable in this chat, or null when they may start. */
+  callDisabledReason(chatId: string | null): string | null {
+    const chat = chatId ? (this.state.chats.find((item) => item.id === chatId) ?? null) : null;
+    if (!chat) return 'calls.realtimeRequired';
+    if (chat.type !== 'DIRECT' && chat.type !== 'GROUP') return 'calls.directOnly';
+    if (this.isE2eeChat(chat.id)) return 'calls.e2eeUnavailable';
+    if (this.state.realtimeStatus !== 'online') return 'calls.realtimeRequired';
+    if (this.state.call.phase !== 'idle') return 'calls.alreadyActive';
+    return null;
+  }
+
   private handleCallSignal(frame: CallSignalFrame): void {
-    // Defence in depth: the relay is DIRECT-only server-side, but a stale or
-    // malformed frame for a GROUP/unknown chat must never create call UI.
+    // #77: GROUP relay is accepted only for conference frames; a legacy or
+    // malformed GROUP frame must never create call UI. DIRECT stays unchanged.
     const chat = this.state.chats.find((item) => item.id === frame.chat_id) ?? null;
-    if (chat && chat.type !== 'DIRECT') return;
+    if (chat && chat.type !== 'DIRECT' && frame.payload.conference !== true) return;
     this.calls.handleSignal(frame);
   }
 
   private handleCallUnavailable(frame: CallUnavailableFrame): void {
-    this.calls.handleUnavailable(frame.payload.call_id);
+    this.calls.handleUnavailable(frame.payload.call_id, frame.from_user_id ?? null);
   }
 
   async sync(): Promise<void> {

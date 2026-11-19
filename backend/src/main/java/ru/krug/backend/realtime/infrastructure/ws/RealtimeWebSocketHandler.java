@@ -209,9 +209,11 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     }
 
     /**
-     * 1:1 call signalling. Unlike other malformed frames, a rejected call frame does not
-     * close the socket: calls are an additive feature and a bad offer must not kill chat.
-     * The error message is generic and never includes SDP or ICE data.
+     * DIRECT/GROUP call signalling. Unlike other malformed frames, a rejected call frame
+     * does not close the socket: calls are an additive feature and a bad offer must not
+     * kill chat. A GROUP frame that reaches no recipient produces {@code call.unavailable}
+     * on the caller's session only; partial delivery is silent by design. The error message
+     * is generic and never includes SDP or ICE data.
      */
     private void callSignal(RealtimeConnection connection, RealtimeSession session,
                             JsonNode frame) {

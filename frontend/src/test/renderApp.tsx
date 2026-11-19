@@ -10,6 +10,7 @@ import type { AppConfig } from '../config/env';
 import { createMockRealtimeSocketFactory } from '../mocks/realtime';
 import { createChatStore, type ChatStore } from '../store/chatStore';
 import type { E2eeBridge } from '../e2ee/app/chatBridge';
+import type { CallRingtone } from '../calls/ringtone';
 import { mockDb } from './server';
 
 export const testConfig: AppConfig = {
@@ -17,7 +18,7 @@ export const testConfig: AppConfig = {
   useMocks: true,
   devSession: true,
   authMode: 'dev',
-  deviceName: 'Сова — тест',
+  deviceName: 'Pickle — тест',
   appVersion: '0.1.0',
   requestTimeoutMs: 5_000,
   historyPageSize: 30,
@@ -52,6 +53,7 @@ export interface TestE2eeOptions {
 export interface TestCallOptions {
   mediaDevices?: Pick<MediaDevices, 'getUserMedia'>;
   createPeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
+  ringtone?: CallRingtone;
 }
 
 export function createTestStore(
@@ -76,6 +78,7 @@ export function createTestStore(
     e2eeBridge: e2ee?.bridge,
     callMediaDevices: calls.mediaDevices,
     callCreatePeerConnection: calls.createPeerConnection,
+    callRingtone: calls.ringtone,
   });
 }
 

@@ -9,7 +9,12 @@ import {
 } from '../mocks/realtime';
 import { IDS } from '../mocks/fixtures';
 import type { ChatStore } from '../store/chatStore';
-import { createFakeCallMedia, FakeMediaStream, fakeMediaError } from '../test/callFakes';
+import {
+  createFakeCallMedia,
+  createFakeRingtone,
+  FakeMediaStream,
+  fakeMediaError,
+} from '../test/callFakes';
 import { renderApp } from '../test/renderApp';
 
 const CALL = '00000000-0000-4000-8000-000000000001';
@@ -18,12 +23,14 @@ const stores: ChatStore[] = [];
 
 function renderCalls() {
   const media = createFakeCallMedia();
+  const ringtone = createFakeRingtone();
   const result = renderApp({ realtimeEnabled: true }, null, {
     mediaDevices: media.mediaDevices,
     createPeerConnection: media.createPeerConnection,
+    ringtone,
   });
   stores.push(result.store);
-  return { ...result, media };
+  return { ...result, media, ringtone };
 }
 
 async function waitForOnline(store: ChatStore): Promise<void> {
@@ -83,22 +90,132 @@ async function answerAndConnect(
   await screen.findByText('Звонок идёт');
 }
 
+async function openGroupPicker(
+  user: ReturnType<typeof renderCalls>['user'],
+  container: HTMLElement,
+  video = false,
+): Promise<HTMLElement> {
+  await user.click(callButton(container, video ? 'video' : 'call'));
+  const dialog = await screen.findByRole('dialog', { name: 'Новый звонок' });
+  await within(dialog).findByRole('checkbox', { name: 'Анна Петрова' });
+  return dialog;
+}
+
+async function startGroupConference(
+  user: ReturnType<typeof renderCalls>['user'],
+  container: HTMLElement,
+  media: ReturnType<typeof createFakeCallMedia>,
+  video = false,
+): Promise<{ callId: string; dialog: HTMLElement }> {
+  const dialog = await openGroupPicker(user, container, video);
+  await user.click(within(dialog).getByRole('button', { name: 'Выбрать всех' }));
+  await user.click(within(dialog).getByRole('button', { name: 'Позвонить' }));
+  await vi.waitFor(() => expect(media.constraints).toHaveLength(1));
+  await vi.waitFor(() =>
+    expect(mockSentCallSignals().filter((item) => item.payload.kind === 'offer')).toHaveLength(3),
+  );
+  const offer = mockSentCallSignals().find((item) => item.payload.kind === 'offer');
+  if (!offer) throw new Error('group offer was not sent');
+  return { callId: offer.payload.call_id, dialog };
+}
+
+/** Answer all three mesh offers and connect every fake peer. */
+async function answerGroup(
+  media: ReturnType<typeof createFakeCallMedia>,
+  callId: string,
+  video: boolean,
+): Promise<void> {
+  const peers = [
+    { peer: media.peers[0], userId: IDS.anna },
+    { peer: media.peers[1], userId: IDS.lena },
+    { peer: media.peers[2], userId: IDS.mark },
+  ];
+  await act(async () => {
+    for (const { userId } of peers) {
+      publishMockCallSignal({
+        chat_id: IDS.groupChat,
+        from_user_id: userId,
+        payload: {
+          call_id: callId,
+          kind: 'answer',
+          video,
+          conference: true,
+          recipients: [IDS.user],
+          sdp: `v=0\r\no=- answer-${userId}`,
+        },
+      });
+    }
+    await Promise.resolve();
+  });
+  await vi.waitFor(() => expect(peers.every(({ peer }) => peer?.remoteDescription)).toBe(true));
+  act(() => {
+    for (const { peer } of peers) {
+      peer?.simulateConnectionState('connected');
+      peer?.fireTrack(
+        new FakeMediaStream(video ? ['audio', 'video'] : ['audio']) as unknown as MediaStream,
+      );
+    }
+  });
+  await screen.findByText('Звонок идёт');
+}
+
 afterEach(() => {
   for (const store of stores.splice(0)) store.dispose();
 });
 
 describe('1:1 calls', () => {
-  it('keeps header call actions disabled for GROUP with an honest title', async () => {
-    const { container, store } = renderCalls();
+  it('enables GROUP call actions and opens the participant picker', async () => {
+    const { user, container, store } = renderCalls();
     await waitForOnline(store);
     await screen.findByRole('heading', { name: 'Команда «Восход»' });
 
     const phone = callButton(container, 'call');
     const video = callButton(container, 'video');
-    expect(phone).toBeDisabled();
-    expect(video).toBeDisabled();
-    expect(phone).toHaveAttribute('title', 'Звонки доступны только в личных чатах');
-    expect(video).toHaveAttribute('title', 'Звонки доступны только в личных чатах');
+    expect(phone).toBeEnabled();
+    expect(video).toBeEnabled();
+    expect(phone).toHaveAttribute('title', 'Позвонить');
+
+    const dialog = await openGroupPicker(user, container);
+    expect(within(dialog).getByText(/Кому позвонить:/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Позвонить' })).toBeDisabled();
+    expect(within(dialog).queryByRole('checkbox', { name: /Дмитрий/ })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('checkbox', { name: 'Анна Петрова' })).not.toBeChecked();
+  });
+
+  it('opens the picker from the details call row as well as the header', async () => {
+    const { user, container, store } = renderCalls();
+    await waitForOnline(store);
+    const details = container.querySelector<HTMLElement>('.details');
+    expect(details).not.toBeNull();
+    await user.click(within(details as HTMLElement).getByRole('button', { name: 'Позвонить' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Новый звонок' });
+    expect(within(dialog).getByRole('button', { name: 'Позвонить' })).toBeDisabled();
+  });
+
+  it('lets the picker select one member and start a 1-peer conference', async () => {
+    const { user, container, store, media } = renderCalls();
+    await waitForOnline(store);
+
+    const dialog = await openGroupPicker(user, container);
+    const call = within(dialog).getByRole('button', { name: 'Позвонить' });
+    expect(call).toBeDisabled();
+
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Лена Волкова' }));
+    expect(call).toBeEnabled();
+    await user.click(call);
+
+    await vi.waitFor(() => expect(media.constraints).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(mockSentCallSignals().filter((item) => item.payload.kind === 'offer')).toHaveLength(1),
+    );
+    const offer = mockSentCallSignals().find((item) => item.payload.kind === 'offer');
+    expect(offer?.payload).toMatchObject({
+      kind: 'offer',
+      video: false,
+      conference: true,
+      recipients: [IDS.lena],
+    });
+    expect(screen.queryByRole('dialog', { name: 'Новый звонок' })).not.toBeInTheDocument();
   });
 
   it('starts an audio call, relays offer/ICE, connects, mutes and confirms hangup', async () => {
@@ -406,5 +523,286 @@ describe('1:1 calls', () => {
     );
     expect(serious).toEqual([]);
     expect(dialog).toBeInTheDocument();
+  });
+});
+
+describe('GROUP mesh calls (#77)', () => {
+  it('runs a 3-peer mesh: one local stream, three offers, routed answers/ICE and a video grid', async () => {
+    const { user, container, store, media } = renderCalls();
+    await waitForOnline(store);
+
+    const { callId } = await startGroupConference(user, container, media, true);
+    expect(media.constraints).toHaveLength(1);
+    expect(media.constraints[0]?.video).toMatchObject({ facingMode: 'user' });
+    expect(media.peers).toHaveLength(3);
+
+    const offers = mockSentCallSignals().filter((item) => item.payload.kind === 'offer');
+    expect(offers.map((item) => item.payload.recipients?.[0]).sort()).toEqual(
+      [IDS.anna, IDS.lena, IDS.mark].sort(),
+    );
+    for (const offer of offers) {
+      expect(offer.payload).toMatchObject({
+        call_id: callId,
+        kind: 'offer',
+        video: true,
+        conference: true,
+      });
+      expect(offer.payload).not.toHaveProperty('sdp', '');
+    }
+
+    await answerGroup(media, callId, true);
+
+    const tiles = container.querySelectorAll('.call-tile');
+    expect(tiles).toHaveLength(4);
+    expect(container.querySelectorAll('.call-tile.is-video')).toHaveLength(4);
+    const names = [...container.querySelectorAll('.call-tile__name')].map(
+      (element) => element.textContent,
+    );
+    expect(names).toEqual(expect.arrayContaining(['Анна Петрова', 'Лена Волкова', 'Марк Соколов']));
+    expect(screen.getByText('Участников: 4')).toBeInTheDocument();
+    expect(screen.getByLabelText('Ваше видео')).toBeInTheDocument();
+
+    // ICE is routed to the leg of the participant that sent it.
+    act(() =>
+      publishMockCallSignal({
+        chat_id: IDS.groupChat,
+        from_user_id: IDS.mark,
+        payload: {
+          call_id: callId,
+          kind: 'ice',
+          video: true,
+          conference: true,
+          recipients: [IDS.user],
+          candidate: { candidate: 'candidate:7 1 udp 1 192.0.2.40 9000 typ host' },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(media.peers[2]?.addedCandidates).toHaveLength(1));
+    expect(media.peers[0]?.addedCandidates).toHaveLength(0);
+    expect(media.peers[1]?.addedCandidates).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: 'Выключить микрофон' }));
+    expect(media.streams[0]?.fakeTracks.find((track) => track.kind === 'audio')?.enabled).toBe(
+      false,
+    );
+    await user.click(screen.getByRole('button', { name: 'Выключить камеру' }));
+    expect(container.querySelector('.call-tile--local')).not.toHaveClass('is-video');
+  });
+
+  it('removes one participant without ending the call and ends at zero remotes', async () => {
+    const { user, container, store, media } = renderCalls();
+    await waitForOnline(store);
+    const { callId } = await startGroupConference(user, container, media, false);
+    await answerGroup(media, callId, false);
+    expect(container.querySelectorAll('.call-tile')).toHaveLength(4);
+
+    act(() =>
+      publishMockCallSignal({
+        chat_id: IDS.groupChat,
+        from_user_id: IDS.anna,
+        payload: {
+          call_id: callId,
+          kind: 'hangup',
+          video: false,
+          conference: true,
+          recipients: [IDS.user],
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(container.querySelectorAll('.call-tile')).toHaveLength(3));
+    expect(store.getSnapshot().call.phase).toBe('connected');
+    expect(screen.getByText('Участников: 3')).toBeInTheDocument();
+
+    act(() => {
+      for (const userId of [IDS.lena, IDS.mark]) {
+        publishMockCallSignal({
+          chat_id: IDS.groupChat,
+          from_user_id: userId,
+          payload: {
+            call_id: callId,
+            kind: 'hangup',
+            video: false,
+            conference: true,
+            recipients: [IDS.user],
+          },
+        });
+      }
+    });
+    await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('idle'));
+    expect(document.querySelector('.call-notice')).toHaveTextContent('Звонок завершён');
+    expect(media.peers.every((peer) => peer.closed)).toBe(true);
+    expect(media.streams[0]?.fakeTracks.every((track) => track.stopped)).toBe(true);
+  });
+
+  it('rings an incoming group call, accepts and answers every caller', async () => {
+    const { user, store, media } = renderCalls();
+    await waitForOnline(store);
+
+    act(() => {
+      publishMockCallSignal({
+        chat_id: IDS.groupChat,
+        from_user_id: IDS.anna,
+        payload: {
+          call_id: CALL,
+          kind: 'offer',
+          video: true,
+          conference: true,
+          recipients: [IDS.user],
+          sdp: 'v=0\r\no=- anna-offer',
+        },
+      });
+      publishMockCallSignal({
+        chat_id: IDS.groupChat,
+        from_user_id: IDS.mark,
+        payload: {
+          call_id: CALL,
+          kind: 'offer',
+          video: true,
+          conference: true,
+          recipients: [IDS.user],
+          sdp: 'v=0\r\no=- mark-offer',
+        },
+      });
+    });
+
+    const dialog = await screen.findByRole('dialog', { name: 'Групповой звонок' });
+    expect(within(dialog).getByText('Входящий групповой звонок')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Анна Петрова')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Марк Соколов')).toBeInTheDocument();
+    expect(store.getSnapshot().call.conference).toBe(true);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Принять' }));
+    await vi.waitFor(() =>
+      expect(mockSentCallSignals().filter((item) => item.payload.kind === 'answer')).toHaveLength(
+        2,
+      ),
+    );
+    expect(media.constraints).toHaveLength(1);
+    expect(media.peers).toHaveLength(2);
+    const answers = mockSentCallSignals().filter((item) => item.payload.kind === 'answer');
+    expect(answers.map((item) => item.payload.recipients?.[0]).sort()).toEqual(
+      [IDS.anna, IDS.mark].sort(),
+    );
+
+    act(() => {
+      media.peers[0]?.simulateConnectionState('connected');
+      media.peers[1]?.simulateConnectionState('connected');
+      media.peers[0]?.fireTrack(new FakeMediaStream(['audio', 'video']) as unknown as MediaStream);
+      media.peers[1]?.fireTrack(new FakeMediaStream(['audio', 'video']) as unknown as MediaStream);
+    });
+    await screen.findByText('Звонок идёт');
+    expect(screen.getByText('Участников: 3')).toBeInTheDocument();
+
+    act(() =>
+      publishMockCallSignal({
+        chat_id: IDS.groupChat,
+        from_user_id: IDS.anna,
+        payload: {
+          call_id: CALL,
+          kind: 'hangup',
+          video: true,
+          conference: true,
+          recipients: [IDS.user],
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('connected'));
+    act(() =>
+      publishMockCallSignal({
+        chat_id: IDS.groupChat,
+        from_user_id: IDS.mark,
+        payload: {
+          call_id: CALL,
+          kind: 'hangup',
+          video: true,
+          conference: true,
+          recipients: [IDS.user],
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('idle'));
+  });
+
+  it('starts ringback on user action, stops on connect, and rings incoming until reject', async () => {
+    const { user, container, store, media, ringtone } = renderCalls();
+    await waitForOnline(store);
+    await openDirect(user);
+
+    await user.click(callButton(container, 'call'));
+    await vi.waitFor(() => expect(media.constraints).toHaveLength(1));
+    expect(ringtone.outgoingStarts).toBe(1);
+    const offer = mockSentCallSignals().find((item) => item.payload.kind === 'offer');
+    if (!offer) throw new Error('offer was not sent');
+    await answerAndConnect(media, offer.payload.call_id, false);
+    expect(ringtone.stops).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: 'Завершить звонок' }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Завершить' }),
+    );
+    await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('idle'));
+
+    const before = ringtone.incomingStarts;
+    act(() =>
+      publishMockCallSignal({
+        chat_id: IDS.directChat,
+        from_user_id: IDS.anna,
+        payload: { call_id: OTHER_CALL, kind: 'offer', video: false, sdp: 'v=0\r\no=- ring' },
+      }),
+    );
+    await screen.findByRole('dialog');
+    expect(ringtone.incomingStarts).toBe(before + 1);
+    await user.click(screen.getByRole('button', { name: 'Отклонить' }));
+    await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('idle'));
+    expect(media.constraints).toHaveLength(1);
+  });
+
+  it('passes an axe audit with the participant picker open', async () => {
+    const { user, container, store } = renderCalls();
+    await waitForOnline(store);
+    await openGroupPicker(user, container);
+
+    const canvas = HTMLCanvasElement.prototype as unknown as {
+      getContext: (...args: unknown[]) => unknown;
+    };
+    const originalGetContext = canvas.getContext;
+    canvas.getContext = () => null;
+    let results;
+    try {
+      results = await axe.run(document.body, {
+        rules: { 'color-contrast': { enabled: false } },
+      });
+    } finally {
+      canvas.getContext = originalGetContext;
+    }
+    const serious = results.violations.filter(
+      (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+    );
+    expect(serious).toEqual([]);
+  });
+
+  it('passes an axe audit with the conference grid open', async () => {
+    const { user, container, store, media } = renderCalls();
+    await waitForOnline(store);
+    const { callId } = await startGroupConference(user, container, media, true);
+    await answerGroup(media, callId, true);
+
+    const canvas = HTMLCanvasElement.prototype as unknown as {
+      getContext: (...args: unknown[]) => unknown;
+    };
+    const originalGetContext = canvas.getContext;
+    canvas.getContext = () => null;
+    let results;
+    try {
+      results = await axe.run(document.body, {
+        rules: { 'color-contrast': { enabled: false } },
+      });
+    } finally {
+      canvas.getContext = originalGetContext;
+    }
+    const serious = results.violations.filter(
+      (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+    );
+    expect(serious).toEqual([]);
   });
 });

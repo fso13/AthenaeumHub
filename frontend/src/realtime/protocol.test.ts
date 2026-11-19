@@ -207,6 +207,28 @@ describe('ws protocol v1 parser', () => {
       },
     });
 
+    // #77 GROUP mesh extension survives parsing: conference flag + recipient.
+    const conference = parseServerFrame(
+      JSON.stringify({
+        v: 1,
+        type: 'event',
+        event: 'call.signal',
+        chat_id: 'c1',
+        from_user_id: 'u2',
+        payload: {
+          call_id: '00000000-0000-4000-8000-000000000001',
+          kind: 'offer',
+          video: true,
+          conference: true,
+          recipients: ['u3'],
+          sdp: 'v=0\r\no=- group-offer',
+        },
+      }),
+    );
+    expect(conference).toMatchObject({
+      payload: { conference: true, recipients: ['u3'], kind: 'offer' },
+    });
+
     // The contract example uses snake_case; browsers use camelCase. Both are
     // accepted and normalized to RTCIceCandidateInit (what addIceCandidate wants).
     const ice = parseServerFrame(
@@ -244,6 +266,7 @@ describe('ws protocol v1 parser', () => {
         type: 'event',
         event: 'call.unavailable',
         chat_id: 'c1',
+        from_user_id: 'u3',
         payload: {
           call_id: '00000000-0000-4000-8000-000000000001',
           kind: 'offer',
@@ -253,6 +276,7 @@ describe('ws protocol v1 parser', () => {
     );
     expect(unavailable).toMatchObject({
       type: 'call.unavailable',
+      from_user_id: 'u3',
       payload: { reason: 'PEER_OFFLINE' },
     });
 

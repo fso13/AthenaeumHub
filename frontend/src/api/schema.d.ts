@@ -1262,10 +1262,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chats/{chatId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List active chat member ids
+         * @description Active membership only; no display names or profile data. Used by group-call participant selection.
+         */
+        get: operations["listChatMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ChatMemberIds: {
+            user_ids: string[];
+        };
         /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). */
         Error: {
             code: string;
@@ -4804,6 +4827,31 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listChatMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active member ids */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMemberIds"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
 }

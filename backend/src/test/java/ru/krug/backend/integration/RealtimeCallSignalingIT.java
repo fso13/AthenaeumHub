@@ -22,6 +22,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -40,8 +41,9 @@ import ru.krug.backend.shared.application.port.TokenIssuer;
 import ru.krug.backend.support.WebSocketIntegrationTestBase;
 
 /**
- * End-to-end WS tests for 1:1 call signalling. A low per-session signal limit keeps the
- * rate-limit assertion fast; each test uses fresh sessions, so the window never leaks.
+ * End-to-end WS tests for DIRECT and GROUP (mesh conference) call signalling. A low
+ * per-session signal limit keeps the rate-limit assertion fast; each test uses fresh
+ * sessions, so the window never leaks.
  */
 @ActiveProfiles("test")
 @TestPropertySource(properties = "krug.realtime.call-signal-limit=8")
@@ -83,6 +85,9 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
                     .isEqualTo(alice.user().id().toString());
             assertThat(offer.get("from_device_id").asText())
                     .isEqualTo(alice.device().id().toString());
+            // DIRECT payload shape is unchanged: no GROUP-only keys.
+            assertThat(offerPayload.has("conference")).isFalse();
+            assertThat(offerPayload.has("recipients")).isFalse();
 
             bobWs.send(signalFrame(room.chatId(), callId, "answer", true,
                     "v=0\r\na=answer\r\n", null));
@@ -169,7 +174,7 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
         carolWs.awaitType("hello", TIMEOUT);
 
         UUID callId = UUID.randomUUID();
-        // GROUP chat -> CALL_NOT_SUPPORTED 422.
+        // GROUP without conference metadata/recipients -> CALL_NOT_SUPPORTED 422.
         aliceWs.send(signalFrame(alice.chat().id(), callId, "offer", true,
                 "v=0\r\na=group\r\n", null));
         JsonNode groupError = aliceWs.awaitType("error", TIMEOUT);
@@ -275,6 +280,316 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
         bobWs.close();
     }
 
+    @Test
+    void groupConferenceRelaysToAllNamedSessionsAndBusyIsOnlyASignal() throws Exception {
+        SessionResponse alice = devSession();
+        SessionResponse bob = devSession();
+        SessionResponse carol = devSession();
+        SessionResponse dave = devSession();
+        Group group = groupRoom(alice, bob, carol, dave);
+
+        WebSocketClient aliceWs = connectSession(alice);
+        WebSocketClient bobWs = connectSession(group.member(0));
+        WebSocketClient carolWs = connectSession(group.member(1));
+        WebSocketClient daveWs = connectSession(group.member(2));
+
+        UUID callId = UUID.randomUUID();
+        String sdpMarker = "GROUP-SDP-MARKER-" + UUID.randomUUID();
+        LogCapture logs = attachLogCapture();
+        try {
+            aliceWs.send(groupSignalFrame(group.chatId(), callId, "offer", true,
+                    "v=0\r\na=x-marker:" + sdpMarker + "\r\n", null, bob.user().id(),
+                    carol.user().id(), dave.user().id()));
+
+            for (WebSocketClient recipient : List.of(bobWs, carolWs, daveWs)) {
+                JsonNode offer = recipient.awaitEvent("call.signal", TIMEOUT);
+                assertThat(offer.get("type").asText()).isEqualTo("event");
+                assertThat(offer.has("seq")).isFalse();
+                assertThat(offer.has("event_id")).isFalse();
+                assertThat(offer.get("from_user_id").asText())
+                        .isEqualTo(alice.user().id().toString());
+                JsonNode payload = offer.get("payload");
+                assertThat(payload.get("call_id").asText()).isEqualTo(callId.toString());
+                assertThat(payload.get("kind").asText()).isEqualTo("offer");
+                assertThat(payload.get("conference").asBoolean()).isTrue();
+                assertThat(payload.get("recipients")).hasSize(3);
+                assertThat(payload.get("sdp").asText()).contains(sdpMarker);
+            }
+        } finally {
+            logs.close();
+        }
+        assertThat(capturedMessages(logs.appender()))
+                .noneMatch(message -> message.contains(sdpMarker));
+        // No echo to the caller.
+        assertThat(aliceWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+
+        // A participant answers only the caller; other participants do not see the answer.
+        bobWs.send(groupSignalFrame(group.chatId(), callId, "answer", true,
+                "v=0\r\na=group-answer\r\n", null, alice.user().id()));
+        JsonNode answer = aliceWs.awaitEvent("call.signal", TIMEOUT);
+        assertThat(answer.get("payload").get("kind").asText()).isEqualTo("answer");
+        assertThat(answer.get("from_user_id").asText())
+                .isEqualTo(bob.user().id().toString());
+        assertThat(carolWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+        assertThat(daveWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+
+        // Busy from one participant reaches only the named recipient (the caller) and the
+        // server keeps no conference state to tear down.
+        carolWs.send(groupSignalFrame(group.chatId(), callId, "busy", false, null, null,
+                alice.user().id()));
+        JsonNode busy = aliceWs.awaitEvent("call.signal", TIMEOUT);
+        assertThat(busy.get("payload").get("kind").asText()).isEqualTo("busy");
+        assertThat(busy.get("from_user_id").asText())
+                .isEqualTo(carol.user().id().toString());
+        assertThat(bobWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+        assertThat(daveWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+
+        // The conference "state" is client-side only: the sockets stay usable.
+        aliceWs.send("{\"v\":1,\"type\":\"ping\",\"client_time\":\"2026-11-19T10:00:00Z\"}");
+        assertThat(aliceWs.awaitType("pong", TIMEOUT).get("type").asText()).isEqualTo("pong");
+
+        aliceWs.close();
+        bobWs.close();
+        carolWs.close();
+        daveWs.close();
+    }
+
+    @Test
+    void groupSubsetDeliversOnlyToNamedRecipients() throws Exception {
+        SessionResponse alice = devSession();
+        SessionResponse bob = devSession();
+        SessionResponse carol = devSession();
+        SessionResponse dave = devSession();
+        Group group = groupRoom(alice, bob, carol, dave);
+
+        WebSocketClient aliceWs = connectSession(alice);
+        WebSocketClient bobWs = connectSession(group.member(0));
+        WebSocketClient carolWs = connectSession(group.member(1));
+        WebSocketClient daveWs = connectSession(group.member(2));
+
+        UUID firstCall = UUID.randomUUID();
+        aliceWs.send(groupSignalFrame(group.chatId(), firstCall, "offer", true,
+                "v=0\r\na=only-bob\r\n", null, bob.user().id()));
+        JsonNode offer = bobWs.awaitEvent("call.signal", TIMEOUT);
+        assertThat(offer.get("payload").get("recipients")).hasSize(1);
+        assertThat(offer.get("payload").get("recipients").get(0).asText())
+                .isEqualTo(bob.user().id().toString());
+        assertThat(carolWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+        assertThat(daveWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+        assertThat(aliceWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+
+        // A different explicit subset for the next frame.
+        UUID secondCall = UUID.randomUUID();
+        aliceWs.send(groupSignalFrame(group.chatId(), secondCall, "hangup", false, null, null,
+                carol.user().id(), dave.user().id()));
+        assertThat(carolWs.awaitEvent("call.signal", TIMEOUT).get("payload").get("kind").asText())
+                .isEqualTo("hangup");
+        assertThat(daveWs.awaitEvent("call.signal", TIMEOUT).get("payload").get("kind").asText())
+                .isEqualTo("hangup");
+        assertThat(bobWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+        assertThat(aliceWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+
+        aliceWs.close();
+        bobWs.close();
+        carolWs.close();
+        daveWs.close();
+    }
+
+    @Test
+    void groupNonMemberOrUnknownRecipientIsForbiddenAndNothingIsRelayed() throws Exception {
+        SessionResponse alice = devSession();
+        SessionResponse bob = devSession();
+        SessionResponse carol = devSession();
+        Group group = groupRoom(alice, bob);
+        addWorkspaceMember(alice, carol.user().id());
+        SessionResponse carolInWorkspace = scoped(carol, alice);
+
+        WebSocketClient aliceWs = connectSession(alice);
+        WebSocketClient bobWs = connectSession(group.member(0));
+        WebSocketClient carolWs = connectSession(carolInWorkspace);
+
+        // Carol is a workspace member but not a member of this GROUP chat.
+        UUID callId = UUID.randomUUID();
+        aliceWs.send(groupSignalFrame(group.chatId(), callId, "offer", true,
+                "v=0\r\na=non-member-recipient\r\n", null, bob.user().id(),
+                carol.user().id()));
+        JsonNode error = aliceWs.awaitType("error", TIMEOUT);
+        assertThat(error.get("code").asText()).isEqualTo("FORBIDDEN");
+        assertThat(error.get("status").asInt()).isEqualTo(403);
+        assertThat(bobWs.awaitEventWithin("call.signal", Duration.ofMillis(400))).isNull();
+        assertThat(carolWs.awaitEventWithin("call.signal", Duration.ofMillis(400))).isNull();
+
+        // A random UUID is denied with the same generic code (no membership probe).
+        aliceWs.send(groupSignalFrame(group.chatId(), callId, "offer", true,
+                "v=0\r\na=unknown-recipient\r\n", null, UUID.randomUUID()));
+        JsonNode unknown = aliceWs.awaitType("error", TIMEOUT);
+        assertThat(unknown.get("code").asText()).isEqualTo("FORBIDDEN");
+        assertThat(unknown.get("status").asInt()).isEqualTo(403);
+
+        // The rejection is recoverable and does not end the conference/chat socket.
+        aliceWs.send("{\"v\":1,\"type\":\"ping\",\"client_time\":\"2026-11-19T10:00:00Z\"}");
+        assertThat(aliceWs.awaitType("pong", TIMEOUT).get("type").asText()).isEqualTo("pong");
+
+        aliceWs.close();
+        bobWs.close();
+        carolWs.close();
+    }
+
+    @Test
+    void groupOfflineRecipientsAreSkippedAndPartialDeliveryIsNotAnError() throws Exception {
+        SessionResponse alice = devSession();
+        SessionResponse bob = devSession();
+        SessionResponse carol = devSession();
+        Group group = groupRoom(alice, bob, carol);
+
+        WebSocketClient aliceWs = connectSession(alice);
+        WebSocketClient bobWs = connectSession(group.member(0));
+        // Carol has no live WS session at all.
+
+        UUID partialCall = UUID.randomUUID();
+        aliceWs.send(groupSignalFrame(group.chatId(), partialCall, "offer", true,
+                "v=0\r\na=partial\r\n", null, bob.user().id(), carol.user().id()));
+        JsonNode relayed = bobWs.awaitEvent("call.signal", TIMEOUT);
+        assertThat(relayed.get("payload").get("call_id").asText())
+                .isEqualTo(partialCall.toString());
+        // At least one recipient is online => no call.unavailable to the caller.
+        assertThat(aliceWs.awaitEventWithin("call.unavailable", Duration.ofMillis(400))).isNull();
+
+        // All named recipients offline => caller-only call.unavailable.
+        UUID offlineCall = UUID.randomUUID();
+        aliceWs.send(groupSignalFrame(group.chatId(), offlineCall, "offer", true,
+                "v=0\r\na=all-offline\r\n", null, carol.user().id()));
+        JsonNode unavailable = aliceWs.awaitEvent("call.unavailable", TIMEOUT);
+        assertThat(unavailable.get("payload").get("call_id").asText())
+                .isEqualTo(offlineCall.toString());
+        assertThat(unavailable.get("payload").get("reason").asText()).isEqualTo("PEER_OFFLINE");
+        assertThat(unavailable.has("seq")).isFalse();
+        assertThat(unavailable.has("event_id")).isFalse();
+
+        aliceWs.close();
+        bobWs.close();
+    }
+
+    @Test
+    void malformedGroupRecipientsAndDirectConferenceMetadataAreRejected() throws Exception {
+        SessionResponse alice = devSession();
+        SessionResponse bob = devSession();
+        SessionResponse carol = devSession();
+        Room direct = directRoom(alice, bob);
+        Group group = groupRoom(alice, bob, carol);
+
+        WebSocketClient aliceWs = connectSession(alice);
+        WebSocketClient bobWs = connectSession(group.member(0));
+        WebSocketClient carolWs = connectSession(group.member(1));
+
+        UUID callId = UUID.randomUUID();
+
+        // Empty recipients array.
+        aliceWs.send(groupSignalFrame(group.chatId(), callId, "offer", true, "v=0\r\n", null));
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        // More than the 50-recipient protocol limit.
+        List<String> tooMany = new ArrayList<>();
+        for (int i = 0; i < 51; i++) {
+            tooMany.add(UUID.randomUUID().toString());
+        }
+        aliceWs.send(groupSignalNode(group.chatId(), callId, "offer", true, "v=0\r\n", null,
+                tooMany).toString());
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        // Duplicate recipient.
+        aliceWs.send(groupSignalFrame(group.chatId(), callId, "offer", true, "v=0\r\n", null,
+                bob.user().id(), bob.user().id()));
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        // Non-UUID recipient.
+        aliceWs.send(groupSignalNode(group.chatId(), callId, "offer", true, "v=0\r\n", null,
+                List.of("not-a-uuid")).toString());
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        // Recipients without conference=true.
+        ObjectNode noConference = groupSignalNode(group.chatId(), callId, "offer", true,
+                "v=0\r\n", null, List.of(bob.user().id().toString()));
+        ((ObjectNode) noConference.get("payload")).remove("conference");
+        aliceWs.send(noConference.toString());
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        // conference=true without recipients.
+        ObjectNode noRecipients = groupSignalNode(group.chatId(), callId, "offer", true,
+                "v=0\r\n", null, List.of(bob.user().id().toString()));
+        ((ObjectNode) noRecipients.get("payload")).remove("recipients");
+        aliceWs.send(noRecipients.toString());
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        // The caller cannot be its own recipient.
+        aliceWs.send(groupSignalFrame(group.chatId(), callId, "offer", true, "v=0\r\n", null,
+                alice.user().id(), bob.user().id()));
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        // DIRECT frames keep rejecting GROUP-only metadata.
+        aliceWs.send(groupSignalFrame(direct.chatId(), callId, "offer", true, "v=0\r\n", null,
+                bob.user().id()));
+        assertRecoverableError(aliceWs, "WS_FRAME_INVALID", 400);
+
+        assertThat(bobWs.awaitEventWithin("call.signal", Duration.ofMillis(400))).isNull();
+        assertThat(carolWs.awaitEventWithin("call.signal", Duration.ofMillis(400))).isNull();
+        // Malformed frames are rejected before the rate limiter; the session stays usable.
+        aliceWs.send("{\"v\":1,\"type\":\"ping\",\"client_time\":\"2026-11-19T10:00:00Z\"}");
+        assertThat(aliceWs.awaitType("pong", TIMEOUT).get("type").asText()).isEqualTo("pong");
+
+        aliceWs.close();
+        bobWs.close();
+        carolWs.close();
+    }
+
+    private void assertRecoverableError(WebSocketClient client, String code, int status)
+            throws Exception {
+        JsonNode error = client.awaitType("error", TIMEOUT);
+        assertThat(error.get("code").asText()).isEqualTo(code);
+        assertThat(error.get("status").asInt()).isEqualTo(status);
+    }
+
+    private WebSocketClient connectSession(SessionResponse session) throws Exception {
+        WebSocketClient client = connect(ticket(session).get("ticket").asText());
+        client.awaitType("hello", TIMEOUT);
+        return client;
+    }
+
+    private Group groupRoom(SessionResponse owner, SessionResponse... invited) throws Exception {
+        UUID chatId = createGroup(owner);
+        List<SessionResponse> members = new ArrayList<>();
+        for (SessionResponse member : invited) {
+            addWorkspaceMember(owner, member.user().id());
+            addChatMember(owner, chatId, member.user().id(), "MEMBER");
+            members.add(scoped(member, owner));
+        }
+        return new Group(chatId, List.copyOf(members));
+    }
+
+    private UUID createGroup(SessionResponse owner) throws Exception {
+        HttpHeaders headers = authHeaders(owner);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.add("Idempotency-Key", UUID.randomUUID().toString());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("type", "GROUP");
+        body.put("name", "calls-" + UUID.randomUUID());
+        ResponseEntity<String> response = rest.exchange(
+                url("/api/v1/workspaces/" + owner.workspace().id() + "/chats"),
+                HttpMethod.POST,
+                new HttpEntity<>(objectMapper.writeValueAsString(body), headers), String.class);
+        assertThat(response.getStatusCode().value()).isIn(200, 201);
+        return UUID.fromString(objectMapper.readTree(response.getBody()).get("id").asText());
+    }
+
+    private void addChatMember(SessionResponse owner, UUID chatId, UUID userId, String role) {
+        migrator().update("""
+                INSERT INTO chat.chat_members (chat_id, workspace_id, user_id, role, status)
+                VALUES (?, ?, ?, ?, 'ACTIVE')
+                ON CONFLICT (chat_id, user_id) DO UPDATE
+                   SET role = EXCLUDED.role, status = 'ACTIVE', updated_at = now()
+                """, chatId, owner.workspace().id(), userId, role);
+    }
+
     private Room directRoom(SessionResponse alice, SessionResponse bob) throws Exception {
         addWorkspaceMember(alice, bob.user().id());
         SessionResponse bobInAliceWorkspace = scoped(bob, alice);
@@ -343,6 +658,29 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
         return objectMapper.writeValueAsString(frame);
     }
 
+    private String groupSignalFrame(UUID chatId, UUID callId, String kind, boolean video,
+                                    String sdp, JsonNode candidate, UUID... recipients)
+            throws Exception {
+        List<String> ids = new ArrayList<>();
+        for (UUID recipient : recipients) {
+            ids.add(recipient.toString());
+        }
+        return groupSignalNode(chatId, callId, kind, video, sdp, candidate, ids).toString();
+    }
+
+    private ObjectNode groupSignalNode(UUID chatId, UUID callId, String kind, boolean video,
+                                       String sdp, JsonNode candidate, List<String> recipients)
+            throws Exception {
+        ObjectNode frame = (ObjectNode) objectMapper.readTree(
+                signalFrame(chatId, callId, kind, video, sdp, candidate));
+        ObjectNode payload = (ObjectNode) frame.get("payload");
+        payload.put("conference", true);
+        ArrayNode array = payload.putArray("recipients");
+        // Deliberately accepts arbitrary strings so malformed-recipient cases are testable.
+        recipients.forEach(array::add);
+        return frame;
+    }
+
     private WebSocketClient connect(String ticket) {
         WebSocketClient listener = new WebSocketClient(objectMapper);
         URI uri = URI.create("ws://localhost:" + port + "/ws?ticket=" + ticket);
@@ -382,6 +720,13 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
     }
 
     private record Room(UUID chatId, SessionResponse bob) {
+    }
+
+    private record Group(UUID chatId, List<SessionResponse> members) {
+
+        private SessionResponse member(int index) {
+            return members.get(index);
+        }
     }
 
     /** Minimal blocking WS client (same shape as the other realtime ITs). */

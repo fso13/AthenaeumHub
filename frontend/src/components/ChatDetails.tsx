@@ -61,8 +61,8 @@ interface ChatDetailsProps {
   onNavigate: (view: 'plugins' | 'security') => void;
   searchValue: string;
   onSearch: (value: string) => void;
-  /** §9: audio call from the details footer (DIRECT + live + idle only). */
-  onStartCall?: () => void;
+  /** §9/#77: audio call from the details footer (DIRECT/GROUP managed only). */
+  onStartCall?: (video: boolean) => void;
   /** Honest reason the details call row is disabled, or null when available. */
   callDisabledReason?: string | null;
   /** D1.1 (#76): open the poll/task accordion after a successful create. */
@@ -652,16 +652,18 @@ export function ChatDetails({
 
         {isDirect ? (
           <div className="panel-foot">
-            <button
-              type="button"
-              className="danger-row"
-              disabled={!onStartCall || callDisabledReason !== null}
-              onClick={onStartCall}
-              title={callDisabledReason ?? t('details.call')}
-            >
-              <PhoneIcon aria-hidden="true" />
-              {t('details.call')}
-            </button>
+            {!isE2ee ? (
+              <button
+                type="button"
+                className="danger-row"
+                disabled={!onStartCall || callDisabledReason !== null}
+                onClick={() => onStartCall?.(false)}
+                title={callDisabledReason ?? t('details.call')}
+              >
+                <PhoneIcon aria-hidden="true" />
+                {t('details.call')}
+              </button>
+            ) : null}
             <button type="button" className="danger-row" disabled title={t('details.blockHint')}>
               <FlagIcon aria-hidden="true" />
               {t('details.block')}
@@ -669,6 +671,18 @@ export function ChatDetails({
           </div>
         ) : (
           <div className="panel-foot">
+            {!isE2ee ? (
+              <button
+                type="button"
+                className="danger-row"
+                disabled={!onStartCall || callDisabledReason !== null}
+                onClick={() => onStartCall?.(false)}
+                title={callDisabledReason ?? t('details.call')}
+              >
+                <PhoneIcon aria-hidden="true" />
+                {t('details.call')}
+              </button>
+            ) : null}
             <button type="button" className="danger-row" disabled title={t('details.leaveHint')}>
               <LogoutIcon aria-hidden="true" />
               {t('details.leave')}

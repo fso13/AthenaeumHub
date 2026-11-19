@@ -27,7 +27,7 @@ public final class ErrorCode {
     public static final String SUBSCRIPTION_LIMIT = "SUBSCRIPTION_LIMIT";
     public static final String WS_FRAME_INVALID = "WS_FRAME_INVALID";
 
-    // 1:1 call signalling (E13 slice). Ephemeral only; no call records are persisted.
+    // Call signalling (E13: DIRECT and GROUP mesh). Ephemeral only; no call records.
     public static final String CALL_NOT_SUPPORTED = "CALL_NOT_SUPPORTED";
     public static final String CALL_PAYLOAD_TOO_LARGE = "CALL_PAYLOAD_TOO_LARGE";
 

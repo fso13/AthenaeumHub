@@ -3,7 +3,7 @@ import { chatDisplayName } from '../domain/chatLabel';
 import { formatDuration } from '../files/format';
 import { t, type MessageKey } from '../i18n/ru';
 import { useChatState, useChatStore } from '../store/ChatProvider';
-import type { CallErrorCode, CallState } from '../calls/types';
+import type { CallErrorCode, CallParticipant, CallState } from '../calls/types';
 import { Avatar } from './Avatar';
 import {
   CloseIcon,
@@ -36,6 +36,7 @@ const ERROR_KEYS: Record<CallErrorCode, MessageKey> = {
 
 function statusLabel(call: CallState): string {
   if (call.phase === 'incoming') {
+    if (call.conference) return t('calls.groupIncoming');
     return call.video ? t('calls.incomingVideo') : t('calls.incoming');
   }
   if (call.phase === 'outgoing') {
@@ -52,6 +53,73 @@ function statusLabel(call: CallState): string {
   }
   if (call.phase === 'connected') return t('calls.connected');
   return '';
+}
+
+/**
+ * One remote (or local) tile in a GROUP video/avatar grid. The video element is
+ * hidden until the stream actually carries video, so audio-only conferences
+ * show initials instead of a black rectangle.
+ */
+function ConferenceTile({
+  participant,
+  name,
+  video,
+  stream,
+  local = false,
+  cameraOn = true,
+  ringing = false,
+}: {
+  participant?: CallParticipant;
+  name: string;
+  video: boolean;
+  stream: MediaStream | null;
+  local?: boolean;
+  cameraOn?: boolean;
+  ringing?: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const hasVideo = Boolean(video && stream && stream.getVideoTracks().length > 0);
+  const showVideo = local ? hasVideo && cameraOn : hasVideo;
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = stream;
+  }, [stream]);
+
+  const state = participant?.connectionState;
+  const showConnecting =
+    !local && !ringing && state !== undefined && state !== 'connected' && state !== 'failed';
+  const showFailed = !local && state === 'failed';
+
+  return (
+    <div className={`call-tile${showVideo ? ' is-video' : ''}${local ? ' call-tile--local' : ''}`}>
+      {video ? (
+        <video
+          ref={videoRef}
+          className="call-tile__video"
+          autoPlay
+          playsInline
+          muted={local}
+          aria-label={local ? t('calls.localPreview') : t('calls.groupVideoAnnounce', { name })}
+        />
+      ) : null}
+      <div className="call-tile__identity">
+        <Avatar name={name} seed={participant?.userId ?? name} size="profile" />
+      </div>
+      <div className="call-tile__meta">
+        <span className="call-tile__name">{name}</span>
+        {showFailed ? (
+          <span className="call-tile__state call-tile__state--error">
+            {t('calls.participantFailed')}
+          </span>
+        ) : showConnecting ? (
+          <span className="call-tile__state">{t('calls.connectingPeer')}</span>
+        ) : null}
+      </div>
+      {local && video && !cameraOn ? (
+        <span className="call-tile__camera-off">{t('calls.audioOnly')}</span>
+      ) : null}
+    </div>
+  );
 }
 
 function CallTimer({ startedAt }: { startedAt: number }) {
@@ -105,6 +173,17 @@ export function CallLayer() {
     call.remoteStream && call.remoteStream.getVideoTracks().length > 0,
   );
   const hasLocalVideo = Boolean(call.localStream && call.localStream.getVideoTracks().length > 0);
+  const conference = call.conference;
+  const incoming = call.phase === 'incoming';
+  const connected = call.phase === 'connected';
+  const participantName = (userId: string): string =>
+    state.workspaceMembers.items.find((item) => item.user_id === userId)?.display_name ??
+    t('calls.participantFallback');
+  const conferenceNames = call.participants.map((item) => participantName(item.userId));
+  const infoTitle = conference ? t('calls.groupCall') : peerName;
+  const totalParticipants = conference ? call.participants.length + (incoming ? 0 : 1) : 1;
+  const gridSize = Math.min(3, Math.max(1, call.participants.length));
+  const announceName = conference ? conferenceNames.join(', ') || t('calls.groupCall') : peerName;
 
   // Reset the confirmation whenever the call goes away.
   useEffect(() => {
@@ -191,6 +270,13 @@ export function CallLayer() {
     }
   }, [active, call.phase]);
 
+  // Incoming conference callers need display names even when the chat details
+  // (the usual member-directory loader) has never been opened.
+  useEffect(() => {
+    if (!active || !call.conference) return;
+    if (state.workspaceMembers.status === 'idle') void store.loadWorkspaceMembers();
+  }, [active, call.conference, state.workspaceMembers.status, store]);
+
   useEffect(() => {
     if (localVideoRef.current) localVideoRef.current.srcObject = call.localStream;
   }, [call.localStream]);
@@ -232,9 +318,6 @@ export function CallLayer() {
     );
   }
 
-  const incoming = call.phase === 'incoming';
-  const connected = call.phase === 'connected';
-
   return (
     <div className={`call-overlay call-overlay--${call.phase}`}>
       <div
@@ -247,43 +330,75 @@ export function CallLayer() {
         tabIndex={-1}
       >
         <div className="call-stage">
-          <video
-            ref={remoteVideoRef}
-            className={`call-stage__remote${hasRemoteVideo ? ' is-video' : ''}`}
-            autoPlay
-            playsInline
-            aria-label={hasRemoteVideo ? t('calls.remoteVideo') : undefined}
-          />
-
-          {!hasRemoteVideo ? (
-            <div className="call-stage__identity" aria-hidden="true">
-              <Avatar name={peerName} seed={call.chatId ?? peerName} size="profile" />
+          {conference ? (
+            <div className={`call-grid call-grid--${gridSize}`}>
+              {call.participants.map((participant) => (
+                <ConferenceTile
+                  key={participant.userId}
+                  participant={participant}
+                  name={participantName(participant.userId)}
+                  video={call.video}
+                  stream={participant.stream}
+                  ringing={incoming}
+                />
+              ))}
+              {call.localStream ? (
+                <ConferenceTile
+                  name={t('calls.you')}
+                  video={call.video}
+                  stream={call.localStream}
+                  local
+                  cameraOn={call.cameraOn}
+                />
+              ) : null}
             </div>
-          ) : null}
+          ) : (
+            <>
+              <video
+                ref={remoteVideoRef}
+                className={`call-stage__remote${hasRemoteVideo ? ' is-video' : ''}`}
+                autoPlay
+                playsInline
+                aria-label={hasRemoteVideo ? t('calls.remoteVideo') : undefined}
+              />
+
+              {!hasRemoteVideo ? (
+                <div className="call-stage__identity" aria-hidden="true">
+                  <Avatar name={peerName} seed={call.chatId ?? peerName} size="profile" />
+                </div>
+              ) : null}
+            </>
+          )}
 
           <div className="call-stage__top">
             <span className="call-kind">
               {call.video ? <VideoIcon aria-hidden="true" /> : <PhoneIcon aria-hidden="true" />}
-              {call.video ? t('calls.video') : t('calls.audio')}
+              {conference
+                ? t('calls.participantsCount', { count: totalParticipants })
+                : call.video
+                  ? t('calls.video')
+                  : t('calls.audio')}
             </span>
             {connected && call.startedAt !== null ? <CallTimer startedAt={call.startedAt} /> : null}
           </div>
 
           <div className="call-stage__info">
             <h2 id={titleId} className="call-peer">
-              {peerName}
+              {infoTitle}
             </h2>
             <p id={descriptionId} className="call-status" role="status" aria-live="polite">
               {statusLabel(call)}
             </p>
             {incoming ? (
               <p className="visually-hidden" role="alert">
-                {t('calls.incomingAnnounce', { name: peerName })}
+                {conference
+                  ? t('calls.groupIncomingAnnounce', { names: announceName })
+                  : t('calls.incomingAnnounce', { name: peerName })}
               </p>
             ) : null}
           </div>
 
-          {call.video && hasLocalVideo ? (
+          {!conference && call.video && hasLocalVideo ? (
             <div className={`call-local${call.cameraOn ? '' : ' is-off'}`}>
               <video
                 ref={localVideoRef}
@@ -377,7 +492,7 @@ export function CallLayer() {
               {t('calls.confirmTitle')}
             </p>
             <p id={`${titleId}-confirm-text`} className="call-confirm__text">
-              {t('calls.confirmText')}
+              {conference ? t('calls.confirmTextGroup') : t('calls.confirmText')}
             </p>
             <div className="call-confirm__actions">
               <button

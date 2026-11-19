@@ -443,4 +443,18 @@ describe('E2EE UI states', () => {
     expect(serious).toEqual([]);
     expect(await screen.findByRole('dialog', { name: 'Код безопасности' })).toBeInTheDocument();
   });
+
+  it('disables GROUP/DIRECT call controls in an E2EE chat and hides the details call row', async () => {
+    const { container } = renderE2ee();
+    await screen.findByRole('heading', { name: 'Команда «Восход»' });
+
+    const phone = container.querySelector<HTMLButtonElement>('.chat-head__call');
+    const video = container.querySelector<HTMLButtonElement>('.chat-head__video');
+    expect(phone).toBeDisabled();
+    expect(video).toBeDisabled();
+    expect(phone).toHaveAttribute('title', 'Звонки недоступны в E2EE-чатах');
+    expect(video).toHaveAttribute('title', 'Звонки недоступны в E2EE-чатах');
+    // Only the header carries the label; the details footer row is not rendered.
+    expect(screen.getAllByRole('button', { name: 'Позвонить' })).toHaveLength(1);
+  });
 });

@@ -113,6 +113,8 @@ export interface CallSignalFrame {
 export interface CallUnavailableFrame {
   type: 'call.unavailable';
   chat_id: string;
+  /** #77: present when one GROUP mesh recipient has no live session. */
+  from_user_id?: string;
   ts?: string;
   payload: {
     call_id: string;
@@ -302,6 +304,7 @@ function parseCallSignal(value: Record<string, unknown>, chatId: string): CallSi
     return null;
   }
 
+  const recipients = readCallRecipients(body.recipients);
   return {
     type: 'call.signal',
     chat_id: chatId,
@@ -314,10 +317,21 @@ function parseCallSignal(value: Record<string, unknown>, chatId: string): CallSi
       call_id: callId,
       kind,
       video: body.video,
+      ...(body.conference === true ? { conference: true } : {}),
+      ...(recipients !== undefined ? { recipients } : {}),
       ...(sdp !== undefined ? { sdp } : {}),
       ...(candidate !== undefined ? { candidate } : {}),
     },
   };
+}
+
+/** #77: GROUP mesh routing list. Empty/invalid arrays are dropped, not fatal. */
+function readCallRecipients(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const recipients = value.filter(
+    (item): item is string => typeof item === 'string' && item.length > 0,
+  );
+  return recipients.length > 0 ? recipients : undefined;
 }
 
 function parseIceCandidate(value: unknown): CallIceCandidate | undefined {
@@ -356,6 +370,7 @@ function parseCallUnavailable(
   return {
     type: 'call.unavailable',
     chat_id: chatId,
+    ...(readString(value.from_user_id) ? { from_user_id: readString(value.from_user_id) } : {}),
     ...(readString(value.ts) ? { ts: readString(value.ts) } : {}),
     payload: { call_id: callId, kind, reason },
   };
