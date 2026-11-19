@@ -169,7 +169,11 @@ public class InMemoryRealtimeHub
             RealtimeSession session = connection.session();
             if (session.sessionId().equals(excludeSessionId)
                     || !relay.recipientUserIds().contains(session.userId())
-                    || !Objects.equals(relay.workspaceId(), session.workspaceId())
+                    // A Keycloak ticket may legitimately have no workspace claim. The
+                    // recipient already passed the chat-membership gate, so a missing
+                    // session workspace must not make a live peer look offline.
+                    || (session.workspaceId() != null
+                        && !Objects.equals(relay.workspaceId(), session.workspaceId()))
                     || connection.isClosed()) {
                 continue;
             }
