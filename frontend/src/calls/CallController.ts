@@ -135,7 +135,12 @@ export class CallController {
         this.fail('connection_failed', callId, true);
         return;
       }
-      this.dispatch(callId, 'offer', video, { sdp });
+      const chatId = this.state.chatId;
+      if (!chatId) {
+        this.fail('signaling_failed', callId);
+        return;
+      }
+      this.dispatch(chatId, 'offer', video, { sdp });
     } catch {
       if (callId === this.state.callId) this.fail('connection_failed', callId, true);
     }
@@ -191,7 +196,12 @@ export class CallController {
         return;
       }
       await this.flushPendingCandidates();
-      this.dispatch(callId, 'answer', incoming.video, { sdp });
+      const chatId = this.state.chatId;
+      if (!chatId) {
+        this.fail('signaling_failed', callId);
+        return;
+      }
+      this.dispatch(chatId, 'answer', incoming.video, { sdp });
     } catch {
       if (callId === this.state.callId) this.fail('connection_failed', callId, true);
     }
@@ -407,7 +417,8 @@ export class CallController {
       if (!raw) return;
       const candidate = toIceCandidate(raw);
       if (!candidate || candidate.candidate.length === 0) return;
-      this.dispatch(callId, 'ice', this.state.video, { candidate });
+      const chatId = this.state.chatId;
+      if (chatId) this.dispatch(chatId, 'ice', this.state.video, { candidate });
     };
 
     pc.ontrack = (event) => {

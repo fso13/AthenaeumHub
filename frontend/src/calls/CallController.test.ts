@@ -56,6 +56,7 @@ describe('CallController', () => {
     controller.start(CHAT, PEER, false);
 
     await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.chatId).toBe(CHAT);
     expect(media.constraints[0]?.audio).toBeTruthy();
     expect(media.constraints[0]?.video).toBe(false);
     expect(media.peers[0]?.config.iceServers).toEqual([{ urls: 'stun:stun.example.test:3478' }]);
