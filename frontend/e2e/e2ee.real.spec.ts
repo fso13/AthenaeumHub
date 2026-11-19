@@ -21,45 +21,55 @@
  *      plaintext markers; WebSocket frames and backend logs are scanned in
  *      memory for the same markers.
  *
- * Test-only fixture (explicitly allowed by F7B):
- *   - `test@krug.local` / `Test1234!` (OWNER) and
- *     `pickle-ui-1794919305193@krug.local` / `CorrectHorseBattery42!`;
- *   - a new `E2EE` workspace `E2EE F7B <timestamp>` per run, created with
+ * Clean-stack fixture (see `e2ee-real-fixture.ts`):
+ *   - both fixture users are provisioned through the **real** BFF:
+ *     `POST /auth/register` → TOTP from the Mailpit API → `POST /auth/verify-email`;
+ *     an already verified user is reused. No pre-seeded `test@krug.local` /
+ *     leftover `pickle-ui-…` account is required;
+ *   - override identities with `E2EE_REAL_USER_A_EMAIL`/`_PASSWORD`/`_NAME` and
+ *     the matching `..._B_...` variables; `E2EE_REAL_MAILPIT_URL` points at the
+ *     Mailpit API (default `http://localhost:8025`);
+ *   - a new `E2EE` workspace `E2EE F7B <timestamp>-<random>` per run, created with
  *     `POST /workspaces {security_mode:"E2EE"}`, and the second user added with
- *     `POST /workspaces/{id}/members {email, role:"MEMBER"}`. A fresh workspace
- *     keeps the DIRECT chat history empty so old messages cannot race R-15;
- *   - every previous ACTIVE device of the two fixture users is revoked through
- *     a documented SQL reset before login (`UPDATE auth.devices ...`), and the
- *     post-login `DELETE /devices/{deviceId}` safety net keeps exactly one
- *     device. This is destructive only inside the disposable E2EE test stack;
+ *     `POST /workspaces/{id}/members {email, role:"MEMBER"}`. The unique name
+ *     avoids slug collisions and the fresh workspace keeps DIRECT history empty
+ *     so old messages cannot race R-15;
+ *   - **destructive SQL is opt-in**: `E2EE_REAL_RESET=1` (alias
+ *     `E2EE_REAL_ALLOW_DESTRUCTIVE=1`) enables the pre-login device reset,
+ *     stale `E2EE F7B …` workspace cleanup and post-run workspace delete.
+ *     Without the gate the spec executes no `UPDATE`/`DELETE`; a clean stack
+ *     works because everything is created uniquely. The post-login
+ *     `DELETE /devices/{deviceId}` API safety net only touches the fixture
+ *     user's own devices and keeps exactly one;
  *   - DB/log assertions use `docker exec`/`docker logs`; set
- *     `E2EE_REAL_DB_CHECK=0` when the stack is remote (it also skips the SQL
- *     device reset; the post-login API cleanup still runs).
+ *     `E2EE_REAL_DB_CHECK=0` when the stack is remote (it skips DB/log checks and
+ *     therefore the destructive SQL too; the post-login API cleanup still runs).
  *
  * No plaintext is written to traces/screenshots/video (disabled in the config),
  * to the report, or to stdout. Assertions about message text use element counts
  * rather than `toHaveText(marker)` so a failure does not echo the plaintext.
  */
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type Browser, type Page, type Response } from '@playwright/test';
 
+import {
+  API,
+  DB_CHECK,
+  DESTRUCTIVE,
+  RESET,
+  USER_A,
+  USER_B,
+  WORKSPACE_PREFIX,
+  backendLogs,
+  cleanupStaleWorkspaces,
+  countOf,
+  deleteWorkspace,
+  ensureFixtureUsers,
+  requireUuid,
+  resetFixtureDevices,
+} from './e2ee-real-fixture';
+
 const ENABLED = process.env.E2EE_REAL === '1';
-const BASE_URL = (process.env.E2EE_REAL_BASE_URL ?? 'http://localhost:8088').replace(/\/$/, '');
-const API = `${BASE_URL}/api/v1`;
-const DB_CHECK = process.env.E2EE_REAL_DB_CHECK !== '0';
-const PG_CONTAINER = process.env.E2EE_REAL_PG_CONTAINER ?? 'krug-postgres';
-const BACKEND_CONTAINER = process.env.E2EE_REAL_BACKEND_CONTAINER ?? 'krug-backend';
-
-const WORKSPACE_PREFIX = 'E2EE F7B';
-const USER_A = { email: 'test@krug.local', password: 'Test1234!', name: 'Тест Пользователь' };
-const USER_B = {
-  email: 'pickle-ui-1794919305193@krug.local',
-  password: 'CorrectHorseBattery42!',
-  name: 'Pickle UI',
-};
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 interface ApiUser {
   readonly token: string;
@@ -113,11 +123,6 @@ interface ApiResponse {
   readonly text: string;
 }
 
-function requireUuid(value: string, label: string): string {
-  if (!UUID_RE.test(value)) throw new Error(`${label} is not a canonical UUID`);
-  return value;
-}
-
 async function api(
   path: string,
   options: {
@@ -149,68 +154,10 @@ async function api(
   return { status: response.status, json, text };
 }
 
-function psql(sql: string): string {
-  try {
-    return execFileSync(
-      'docker',
-      [
-        'exec',
-        PG_CONTAINER,
-        'psql',
-        '-U',
-        'krug_migrator',
-        '-d',
-        'krug',
-        '-v',
-        'ON_ERROR_STOP=1',
-        '-tA',
-        '-F',
-        '\t',
-        '-c',
-        sql,
-      ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024 },
-    ).trim();
-  } catch {
-    throw new Error(
-      `E2EE DB check needs \`docker exec ${PG_CONTAINER} psql\`; set E2EE_REAL_DB_CHECK=0 for a remote stack`,
-    );
-  }
-}
-
-function scalar(sql: string): string {
-  return psql(sql).split('\n')[0]?.trim() ?? '';
-}
-
-function countOf(sql: string): number {
-  const value = Number(scalar(sql));
-  if (!Number.isInteger(value) || value < 0) throw new Error('E2EE DB check returned no count');
-  return value;
-}
-
 function assertStatus(response: ApiResponse, allowed: readonly number[], what: string): void {
   if (!allowed.includes(response.status)) {
     throw new Error(`${what}: unexpected HTTP ${response.status}`);
   }
-}
-
-/**
- * Revokes every ACTIVE device of a fixture user *before* the browser logs in.
- * A previous crashed/fast run can leave five devices, and a new keyed
- * registration would then fail with DEVICE_LIMIT_REACHED before the test could
- * clean up. This is a documented test-only SQL fixture for the disposable E2EE
- * stack; with `E2EE_REAL_DB_CHECK=0` it is skipped.
- */
-async function preLoginRevokeAllDevices(email: string): Promise<void> {
-  if (!DB_CHECK) return;
-  const userId = scalar(`SELECT id FROM auth.users WHERE email='${email.replace(/'/g, "''")}';`);
-  if (userId === '') throw new Error('E2EE fixture user does not exist');
-  requireUuid(userId, 'fixture user id');
-  psql(
-    `UPDATE auth.devices
-        SET status='REVOKED', revoked_at=now(), revoked_reason='E2EE_F7B_TEST_RESET'
-      WHERE user_id='${userId}' AND status='ACTIVE';`,
-  );
 }
 
 async function readAuth(page: Page): Promise<(ApiUser & { deviceId: string }) | null> {
@@ -233,7 +180,12 @@ async function readAuth(page: Page): Promise<(ApiUser & { deviceId: string }) | 
 
 async function loginViaUi(page: Page, email: string, password: string): Promise<BrowserUser> {
   await page.goto('/');
+  // A clean-stack user has no workspace yet, so the post-login state is the
+  // onboarding screen, not the chat shell. Both prove that the keyed device was
+  // registered in `runPasswordBootstrap`; `readAuth` below waits for its id.
   const chatButton = page.getByRole('button', { name: 'Создать чат' });
+  const onboarding = page.getByRole('heading', { name: 'Создайте пространство' });
+  const loggedIn = chatButton.or(onboarding);
   const rateLimited = page.getByText(/Слишком много попыток/);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -242,7 +194,7 @@ async function loginViaUi(page: Page, email: string, password: string): Promise<
     await page.getByLabel('Пароль', { exact: true }).fill(password);
     await page.getByRole('button', { name: 'Войти' }).click();
     try {
-      await expect(chatButton).toBeVisible({ timeout: 30_000 });
+      await expect(loggedIn).toBeVisible({ timeout: 30_000 });
       break;
     } catch (error) {
       if (attempt === 2 || !(await rateLimited.isVisible().catch(() => false))) throw error;
@@ -251,7 +203,7 @@ async function loginViaUi(page: Page, email: string, password: string): Promise<
       await page.waitForTimeout(5_000);
     }
   }
-  await expect(chatButton).toBeVisible({ timeout: 60_000 });
+  await expect(loggedIn).toBeVisible({ timeout: 60_000 });
 
   const resolved: { auth: (ApiUser & { deviceId: string }) | null } = { auth: null };
   await expect
@@ -295,7 +247,9 @@ async function expectKeyedDevice(user: BrowserUser): Promise<void> {
     throw new Error(
       'E2EE device is not keyed/prekey-ready: the SPA must be built with ' +
         'VITE_E2EE_ENABLED=true and the backend with KRUG_E2EE_ENABLED=true ' +
-        '(deploy/docker-compose.e2ee-test.yml overlay)',
+        '(deploy/docker-compose.e2ee-test.yml overlay). If the fixture user already ' +
+        'has MAX_ACTIVE_DEVICES from earlier crashed runs, re-run once with ' +
+        'E2EE_REAL_RESET=1 on the disposable stack (opt-in destructive SQL).',
     );
   }
 
@@ -331,16 +285,14 @@ async function pruneOtherDevices(user: BrowserUser): Promise<void> {
 }
 
 /**
- * Creates a **fresh** E2EE workspace for this run and adds user B as MEMBER.
- * A new workspace means the DIRECT chat starts with empty history, so history
- * decryption cannot race the R-15 fault injection with messages from earlier
- * runs. Workspaces accumulate in the disposable test stack (no delete API).
+ * Creates a **fresh** E2EE workspace for this run. The name contains a timestamp
+ * and a random suffix, so reruns never collide on the workspace slug and no
+ * destructive cleanup is needed for the default (clean-stack) path. A fresh
+ * workspace also keeps DIRECT history empty so old messages cannot race R-15.
+ * With `E2EE_REAL_RESET=1` the caller deletes it in `finally`; without the gate
+ * the workspace stays in the disposable test DB.
  */
-async function ensureWorkspace(
-  owner: BrowserUser,
-  memberEmail: string,
-  name: string,
-): Promise<string> {
+async function createFixtureWorkspace(owner: BrowserUser, name: string): Promise<string> {
   const created = await api('/workspaces', {
     method: 'POST',
     token: owner.token,
@@ -358,8 +310,15 @@ async function ensureWorkspace(
   if (workspace.security_mode !== 'E2EE') {
     throw new Error(`fixture workspace "${name}" is not E2EE`);
   }
+  return workspace.id;
+}
 
-  const added = await api(`/workspaces/${workspace.id}/members`, {
+async function addWorkspaceMember(
+  owner: BrowserUser,
+  workspaceId: string,
+  memberEmail: string,
+): Promise<void> {
+  const added = await api(`/workspaces/${workspaceId}/members`, {
     method: 'POST',
     token: owner.token,
     deviceId: owner.deviceId,
@@ -367,7 +326,6 @@ async function ensureWorkspace(
   });
   // 409: already a member (a concurrent/manual fixture won the race).
   assertStatus(added, [201, 409], 'POST workspace member');
-  return workspace.id;
 }
 
 async function openWorkspace(
@@ -390,12 +348,16 @@ async function openWorkspace(
   await expect(page.getByText(/Чатов: \d+ из \d+/)).toBeVisible({ timeout: 60_000 });
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function createDirectChat(page: Page, peerName: string): Promise<ApiChat> {
   await page.getByRole('button', { name: 'Создать чат' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   await dialog.getByRole('radio', { name: 'Личный чат' }).check();
-  const peer = dialog.getByRole('radio', { name: new RegExp(peerName) });
+  const peer = dialog.getByRole('radio', { name: new RegExp(escapeRegExp(peerName)) });
   await expect(peer).toBeVisible({ timeout: 30_000 });
   await peer.check();
 
@@ -586,20 +548,6 @@ async function countE2eeSessions(page: Page): Promise<number> {
   });
 }
 
-function backendLogs(sinceMs: number): string {
-  try {
-    return execFileSync(
-      'docker',
-      ['logs', BACKEND_CONTAINER, '--since', new Date(sinceMs).toISOString()],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 },
-    );
-  } catch {
-    throw new Error(
-      `E2EE log check needs \`docker logs ${BACKEND_CONTAINER}\`; set E2EE_REAL_DB_CHECK=0 for a remote stack`,
-    );
-  }
-}
-
 test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
   test.skip(
     !ENABLED,
@@ -654,23 +602,56 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
     }
 
     const logStart = Date.now();
-    const workspaceName = `${WORKSPACE_PREFIX} ${Date.now()}`;
+    // Unique name: no slug collisions on reruns, no cleanup needed by default.
+    const workspaceName = `${WORKSPACE_PREFIX} ${Date.now()}-${randomUUID().slice(0, 8)}`;
     const markerA = `f7b_a_${Date.now()}_${randomUUID().slice(0, 8)}`;
     const markerB = `f7b_b_${Date.now()}_${randomUUID().slice(0, 8)}`;
     const markerR15 = `f7b_r15_${Date.now()}_${randomUUID().slice(0, 8)}`;
     const markerLost = `f7b_lost_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    let workspaceId: string | null = null;
     let chatId: string | null = null;
     let sentA: { id: string; clientMessageId: string } | null = null;
     let sentB: { id: string; clientMessageId: string } | null = null;
     let sentR15: Array<{ id: string }> = [];
 
     try {
-      await test.step('fixture: fresh keyed devices, E2EE workspace + member', async () => {
-        await preLoginRevokeAllDevices(USER_A.email);
-        await preLoginRevokeAllDevices(USER_B.email);
+      await test.step('fixture: BFF users via Mailpit, keyed devices, E2EE workspace + member', async () => {
+        // Clean-stack provisioning: register/verify A and B through the real
+        // BFF + Mailpit when absent, reuse them when a previous run created
+        // them. No pre-seeded fixture account and no SQL user shortcut.
+        const fixtureStates = await ensureFixtureUsers([USER_A, USER_B]);
+        test.info().annotations.push({
+          type: 'E2EE_FIXTURE_USERS',
+          description:
+            `registered/reused via BFF+Mailpit: ` +
+            `A=${fixtureStates[0]?.source ?? 'missing'}, B=${fixtureStates[1]?.source ?? 'missing'}`,
+        });
 
-        // Both real browser contexts register their own keyed device before the
-        // chat can be created (server requires a capable device on both sides).
+        if (DESTRUCTIVE) {
+          // Opt-in only (E2EE_REAL_RESET=1): disposable stack, no live users.
+          const revoked = resetFixtureDevices([USER_A.email, USER_B.email]);
+          const cleaned = cleanupStaleWorkspaces();
+          test.info().annotations.push({
+            type: 'E2EE_REAL_RESET',
+            description:
+              `on: revoked ${revoked} active fixture device(s), deleted ${cleaned} ` +
+              `stale ${WORKSPACE_PREFIX} row(s)`,
+          });
+        } else if (RESET) {
+          test.info().annotations.push({
+            type: 'E2EE_REAL_RESET',
+            description: 'requested but E2EE_REAL_DB_CHECK=0; destructive SQL skipped',
+          });
+        } else {
+          test.info().annotations.push({
+            type: 'E2EE_REAL_RESET',
+            description: 'off: no destructive SQL executed (no device reset, no workspace cleanup)',
+          });
+        }
+
+        // Both real browser contexts register their own keyed device before
+        // the chat can be created (the server requires a capable device on
+        // both sides).
         const [browserA, browserB] = await Promise.all([
           loginViaUi(pageA, USER_A.email, USER_A.password),
           loginViaUi(pageB, USER_B.email, USER_B.password),
@@ -680,7 +661,8 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
         await pruneOtherDevices(browserA);
         await pruneOtherDevices(browserB);
 
-        const workspaceId = await ensureWorkspace(browserA, USER_B.email, workspaceName);
+        workspaceId = await createFixtureWorkspace(browserA, workspaceName);
+        await addWorkspaceMember(browserA, workspaceId, USER_B.email);
         await openWorkspace(pageA, workspaceId, workspaceName);
         await openWorkspace(pageB, workspaceId, workspaceName);
       });
@@ -1023,6 +1005,18 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
     } finally {
       await contextA.close();
       await contextB.close();
+      if (DESTRUCTIVE && workspaceId !== null) {
+        try {
+          deleteWorkspace(workspaceId);
+        } catch (error) {
+          // A cleanup failure must not mask the scenario result; surface it in
+          // the Playwright report and let the next reset run retry.
+          test.info().annotations.push({
+            type: 'E2EE_REAL_CLEANUP_FAILED',
+            description: error instanceof Error ? error.message : 'workspace cleanup failed',
+          });
+        }
+      }
     }
   });
 });

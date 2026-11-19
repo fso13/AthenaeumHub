@@ -402,12 +402,37 @@ Overlay включает `KRUG_E2EE_ENABLED=true` и пересобирает SP
 База — **`http://localhost:8088`**, не `127.0.0.1`: backend проверяет Origin
 WebSocket по `PUBLIC_URL`, и `127.0.0.1` даёт 403 на `/ws`.
 
+**Clean-stack fixture.** Пользователи не предполагаются заранее: на чистом
+стенде оба аккаунта создаются через реальный BFF — `POST /auth/register` →
+код из Mailpit API (`GET /api/v1/messages`, `GET /api/v1/message/{id}`) →
+`POST /auth/verify-email`, затем обычный UI-login. На повторном прогоне
+существующие verified-аккаунты переиспользуются. Пространство на каждый прогон
+уникально (`E2EE F7B <timestamp>-<random>`), поэтому по умолчанию тест работает
+без reset и без destructive SQL.
+
+```bash
+# изолированные fixture-аккаунты (иначе e2ee-f7b-a/b@krug.local)
+E2EE_REAL_USER_A_EMAIL=e2ee-a-$(date +%s)@krug.local \
+E2EE_REAL_USER_B_EMAIL=e2ee-b-$(date +%s)@krug.local \
+PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:e2ee:real
+```
+
+Переменные: `E2EE_REAL_BASE_URL`, `E2EE_REAL_MAILPIT_URL` (default
+`http://localhost:8025`), `E2EE_REAL_USER_{A,B}_{EMAIL,PASSWORD,NAME}`,
+`E2EE_REAL_MAIL_TIMEOUT_MS`. `E2EE_REAL_DB_CHECK=0` отключает read-only DB/log
+проверки для удалённого стека. **Destructive SQL — только opt-in**:
+`E2EE_REAL_RESET=1` (alias `E2EE_REAL_ALLOW_DESTRUCTIVE=1`) разрешает
+pre-login revoke devices, удаление stale `E2EE F7B …` workspace старше часа и
+удаление workspace текущего прогона в `finally`. Без этого флага spec не
+выполняет ни одного `UPDATE`/`DELETE`; API-cleanup `DELETE /devices/{id}` после
+login только поддерживает ровно одно устройство fixture-пользователя.
+
 Что проверяется в Chromium и Firefox (WebKit исключён по ADR-26):
 
 1. реальный login через BFF; bridge регистрирует keyed device и prekeys,
    `GET /devices` показывает `e2ee_capable=true`, SPK и OPK > 0;
-2. fixture создаёт **новое** E2EE-пространство `E2EE F7B <timestamp>` и добавляет
-   второго пользователя через E12 members API;
+2. fixture создаёт **новое** E2EE-пространство `E2EE F7B <timestamp>-<random>` и
+   добавляет второго пользователя через E12 members API;
 3. A создаёт/открывает DIRECT E2EE-чат; B открывает его после reload;
 4. A → B и B → A: plaintext виден в UI, в `POST /messages` уходит только
    `envelopes` (без `text`), ответ сервера `text:null`;
@@ -426,13 +451,14 @@ WebSocket по `PUBLIC_URL`, и `127.0.0.1` даёт 403 на `/ws`.
    `PAIRWISE_X3DH_DR`, prekey на первом конверте; plaintext-маркеров нет ни в
    строках БД, ни в backend-логах, ни в WS-кадрах.
 
-Test-only fixtures (документированы в spec): пользователи
-`test@krug.local` / `Test1234!` и `pickle-ui-1794919305193@krug.local` /
-`CorrectHorseBattery42!`; SQL `UPDATE auth.devices ... status='REVOKED'` перед
-login, чтобы повторные прогоны не упирались в лимит 5 устройств; E2EE-пространство
-создаётся через API при каждом прогоне (остаются в тестовой БД — это одноразовый
-стенд). DB/log-проверки используют `docker exec`/`docker logs`; для удалённого
-стека `E2EE_REAL_DB_CHECK=0` отключает их и SQL-фикстуру.
+Fixture-аккаунты задаются переменными выше (default
+`e2ee-f7b-a@krug.local` / `e2ee-f7b-b@krug.local`); пароли — те же
+`E2EE_REAL_USER_*_PASSWORD`. Если аккаунт уже существует с другим паролем,
+fixture падает с понятной ошибкой и не подставляет pre-seeded пользователя.
+DB/log-проверки используют `docker exec`/`docker logs`; для удалённого стека
+`E2EE_REAL_DB_CHECK=0` отключает их и destructive SQL. Если Mailpit или
+Keycloak недоступны, fixture падает с явным сообщением (URL/сервис), а не
+пропускает сценарий.
 
 В песочнице DSH Firefox требует writable `TMPDIR` (иначе «Could not find profile
 folder»): `TMPDIR=$PWD/.pw-tmp CFFIXED_USER_HOME=$PWD/.pw-home

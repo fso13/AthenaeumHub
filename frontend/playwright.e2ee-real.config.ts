@@ -13,6 +13,11 @@ import { defineConfig, devices } from '@playwright/test';
  * is skipped. Chromium and Firefox only — WebKit/Safari is excluded by ADR-26
  * until its Ed25519 implementation passes the strict KAT.
  *
+ * Fixture: both users are registered through the real BFF; the TOTP is read
+ * from Mailpit (`E2EE_REAL_MAILPIT_URL`, default http://localhost:8025).
+ * Destructive SQL (device reset / workspace cleanup) is opt-in only:
+ * `E2EE_REAL_RESET=1`. See `e2e/e2ee-real-fixture.ts` and README.
+ *
  * Traces/screenshots/video are disabled: a failing E2EE test must not write
  * decrypted message text to disk.
  */
