@@ -17,7 +17,7 @@
 ## Тесты и контракт
 
 - Backend: **498 tests**, ArchUnit 10/10.
-- Frontend: **869 tests**, KAT 27/27, Chromium/Firefox F7B 2/2.
+- Frontend: **915 tests**, KAT 27/27, Chromium/Firefox F7B 2/2.
 - Contract: **48 paths / 56 operations / 88 schemas**.
 
 ## CI и релиз
@@ -36,6 +36,12 @@
 Условия #29–#38: открыты #29, #30, #32–#37; #31 закрыт; #38 blocked.
 `KRUG_E2EE_ENABLED=false`; тестовый overlay — только disposable стенд.
 Порядок включения и evidence: [`docs/E2EE-ENABLE-CHECKLIST.md`](docs/E2EE-ENABLE-CHECKLIST.md).
+
+## Новые функции
+
+- Реакции, редактирование, удаление для себя/для всех.
+- Аудио/видео звонки 1:1 (WebRTC signaling over WS).
+- Сворачиваемое меню сайдбара.
 
 ## Очередь
 

@@ -65,11 +65,17 @@ public final class ApiRequestPath {
         if (decoded.indexOf('%') >= 0) {
             throw new InvalidPathException("path contains a nested percent-encoding");
         }
-        for (int i = 0; i < decoded.length(); i++) {
-            char value = decoded.charAt(i);
-            if (Character.isISOControl(value) || Character.isSurrogate(value)) {
+        // Iterate by code point: an emoji path segment (for example
+        // /messages/{id}/reactions/%F0%9F%91%8D) legitimately decodes to a surrogate pair.
+        // Unpaired surrogates are still rejected; valid pairs are not a control character.
+        for (int i = 0; i < decoded.length(); ) {
+            int codePoint = decoded.codePointAt(i);
+            if (Character.isISOControl(codePoint)
+                    || (codePoint >= Character.MIN_SURROGATE
+                        && codePoint <= Character.MAX_SURROGATE)) {
                 throw new InvalidPathException("path contains a control character");
             }
+            i += Character.charCount(codePoint);
         }
         String[] segments = decoded.split("/", -1);
         for (String segment : segments) {

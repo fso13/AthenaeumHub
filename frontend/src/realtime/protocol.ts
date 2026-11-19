@@ -10,6 +10,8 @@
  *    (payload table). No extra fields are invented.
  */
 
+import type { CallIceCandidate, CallSignalKind, CallSignalPayload } from '../calls/types';
+
 export const WS_PROTOCOL_VERSION = 1;
 
 export const CLOSE_CODES = {
@@ -94,6 +96,31 @@ export interface PresenceFrame {
   last_seen_at?: string;
 }
 
+/**
+ * §9.2: relayed `call.signal`. The envelope carries `from_*`; the payload is
+ * byte-identical to what the caller sent. No `seq`/`event_id` ever appears.
+ */
+export interface CallSignalFrame {
+  type: 'call.signal';
+  chat_id: string;
+  from_user_id?: string;
+  from_device_id?: string;
+  ts?: string;
+  payload: CallSignalPayload;
+}
+
+/** §9.3: only the calling session receives this when the peer is offline. */
+export interface CallUnavailableFrame {
+  type: 'call.unavailable';
+  chat_id: string;
+  ts?: string;
+  payload: {
+    call_id: string;
+    kind: CallSignalKind;
+    reason: string;
+  };
+}
+
 export type ServerFrame =
   | HelloFrame
   | SubscribedFrame
@@ -103,13 +130,16 @@ export type ServerFrame =
   | ErrorFrame
   | SessionRevokedFrame
   | TypingFrame
-  | PresenceFrame;
+  | PresenceFrame
+  | CallSignalFrame
+  | CallUnavailableFrame;
 
 export type ClientFrame =
   | { v: 1; type: 'subscribe'; chats: RealtimeSubscription[]; presence: true }
   | { v: 1; type: 'ack'; last_seq: number }
   | { v: 1; type: 'ping'; client_time: string }
-  | { v: 1; type: 'typing'; chat_id: string };
+  | { v: 1; type: 'typing'; chat_id: string }
+  | { v: 1; type: 'call.signal'; chat_id: string; payload: CallSignalPayload };
 
 export function encodeClientFrame(frame: ClientFrame): string {
   return JSON.stringify(frame);
@@ -212,7 +242,7 @@ function parseSubscribed(value: Record<string, unknown>): SubscribedFrame | null
 
 function parseEvent(
   value: Record<string, unknown>,
-): EventFrame | TypingFrame | PresenceFrame | null {
+): EventFrame | TypingFrame | PresenceFrame | CallSignalFrame | CallUnavailableFrame | null {
   const event = readString(value.event);
   const chatId = readString(value.chat_id) ?? readString(payload(value).chat_id);
   if (!event || !chatId) return null;
@@ -226,6 +256,13 @@ function parseEvent(
   if (event === 'presence') {
     return parsePresence({ ...body, chat_id: chatId });
   }
+  // §9.2/§9.3: call frames are ephemeral and carry no event_id/seq.
+  if (event === 'call.signal') {
+    return parseCallSignal(value, chatId);
+  }
+  if (event === 'call.unavailable') {
+    return parseCallUnavailable(value, chatId);
+  }
 
   const eventId = readString(value.event_id);
   if (!eventId) return null;
@@ -237,6 +274,90 @@ function parseEvent(
     ...(typeof value.seq === 'number' ? { seq: value.seq } : {}),
     ...(readString(value.ts) ? { ts: readString(value.ts) } : {}),
     payload: body,
+  };
+}
+
+const CALL_KINDS: readonly CallSignalKind[] = ['offer', 'answer', 'ice', 'hangup', 'busy'];
+
+function isCallKind(value: string | undefined): value is CallSignalKind {
+  return value !== undefined && (CALL_KINDS as readonly string[]).includes(value);
+}
+
+function parseCallSignal(value: Record<string, unknown>, chatId: string): CallSignalFrame | null {
+  const body = payload(value);
+  const callId = readString(body.call_id);
+  const kind = readString(body.kind);
+  if (!callId || !isCallKind(kind) || typeof body.video !== 'boolean') return null;
+
+  const sdp = body.sdp === undefined ? undefined : readString(body.sdp);
+  if (body.sdp !== undefined && sdp === undefined) return null;
+  const candidate = body.candidate === undefined ? undefined : parseIceCandidate(body.candidate);
+  if (body.candidate !== undefined && candidate === undefined) return null;
+
+  if (kind === 'offer' || kind === 'answer') {
+    if (sdp === undefined || candidate !== undefined) return null;
+  } else if (kind === 'ice') {
+    if (candidate === undefined || sdp !== undefined) return null;
+  } else if (sdp !== undefined || candidate !== undefined) {
+    return null;
+  }
+
+  return {
+    type: 'call.signal',
+    chat_id: chatId,
+    ...(readString(value.from_user_id) ? { from_user_id: readString(value.from_user_id) } : {}),
+    ...(readString(value.from_device_id)
+      ? { from_device_id: readString(value.from_device_id) }
+      : {}),
+    ...(readString(value.ts) ? { ts: readString(value.ts) } : {}),
+    payload: {
+      call_id: callId,
+      kind,
+      video: body.video,
+      ...(sdp !== undefined ? { sdp } : {}),
+      ...(candidate !== undefined ? { candidate } : {}),
+    },
+  };
+}
+
+function parseIceCandidate(value: unknown): CallIceCandidate | undefined {
+  if (!isRecord(value)) return undefined;
+  const candidate = readString(value.candidate);
+  if (!candidate) return undefined;
+
+  // Accept both the browser shape (`sdpMid`/`sdpMLineIndex`) and the contract
+  // example's snake_case (`sdp_mid`/`sdp_mline_index`); the backend relays the
+  // object unchanged, so a non-browser client may send either.
+  const sdpMid = readString(value.sdpMid) ?? readString(value.sdp_mid);
+  const sdpMLineIndex =
+    readNonNegativeInt(value.sdpMLineIndex) ??
+    readNonNegativeInt(value.sdp_mline_index) ??
+    undefined;
+  const usernameFragment =
+    readString(value.usernameFragment) ?? readString(value.username_fragment);
+
+  return {
+    candidate,
+    ...(sdpMid !== undefined ? { sdpMid } : {}),
+    ...(sdpMLineIndex !== undefined ? { sdpMLineIndex } : {}),
+    ...(usernameFragment !== undefined ? { usernameFragment } : {}),
+  };
+}
+
+function parseCallUnavailable(
+  value: Record<string, unknown>,
+  chatId: string,
+): CallUnavailableFrame | null {
+  const body = payload(value);
+  const callId = readString(body.call_id);
+  const kind = readString(body.kind);
+  const reason = readString(body.reason);
+  if (!callId || !isCallKind(kind) || !reason) return null;
+  return {
+    type: 'call.unavailable',
+    chat_id: chatId,
+    ...(readString(value.ts) ? { ts: readString(value.ts) } : {}),
+    payload: { call_id: callId, kind, reason },
   };
 }
 

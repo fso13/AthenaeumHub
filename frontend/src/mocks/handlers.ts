@@ -26,6 +26,7 @@ import type {
   PreflightDecision,
   PreflightFile,
   ReadNotificationsRequest,
+  ReactionSummary,
   RealtimeTicket,
   StickerRef,
   SyncResponse,
@@ -48,7 +49,12 @@ import {
   type MockUpload,
 } from './db';
 import { IDS, MOCK_ACCESS_TOKEN, MOCK_DEMO_EMAIL, MOCK_EMAIL_CODE, messageId } from './fixtures';
-import { publishMockMessageCreated } from './realtime';
+import {
+  publishMockMessageCreated,
+  publishMockMessageDeleted,
+  publishMockMessageUpdated,
+  publishMockReactionChanged,
+} from './realtime';
 
 const API = '*/api/v1';
 /** Mock presigned media origin (MinIO in the real contour). */
@@ -116,8 +122,32 @@ function threadExcerpt(value: string | null | undefined): string | null {
 /** Live (non-deleted) replies of one root in seq order. */
 function threadRepliesOf(chat: ChatLike, rootId: string): ApiMessage[] {
   return chat.messages
-    .filter((message) => message.thread_root_id === rootId && !message.deleted_at)
+    .filter(
+      (message) =>
+        message.thread_root_id === rootId &&
+        !message.deleted_at &&
+        !chat.hiddenMessageIds.has(message.id),
+    )
     .sort((a, b) => a.seq - b.seq);
+}
+
+/** #61: `ReactionCreate.emoji` — 1..32 code points, no HTML/space/control. */
+function validReactionEmoji(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const points = Array.from(value);
+  if (points.length < 1 || points.length > 32) return false;
+  if (/[\s<>"'`&]/.test(value)) return false;
+  return points.every((char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code >= 0x20 && code !== 0x7f;
+  });
+}
+
+/** Hidden-for-me rows behave like missing messages (`404` on metadata writes). */
+function visibleMessage(chat: ChatLike, messageId: string): ApiMessage | null {
+  const message = chat.messages.find((item) => item.id === messageId);
+  if (!message || chat.hiddenMessageIds.has(message.id)) return null;
+  return message;
 }
 
 function buildThreadSummary(chat: ChatLike, rootId: string): ThreadSummary | null {
@@ -138,12 +168,18 @@ function buildThreadSummary(chat: ChatLike, rootId: string): ThreadSummary | nul
 function presentMessage(chat: ChatLike, message: ApiMessage): ApiMessage {
   const threadRootId = message.thread_root_id ?? null;
   if (threadRootId !== null) {
-    return { ...message, thread_root_id: threadRootId, thread_summary: null };
+    return {
+      ...message,
+      thread_root_id: threadRootId,
+      thread_summary: null,
+      reactions: message.reactions ?? [],
+    };
   }
   return {
     ...message,
     thread_root_id: null,
     thread_summary: buildThreadSummary(chat, message.id),
+    reactions: message.reactions ?? [],
   };
 }
 
@@ -156,7 +192,7 @@ function validateThreadRoot(chat: ChatLike, rootId: string): Response | null {
       'Threads are not supported in an E2EE chat',
     );
   }
-  const root = chat.messages.find((message) => message.id === rootId);
+  const root = visibleMessage(chat, rootId);
   if (!root) {
     return errorResponse(422, 'THREAD_ROOT_NOT_FOUND', 'Thread root not found');
   }
@@ -209,6 +245,7 @@ function addWorkspaceChat(
     workspaceId,
     messages: [],
     clientMessageIds: new Map(),
+    hiddenMessageIds: new Set(),
   };
   db.chats[chatId] = chat;
   return chat;
@@ -1991,6 +2028,7 @@ export function createHandlers(db: MockDb) {
         edited_at: null,
         deleted_at: null,
         version: 1,
+        reactions: [],
       };
       db.chats[chatId] = {
         summary: {
@@ -2007,6 +2045,7 @@ export function createHandlers(db: MockDb) {
         workspaceId: workspace.id,
         messages: [systemMessage],
         clientMessageIds: new Map(),
+        hiddenMessageIds: new Set(),
       };
       db.chatRequests.set(idempotencyKey, { bodyHash, chat });
       db.chatCreateRequests.push({ idempotencyKey, body });
@@ -2635,7 +2674,9 @@ export function createHandlers(db: MockDb) {
         .sort((a, b) => a.seq - b.seq)
         .filter((message) =>
           threadRootId === null ? !message.thread_root_id : message.thread_root_id === threadRootId,
-        );
+        )
+        // #63 `scope=me`: hidden rows disappear from this caller's pages only.
+        .filter((message) => !chat.hiddenMessageIds.has(message.id));
       let pageItems = sorted;
       let hasMore = false;
 
@@ -2896,6 +2937,7 @@ export function createHandlers(db: MockDb) {
         edited_at: null,
         deleted_at: null,
         version: 1,
+        reactions: [],
         ...(sticker ? { sticker_id: sticker.id, sticker } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
       };
@@ -2925,6 +2967,286 @@ export function createHandlers(db: MockDb) {
       publishMockMessageCreated(db, message);
 
       return HttpResponse.json(presentMessage(chat, message), { status: 201 });
+    }),
+
+    /*
+     * #61–#63 message actions (MSW parity with the backend contract):
+     * managed-only reaction/edit metadata, opaque idempotent reactions,
+     * optimistic-lock edit (409), and delete scope=me|all.
+     */
+
+    http.post(`${API}/chats/:chatId/messages/:messageId/reactions`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+
+      const chat = db.chats[String(params.chatId)];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (chat.summary.security_mode === 'E2EE') {
+        return errorResponse(
+          422,
+          'E2EE_METADATA_FORBIDDEN',
+          'Reactions are not available in an E2EE chat',
+        );
+      }
+      const message = visibleMessage(chat, String(params.messageId));
+      if (!message || message.deleted_at) {
+        return errorResponse(404, 'NOT_FOUND', 'Message not found');
+      }
+      if (message.type === 'SYSTEM') {
+        return errorResponse(422, 'MESSAGE_NOT_EDITABLE', 'System messages accept no reactions');
+      }
+
+      const body = await readJson(request);
+      if (body === null || typeof body !== 'object') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      }
+      const emoji = (body as { emoji?: unknown }).emoji;
+      if (!validReactionEmoji(emoji)) {
+        return errorResponse(
+          400,
+          'VALIDATION_FAILED',
+          'emoji must be 1..32 Unicode characters without spaces or HTML',
+        );
+      }
+
+      db.reactionRequests.push({
+        chatId: chat.summary.id,
+        messageId: message.id,
+        emoji,
+        action: 'ADD',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceReactionError) {
+        const forced = db.forceReactionError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const userId = db.session.user.id;
+      const reactions = [...(message.reactions ?? [])];
+      const index = reactions.findIndex((reaction) => reaction.emoji === emoji);
+      const current = index >= 0 ? reactions[index] : undefined;
+      // Idempotent per (message, user, emoji): the mock has one caller.
+      const next: ReactionSummary =
+        current && current.me
+          ? { ...current }
+          : { emoji, count: (current?.count ?? 0) + 1, me: true };
+      if (index >= 0) reactions[index] = next;
+      else reactions.push(next);
+      message.reactions = reactions;
+
+      publishMockReactionChanged(
+        db,
+        chat.summary.id,
+        message.id,
+        userId,
+        emoji,
+        'ADDED',
+        next.count,
+      );
+      return HttpResponse.json(next, { status: 200 });
+    }),
+
+    http.delete(
+      `${API}/chats/:chatId/messages/:messageId/reactions/:emoji`,
+      ({ request, params }) => {
+        const unauthorized = requireAuth(request);
+        if (unauthorized) return unauthorized;
+
+        const chat = db.chats[String(params.chatId)];
+        if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+        if (chat.summary.security_mode === 'E2EE') {
+          return errorResponse(
+            422,
+            'E2EE_METADATA_FORBIDDEN',
+            'Reactions are not available in an E2EE chat',
+          );
+        }
+        const message = visibleMessage(chat, String(params.messageId));
+        if (!message || message.deleted_at) {
+          return errorResponse(404, 'NOT_FOUND', 'Message not found');
+        }
+
+        let emoji = String(params.emoji);
+        try {
+          emoji = decodeURIComponent(emoji);
+        } catch {
+          return errorResponse(400, 'VALIDATION_FAILED', 'emoji path segment is malformed');
+        }
+        if (!validReactionEmoji(emoji)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'emoji is invalid');
+        }
+
+        db.reactionRequests.push({
+          chatId: chat.summary.id,
+          messageId: message.id,
+          emoji,
+          action: 'REMOVE',
+          deviceId: request.headers.get('x-device-id'),
+        });
+        if (db.forceReactionError) {
+          const forced = db.forceReactionError;
+          return errorResponse(forced.status, forced.code, forced.message, {
+            details: forced.details,
+            retryAfterSeconds: forced.retryAfterSeconds,
+          });
+        }
+
+        const reactions = [...(message.reactions ?? [])];
+        const index = reactions.findIndex((reaction) => reaction.emoji === emoji);
+        const current = index >= 0 ? reactions[index] : undefined;
+        if (current?.me) {
+          const count = Math.max(0, current.count - 1);
+          if (count === 0) reactions.splice(index, 1);
+          else reactions[index] = { emoji, count, me: false };
+          message.reactions = reactions;
+          publishMockReactionChanged(
+            db,
+            chat.summary.id,
+            message.id,
+            db.session.user.id,
+            emoji,
+            'REMOVED',
+            count,
+          );
+        }
+        return new HttpResponse(null, { status: 204 });
+      },
+    ),
+
+    http.patch(`${API}/chats/:chatId/messages/:messageId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+
+      const chat = db.chats[String(params.chatId)];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (chat.summary.security_mode === 'E2EE') {
+        return errorResponse(
+          422,
+          'E2EE_METADATA_FORBIDDEN',
+          'Editing is not available in an E2EE chat',
+        );
+      }
+      const message = visibleMessage(chat, String(params.messageId));
+      if (!message || message.deleted_at) {
+        return errorResponse(404, 'NOT_FOUND', 'Message not found');
+      }
+      if (message.type !== 'TEXT') {
+        return errorResponse(422, 'MESSAGE_NOT_EDITABLE', 'Only TEXT messages can be edited');
+      }
+      if (message.sender_id !== db.session.user.id) {
+        return errorResponse(403, 'FORBIDDEN', 'Only the author can edit this message');
+      }
+
+      const body = await readJson(request);
+      if (body === null || typeof body !== 'object') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      }
+      const candidate = body as { text?: unknown; version?: unknown };
+      if (typeof candidate.text !== 'string') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'text is required');
+      }
+      const text = candidate.text;
+      if (text.trim().length < 1) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'text must not be empty');
+      }
+      if (text.length > 8000) {
+        return errorResponse(422, 'MESSAGE_TOO_LONG', 'Message text is too long', {
+          details: { max_length: 8000 },
+        });
+      }
+      if (
+        candidate.version !== undefined &&
+        candidate.version !== null &&
+        (typeof candidate.version !== 'number' || !Number.isInteger(candidate.version))
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'version must be an integer');
+      }
+
+      db.editRequests.push({
+        chatId: chat.summary.id,
+        messageId: message.id,
+        body: { text, version: candidate.version ?? null },
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceEditError) {
+        const forced = db.forceEditError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      if (typeof candidate.version === 'number' && candidate.version !== message.version) {
+        return errorResponse(409, 'VERSION_CONFLICT', 'Message was changed on another device', {
+          details: { current_version: message.version },
+        });
+      }
+
+      message.text = text;
+      message.edited_at = new Date().toISOString();
+      message.version += 1;
+      publishMockMessageUpdated(db, message);
+      return HttpResponse.json(presentMessage(chat, message), { status: 200 });
+    }),
+
+    http.delete(`${API}/chats/:chatId/messages/:messageId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+
+      const chat = db.chats[String(params.chatId)];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const message = chat.messages.find((item) => item.id === String(params.messageId));
+      if (!message) return errorResponse(404, 'NOT_FOUND', 'Message not found');
+
+      const url = new URL(request.url);
+      const rawScope = url.searchParams.get('scope');
+      const scope = rawScope ?? 'me';
+      if (scope !== 'me' && scope !== 'all') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'scope must be me or all');
+      }
+
+      db.deleteRequests.push({
+        chatId: chat.summary.id,
+        messageId: message.id,
+        scope,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceDeleteError) {
+        const forced = db.forceDeleteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      if (scope === 'me') {
+        // Per-user marker: idempotent and invisible to other participants.
+        chat.hiddenMessageIds.add(message.id);
+        return new HttpResponse(null, { status: 204 });
+      }
+
+      if (message.sender_id !== db.session.user.id) {
+        return errorResponse(403, 'FORBIDDEN', 'Only the author can delete for everyone');
+      }
+      if (message.deleted_at) return new HttpResponse(null, { status: 204 });
+
+      const deletedAt = new Date().toISOString();
+      message.deleted_at = deletedAt;
+      message.text = null;
+      message.edited_at = null;
+      message.reactions = [];
+      message.attachments = [];
+      message.sticker = undefined;
+      message.sticker_id = null;
+      message.crypto = null;
+      for (const attachment of db.attachments.values()) {
+        if (attachment.messageId === message.id) attachment.messageId = null;
+      }
+      publishMockMessageDeleted(db, chat.summary.id, message.id, deletedAt, db.session.user.id);
+      return new HttpResponse(null, { status: 204 });
     }),
 
     http.post(`${API}/chats/:chatId/read`, async ({ request, params }) => {

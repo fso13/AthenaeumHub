@@ -31,7 +31,6 @@ import { StatePanel } from './StatePanel';
 import { StickerPicker } from './StickerPicker';
 import { ThreadPanel } from './ThreadPanel';
 import { TypingIndicator } from './TypingIndicator';
-import { LimitsBar } from './LimitsBar';
 import { UploadTray } from './UploadTray';
 
 interface ChatScreenProps {
@@ -450,6 +449,10 @@ export function ChatScreen({
             }}
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
+            onStartCall={(video) => {
+              if (activeChatId) store.startCall(activeChatId, video);
+            }}
+            callActive={state.call.phase !== 'idle'}
           />
 
           {searchOpen ? (
@@ -547,13 +550,6 @@ export function ChatScreen({
                   handleFileInput(event.target.files);
                   event.target.value = '';
                 }}
-              />
-              <LimitsBar
-                limits={filesState.limits}
-                status={filesState.limitsStatus}
-                error={filesState.limitsError}
-                role={role}
-                onRetry={() => void filesStore.refreshLimits()}
               />
               <UploadTray
                 tasks={uploadTasks}
@@ -667,6 +663,20 @@ export function ChatScreen({
             setSearchQuery(value);
             setSearchOpen(true);
           }}
+          onStartCall={
+            activeChatId && chatSummary?.type === 'DIRECT'
+              ? () => store.startCall(activeChatId, false)
+              : undefined
+          }
+          callDisabledReason={
+            !chatSummary || chatSummary.type !== 'DIRECT'
+              ? t('calls.directOnly')
+              : state.realtimeStatus !== 'online'
+                ? t('calls.realtimeRequired')
+                : state.call.phase !== 'idle'
+                  ? t('calls.alreadyActive')
+                  : null
+          }
         />
       ) : null}
     </>

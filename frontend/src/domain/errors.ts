@@ -75,6 +75,39 @@ export function describeError(error: unknown, translator: Translator = t): Descr
     };
   }
 
+  if (error.code === 'E2EE_METADATA_FORBIDDEN') {
+    return {
+      ...meta,
+      kind: 'no_access',
+      title: translate('errors.e2eeMetadata.title'),
+      message: translate('errors.e2eeMetadata.text'),
+      retryable: false,
+      canRestoreText: false,
+    };
+  }
+
+  if (error.code === 'MESSAGE_NOT_EDITABLE') {
+    return {
+      ...meta,
+      kind: 'validation',
+      title: translate('errors.messageNotEditable.title'),
+      message: translate('errors.messageNotEditable.text'),
+      retryable: false,
+      canRestoreText: false,
+    };
+  }
+
+  if (error.code === 'VERSION_CONFLICT') {
+    return {
+      ...meta,
+      kind: 'conflict',
+      title: translate('errors.versionConflict.title'),
+      message: translate('errors.versionConflict.text'),
+      retryable: false,
+      canRestoreText: false,
+    };
+  }
+
   if (error.status === 401) {
     return {
       ...meta,

@@ -105,13 +105,15 @@ describe('E6-F notifications', () => {
   });
 
   it('shows the loading state while the first page is in flight', async () => {
-    mockDb.notificationsDelayMs = 1_500;
+    // Keep the first page in flight long enough that the panel's loading state
+    // is observable even when the full suite runs on a loaded machine.
+    mockDb.notificationsDelayMs = 5_000;
     const { user, store } = renderApp();
     stores.push(store);
     await screen.findByRole('heading', { name: 'Команда «Восход»' });
     await user.click(screen.getByRole('button', { name: /Уведомления/ }));
     const panel = await screen.findByRole('region', { name: 'Уведомления' });
-    expect(within(panel).getByText('Загружаем уведомления…')).toBeInTheDocument();
+    expect(await within(panel).findByText('Загружаем уведомления…')).toBeInTheDocument();
   });
 
   it('shows the empty state when there are no notifications', async () => {

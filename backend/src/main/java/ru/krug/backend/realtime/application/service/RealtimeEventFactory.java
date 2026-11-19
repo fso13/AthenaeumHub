@@ -1,5 +1,6 @@
 package ru.krug.backend.realtime.application.service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -20,6 +21,9 @@ import ru.krug.backend.realtime.application.model.StickerSnapshot;
 public final class RealtimeEventFactory {
 
     public static final String MESSAGE_CREATED = "message.created";
+    public static final String MESSAGE_UPDATED = "message.updated";
+    public static final String MESSAGE_DELETED = "message.deleted";
+    public static final String MESSAGE_REACTION_CHANGED = "message.reaction.changed";
     public static final String MESSAGE_RECEIPT = "message.receipt";
     public static final String TYPING = "typing";
     public static final String PRESENCE = "presence";
@@ -37,6 +41,60 @@ public final class RealtimeEventFactory {
      */
     public static RealtimeEvent messageCreated(MessageSnapshot message,
                                                Map<UUID, Object> cryptoByDevice) {
+        return new RealtimeEvent(message.id(), MESSAGE_CREATED, message.workspaceId(),
+                message.chatId(), message.seq(), message.createdAt(),
+                messagePayload(message), cryptoByDevice);
+    }
+
+    /** Edit fan-out: same {@code Message} payload as created, with the new version/edited_at. */
+    public static RealtimeEvent messageUpdated(MessageSnapshot message) {
+        Instant ts = message.editedAt() == null ? message.createdAt() : message.editedAt();
+        UUID eventId = stableId("message.updated:" + message.id() + ":" + message.version());
+        return new RealtimeEvent(eventId, MESSAGE_UPDATED, message.workspaceId(),
+                message.chatId(), message.seq(), ts, messagePayload(message));
+    }
+
+    /**
+     * Delete-for-all tombstone. Delete-for-me is deliberately not fanned out: only the
+     * caller's own reads change, and broadcasting it would hide the message for everyone.
+     */
+    public static RealtimeEvent messageDeleted(UUID workspaceId, UUID chatId, UUID messageId,
+                                               long seq, Instant deletedAt, UUID deletedBy,
+                                               String scope) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("message_id", messageId);
+        payload.put("chat_id", chatId);
+        payload.put("seq", seq);
+        payload.put("deleted_at", deletedAt);
+        payload.put("deleted_by", deletedBy);
+        payload.put("scope", scope);
+        UUID eventId = stableId("message.deleted:" + messageId + ":" + scope + ":" + deletedAt);
+        return new RealtimeEvent(eventId, MESSAGE_DELETED, workspaceId, chatId, seq, deletedAt,
+                payload);
+    }
+
+    public static RealtimeEvent messageReactionChanged(UUID workspaceId, UUID chatId,
+                                                       UUID messageId, long seq, UUID userId,
+                                                       String emoji, String action, long count,
+                                                       Instant ts) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("message_id", messageId);
+        payload.put("chat_id", chatId);
+        payload.put("seq", seq);
+        payload.put("user_id", userId);
+        payload.put("emoji", emoji);
+        payload.put("action", action);
+        payload.put("count", count);
+        // The fact is (message, user, emoji, action, resulting count); a repeated
+        // idempotent POST/DELETE must dedupe to the same event even though its wall clock
+        // timestamp differs.
+        UUID eventId = stableId("message.reaction.changed:" + messageId + ":" + userId + ":"
+                + emoji + ":" + action + ":" + count);
+        return new RealtimeEvent(eventId, MESSAGE_REACTION_CHANGED, workspaceId, chatId, seq,
+                ts, payload);
+    }
+
+    private static Map<String, Object> messagePayload(MessageSnapshot message) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("id", message.id());
         payload.put("chat_id", message.chatId());
@@ -67,10 +125,18 @@ public final class RealtimeEventFactory {
             item.put("media", media(attachment.media()));
             return item;
         }).toList());
-        // The message id is the stable event id: replay and live delivery of the same fact
-        // must dedupe to one event on the client.
-        return new RealtimeEvent(message.id(), MESSAGE_CREATED, message.workspaceId(),
-                message.chatId(), message.seq(), message.createdAt(), payload, cryptoByDevice);
+        payload.put("reactions", message.reactions().stream().map(reaction -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("emoji", reaction.emoji());
+            item.put("count", reaction.count());
+            item.put("me", reaction.me());
+            return item;
+        }).toList());
+        return payload;
+    }
+
+    private static UUID stableId(String fact) {
+        return UUID.nameUUIDFromBytes(fact.getBytes(StandardCharsets.UTF_8));
     }
 
     private static Map<String, Object> media(AttachmentMediaSnapshot media) {

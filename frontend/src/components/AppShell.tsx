@@ -8,6 +8,7 @@ import { useChatState, useChatStore } from '../store/ChatProvider';
 import type { AppState } from '../store/chatStore';
 import { useTheme } from '../hooks/useTheme';
 import { ChatScreen } from './ChatScreen';
+import { CallLayer } from './CallLayer';
 import { FilesPage } from './pages/FilesPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PluginsPage } from './pages/PluginsPage';
@@ -56,6 +57,13 @@ export function AppShell({
   const view = parseView(location);
   const { theme, setTheme } = useTheme();
   const [navOpen, setNavOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    try {
+      return globalThis.localStorage?.getItem('krug.navCollapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [chatSettingsOpen, setChatSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const activeChat =
@@ -94,6 +102,14 @@ export function AppShell({
   );
 
   useEffect(() => {
+    try {
+      globalThis.localStorage?.setItem('krug.navCollapsed', navCollapsed ? '1' : '0');
+    } catch {
+      // localStorage may be unavailable; the in-memory state still works.
+    }
+  }, [navCollapsed]);
+
+  useEffect(() => {
     if (!navOpen) return;
     const handle = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setNavOpen(false);
@@ -110,7 +126,9 @@ export function AppShell({
   const page = view === 'chat' ? null : view;
 
   return (
-    <div className={`app${navOpen ? ' app--nav-open' : ''}${page === null ? '' : ' app--page'}`}>
+    <div
+      className={`app${navOpen ? ' app--nav-open' : ''}${page === null ? '' : ' app--page'}${navCollapsed ? ' app--nav-collapsed' : ''}`}
+    >
       <a className="skip-link" href="#chat-main">
         {t('app.skipToChat')}
       </a>
@@ -147,6 +165,8 @@ export function AppShell({
           onOpenAdmin={onOpenAdmin}
           onOpenMembers={onOpenMembers}
           onOpenProfile={() => setProfileOpen(true)}
+          navCollapsed={navCollapsed}
+          onToggleCollapsed={() => setNavCollapsed((value) => !value)}
         />
       </div>
 
@@ -216,6 +236,7 @@ export function AppShell({
         onClose={() => setProfileOpen(false)}
         onLogout={onLogout}
       />
+      <CallLayer />
     </div>
   );
 }

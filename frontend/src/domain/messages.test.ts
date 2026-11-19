@@ -27,6 +27,7 @@ function message(seq: number, overrides: Partial<ApiMessage> = {}): ApiMessage {
     edited_at: null,
     deleted_at: null,
     version: 1,
+    reactions: [],
     ...overrides,
   };
 }

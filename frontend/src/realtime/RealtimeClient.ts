@@ -1,5 +1,6 @@
 import type { RealtimeTicket } from '../api/types';
 import { isApiError, toApiError, type ApiError } from '../api/problem';
+import type { CallSignalPayload } from '../calls/types';
 import {
   backoffDelay,
   ReconnectBudget,
@@ -11,6 +12,8 @@ import {
   normalizeEventFrame,
   parseServerFrame,
   subscribeFrame,
+  type CallSignalFrame,
+  type CallUnavailableFrame,
   type ErrorFrame,
   type EventFrame,
   type HelloFrame,
@@ -52,6 +55,10 @@ export interface RealtimeCallbacks {
   onGap(frame: ResumeGapFrame): void;
   onTyping?(frame: TypingFrame): void;
   onPresence?(frame: PresenceFrame): void;
+  /** §9.2: a relayed offer/answer/ICE/hangup/busy from the DIRECT peer. */
+  onCallSignal?(frame: CallSignalFrame): void;
+  /** §9.3: the peer has no live session; the caller ends the attempt. */
+  onCallUnavailable?(frame: CallUnavailableFrame): void;
   onServerError?(frame: ErrorFrame): void;
   onFailure?(failure: RealtimeFailure): void;
   onRevoked(reason: string): void;
@@ -203,6 +210,17 @@ export class RealtimeClient {
     this.send({ v: 1, type: 'ack', last_seq: lastSeq });
   }
 
+  /**
+   * Relay one call signal over the existing socket (§9.1). Returns false when
+   * the socket is not online so the call engine can fail the attempt honestly.
+   * `sdp`/`candidate` are never logged or persisted here.
+   */
+  sendCallSignal(chatId: string, payload: CallSignalPayload): boolean {
+    if (this.status !== 'online' || chatId.length === 0) return false;
+    this.send({ v: 1, type: 'call.signal', chat_id: chatId, payload });
+    return true;
+  }
+
   private async connect(): Promise<void> {
     if (!this.running) return;
     this.clearTimers();
@@ -323,6 +341,14 @@ export class RealtimeClient {
         }
         break;
       }
+      // §9 call frames are parsed out of the `event` envelope but carry their
+      // own frame type, so they are dispatched here rather than to ChatStore.
+      case 'call.signal':
+        this.options.callbacks.onCallSignal?.(frame);
+        break;
+      case 'call.unavailable':
+        this.options.callbacks.onCallUnavailable?.(frame);
+        break;
       case 'resume.gap':
         this.options.callbacks.onGap(frame);
         break;

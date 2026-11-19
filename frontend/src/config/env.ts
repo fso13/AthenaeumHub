@@ -47,6 +47,13 @@ export interface AppConfig {
   typingTtlMs: number;
   /** Ephemeral `presence` TTL (contract: 60 s, not persisted). */
   presenceTtlMs: number;
+  /**
+   * WebRTC ICE servers for 1:1 calls. Empty by default: no third-party STUN is
+   * contacted, so only host candidates are gathered. `VITE_WEBRTC_ICE_SERVERS`
+   * is a comma/space separated URL list (`stun:`, `stuns:`, `turn:`, `turns:`).
+   * No TURN is deployed in the MVP; see frontend/CALLS-REPORT.md.
+   */
+  webrtcIceServers: RTCIceServer[];
 
   /** Client-side web cap from SYSTEM-ANALYSIS §12.1 (desktop v1 is 10 GiB). */
   uploadMaxFileBytes: number;
@@ -67,6 +74,22 @@ function readString(value: string | boolean | undefined): string {
 function readBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined || value.trim() === '') return fallback;
   return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+/**
+ * `VITE_WEBRTC_ICE_SERVERS` accepts a comma/whitespace separated URL list.
+ * Invalid schemes are ignored instead of being passed to RTCPeerConnection,
+ * which would throw during call setup. Empty → no STUN/TURN at all.
+ */
+export function parseIceServers(value: string | boolean | undefined): RTCIceServer[] {
+  if (typeof value !== 'string' || value.trim() === '') return [];
+  const servers: RTCIceServer[] = [];
+  for (const entry of value.split(/[,\s]+/)) {
+    const urls = entry.trim();
+    if (!/^(?:stun|stuns|turn|turns):/i.test(urls)) continue;
+    servers.push({ urls });
+  }
+  return servers;
 }
 
 export function resolveConfig(env: Record<string, string | boolean | undefined>): AppConfig {
@@ -103,6 +126,7 @@ export function resolveConfig(env: Record<string, string | boolean | undefined>)
     realtimeMaxPerHour: 60,
     typingTtlMs: 5_000,
     presenceTtlMs: 60_000,
+    webrtcIceServers: parseIceServers(env.VITE_WEBRTC_ICE_SERVERS),
     uploadMaxFileBytes: 2 * 1024 * 1024 * 1024,
     uploadPartConcurrency: 3,
     uploadPartTimeoutMs: 60_000,

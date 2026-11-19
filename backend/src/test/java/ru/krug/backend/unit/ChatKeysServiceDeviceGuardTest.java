@@ -69,7 +69,7 @@ class ChatKeysServiceDeviceGuardTest {
         when(chatWorkspace.findWorkspaceForChat(chatId, aliceId))
                 .thenReturn(Optional.of(workspaceId));
         when(chatAccess.requireActiveChat(workspaceId, chatId, aliceId))
-                .thenReturn(new ChatAccess(chatId, workspaceId, "OWNER", "E2EE", 0));
+                .thenReturn(new ChatAccess(chatId, workspaceId, "DIRECT", "OWNER", "E2EE", 0));
         when(chatDirectory.find(workspaceId, chatId)).thenReturn(Optional.of(
                 new ChatDirectorySnapshot(chatId, workspaceId, "chat", true,
                         List.of(aliceId, bobId))));

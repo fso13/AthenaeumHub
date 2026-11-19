@@ -1,8 +1,7 @@
 package ru.krug.backend.realtime.infrastructure.ws;
 
-import jakarta.websocket.server.ServerContainer;
-
-import org.springframework.boot.web.servlet.ServletContextInitializer;
+import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
@@ -20,6 +19,10 @@ import ru.krug.backend.realtime.infrastructure.config.RealtimeProperties;
 public class RealtimeWebSocketConfig implements WebSocketConfigurer {
 
     private static final int MAX_MESSAGE_BYTES = 64 * 1024;
+    private static final String TOMCAT_TEXT_BUFFER_SIZE =
+            "org.apache.tomcat.websocket.textBufferSize";
+    private static final String TOMCAT_BINARY_BUFFER_SIZE =
+            "org.apache.tomcat.websocket.binaryBufferSize";
 
     private final RealtimeWebSocketHandler handler;
     private final TicketHandshakeInterceptor ticketHandshakeInterceptor;
@@ -42,20 +45,20 @@ public class RealtimeWebSocketConfig implements WebSocketConfigurer {
     }
 
     /**
-     * Applies buffer limits only when a real servlet container is present. A
-     * ServletServerContainerFactoryBean would fail in MockMvc contexts (no ServerContainer).
+     * Tomcat reads its WebSocket buffer limits from servlet context init parameters while it
+     * creates {@code WsServerContainer}, i.e. before any {@code ServletContextInitializer}
+     * runs. Setting them through the servlet context at startup would therefore be too late
+     * and frames above Tomcat's 8 KiB default would close with 1009. A context customizer
+     * runs before the context starts, so the 64 KiB protocol cap is in force from the first
+     * handshake. MockMvc contexts never build a Tomcat factory, so this bean is simply unused
+     * there (no ServerContainer is required at refresh time).
      */
     @Bean
-    public ServletContextInitializer realtimeWebSocketContainerInitializer() {
-        return servletContext -> {
-            Object attribute = servletContext.getAttribute(
-                    "jakarta.websocket.server.ServerContainer");
-            if (attribute instanceof ServerContainer container) {
-                container.setDefaultMaxTextMessageBufferSize(MAX_MESSAGE_BYTES);
-                container.setDefaultMaxBinaryMessageBufferSize(MAX_MESSAGE_BYTES);
-                // Heartbeat is owned by InMemoryRealtimeHub, not the servlet container.
-                container.setDefaultMaxSessionIdleTimeout(0L);
-            }
-        };
+    public WebServerFactoryCustomizer<TomcatServletWebServerFactory>
+            realtimeWebSocketBufferCustomizer() {
+        return factory -> factory.addContextCustomizers(context -> {
+            context.addParameter(TOMCAT_TEXT_BUFFER_SIZE, String.valueOf(MAX_MESSAGE_BYTES));
+            context.addParameter(TOMCAT_BINARY_BUFFER_SIZE, String.valueOf(MAX_MESSAGE_BYTES));
+        });
     }
 }

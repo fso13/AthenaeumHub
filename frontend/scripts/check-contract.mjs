@@ -77,6 +77,14 @@ const operations = {
   'POST /admin/users/{userId}/activate': spec.paths?.['/admin/users/{userId}/activate']?.post,
   'DELETE /admin/chats/{chatId}': spec.paths?.['/admin/chats/{chatId}']?.delete,
   'PATCH /chats/{chatId}': spec.paths?.['/chats/{chatId}']?.patch,
+  'PATCH /chats/{chatId}/messages/{messageId}':
+    spec.paths?.['/chats/{chatId}/messages/{messageId}']?.patch,
+  'DELETE /chats/{chatId}/messages/{messageId}':
+    spec.paths?.['/chats/{chatId}/messages/{messageId}']?.delete,
+  'POST /chats/{chatId}/messages/{messageId}/reactions':
+    spec.paths?.['/chats/{chatId}/messages/{messageId}/reactions']?.post,
+  'DELETE /chats/{chatId}/messages/{messageId}/reactions/{emoji}':
+    spec.paths?.['/chats/{chatId}/messages/{messageId}/reactions/{emoji}']?.delete,
   'GET /admin/audit': spec.paths?.['/admin/audit']?.get,
   'GET /me': spec.paths?.['/me']?.get,
   'POST /devices': spec.paths?.['/devices']?.post,
@@ -579,18 +587,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 48,
-  'Contract must expose exactly 48 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1)',
+  Object.keys(spec.paths ?? {}).length === 51,
+  'Contract must expose exactly 51 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 56,
-  'Contract check must cover exactly 56 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1)',
+  Object.keys(operations).length === 60,
+  'Contract check must cover exactly 60 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions)',
 );
 check(
-  Object.keys(schemas).length === 88,
-  'Contract must expose exactly 88 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1)',
+  Object.keys(schemas).length === 91,
+  'Contract must expose exactly 91 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions)',
 );
 
 check(

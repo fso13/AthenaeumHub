@@ -30,6 +30,7 @@ public record MessageResponse(
         UUID stickerId,
         @JsonInclude(JsonInclude.Include.NON_NULL) MessageStickerResponse sticker,
         List<AttachmentRefResponse> attachments,
+        List<ReactionSummaryResponse> reactions,
         ThreadSummaryResponse threadSummary,
         @JsonInclude(JsonInclude.Include.NON_NULL) EnvelopeCoverageResponse envelopeCoverage) {
 }

@@ -39,6 +39,30 @@ Managed-чат по контракту `contracts/openapi.yaml`: история 
   и axe. Полный `npm run check` — **783** теста (74 файла), contract
   47 paths / 55 operations / 87 schemas. Отчёт: `D1-FE1-REPORT.md`.
 
+## #61–#63 — реакции, редактирование и удаление
+
+- **API/store.** `POST/DELETE .../reactions/{emoji}`, `PATCH .../messages/{id}`
+  (`text` + `version`), `DELETE .../messages/{id}?scope=me|all`. Реакции
+  optimistic только для своей (`me`), агрегат `count/me` заменяется ответом
+  сервера и WS `message.reaction.changed`; edit — свой managed `TEXT`, `edited_at`,
+  `409 VERSION_CONFLICT` с перечитыванием строки и сохранением черновика;
+  delete-for-me — после `204`, delete-for-all — **без оптимистичного удаления**,
+  только tombstone после подтверждения. WS `message.updated` / `message.deleted`
+  (`scope=all`) применяются в store.
+- **UI.** Hover/focus toolbar: emoji, edit, delete, reply, thread (thread-кнопка
+  не дублирует `ThreadLink`). Picker фиксированного набора, чипы `count/me` под
+  сообщением, маркер «изменено» с временем в `title`, edit-диалог с
+  save/cancel/validation/error и возвратом фокуса, меню «Удалить у себя /
+  Удалить у всех» (all — только автору, с `alertdialog`). На ≤760 px и
+  `hover:none` — видимая кнопка «Ещё действия». E2EE и STICKER/SYSTEM честно
+  disabled; E2EE delete остаётся доступен по контрактному tombstone-пути.
+- **MSW/тесты.** `src/components/MessageActions.test.tsx` (16) — toggle/count/me,
+  live WS, edit success/409/403, delete me/all и серверный 403, E2EE disabled без
+  metadata-запросов, keyboard/axe; `e2e/d1-msg-actions.spec.ts` (4) — picker/axe,
+  edit, delete me/all без optimistic-loss, 390 px visible actions. Полный
+  `npm run check` — **915** тестов, contract 60 operations / 91 schema.
+  Отчёт: `MSG-ACTIONS-REPORT.md`.
+
 ## Стек
 
 - Vite 7 + React 19 + TypeScript 5.9 (`strict`, `noUncheckedIndexedAccess`).
@@ -93,19 +117,20 @@ npm run check        # всё перечисленное + build
 
 Скопируйте `.env.example` в `.env.local` (файл в `.gitignore`).
 
-| Переменная              | По умолчанию                                                | Назначение                                                                       |
-| ----------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `VITE_API_BASE_URL`     | `/api/v1` при mock, `http://localhost:8081/api/v1` при real | База API (контракт: `http://localhost:8081/api/v1`)                              |
-| `VITE_USE_MOCKS`        | `true` в dev, `false` в production build                    | MSW-моки вместо backend                                                          |
-| `VITE_AUTH_MODE`        | `dev`                                                       | `dev` (F-01) или `password` (Auth BFF, F-04); production — `password`            |
-| `VITE_DEV_SESSION`      | `true`                                                      | В dev-режиме вызывать `POST /dev/session` при старте и на 401                    |
-| `VITE_API_PROXY_TARGET` | —                                                           | Dev-прокси Vite: `/api` → target (обход выключенного CORS у backend)             |
-| `VITE_WS_URL`           | —                                                           | Переопределяет `ws_url` из ticket; `/ws` — тот же origin, `wss://...` — напрямую |
-| `VITE_WS_PROXY_TARGET`  | `VITE_API_PROXY_TARGET` или `http://localhost:8081`         | Dev-прокси Vite: `/ws` → target, `ws: true`                                      |
-| `VITE_REALTIME_ENABLED` | `true`                                                      | Выключить WebSocket-клиент (REST/sync остаются рабочими)                         |
-| `VITE_MEDIA_ORIGINS`    | `http://localhost:9002`                                     | Origin(ы) presigned URL/MinIO через запятую: `img-src`/`media-src`/`connect-src` |
-| `VITE_DEVICE_NAME`      | `Круг — браузер`                                            | Имя устройства для `POST /devices`                                               |
-| `VITE_APP_VERSION`      | `0.1.0`                                                     | `app_version` для `POST /devices`                                                |
+| Переменная                | По умолчанию                                                | Назначение                                                                                          |
+| ------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `VITE_API_BASE_URL`       | `/api/v1` при mock, `http://localhost:8081/api/v1` при real | База API (контракт: `http://localhost:8081/api/v1`)                                                 |
+| `VITE_USE_MOCKS`          | `true` в dev, `false` в production build                    | MSW-моки вместо backend                                                                             |
+| `VITE_AUTH_MODE`          | `dev`                                                       | `dev` (F-01) или `password` (Auth BFF, F-04); production — `password`                               |
+| `VITE_DEV_SESSION`        | `true`                                                      | В dev-режиме вызывать `POST /dev/session` при старте и на 401                                       |
+| `VITE_API_PROXY_TARGET`   | —                                                           | Dev-прокси Vite: `/api` → target (обход выключенного CORS у backend)                                |
+| `VITE_WS_URL`             | —                                                           | Переопределяет `ws_url` из ticket; `/ws` — тот же origin, `wss://...` — напрямую                    |
+| `VITE_WS_PROXY_TARGET`    | `VITE_API_PROXY_TARGET` или `http://localhost:8081`         | Dev-прокси Vite: `/ws` → target, `ws: true`                                                         |
+| `VITE_REALTIME_ENABLED`   | `true`                                                      | Выключить WebSocket-клиент (REST/sync остаются рабочими)                                            |
+| `VITE_WEBRTC_ICE_SERVERS` | —                                                           | ICE-серверы для звонков через запятую (`stun:`, `stuns:`, `turn:`, `turns:`); пусто — без STUN/TURN |
+| `VITE_MEDIA_ORIGINS`      | `http://localhost:9002`                                     | Origin(ы) presigned URL/MinIO через запятую: `img-src`/`media-src`/`connect-src`                    |
+| `VITE_DEVICE_NAME`        | `Круг — браузер`                                            | Имя устройства для `POST /devices`                                                                  |
+| `VITE_APP_VERSION`        | `0.1.0`                                                     | `app_version` для `POST /devices`                                                                   |
 
 Порт 8080 в этом окружении занят другим проектом (`competency-service`); «Круг» использует frontend `5173`, backend `8081`. Keycloak в браузере не используется.
 
@@ -191,6 +216,15 @@ src/
 8. **Heartbeat.** `ping` каждые `hello.heartbeat_ms` (≤25 с); если за 60 с не пришло ни одного кадра/pong — close и reconnect.
 9. **Typing/presence.** Эфемерные, TTL 5 с/60 с, не replay-ятся. «Печатает…» — один `role="status"` c `aria-live="polite"`; presence показывает число online в шапке.
 10. **REST при WS down.** Отправка/история не блокируются; в шапке online/reconnecting/offline, при auth/forbidden/protocol — понятный баннер. 401/403 на ticket не ретраятся бесконечно.
+
+### 1:1 звонки (audio/video, §9)
+
+1. **Доступность.** Кнопки «Позвонить»/«Видеозвонок» в шапке активны только для `DIRECT` при `realtimeStatus=online`; для `GROUP` они disabled с title «Звонки доступны только в личных чатах», без live-сервера — с title про отсутствие соединения. Автозвонка при монтировании нет: `getUserMedia` вызывается только после клика.
+2. **Transport.** Клиент отправляет `call.signal {chat_id, payload:{call_id,kind,video,sdp?,candidate?}}` через существующий WS; сервер relay-ит `event=call.signal` второму участнику и `call.unavailable` вызывающему. Новых сокетов, REST-звонков и `call.state` нет; состояние выводится из кадров. Ошибки `CALL_*`/`RATE_LIMITED` не закрывают WS и завершают только текущую попытку.
+3. **WebRTC.** `getUserMedia`: аудио всегда (echoCancellation/noiseSuppression/autoGainControl), видео — только для видеозвонка. Один `RTCPeerConnection`, `iceServers` из `VITE_WEBRTC_ICE_SERVERS` (по умолчанию пусто — только host-кандидаты, без внешнего STUN; TURN в MVP не развёрнут). Offer/answer/ICE relay-ятся по WS; ранние ICE буферизуются до `setRemoteDescription`; `busy` отправляется на встречный offer во время активного звонка. SDP ≤32 КиБ и candidate ≤4 КиБ проверяются до отправки; SDP/candidate никогда не логируются, медиа на сервер не уходит.
+4. **Cleanup.** Завершение (своё/удалённое/`busy`/`unavailable`/сбой) останавливает все локальные треки, закрывает `RTCPeerConnection` и очищает состояние; logout/смена workspace/размонтирование слоя звонка делают то же самое.
+5. **UI.** Исходящий overlay: «Запрашиваем доступ…» → «Вызываем…» → «Соединяем…» → «Звонок идёт» + таймер; входящий — «Принять»/«Отклонить» с focus trap и первичным фокусом на «Принять», виден поверх любого открытого чата (слой смонтирован в `AppShell`). В соединении — mute, camera (для видео), hangup; локальное preview — PiP, удалённое видео — на весь stage, аудио играет через тот же `<video>`. `Esc` на активном звонке открывает подтверждение «Завершить звонок?» (случайное завершение исключено), на входящем — отклоняет. Ошибки разрешений/устройств/сигналинга показываются dismissible `role="alert"`; статусы — `role="status" aria-live="polite"`. На ≤640 px overlay полноэкранный.
+6. **Ограничения.** Только 1:1 DIRECT (GROUP отклоняется сервером `CALL_NOT_SUPPORTED`), нет TURN — звонки за симметричным NAT/без host-кандидатов могут не соединиться; нет групповых звонков, записи, истории звонков, push-уведомлений о входящем при закрытой вкладке. Подробности и тесты — `frontend/CALLS-REPORT.md`.
 
 ### Managed-файлы (E4-F)
 
@@ -633,7 +667,7 @@ window.__krugMocks.notifications.reset();
 
 ## Что вне scope
 
-Кастомные формы пароля/регистрации, 2FA UI, инвайты, управление ролями, BFF, E2EE UI/сессии/сеть (E7-F2+), **E2EE-файлы, AV UI, DLP, публичные ссылки, CDN, presigned upload, 10 ГиБ/desktop**, свои наборы/загрузка/модерация стикеров, E2EE pack keys, APNG, маркетплейс, поиск, плагины, редактирование/удаление, реакции/пины, offline-очередь сообщений, **push/Web Push, email-доставка, digest, mentions parser, quiet hours, notification WS event**, Redis/Kafka fan-out, мобильная нативная версия. Прототип `design/**` не импортируется; используются только визуальный язык и названия состояний.
+Кастомные формы пароля/регистрации, 2FA UI, инвайты, управление ролями, BFF, E2EE UI/сессии/сеть (E7-F2+), **E2EE-файлы, групповые/E2EE-звонки, запись звонков, TURN-развёртывание, DLP, публичные ссылки, CDN, presigned upload, 10 ГиБ/desktop**, свои наборы/загрузка/модерация стикеров, E2EE pack keys, APNG, маркетплейс, поиск, плагины, редактирование/удаление, реакции/пины, offline-очередь сообщений, **push/Web Push, email-доставка, digest, mentions parser, quiet hours, notification WS event**, Redis/Kafka fan-out, мобильная нативная версия. Прототип `design/**` не импортируется; используются только визуальный язык и названия состояний.
 
 ## Известный долг E4-F
 

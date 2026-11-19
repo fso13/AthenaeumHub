@@ -55,6 +55,8 @@ export interface ChatRecord {
   messages: ApiMessage[];
   /** Server-side client_message_id dedupe (not exposed by the contract). */
   clientMessageIds: Map<string, string>;
+  /** #63 `scope=me`: per-user markers hide rows only from this caller. */
+  hiddenMessageIds: Set<string>;
 }
 
 export interface DeviceRequestRecord {
@@ -393,6 +395,29 @@ export interface MockDb {
   sendAttempts: Array<{ idempotencyKey: string; clientMessageId: string; bodyHash: string }>;
   /** Last validated request bodies, for E5 send-shape assertions. */
   sendBodies: Array<Record<string, unknown>>;
+  /* #61–#63 message actions: observed requests + injectable failures. */
+  reactionRequests: Array<{
+    chatId: string;
+    messageId: string;
+    emoji: string;
+    action: 'ADD' | 'REMOVE';
+    deviceId: string | null;
+  }>;
+  editRequests: Array<{
+    chatId: string;
+    messageId: string;
+    body: Record<string, unknown>;
+    deviceId: string | null;
+  }>;
+  deleteRequests: Array<{
+    chatId: string;
+    messageId: string;
+    scope: 'me' | 'all';
+    deviceId: string | null;
+  }>;
+  forceReactionError: ForcedSendError | null;
+  forceEditError: ForcedSendError | null;
+  forceDeleteError: ForcedSendError | null;
   serverTime: () => string;
 
   /* E4-F managed files */
@@ -480,12 +505,14 @@ function buildChats(): Record<string, ChatRecord> {
       workspaceId: IDS.workspace,
       messages: buildGroupMessages(),
       clientMessageIds: new Map(),
+      hiddenMessageIds: new Set(),
     },
     [IDS.directChat]: {
       summary: clone(direct),
       workspaceId: IDS.workspace,
       messages: buildDirectMessages(),
       clientMessageIds: new Map(),
+      hiddenMessageIds: new Set(),
     },
   };
 }
@@ -558,6 +585,12 @@ export function createMockDb(): MockDb {
     sendDelayMs: 0,
     sendAttempts: [],
     sendBodies: [],
+    reactionRequests: [],
+    editRequests: [],
+    deleteRequests: [],
+    forceReactionError: null,
+    forceEditError: null,
+    forceDeleteError: null,
     serverTime: () => new Date().toISOString(),
 
     limits: createMockLimits(),
@@ -669,6 +702,12 @@ export function resetMockDb(db: MockDb): void {
   db.sendDelayMs = 0;
   db.sendAttempts = [];
   db.sendBodies = [];
+  db.reactionRequests = [];
+  db.editRequests = [];
+  db.deleteRequests = [];
+  db.forceReactionError = null;
+  db.forceEditError = null;
+  db.forceDeleteError = null;
 
   db.limits = fresh.limits;
   db.uploads = fresh.uploads;
@@ -762,6 +801,7 @@ export function insertMockMessage(
     edited_at: null,
     deleted_at: null,
     version: 1,
+    reactions: [],
   };
 
   chat.messages.push(message);
@@ -857,6 +897,7 @@ export function insertMockStickerMessage(
     edited_at: null,
     deleted_at: null,
     version: 1,
+    reactions: [],
     sticker_id: sticker.id,
     sticker: { ...sticker },
   };

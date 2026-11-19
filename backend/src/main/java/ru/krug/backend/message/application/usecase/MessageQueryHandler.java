@@ -13,14 +13,17 @@ import ru.krug.backend.message.application.command.ListMessagesQuery;
 import ru.krug.backend.message.application.model.MessageAttachmentView;
 import ru.krug.backend.message.application.model.MessagePageCursor;
 import ru.krug.backend.message.application.model.MessagePageView;
+import ru.krug.backend.message.application.model.ReactionSummaryView;
 import ru.krug.backend.message.application.model.MessageView;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
 import ru.krug.backend.message.application.port.MessageDeviceDirectoryPort;
 import ru.krug.backend.message.application.service.EnvelopeWireMapper;
 import ru.krug.backend.message.domain.model.Message;
 import ru.krug.backend.message.domain.model.MessageEnvelope;
+import ru.krug.backend.message.domain.model.MessageReaction;
 import ru.krug.backend.message.domain.model.ThreadSummary;
 import ru.krug.backend.message.domain.repository.MessageEnvelopeRepository;
+import ru.krug.backend.message.domain.repository.MessageReactionRepository;
 import ru.krug.backend.message.domain.repository.MessageRepository;
 import ru.krug.backend.message.domain.service.MessageThreadPolicy;
 import ru.krug.backend.shared.application.model.Principal;
@@ -49,6 +52,7 @@ public class MessageQueryHandler {
     private final ChatAccessPort chatAccess;
     private final MessageRepository messageRepository;
     private final MessageEnvelopeRepository envelopeRepository;
+    private final MessageReactionRepository reactionRepository;
     private final ChatWorkspacePort chatWorkspace;
     private final MessageAttachmentPort attachmentPort;
     private final StickerCatalogPort stickerCatalog;
@@ -58,6 +62,7 @@ public class MessageQueryHandler {
     public MessageQueryHandler(TenantContext tenantContext, ChatAccessPort chatAccess,
                                MessageRepository messageRepository,
                                MessageEnvelopeRepository envelopeRepository,
+                               MessageReactionRepository reactionRepository,
                                ChatWorkspacePort chatWorkspace,
                                MessageAttachmentPort attachmentPort,
                                StickerCatalogPort stickerCatalog,
@@ -67,6 +72,7 @@ public class MessageQueryHandler {
         this.chatAccess = chatAccess;
         this.messageRepository = messageRepository;
         this.envelopeRepository = envelopeRepository;
+        this.reactionRepository = reactionRepository;
         this.chatWorkspace = chatWorkspace;
         this.attachmentPort = attachmentPort;
         this.stickerCatalog = stickerCatalog;
@@ -106,10 +112,11 @@ public class MessageQueryHandler {
 
         List<Message> rows = query.threadRootId() == null
                 ? messageRepository.findMainPage(query.principal().workspaceId(),
-                        query.chatId(), query.afterSeq(), query.beforeSeq(), limit + 1)
+                        query.chatId(), query.afterSeq(), query.beforeSeq(),
+                        query.principal().userId(), limit + 1)
                 : messageRepository.findThreadPage(query.principal().workspaceId(),
                         query.chatId(), query.threadRootId(), query.afterSeq(),
-                        query.beforeSeq(), limit + 1);
+                        query.beforeSeq(), query.principal().userId(), limit + 1);
         boolean hasMore = rows.size() > limit;
         List<MessageView> items = enrich(query.principal().workspaceId(),
                 query.principal().userId(),
@@ -120,7 +127,8 @@ public class MessageQueryHandler {
             items = withCrypto(query.principal().workspaceId(),
                     query.principal().userId(), query.principal().deviceId(), items);
         } else if (query.threadRootId() == null) {
-            items = withThreadSummaries(query.principal().workspaceId(), query.chatId(), items);
+            items = withThreadSummaries(query.principal().workspaceId(), query.chatId(),
+                    query.principal().userId(), items);
         }
         String nextCursor = null;
         if (hasMore && !items.isEmpty()) {
@@ -141,6 +149,10 @@ public class MessageQueryHandler {
         }
         chatAccess.requireActiveChat(principal.workspaceId(), message.chatId(),
                 principal.userId());
+        if (messageRepository.isHiddenForUser(principal.workspaceId(), messageId,
+                principal.userId())) {
+            return null;
+        }
         return enrich(principal.workspaceId(), principal.userId(),
                 List.of(MessageView.from(message))).get(0);
     }
@@ -230,6 +242,12 @@ public class MessageQueryHandler {
                 .toList();
         Map<UUID, StickerRefView> stickers = stickerIds.isEmpty() ? Map.of()
                 : stickerCatalog.findForMessage(viewerId, stickerIds);
+        // Reactions are managed-only metadata; an E2EE page never queries them and never
+        // exposes a count that could reveal who interacted with an encrypted timeline.
+        List<UUID> managedIds = views.stream().filter(view -> !view.isE2ee())
+                .map(MessageView::id).toList();
+        Map<UUID, List<ReactionSummaryView>> reactions = managedIds.isEmpty() ? Map.of()
+                : reactionView(reactionRepository.summarize(workspaceId, managedIds, viewerId));
         return views.stream()
                 // D1-BE2 defense-in-depth: an E2EE message must never expose a managed
                 // attachment (and therefore its plaintext media metadata), even if a row
@@ -237,8 +255,22 @@ public class MessageQueryHandler {
                 .map(view -> view.withAttachments(view.isE2ee() ? List.of()
                                 : byMessage.getOrDefault(view.id(), List.of()))
                         .withSticker(view.stickerId() == null ? null
-                                : stickers.get(view.stickerId())))
+                                : stickers.get(view.stickerId()))
+                        .withReactions(reactions.getOrDefault(view.id(), List.of()))
+                        // A deleted-for-all row keeps its seq but never leaks text, sticker,
+                        // attachment metadata or reactions even if legacy SQL left them.
+                        .asTombstone())
                 .toList();
+    }
+
+    private static Map<UUID, List<ReactionSummaryView>> reactionView(
+            Map<UUID, List<MessageReaction>> rows) {
+        Map<UUID, List<ReactionSummaryView>> result = new java.util.LinkedHashMap<>();
+        rows.forEach((messageId, reactions) -> result.put(messageId, reactions.stream()
+                .map(reaction -> new ReactionSummaryView(reaction.emoji(), reaction.count(),
+                        reaction.me()))
+                .toList()));
+        return result;
     }
 
     /**
@@ -246,7 +278,7 @@ public class MessageQueryHandler {
      * so only their ids are passed; replies never receive a summary. E2EE never reaches
      * this method, and the summary itself is managed-only.
      */
-    private List<MessageView> withThreadSummaries(UUID workspaceId, UUID chatId,
+    private List<MessageView> withThreadSummaries(UUID workspaceId, UUID chatId, UUID viewerId,
                                                   List<MessageView> views) {
         List<UUID> rootIds = views.stream()
                 .filter(view -> view.threadRootId() == null)
@@ -257,11 +289,11 @@ public class MessageQueryHandler {
             return views;
         }
         Map<UUID, ThreadSummary> summaries = messageRepository.findThreadSummaries(
-                workspaceId, chatId, rootIds);
+                workspaceId, chatId, rootIds, viewerId);
         // Every managed root carries a summary, including reply_count=0: the client can
         // render "create thread" without a second request. Replies keep null.
         return views.stream()
-                .map(view -> view.threadRootId() == null
+                .map(view -> view.threadRootId() == null && view.deletedAt() == null
                         ? view.withThreadSummary(summaries.getOrDefault(view.id(),
                                 ThreadSummary.empty(view.id())))
                         : view)

@@ -27,6 +27,8 @@ import type {
   DownloadUrl,
   MeResponse,
   MessageCreateBody,
+  MessageDeleteScope,
+  MessageEdit,
   MessagePage,
   NotificationPage,
   NotificationPreference,
@@ -34,6 +36,7 @@ import type {
   NotificationPreferences,
   PreflightFile,
   PreflightResponse,
+  ReactionSummary,
   ReadNotificationsRequest,
   RealtimeTicket,
   Session,
@@ -152,6 +155,17 @@ export interface ChatApi {
     body: MessageCreateBody,
     idempotencyKey: string,
   ): Promise<SendMessageResult>;
+  /**
+   * #61–#63 message actions. All are managed-only: the backend rejects E2EE
+   * metadata mutations with `422 E2EE_METADATA_FORBIDDEN`; the UI never calls
+   * them for an E2EE chat. Reactions are idempotent (POST/DELETE), edits carry
+   * an optional `version` for the optimistic lock, and delete defaults to
+   * `scope=me`.
+   */
+  addReaction(chatId: string, messageId: string, emoji: string): Promise<ReactionSummary>;
+  removeReaction(chatId: string, messageId: string, emoji: string): Promise<void>;
+  editMessage(chatId: string, messageId: string, body: MessageEdit): Promise<ApiMessage>;
+  deleteMessage(chatId: string, messageId: string, scope: MessageDeleteScope): Promise<void>;
   markRead(chatId: string, lastSeq: number, idempotencyKey: string): Promise<void>;
   sync(workspaceId: string): Promise<SyncResponse>;
   /** E3: one-time ticket; each reconnect must request a fresh one. */
@@ -489,6 +503,46 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
           message: response.data,
           replayed: response.headers.get('Idempotent-Replay') === 'true',
         };
+      });
+    },
+
+    addReaction(chatId, messageId, emoji) {
+      return withReauth(async () => {
+        const response = await client.post<ReactionSummary>(
+          `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reactions`,
+          { emoji },
+        );
+        return response.data;
+      });
+    },
+
+    removeReaction(chatId, messageId, emoji) {
+      return withReauth(async () => {
+        // The emoji is a path segment: encode ZWJ/VS16 sequences exactly once.
+        await client.delete(
+          `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(
+            messageId,
+          )}/reactions/${encodeURIComponent(emoji)}`,
+        );
+      });
+    },
+
+    editMessage(chatId, messageId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<ApiMessage>(
+          `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    deleteMessage(chatId, messageId, scope) {
+      return withReauth(async () => {
+        // `scope` is a query parameter; `me` is the contract default.
+        await client.delete(
+          `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}?scope=${scope}`,
+        );
       });
     },
 

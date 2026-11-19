@@ -9,6 +9,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
+import ru.krug.backend.realtime.application.model.CallKind;
+import ru.krug.backend.realtime.application.model.CallSignalRelay;
 import ru.krug.backend.realtime.application.model.EphemeralEvent;
 import ru.krug.backend.realtime.application.model.RealtimeEvent;
 import ru.krug.backend.realtime.application.model.RealtimeGap;
@@ -138,6 +140,48 @@ public class WsFrameCodec {
         return write(node);
     }
 
+    /**
+     * Ephemeral {@code call.signal}: the validated payload is relayed byte-for-byte plus
+     * the authenticated sender ids. No event_id/seq, no persistence, no replay.
+     */
+    public String callSignal(CallSignalRelay relay) {
+        ObjectNode node = base("event");
+        node.put("event", "call.signal");
+        node.put("workspace_id", relay.workspaceId().toString());
+        node.put("chat_id", relay.chatId().toString());
+        node.put("ts", relay.ts().toString());
+        node.put("from_user_id", relay.fromUserId().toString());
+        node.put("from_device_id", relay.fromDeviceId().toString());
+        ObjectNode payload = node.putObject("payload");
+        payload.put("call_id", relay.signal().callId().toString());
+        payload.put("kind", relay.signal().kind().wire());
+        payload.put("video", relay.signal().video());
+        if (relay.signal().sdp() != null) {
+            payload.put("sdp", relay.signal().sdp());
+        }
+        if (relay.signal().candidate() != null) {
+            payload.set("candidate", mapper.valueToTree(relay.signal().candidate()));
+        }
+        return write(node);
+    }
+
+    /** Caller-only, ephemeral: no live session of the other DIRECT member. */
+    public String callUnavailable(UUID workspaceId, UUID chatId, UUID callId, CallKind kind,
+                                  String reason, Instant ts) {
+        ObjectNode node = base("event");
+        node.put("event", "call.unavailable");
+        if (workspaceId != null) {
+            node.put("workspace_id", workspaceId.toString());
+        }
+        node.put("chat_id", chatId.toString());
+        node.put("ts", ts.toString());
+        ObjectNode payload = node.putObject("payload");
+        payload.put("call_id", callId.toString());
+        payload.put("kind", kind.wire());
+        payload.put("reason", reason);
+        return write(node);
+    }
+
     public String pong(Instant serverTime) {
         ObjectNode node = base("pong");
         node.put("server_time", serverTime.toString());
@@ -145,12 +189,24 @@ public class WsFrameCodec {
     }
 
     public String error(String code, String message, String requestId, UUID chatId) {
+        return error(code, message, requestId, chatId, null);
+    }
+
+    /**
+     * Error frame with an optional semantic HTTP-like status. Call signalling uses 400/403/
+     * 413/422/429; other WS errors keep the legacy shape without {@code status}.
+     */
+    public String error(String code, String message, String requestId, UUID chatId,
+                        Integer status) {
         ObjectNode node = base("error");
         node.put("code", code);
         node.put("message", message);
         node.put("request_id", requestId);
         if (chatId != null) {
             node.put("chat_id", chatId.toString());
+        }
+        if (status != null) {
+            node.put("status", status);
         }
         return write(node);
     }

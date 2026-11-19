@@ -42,4 +42,14 @@ describe('auth mode configuration', () => {
     expect(resolveConfig({ VITE_DEV_SESSION: 'false' }).devSession).toBe(false);
     expect(resolveConfig({ VITE_DEV_SESSION: 'true' }).devSession).toBe(true);
   });
+
+  it('defaults WebRTC to no STUN and parses VITE_WEBRTC_ICE_SERVERS', () => {
+    expect(resolveConfig({}).webrtcIceServers).toEqual([]);
+    expect(
+      resolveConfig({
+        VITE_WEBRTC_ICE_SERVERS:
+          'stun:stun.example.test:3478, turn:turn.example.test:3478, nope:invalid',
+      }).webrtcIceServers,
+    ).toEqual([{ urls: 'stun:stun.example.test:3478' }, { urls: 'turn:turn.example.test:3478' }]);
+  });
 });

@@ -27,6 +27,10 @@ public final class ErrorCode {
     public static final String SUBSCRIPTION_LIMIT = "SUBSCRIPTION_LIMIT";
     public static final String WS_FRAME_INVALID = "WS_FRAME_INVALID";
 
+    // 1:1 call signalling (E13 slice). Ephemeral only; no call records are persisted.
+    public static final String CALL_NOT_SUPPORTED = "CALL_NOT_SUPPORTED";
+    public static final String CALL_PAYLOAD_TOO_LARGE = "CALL_PAYLOAD_TOO_LARGE";
+
     // Files (E4-B). Codes follow SYSTEM-ANALYSIS §7.1/§12.2.
     public static final String FILE_TOO_LARGE = "FILE_TOO_LARGE";
     public static final String QUOTA_EXCEEDED = "QUOTA_EXCEEDED";
@@ -130,6 +134,13 @@ public final class ErrorCode {
 
     // D1-BE3: chat settings PATCH. E2EE exposes only a name label, not a description.
     public static final String CHAT_SETTINGS_E2EE_UNSUPPORTED = "CHAT_SETTINGS_E2EE_UNSUPPORTED";
+
+    // D1 message actions (#61-#63): reactions, edit and delete.
+    // E2EE messages carry no server-visible metadata: reactions and edits are forbidden
+    // rather than silently stored as plaintext. Delete remains a content-free tombstone.
+    public static final String E2EE_METADATA_FORBIDDEN = "E2EE_METADATA_FORBIDDEN";
+    public static final String MESSAGE_NOT_EDITABLE = "MESSAGE_NOT_EDITABLE";
+    public static final String VERSION_CONFLICT = "VERSION_CONFLICT";
 
     private ErrorCode() {
     }

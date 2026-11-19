@@ -9,6 +9,7 @@ import ru.krug.backend.message.api.dto.MessagePageInfo;
 import ru.krug.backend.message.api.dto.MessagePageResponse;
 import ru.krug.backend.message.api.dto.MessageResponse;
 import ru.krug.backend.message.api.dto.MessageStickerResponse;
+import ru.krug.backend.message.api.dto.ReactionSummaryResponse;
 import ru.krug.backend.message.api.dto.ThreadSummaryResponse;
 import ru.krug.backend.message.application.model.AttachmentMediaView;
 import ru.krug.backend.message.application.model.EnvelopeCoverageView;
@@ -48,12 +49,16 @@ public final class MessageApiMapper {
                         attachment.filename(), attachment.sizeBytes(), attachment.mimeType(),
                         attachment.scanStatus(), media(attachment.media())))
                 .toList();
+        List<ReactionSummaryResponse> reactions = view.reactions().stream()
+                .map(reaction -> new ReactionSummaryResponse(reaction.emoji(),
+                        reaction.count(), reaction.me()))
+                .toList();
         return new MessageResponse(view.id(), view.chatId(), view.seq(), view.type(),
                 view.senderId(), view.senderDisplayName(), view.text(), view.replyToId(),
                 view.threadRootId(), view.createdAt(), view.editedAt(), view.deletedAt(),
                 view.version(), view.clientMessageId(), view.crypto(), view.stickerId(),
-                sticker(view.sticker()), attachments, summary(view.threadSummary()),
-                coverage(coverage));
+                sticker(view.sticker()), attachments, reactions,
+                summary(view.threadSummary()), coverage(coverage));
     }
 
     public static MessagePageResponse toResponse(MessagePageView view) {

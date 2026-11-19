@@ -4,7 +4,9 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,13 +16,20 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import ru.krug.backend.message.api.dto.MessageCreateRequest;
+import ru.krug.backend.message.api.dto.MessageEditRequest;
 import ru.krug.backend.message.api.dto.MessagePageResponse;
 import ru.krug.backend.message.api.dto.MessageResponse;
+import ru.krug.backend.message.api.dto.ReactionCreateRequest;
+import ru.krug.backend.message.api.dto.ReactionSummaryResponse;
 import ru.krug.backend.message.api.mapper.MessageApiMapper;
+import ru.krug.backend.message.application.command.DeleteMessageScope;
 import ru.krug.backend.message.application.command.ListMessagesQuery;
 import ru.krug.backend.message.application.command.SendMessageCommand;
 import ru.krug.backend.message.application.model.MessageCreateInput;
+import ru.krug.backend.message.application.model.MessageEditInput;
+import ru.krug.backend.message.application.model.ReactionSummaryView;
 import ru.krug.backend.message.application.model.SendMessageResult;
+import ru.krug.backend.message.application.usecase.MessageActionsService;
 import ru.krug.backend.message.application.usecase.MessageQueryHandler;
 import ru.krug.backend.message.application.usecase.SendMessageUseCase;
 import ru.krug.backend.shared.api.RequestHeaders;
@@ -33,11 +42,14 @@ public class MessageController {
 
     private final SendMessageUseCase sendMessageUseCase;
     private final MessageQueryHandler messageQueryHandler;
+    private final MessageActionsService messageActionsService;
 
     public MessageController(SendMessageUseCase sendMessageUseCase,
-                             MessageQueryHandler messageQueryHandler) {
+                             MessageQueryHandler messageQueryHandler,
+                             MessageActionsService messageActionsService) {
         this.sendMessageUseCase = sendMessageUseCase;
         this.messageQueryHandler = messageQueryHandler;
+        this.messageActionsService = messageActionsService;
     }
 
     @GetMapping
@@ -75,5 +87,50 @@ public class MessageController {
         }
         return builder.body(MessageApiMapper.toCreateResponse(result.message(),
                 result.coverage()));
+    }
+
+    @PatchMapping("/{messageId}")
+    public MessageResponse edit(@PathVariable UUID chatId, @PathVariable UUID messageId,
+                                @RequestBody(required = false) MessageEditRequest request,
+                                Principal principal) {
+        if (request == null) {
+            throw DomainException.badRequest("Request body is required",
+                    Map.of("reason", "missing_body"));
+        }
+        return MessageApiMapper.toResponse(messageActionsService.edit(principal, chatId,
+                messageId, new MessageEditInput(request.text(), request.version())));
+    }
+
+    @DeleteMapping("/{messageId}")
+    public ResponseEntity<Void> delete(@PathVariable UUID chatId, @PathVariable UUID messageId,
+                                       @RequestParam(value = "scope", required = false)
+                                       String scope,
+                                       Principal principal) {
+        messageActionsService.delete(principal, chatId, messageId,
+                DeleteMessageScope.parse(scope));
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{messageId}/reactions")
+    public ReactionSummaryResponse react(@PathVariable UUID chatId,
+                                         @PathVariable UUID messageId,
+                                         @RequestBody(required = false) ReactionCreateRequest request,
+                                         Principal principal) {
+        if (request == null) {
+            throw DomainException.badRequest("Request body is required",
+                    Map.of("reason", "missing_body"));
+        }
+        ReactionSummaryView reaction = messageActionsService.react(principal, chatId,
+                messageId, request.emoji());
+        return new ReactionSummaryResponse(reaction.emoji(), reaction.count(), reaction.me());
+    }
+
+    @DeleteMapping("/{messageId}/reactions/{emoji}")
+    public ResponseEntity<Void> unreact(@PathVariable UUID chatId,
+                                        @PathVariable UUID messageId,
+                                        @PathVariable String emoji,
+                                        Principal principal) {
+        messageActionsService.unreact(principal, chatId, messageId, emoji);
+        return ResponseEntity.noContent().build();
     }
 }

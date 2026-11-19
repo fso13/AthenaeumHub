@@ -7,7 +7,9 @@ import { formatUnreadBadge } from '../domain/unread';
 import { t, type MessageKey } from '../i18n/ru';
 import { Avatar } from './Avatar';
 import {
+  ArrowLeftIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   FolderIcon,
   LogoutIcon,
   MoonIcon,
@@ -44,6 +46,9 @@ interface SidebarProps {
   onOpenMembers?: () => void;
   /** D1-FE5: opens the profile modal from the signed-in user row. */
   onOpenProfile?: () => void;
+  /** #65: collapse the sidebar to an icon rail. */
+  navCollapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 export function Sidebar({
@@ -58,6 +63,8 @@ export function Sidebar({
   onCreateChat,
   onOpenMembers,
   onOpenProfile,
+  navCollapsed = false,
+  onToggleCollapsed,
 }: SidebarProps) {
   const loading = state.sessionStatus === 'loading' || state.sessionStatus === 'idle';
   const session = state.session;
@@ -172,6 +179,22 @@ export function Sidebar({
             </>
           ) : null}
         </div>
+        {onToggleCollapsed ? (
+          <button
+            type="button"
+            className="icon-button ws-head__collapse"
+            onClick={onToggleCollapsed}
+            aria-label={navCollapsed ? t('nav.expand') : t('nav.collapse')}
+            title={navCollapsed ? t('nav.expand') : t('nav.collapse')}
+            aria-expanded={!navCollapsed}
+          >
+            {navCollapsed ? (
+              <ChevronRightIcon aria-hidden="true" />
+            ) : (
+              <ArrowLeftIcon aria-hidden="true" />
+            )}
+          </button>
+        ) : null}
         {state.sessionStatus === 'ready' ? <NotificationBell /> : null}
         {onCreateChat ? (
           <button

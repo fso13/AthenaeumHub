@@ -150,6 +150,17 @@ public class MessageEnvelopeRepositoryAdapter implements MessageEnvelopeReposito
                 .toList();
     }
 
+    @Override
+    public int deleteByMessage(UUID workspaceId, UUID messageId) {
+        return entityManager.createNativeQuery("""
+                        DELETE FROM message.message_envelopes
+                         WHERE workspace_id = ?1 AND message_id = ?2
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, messageId)
+                .executeUpdate();
+    }
+
     /**
      * P1-03: a row can predate the V18 ciphertext floor (V18 is {@code NOT VALID}) or be
      * otherwise unreadable. Such a row must never reach the {@link CryptoEnvelope}

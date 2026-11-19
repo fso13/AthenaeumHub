@@ -14,6 +14,7 @@ import {
   publishMockReceipt,
   publishMockServerFrame,
   publishMockTyping,
+  mockRealtimeSubscribedChats,
 } from '../mocks/realtime';
 import type { ChatStore } from './chatStore';
 
@@ -26,6 +27,9 @@ async function boot(): Promise<ChatStore> {
   await vi.waitFor(
     () => {
       expect(store.getSnapshot().realtimeStatus).toBe('online');
+      // A live frame published before the subscribe frame is processed would
+      // be dropped by the mock fan-out; wait for the actual subscription.
+      expect(mockRealtimeSubscribedChats()).toContain(IDS.groupChat);
     },
     { timeout: 4_000 },
   );

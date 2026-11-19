@@ -48,6 +48,8 @@ interface Harness {
   gaps: unknown[];
   typing: unknown[];
   presence: unknown[];
+  calls: unknown[];
+  callUnavailable: unknown[];
   revoked: string[];
   order: string[];
   subscriptions: { chat_id: string; last_seq: number }[];
@@ -70,6 +72,8 @@ function createHarness(
     gaps: [],
     typing: [],
     presence: [],
+    calls: [],
+    callUnavailable: [],
     revoked: [],
     order: [],
     subscriptions: [{ chat_id: 'c1', last_seq: 41 }],
@@ -107,6 +111,8 @@ function createHarness(
       onGap: (gap) => harness.gaps.push(gap),
       onTyping: (frame) => harness.typing.push(frame),
       onPresence: (frame) => harness.presence.push(frame),
+      onCallSignal: (frame) => harness.calls.push(frame),
+      onCallUnavailable: (frame) => harness.callUnavailable.push(frame),
       onFailure: (failure) => harness.failures.push(failure),
       onRevoked: (reason) => harness.revoked.push(reason),
       onBeforeReconnect: () => {
@@ -216,6 +222,62 @@ describe('RealtimeClient handshake', () => {
     expect(harness.gaps).toHaveLength(1);
     expect(harness.typing).toHaveLength(1);
     expect(harness.presence).toHaveLength(1);
+  });
+
+  it('routes §9 call frames to their own callbacks and sends call.signal payloads', async () => {
+    const harness = createHarness();
+    const socket = await connect(harness);
+
+    const payload = {
+      call_id: '00000000-0000-4000-8000-000000000001',
+      kind: 'offer' as const,
+      video: true,
+      sdp: 'v=0\r\no=- offer',
+    };
+    expect(harness.client.sendCallSignal('c1', payload)).toBe(true);
+    expect(socket.frames().at(-1)).toEqual({
+      v: 1,
+      type: 'call.signal',
+      chat_id: 'c1',
+      payload,
+    });
+
+    socket.receive({
+      type: 'event',
+      event: 'call.signal',
+      chat_id: 'c1',
+      from_user_id: 'u2',
+      from_device_id: 'd2',
+      payload: {
+        call_id: payload.call_id,
+        kind: 'answer',
+        video: true,
+        sdp: 'v=0\r\no=- answer',
+      },
+    });
+    socket.receive({
+      type: 'event',
+      event: 'call.unavailable',
+      chat_id: 'c1',
+      payload: { call_id: payload.call_id, kind: 'offer', reason: 'PEER_OFFLINE' },
+    });
+
+    expect(harness.events).toHaveLength(0);
+    expect(harness.calls).toHaveLength(1);
+    expect(harness.calls[0]).toMatchObject({
+      type: 'call.signal',
+      chat_id: 'c1',
+      from_user_id: 'u2',
+      payload: { kind: 'answer', video: true, sdp: 'v=0\r\no=- answer' },
+    });
+    expect(harness.callUnavailable).toHaveLength(1);
+    expect(harness.callUnavailable[0]).toMatchObject({
+      type: 'call.unavailable',
+      payload: { call_id: payload.call_id, reason: 'PEER_OFFLINE' },
+    });
+
+    harness.client.stop();
+    expect(harness.client.sendCallSignal('c1', payload)).toBe(false);
   });
 });
 

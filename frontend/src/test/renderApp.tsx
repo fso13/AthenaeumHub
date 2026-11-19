@@ -32,6 +32,7 @@ export const testConfig: AppConfig = {
   realtimeMaxPerHour: 60,
   typingTtlMs: 5_000,
   presenceTtlMs: 60_000,
+  webrtcIceServers: [],
   uploadMaxFileBytes: 2 * 1024 * 1024 * 1024,
   uploadPartConcurrency: 3,
   uploadPartTimeoutMs: 60_000,
@@ -48,7 +49,16 @@ export interface TestE2eeOptions {
   readonly bridge: E2eeBridge;
 }
 
-export function createTestStore(config: AppConfig, e2ee: TestE2eeOptions | null = null): ChatStore {
+export interface TestCallOptions {
+  mediaDevices?: Pick<MediaDevices, 'getUserMedia'>;
+  createPeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
+}
+
+export function createTestStore(
+  config: AppConfig,
+  e2ee: TestE2eeOptions | null = null,
+  calls: TestCallOptions = {},
+): ChatStore {
   configureAuthRuntime({ mode: config.authMode });
   const client = new ApiClient({
     baseUrl: config.apiBaseUrl,
@@ -64,12 +74,18 @@ export function createTestStore(config: AppConfig, e2ee: TestE2eeOptions | null 
     // Existing suites stay on the legacy path; E2EE suites opt in explicitly.
     e2eeEnabled: e2ee?.enabled ?? false,
     e2eeBridge: e2ee?.bridge,
+    callMediaDevices: calls.mediaDevices,
+    callCreatePeerConnection: calls.createPeerConnection,
   });
 }
 
-export function renderApp(overrides: Partial<AppConfig> = {}, e2ee: TestE2eeOptions | null = null) {
+export function renderApp(
+  overrides: Partial<AppConfig> = {},
+  e2ee: TestE2eeOptions | null = null,
+  calls: TestCallOptions = {},
+) {
   const config = createTestConfig(overrides);
-  const store = createTestStore(config, e2ee);
+  const store = createTestStore(config, e2ee, calls);
   const user = userEvent.setup();
   const result = render(<App store={store} config={config} />);
   return { ...result, store, user, config };

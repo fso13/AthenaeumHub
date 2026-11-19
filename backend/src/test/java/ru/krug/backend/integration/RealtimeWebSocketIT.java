@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.net.http.WebSocketHandshakeException;
@@ -19,6 +20,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -186,6 +191,104 @@ class RealtimeWebSocketIT extends WebSocketIntegrationTestBase {
         assertThat(replayReply.get("payload").get("thread_root_id").asText())
                 .isEqualTo(rootId.toString());
         reconnected.close();
+    }
+
+    @Test
+    void messageActionsFanOutUpdatedDeletedAndReactionEvents() throws Exception {
+        SessionResponse alice = devSession();
+        UUID chatId = alice.chat().id();
+
+        WebSocketClient client = connect(ticket(alice).get("ticket").asText());
+        client.awaitType("hello", TIMEOUT);
+        client.send(subscribeFrame(chatId, 0, false));
+        client.awaitType("subscribed", TIMEOUT);
+
+        JsonNode sent = sendMessage(alice, chatId, "before", UUID.randomUUID().toString());
+        UUID messageId = UUID.fromString(sent.get("id").asText());
+        JsonNode created = client.awaitEvent("message.created", TIMEOUT);
+        assertThat(created.get("payload").get("reactions").size()).isZero();
+
+        ResponseEntity<String> edited = patchMessage(alice, chatId, messageId, "after");
+        assertThat(edited.getStatusCode().value()).isEqualTo(200);
+        JsonNode updated = client.awaitEvent("message.updated", TIMEOUT);
+        assertThat(updated.get("seq").asLong()).isEqualTo(1);
+        assertThat(updated.get("payload").get("id").asText())
+                .isEqualTo(messageId.toString());
+        assertThat(updated.get("payload").get("text").asText()).isEqualTo("after");
+        assertThat(updated.get("payload").get("version").asInt()).isEqualTo(2);
+        assertThat(updated.get("payload").get("edited_at").isNull()).isFalse();
+        assertThat(updated.get("payload").get("reactions").size()).isZero();
+
+        ResponseEntity<String> reacted = react(alice, chatId, messageId, "👍");
+        assertThat(reacted.getStatusCode().value()).isEqualTo(200);
+        JsonNode added = client.awaitEvent("message.reaction.changed", TIMEOUT);
+        assertThat(added.get("payload").get("message_id").asText())
+                .isEqualTo(messageId.toString());
+        assertThat(added.get("payload").get("user_id").asText())
+                .isEqualTo(alice.user().id().toString());
+        assertThat(added.get("payload").get("emoji").asText()).isEqualTo("👍");
+        assertThat(added.get("payload").get("action").asText()).isEqualTo("ADDED");
+        assertThat(added.get("payload").get("count").asInt()).isEqualTo(1);
+
+        ResponseEntity<String> unreacted = unreact(alice, chatId, messageId, "👍");
+        assertThat(unreacted.getStatusCode().value()).isEqualTo(204);
+        JsonNode removed = client.awaitEvent("message.reaction.changed", TIMEOUT);
+        assertThat(removed.get("payload").get("action").asText()).isEqualTo("REMOVED");
+        assertThat(removed.get("payload").get("count").asInt()).isZero();
+
+        ResponseEntity<String> deleted = deleteMessage(alice, chatId, messageId, "all");
+        assertThat(deleted.getStatusCode().value()).isEqualTo(204);
+        JsonNode tombstone = client.awaitEvent("message.deleted", TIMEOUT);
+        assertThat(tombstone.get("payload").get("message_id").asText())
+                .isEqualTo(messageId.toString());
+        assertThat(tombstone.get("payload").get("scope").asText()).isEqualTo("all");
+        assertThat(tombstone.get("payload").get("deleted_by").asText())
+                .isEqualTo(alice.user().id().toString());
+        assertThat(tombstone.get("payload").get("deleted_at").isNull()).isFalse();
+
+        // Delete-for-me is caller-local and deliberately not fanned out.
+        JsonNode second = sendMessage(alice, chatId, "only-for-me",
+                UUID.randomUUID().toString());
+        client.awaitEvent("message.created", TIMEOUT);
+        UUID secondId = UUID.fromString(second.get("id").asText());
+        assertThat(deleteMessage(alice, chatId, secondId, "me").getStatusCode().value())
+                .isEqualTo(204);
+        assertThat(client.awaitEventWithin("message.deleted", Duration.ofMillis(400))).isNull();
+        client.close();
+    }
+
+    private ResponseEntity<String> patchMessage(SessionResponse session, UUID chatId,
+                                                UUID messageId, String text) {
+        HttpHeaders headers = authHeaders(session);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return rest.exchange(url("/api/v1/chats/" + chatId + "/messages/" + messageId),
+                HttpMethod.PATCH, new HttpEntity<>("{\"text\":\"" + text + "\"}", headers),
+                String.class);
+    }
+
+    private ResponseEntity<String> react(SessionResponse session, UUID chatId, UUID messageId,
+                                         String emoji) {
+        HttpHeaders headers = authHeaders(session);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return rest.exchange(url("/api/v1/chats/" + chatId + "/messages/" + messageId
+                        + "/reactions"), HttpMethod.POST,
+                new HttpEntity<>("{\"emoji\":\"" + emoji + "\"}", headers), String.class);
+    }
+
+    private ResponseEntity<String> unreact(SessionResponse session, UUID chatId, UUID messageId,
+                                           String emoji) {
+        URI uri = URI.create(url("/api/v1/chats/" + chatId + "/messages/" + messageId
+                + "/reactions/" + URLEncoder.encode(emoji,
+                java.nio.charset.StandardCharsets.UTF_8)));
+        return rest.exchange(uri, HttpMethod.DELETE,
+                new HttpEntity<>(authHeaders(session)), String.class);
+    }
+
+    private ResponseEntity<String> deleteMessage(SessionResponse session, UUID chatId,
+                                                 UUID messageId, String scope) {
+        return rest.exchange(url("/api/v1/chats/" + chatId + "/messages/" + messageId
+                        + "?scope=" + scope), HttpMethod.DELETE,
+                new HttpEntity<>(authHeaders(session)), String.class);
     }
 
     private static void assertStickerPayload(JsonNode event, UUID stickerId) {

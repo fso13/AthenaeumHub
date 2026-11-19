@@ -1,5 +1,6 @@
 package ru.krug.backend.realtime.infrastructure.adapter;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -8,12 +9,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import ru.krug.backend.message.application.model.MessageAttachmentView;
+import ru.krug.backend.message.application.model.ReactionSummaryView;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
 import ru.krug.backend.message.application.port.MessageDeviceDirectoryPort;
 import ru.krug.backend.message.application.service.EnvelopeWireMapper;
 import ru.krug.backend.message.domain.model.Message;
 import ru.krug.backend.message.domain.model.MessageEnvelope;
 import ru.krug.backend.message.domain.repository.MessageEnvelopeRepository;
+import ru.krug.backend.message.domain.repository.MessageReactionRepository;
 import ru.krug.backend.message.domain.repository.MessageRepository;
 import ru.krug.backend.realtime.application.model.AttachmentMediaSnapshot;
 import ru.krug.backend.realtime.application.model.AttachmentSnapshot;
@@ -37,6 +40,7 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
 
     private final MessageRepository messageRepository;
     private final MessageEnvelopeRepository envelopeRepository;
+    private final MessageReactionRepository reactionRepository;
     private final MessageAttachmentPort attachmentPort;
     private final StickerCatalogPort stickerCatalog;
     private final TenantContext tenantContext;
@@ -45,6 +49,7 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
 
     public RealtimeChatHistoryAdapter(MessageRepository messageRepository,
                                       MessageEnvelopeRepository envelopeRepository,
+                                      MessageReactionRepository reactionRepository,
                                       MessageAttachmentPort attachmentPort,
                                       StickerCatalogPort stickerCatalog,
                                       TenantContext tenantContext,
@@ -52,6 +57,7 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                                       E2eeSettingsPort e2eeSettings) {
         this.messageRepository = messageRepository;
         this.envelopeRepository = envelopeRepository;
+        this.reactionRepository = reactionRepository;
         this.attachmentPort = attachmentPort;
         this.stickerCatalog = stickerCatalog;
         this.tenantContext = tenantContext;
@@ -65,7 +71,7 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                                        long afterSeq, int limit) {
         tenantContext.activate(new Principal(userId, deviceId, workspaceId, "realtime-replay"));
         List<Message> rows = messageRepository.findPage(workspaceId, chatId, afterSeq, null,
-                limit);
+                userId, limit);
         // P2-03: the kill-switch also covers WS replay. With the flag off an already stored
         // E2EE message is neither replayed nor accompanied by an envelope, matching the
         // REST 409 E2EE_DISABLED. Managed messages are unaffected.
@@ -76,6 +82,10 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                 workspaceId, messages.stream().map(Message::id).toList());
         Map<UUID, StickerRefView> stickers = stickerCatalog.findForMessage(userId,
                 messageStickerIds(messages));
+        Map<UUID, List<ReactionSummaryView>> reactions = reactionView(
+                reactionRepository.summarize(workspaceId,
+                        messages.stream().filter(message -> !message.isE2ee())
+                                .map(Message::id).toList(), userId));
         // P0-01 defense-in-depth: only an ACTIVE device of the authenticated user may
         // resolve an envelope; otherwise every frame gets crypto:null.
         boolean deviceValid = e2eeEnabled && deviceId != null
@@ -91,7 +101,8 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                 .map(message -> snapshot(message,
                         attachments.getOrDefault(message.id(), List.of()),
                         message.stickerId() == null ? null : stickers.get(message.stickerId()),
-                        crypto.get(message.id())))
+                        crypto.get(message.id()),
+                        reactions.getOrDefault(message.id(), List.of())))
                 .toList();
     }
 
@@ -106,23 +117,37 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
     private static MessageSnapshot snapshot(Message message,
                                             List<MessageAttachmentView> attachments,
                                             StickerRefView sticker,
-                                            MessageEnvelope envelope) {
-        Object crypto = envelope == null ? null
+                                            MessageEnvelope envelope,
+                                            List<ReactionSummaryView> reactions) {
+        Object crypto = envelope == null || message.deletedAt() != null ? null
                 : EnvelopeWireMapper.toWire(envelope.envelope());
+        boolean deleted = message.deletedAt() != null;
         return new MessageSnapshot(message.workspaceId(), message.id(), message.chatId(),
                 message.seq(), message.type().name(), message.senderId(),
-                message.senderDisplayName(), message.body() == null ? null
+                message.senderDisplayName(), deleted || message.body() == null ? null
                         : message.body().value(), message.replyToId(), message.threadRootId(),
                 message.createdAt(), message.editedAt(), message.deletedAt(), message.version(),
-                message.clientMessageId(), crypto, message.stickerId(),
-                sticker == null ? null : new StickerSnapshot(sticker.id(), sticker.packId(),
-                        sticker.alt(), sticker.url(), sticker.favorite()),
-                attachments.stream()
+                message.clientMessageId(), crypto, deleted ? null : message.stickerId(),
+                deleted || sticker == null ? null
+                        : new StickerSnapshot(sticker.id(), sticker.packId(),
+                                sticker.alt(), sticker.url(), sticker.favorite()),
+                deleted ? List.of() : attachments.stream()
                         .map(attachment -> new AttachmentSnapshot(attachment.id(),
                                 attachment.filename(), attachment.sizeBytes(),
                                 attachment.mimeType(), attachment.scanStatus(),
                                 media(attachment.media())))
-                        .toList());
+                        .toList(),
+                deleted ? List.of() : reactions);
+    }
+
+    private static Map<UUID, List<ReactionSummaryView>> reactionView(
+            Map<UUID, List<ru.krug.backend.message.domain.model.MessageReaction>> rows) {
+        Map<UUID, List<ReactionSummaryView>> result = new LinkedHashMap<>();
+        rows.forEach((messageId, reactions) -> result.put(messageId, reactions.stream()
+                .map(reaction -> new ReactionSummaryView(reaction.emoji(), reaction.count(),
+                        reaction.me()))
+                .toList()));
+        return result;
     }
 
     private static AttachmentMediaSnapshot media(

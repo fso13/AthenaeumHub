@@ -327,5 +327,25 @@ class SubscriptionServiceTest {
         public Duration presenceTtl() {
             return Duration.ofSeconds(60);
         }
+
+        @Override
+        public int callSignalLimit() {
+            return 10;
+        }
+
+        @Override
+        public Duration callSignalWindow() {
+            return Duration.ofSeconds(10);
+        }
+
+        @Override
+        public int callSdpMaxBytes() {
+            return 8192;
+        }
+
+        @Override
+        public int callCandidateMaxBytes() {
+            return 4096;
+        }
     }
 }

@@ -865,6 +865,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chats/{chatId}/messages/{messageId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Удалить сообщение для себя или для всех (только автор)
+         * @description `scope=me` (по умолчанию) создаёт per-user маркер: сообщение исчезает только из чтений вызывающего, остальные участники его видят. `scope=all` доступен только автору сообщения (владелец/админ чата не получает это право) и является soft delete: строка и `seq` остаются, `deleted_at`/`deleted_by` выставляются, managed-контент очищается, вложения помечаются удалёнными, реакции удаляются; публикуется WS `message.deleted` (`scope=all`). Повторный вызов идемпотентен (`204`). Неизвестное/чужое сообщение → `404`; delete-for-all не автором → `403`. E2EE-сообщение удаляется тем же tombstone-путём (конверты удаляются), чтобы контент не оставался доступным.
+         */
+        delete: operations["deleteMessage"];
+        options?: never;
+        head?: never;
+        /**
+         * Редактировать собственное TEXT-сообщение (managed-only)
+         * @description Только автор сообщения и только активный участник чата. Редактируются лишь managed `TEXT`-сообщения, не удалённые (delete-for-all) и не скрытые для вызывающего. `text` — 1..8000 символов. Сервер выставляет `edited_at`, увеличивает `version` и публикует WS `message.updated`. Если передан `version` и он не совпал с текущим — `409 VERSION_CONFLICT` (оптимистичная блокировка). E2EE-чат → `422 E2EE_METADATA_FORBIDDEN` (сервер не редактирует шифротекст и не хранит plaintext-метаданные); STICKER/SYSTEM → `422 MESSAGE_NOT_EDITABLE`.
+         */
+        patch: operations["editMessage"];
+        trace?: never;
+    };
+    "/chats/{chatId}/messages/{messageId}/reactions": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Поставить реакцию (идемпотентно)
+         * @description Managed-only: E2EE-чат → `422 E2EE_METADATA_FORBIDDEN`. Уникальность `(message, user, emoji)`; повторный POST не создаёт дубль и возвращает текущий агрегат. `emoji` — 1..32 символа, валидная Unicode-последовательность без HTML, пробелов и control-символов. Удалённое (delete-for-all) или скрытое для вызывающего сообщение → `404`. Публикуется WS `message.reaction.changed` (`action=ADDED`).
+         */
+        post: operations["addMessageReaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/messages/{messageId}/reactions/{emoji}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+                /** @description Одна emoji-последовательность в percent-encoding, без HTML/пробелов/control. */
+                emoji: components["parameters"]["Emoji"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Снять реакцию (идемпотентно)
+         * @description Удаляет только реакцию вызывающего с этим `emoji`; отсутствующая реакция тоже даёт `204`. Managed-only (`422 E2EE_METADATA_FORBIDDEN`). Публикуется WS `message.reaction.changed` (`action=REMOVED`).
+         */
+        delete: operations["removeMessageReaction"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chats/{chatId}/read": {
         parameters: {
             query?: never;
@@ -905,7 +986,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). */
+        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. */
         Error: {
             code: string;
             message: string;
@@ -1543,6 +1624,8 @@ export interface components {
             sticker_id?: string | null;
             sticker?: (components["schemas"]["StickerRef"] | null) & components["schemas"]["StickerRef"];
             attachments?: components["schemas"]["AttachmentRef"][];
+            /** @description Агрегированные реакции страницы: один элемент на emoji, `me` — ставил ли реакцию вызывающий. Считается одним запросом на страницу, без N+1. Для E2EE и удалённых сообщений всегда пуст. */
+            reactions?: components["schemas"]["ReactionSummary"][];
             /** Format: uuid */
             client_message_id?: string | null;
             crypto?: components["schemas"]["CryptoEnvelope"] | null;
@@ -1565,6 +1648,23 @@ export interface components {
             sticker_id?: string | null;
             attachment_ids?: string[];
             envelopes?: components["schemas"]["CryptoEnvelope"][];
+        };
+        MessageEdit: {
+            /** @description Новый plaintext managed-сообщения (сервер шифрует при записи). */
+            text: string;
+            /** @description Необязательная оптимистичная блокировка: при несовпадении с текущей версией — `409 VERSION_CONFLICT`. Без поля сервер всё равно увеличивает `version` на единицу. */
+            version?: number | null;
+        };
+        ReactionCreate: {
+            /** @description Emoji-последовательность (ZWJ/VS16/skin-tone допустимы); plain text, без HTML/пробелов/control-символов. */
+            emoji: string;
+        };
+        ReactionSummary: {
+            emoji: string;
+            /** @description Число уникальных пользователей с этой реакцией. */
+            count: number;
+            /** @description Ставил ли реакцию вызывающий. */
+            me: boolean;
         };
         MessagePage: {
             items: components["schemas"]["Message"][];
@@ -1913,6 +2013,9 @@ export interface components {
         DeviceId: string;
         IdempotencyKey: string;
         ChatId: string;
+        MessageId: string;
+        /** @description Одна emoji-последовательность в percent-encoding, без HTML/пробелов/control. */
+        Emoji: string;
         WorkspaceId: string;
         WorkspaceIdQuery: string;
         StickerId: string;
@@ -3574,6 +3677,135 @@ export interface operations {
             413: components["responses"]["TooLarge"];
             422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
+        };
+    };
+    deleteMessage: {
+        parameters: {
+            query?: {
+                scope?: "me" | "all";
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Удалено (идемпотентно) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    editMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MessageEdit"];
+            };
+        };
+        responses: {
+            /** @description Обновлённое сообщение с новыми `version` и `edited_at` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    addMessageReaction: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReactionCreate"];
+            };
+        };
+        responses: {
+            /** @description Текущий агрегат реакции */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReactionSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    removeMessageReaction: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+                /** @description Одна emoji-последовательность в percent-encoding, без HTML/пробелов/control. */
+                emoji: components["parameters"]["Emoji"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Реакция снята (идемпотентно) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
         };
     };
     markRead: {

@@ -19,7 +19,11 @@ public record RealtimeProperties(
         @DefaultValue("25s") Duration heartbeatInterval,
         @DefaultValue("60s") Duration heartbeatTimeout,
         @DefaultValue("5s") Duration typingTtl,
-        @DefaultValue("60s") Duration presenceTtl) {
+        @DefaultValue("60s") Duration presenceTtl,
+        @DefaultValue("120") int callSignalLimit,
+        @DefaultValue("60s") Duration callSignalWindow,
+        @DefaultValue("32768") int callSdpMaxBytes,
+        @DefaultValue("4096") int callCandidateMaxBytes) {
 
     public RealtimeProperties {
         if (allowedOrigins == null) {
@@ -39,6 +43,18 @@ public record RealtimeProperties(
         if (heartbeatInterval == null || heartbeatTimeout == null
                 || heartbeatInterval.isZero() || heartbeatTimeout.isZero()) {
             throw new IllegalArgumentException("realtime heartbeat settings must be positive");
+        }
+        if (typingTtl == null || typingTtl.isZero() || presenceTtl == null
+                || presenceTtl.isZero()) {
+            throw new IllegalArgumentException("realtime TTL settings must be positive");
+        }
+        if (callSignalLimit < 1 || callSignalWindow == null || callSignalWindow.isZero()
+                || callSignalWindow.isNegative() || callSdpMaxBytes < 1
+                || callCandidateMaxBytes < 1) {
+            throw new IllegalArgumentException("realtime call signaling limits must be positive");
+        }
+        if (callSdpMaxBytes >= 64 * 1024) {
+            throw new IllegalArgumentException("call SDP limit must stay below the WS frame cap");
         }
     }
 

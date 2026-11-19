@@ -19,7 +19,6 @@ async function renderFiles(overrides: Parameters<typeof renderApp>[0] = {}) {
   });
   stores.push(result.store);
   await screen.findByRole('heading', { name: 'Команда «Восход»' });
-  await screen.findByText('Хранилище');
   const input = result.container.querySelector('input[type="file"]');
   if (!input) throw new Error('File input is missing');
   return { ...result, input: input as HTMLInputElement };
@@ -208,23 +207,14 @@ describe('managed files in chat', () => {
     mockDb.forceDownloadError = null;
   });
 
-  it('shows 80/95/100 % quota warnings and disables the picker at 100 %', async () => {
+  it('disables the picker when the storage is full (composer no longer shows the limits bar)', async () => {
     const { store } = await renderFiles();
-    const setUsage = async (used: number) => {
-      mockDb.limits.usage.used = used;
-      mockDb.limits.usage.reserved = 0;
-      await store.files.refreshLimits();
-    };
-
-    await setUsage(Math.floor(mockDb.limits.usage.limit * 0.81));
-    expect(await screen.findByText('Использовано больше 80 % хранилища.')).toBeInTheDocument();
-
-    await setUsage(Math.floor(mockDb.limits.usage.limit * 0.96));
-    expect(await screen.findByText('Осталось меньше 5 % хранилища.')).toBeInTheDocument();
-
-    await setUsage(mockDb.limits.usage.limit);
-    expect(await screen.findByText(/Хранилище заполнено/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Прикрепить файлы' })).toBeDisabled();
+    mockDb.limits.usage.used = mockDb.limits.usage.limit;
+    mockDb.limits.usage.reserved = 0;
+    await store.files.refreshLimits();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Прикрепить файлы' })).toBeDisabled(),
+    );
   });
 
   it('accepts a drag and drop file batch', async () => {

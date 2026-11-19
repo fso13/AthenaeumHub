@@ -178,6 +178,109 @@ describe('ws protocol v1 parser', () => {
     });
   });
 
+  it('parses §9 call frames without event_id and normalizes ICE candidate shapes', () => {
+    const offer = parseServerFrame(
+      JSON.stringify({
+        v: 1,
+        type: 'event',
+        event: 'call.signal',
+        chat_id: 'c1',
+        from_user_id: 'u2',
+        from_device_id: 'd2',
+        payload: {
+          call_id: '00000000-0000-4000-8000-000000000001',
+          kind: 'offer',
+          video: true,
+          sdp: 'v=0\r\no=- offer',
+        },
+      }),
+    );
+    expect(offer).toMatchObject({
+      type: 'call.signal',
+      chat_id: 'c1',
+      from_user_id: 'u2',
+      from_device_id: 'd2',
+      payload: {
+        call_id: '00000000-0000-4000-8000-000000000001',
+        kind: 'offer',
+        video: true,
+      },
+    });
+
+    // The contract example uses snake_case; browsers use camelCase. Both are
+    // accepted and normalized to RTCIceCandidateInit (what addIceCandidate wants).
+    const ice = parseServerFrame(
+      JSON.stringify({
+        v: 1,
+        type: 'event',
+        event: 'call.signal',
+        chat_id: 'c1',
+        payload: {
+          call_id: '00000000-0000-4000-8000-000000000001',
+          kind: 'ice',
+          video: false,
+          candidate: {
+            candidate: 'candidate:1 1 udp 1 192.0.2.1 5000 typ host',
+            sdp_mid: '0',
+            sdp_mline_index: 0,
+          },
+        },
+      }),
+    );
+    expect(ice).toMatchObject({
+      payload: {
+        kind: 'ice',
+        candidate: {
+          candidate: 'candidate:1 1 udp 1 192.0.2.1 5000 typ host',
+          sdpMid: '0',
+          sdpMLineIndex: 0,
+        },
+      },
+    });
+
+    const unavailable = parseServerFrame(
+      JSON.stringify({
+        v: 1,
+        type: 'event',
+        event: 'call.unavailable',
+        chat_id: 'c1',
+        payload: {
+          call_id: '00000000-0000-4000-8000-000000000001',
+          kind: 'offer',
+          reason: 'PEER_OFFLINE',
+        },
+      }),
+    );
+    expect(unavailable).toMatchObject({
+      type: 'call.unavailable',
+      payload: { reason: 'PEER_OFFLINE' },
+    });
+
+    // Per-kind field rules are enforced before a frame reaches the call engine.
+    expect(
+      parseServerFrame(
+        JSON.stringify({
+          v: 1,
+          type: 'event',
+          event: 'call.signal',
+          chat_id: 'c1',
+          payload: { call_id: 'id', kind: 'offer', video: false },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseServerFrame(
+        JSON.stringify({
+          v: 1,
+          type: 'event',
+          event: 'call.signal',
+          chat_id: 'c1',
+          payload: { call_id: 'id', kind: 'hangup', video: false, sdp: 'x' },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('rejects malformed, unknown and wrong-version frames', () => {
     expect(parseServerFrame('not-json')).toBeNull();
     expect(parseServerFrame('')).toBeNull();
@@ -222,6 +325,21 @@ describe('ws protocol v1 parser', () => {
       v: 1,
       type: 'typing',
       chat_id: 'c1',
+    });
+    expect(
+      JSON.parse(
+        encodeClientFrame({
+          v: 1,
+          type: 'call.signal',
+          chat_id: 'c1',
+          payload: { call_id: 'call-1', kind: 'hangup', video: false },
+        }),
+      ),
+    ).toEqual({
+      v: 1,
+      type: 'call.signal',
+      chat_id: 'c1',
+      payload: { call_id: 'call-1', kind: 'hangup', video: false },
     });
   });
 });

@@ -118,6 +118,28 @@ export function VideoIcon(props: IconProps) {
   );
 }
 
+/** §9 call controls: camera off. */
+export function VideoOffIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M10.7 6H13a2.5 2.5 0 0 1 2.5 2.5v2.2" />
+      <path d="M15.5 13.7V15a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 15V9A2.5 2.5 0 0 1 5 6.5h.8" />
+      <path d="m21.5 7.5-6 3v3l6 3Z" />
+      <path d="M3 3l18 18" />
+    </IconBase>
+  );
+}
+
+/** §9 call controls: hang up. */
+export function PhoneOffIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M6.5 3.5h3l1.5 4-2 1.5a12 12 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2.2 2A17 17 0 0 1 4.5 5.7a2 2 0 0 1 2-2.2Z" />
+      <path d="M3 3l18 18" />
+    </IconBase>
+  );
+}
+
 /** D1 UX: details-panel toggle in the chat header. */
 export function InfoIcon(props: IconProps) {
   return (
@@ -429,6 +451,21 @@ export function MicIcon(props: IconProps) {
   );
 }
 
+/** §9 call controls: muted microphone. */
+export function MicOffIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M9 9v2a3 3 0 0 0 4.6 2.5" />
+      <path d="M15 10V5a3 3 0 0 0-5.7-1.3" />
+      <path d="M5 10a7 7 0 0 0 11.4 5.5" />
+      <path d="M19 10a7 7 0 0 1-.8 3.3" />
+      <path d="M12 17v5" />
+      <path d="M8 22h8" />
+      <path d="M3 3l18 18" />
+    </IconBase>
+  );
+}
+
 export function MusicIcon(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -447,6 +484,27 @@ export function TrashIcon(props: IconProps) {
       <path d="m5 6 1 15h12l1-15" />
       <path d="M10 11v6" />
       <path d="M14 11v6" />
+    </IconBase>
+  );
+}
+
+/** #62: edit own managed text (pencil). */
+export function EditIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 20h4L19 9l-4-4L4 16v4Z" />
+      <path d="m14 6 4 4" />
+    </IconBase>
+  );
+}
+
+/** #61/#63: compact "more actions" trigger on touch layouts. */
+export function MoreIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="5" cy="12" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.2" fill="currentColor" stroke="none" />
     </IconBase>
   );
 }

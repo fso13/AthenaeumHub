@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -765,6 +766,75 @@ class E2eeMessageIT extends IntegrationTestBase {
                 SELECT count(*) FROM message.message_envelopes
                  WHERE message_id = ?
                 """, Integer.class, UUID.fromString(first.get("id").asText()))).isEqualTo(1);
+    }
+
+    @Test
+    void e2eeEditAndReactionsAreForbiddenButSenderTombstonePurgesEnvelopes() throws Exception {
+        Fixture fixture = fixture();
+        Device a1 = register(fixture.alice(), "a1");
+        Device b1 = register(fixture.bob(), "b1");
+        UUID chatId = UUID.fromString(createDirect(fixture.alice(), fixture.workspaceId(),
+                fixture.bob().user().id(), 201).get("id").asText());
+        JsonNode sent = send(fixture.alice(), a1, chatId, e2eeBody(UUID.randomUUID(),
+                List.of(envelope(chatId, a1, a1.material(), b1, b1.material(), random(300),
+                        true))), 201);
+        UUID messageId = UUID.fromString(sent.get("id").asText());
+
+        // Edit would create server-visible plaintext metadata for an encrypted timeline.
+        MvcResult edit = mockMvc.perform(authed(
+                        patch("/api/v1/chats/{id}/messages/{messageId}", chatId, messageId),
+                        sessionFor(fixture.alice(), a1.id(), fixture.workspaceId()), a1.id())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"text\":\"plaintext-in-e2ee\"}"))
+                .andReturn();
+        assertThat(edit.getResponse().getStatus()).isEqualTo(422);
+        assertThat(json(edit).get("code").asText()).isEqualTo("E2EE_METADATA_FORBIDDEN");
+
+        // Reactions are plaintext metadata too: rejected for every member.
+        MvcResult reaction = mockMvc.perform(authed(
+                        post("/api/v1/chats/{id}/messages/{messageId}/reactions", chatId,
+                                messageId),
+                        sessionFor(fixture.bob(), b1.id(), fixture.workspaceId()), b1.id())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"emoji\":\"👍\"}"))
+                .andReturn();
+        assertThat(reaction.getResponse().getStatus()).isEqualTo(422);
+        assertThat(json(reaction).get("code").asText()).isEqualTo("E2EE_METADATA_FORBIDDEN");
+
+        // Delete-for-all stays sender-only; a plain member cannot erase it.
+        MvcResult foreignDelete = mockMvc.perform(authed(
+                        delete("/api/v1/chats/{id}/messages/{messageId}", chatId, messageId)
+                                .param("scope", "all"),
+                        sessionFor(fixture.bob(), b1.id(), fixture.workspaceId()), b1.id()))
+                .andReturn();
+        assertThat(foreignDelete.getResponse().getStatus()).isEqualTo(403);
+
+        MvcResult delete = mockMvc.perform(authed(
+                        delete("/api/v1/chats/{id}/messages/{messageId}", chatId, messageId)
+                                .param("scope", "all"),
+                        sessionFor(fixture.alice(), a1.id(), fixture.workspaceId()), a1.id()))
+                .andReturn();
+        assertThat(delete.getResponse().getStatus()).isEqualTo(204);
+
+        // The tombstone keeps the row/seq but leaves no decryptable envelope behind.
+        assertThat(migrator().queryForObject("""
+                SELECT count(*) FROM message.message_envelopes WHERE message_id = ?
+                """, Integer.class, messageId)).isZero();
+        Map<String, Object> row = migrator().queryForMap("""
+                SELECT deleted_at, deleted_by FROM message.messages WHERE id = ?
+                """, messageId);
+        assertThat(row.get("deleted_at")).isNotNull();
+        assertThat(row.get("deleted_by")).isEqualTo(fixture.alice().user().id());
+
+        JsonNode page = list(fixture.bob(), b1, chatId);
+        JsonNode tombstone = page.get("items").get(0);
+        CONTRACT.assertValid("Message", tombstone);
+        assertThat(tombstone.get("id").asText()).isEqualTo(messageId.toString());
+        assertThat(tombstone.get("text").isNull()).isTrue();
+        assertThat(tombstone.get("deleted_at").isNull()).isFalse();
+        assertThat(tombstone.get("crypto").isNull()).isTrue();
+        assertThat(tombstone.get("reactions").size()).isZero();
+        assertThat(tombstone.get("attachments").size()).isZero();
     }
 
     @Test

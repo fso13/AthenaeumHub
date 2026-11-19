@@ -172,6 +172,11 @@ krug:
     heartbeat-timeout: ${KRUG_REALTIME_HEARTBEAT_TIMEOUT:60s}
     typing-ttl: ${KRUG_REALTIME_TYPING_TTL:5s}
     presence-ttl: ${KRUG_REALTIME_PRESENCE_TTL:60s}
+    # 1:1 call signalling: ephemeral relay only, bounded SDP/ICE, per-session rate limit.
+    call-signal-limit: ${KRUG_REALTIME_CALL_SIGNAL_LIMIT:120}
+    call-signal-window: ${KRUG_REALTIME_CALL_SIGNAL_WINDOW:60s}
+    call-sdp-max-bytes: ${KRUG_REALTIME_CALL_SDP_MAX_BYTES:32768}
+    call-candidate-max-bytes: ${KRUG_REALTIME_CALL_CANDIDATE_MAX_BYTES:4096}
   # OIDC resource-server settings (keycloak/prod profiles). Blank here so the dev HMAC
   # decoder is completely independent; the keycloak profile supplies local defaults and
   # prod requires the environment variables (fail fast).

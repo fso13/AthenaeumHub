@@ -22,4 +22,13 @@ public interface RealtimeSettingsPort {
     Duration typingTtl();
 
     Duration presenceTtl();
+
+    /** Max accepted {@code call.signal} frames per session within {@link #callSignalWindow()}. */
+    int callSignalLimit();
+
+    Duration callSignalWindow();
+
+    int callSdpMaxBytes();
+
+    int callCandidateMaxBytes();
 }

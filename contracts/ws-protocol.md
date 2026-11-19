@@ -29,7 +29,8 @@
 - `v` — версия протокола (1).
 - `event_id` — UUID; клиент дедуплицирует по нему.
 - `seq` — per-chat seq; порядок только по нему.
-- Эфемерные события (`typing`, `presence`) могут не иметь `seq`/`event_id`; они не replay-ятся.
+- Эфемерные события (`typing`, `presence`, `call.signal`, `call.unavailable`) могут не иметь
+  `seq`/`event_id`; они не replay-ятся.
 
 ## 3. Сервер → клиент
 
@@ -48,6 +49,9 @@
 | `event`               | `payload`                                                                                 |
 | --------------------- | ----------------------------------------------------------------------------------------- |
 | `message.created`     | Объект `Message` из OpenAPI **полями на верхнем уровне `payload`** (не `payload.message`) |
+| `message.updated`     | Объект `Message` из OpenAPI (flat), с новыми `version`, `edited_at`, `reactions` и `text`  |
+| `message.deleted`     | `message_id`, `seq`, `deleted_at`, `deleted_by`, `scope` (`all`); tombstone              |
+| `message.reaction.changed` | `message_id`, `seq`, `user_id`, `emoji`, `action` (`ADDED\|REMOVED`), `count`          |
 | `message.receipt`     | `user_id`, `last_read_seq`                                                                |
 | `chat.member.changed` | `user_id`, `role`, `status`, `epoch`                                                      |
 | `chat.pin.changed`    | `message_id`, `action`                                                                    |
@@ -55,6 +59,8 @@
 | `device.list.changed` | `device_id`, `status`, `key_generation` (свои устройства)                                 |
 | `typing`              | `user_id`, `expires_at`                                                                   |
 | `presence`            | `user_id`, `status`, `last_seen_at`                                                       |
+| `call.signal`         | `payload`: `call_id`, `kind`, `video`, `sdp?`, `candidate?`; кадр: `from_user_id`, `from_device_id` |
+| `call.unavailable`    | `call_id`, `kind`, `reason` (`PEER_OFFLINE`)                                              |
 
 `message.created` payload — `Message` из OpenAPI. Для E2EE-сообщения `payload.text=null`, а
 `payload.crypto` — конверт **только для устройства соединения**; для отправителя на том же
@@ -65,6 +71,18 @@
 инкрементирует счётчик/превью корня локально по `message.created`. При
 `krug.e2ee.enabled=false` live- и replay-кадры E2EE не публикуются: ни `message.created`, ни
 `crypto` (P2-03 review-06); managed-события не затронуты.
+
+`message.updated`/`message.deleted`/`message.reaction.changed` — live-события после
+commit REST-операции. Они **не входят в durable replay** `seq > last_seq` (replay
+по-прежнему отдаёт `message.created` с актуальным состоянием строки, включая
+`edited_at`/`version`/`deleted_at`/`reactions`), поэтому после reconnect клиент
+перечитывает страницу REST, если получил `resume.gap`. `event_id` детерминирован от
+факта (`message_id` + `version` для updated, `message_id` + `scope` + `deleted_at` для
+deleted), поэтому live/повторная доставка дедуплицируются. `message.deleted` со
+`scope=me` **не публикуется**: скрытие для себя — локальное состояние вызывающего,
+остальные участники не должны его видеть; другие устройства пользователя
+синхронизируются через REST. Реакции на E2EE-чат и редактирование E2EE запрещены
+(`422 E2EE_METADATA_FORBIDDEN`), поэтому такие события для E2EE не возникают.
 
 `payload.attachments[]` — объекты `AttachmentRef` из OpenAPI; с D1-BE2 managed-вложение
 несёт `media` (или `null`) с теми же sanitized-полями, что и REST. Для E2EE `attachments`
@@ -117,12 +135,14 @@ generation при этом не меняется) плюс `device.list.changed`
 | `ack`       | `last_seq`                              | Для backpressure/метрик; не является read receipt |
 | `ping`      | `client_time`                           | Heartbeat                                         |
 | `typing`    | `chat_id`                               | Эфемерно; сервер ставит TTL 5 с                   |
+| `call.signal` | `chat_id`, `call_id`, `kind`, `video`, `sdp?`, `candidate?` | 1:1 DIRECT; эфемерный relay |
 
 ```json
 {"v":1,"type":"subscribe","chats":[{"chat_id":"...","last_seq":41}],"presence":true}
 {"v":1,"type":"ack","last_seq":42}
 {"v":1,"type":"typing","chat_id":"..."}
 {"v":1,"type":"ping","client_time":"2026-11-16T10:00:00Z"}
+{"v":1,"type":"call.signal","chat_id":"...","payload":{"call_id":"...","kind":"offer","video":true,"sdp":"v=0\r\n..."}}
 ```
 
 ## 5. Replay и gap
@@ -175,3 +195,106 @@ generation при этом не меняется) плюс `device.list.changed`
   REST-отправке; WS-кадр содержит один конверт устройства соединения.
 - Нет durable replay старше 500 сообщений: клиент идёт в REST.
 - `typing`/`presence` — эфемерные, без истории.
+- `call.signal`/`call.unavailable` — эфемерные, без истории, без offline-очереди и без
+  серверных записей звонка.
+
+## 9. 1:1 звонки: signaling (audio/video)
+
+Срез — **только WebRTC signalling** через существующий WS-канал. Сервер не проксирует медиа,
+не парсит SDP, не хранит звонки и ничего не пишет в БД. `call.state` не вводится: состояние
+звонка (ringing/connected/ended) клиент выводит из `call.signal` и `call.unavailable`.
+REST-записей звонка нет.
+
+### 9.1 Клиент → сервер: `call.signal`
+
+```json
+{
+  "v": 1,
+  "type": "call.signal",
+  "chat_id": "uuid",
+  "payload": {
+    "call_id": "uuid",
+    "kind": "offer|answer|ice|hangup|busy",
+    "video": true,
+    "sdp": "v=0\r\n...",
+    "candidate": {"candidate": "candidate:...", "sdp_mid": "0", "sdp_mline_index": 0}
+  }
+}
+```
+
+- `call_id`, `kind`, `video` обязательны всегда. `video` — boolean (audio-only = `false`).
+- `offer`/`answer`: обязателен непустой `sdp`; `candidate` запрещён.
+- `ice`: обязателен объект `candidate` (структура — `RTCIceCandidateInit` на клиенте);
+  `sdp` запрещён. Конец candidate-потока отдельным кадром не требуется.
+- `hangup`/`busy`: `sdp` и `candidate` запрещены.
+- `chat_id` и `payload.call_id` — канонические UUID (36 символов). Неизвестные `kind` или
+  лишние поля отклоняются, сообщение об ошибке не содержит SDP/candidate.
+- `call.signal` не является durable-событием: ответа с `seq`/`event_id` нет.
+
+### 9.2 Сервер → клиент: `call.signal`
+
+Сервер валидирует отправителя и relay-ит payload всем **живым WS-сессиям второго участника**
+DIRECT-чата в том же workspace, добавляя `from_user_id`, `from_device_id`:
+
+```json
+{
+  "v": 1,
+  "type": "event",
+  "event": "call.signal",
+  "workspace_id": "uuid",
+  "chat_id": "uuid",
+  "ts": "2026-11-19T10:00:00Z",
+  "from_user_id": "uuid",
+  "from_device_id": "uuid",
+  "payload": {
+    "call_id": "uuid",
+    "kind": "offer",
+    "video": true,
+    "sdp": "v=0\r\n..."
+  }
+}
+```
+
+- `from_user_id`/`from_device_id` — на верхнем уровне кадра; `payload` совпадает с
+  валидированным payload клиента (`sdp`/`candidate` не переписываются).
+- `seq` и `event_id` отсутствуют; событие не replay-ится и не буферизуется offline.
+- Подписка на `chat_id` для получения звонка не требуется: достаточно live-сессии
+  участника. Это позволяет показать входящий звонок, даже если чат не открыт.
+- Все устройства получателя получают кадр; отвечает то устройство, которое приняло звонок.
+  Кадры `answer`/`ice`/`hangup`/`busy` от него relay-ятся всем live-сессиям вызывающего.
+- Отправитель не получает эхо собственного `call.signal`.
+
+### 9.3 Сервер → клиент: `call.unavailable`
+
+Если у второго участника нет ни одной live-сессии, вызывающая сессия получает эфемерное
+событие (offline-очереди нет):
+
+```json
+{
+  "v": 1,
+  "type": "event",
+  "event": "call.unavailable",
+  "workspace_id": "uuid",
+  "chat_id": "uuid",
+  "ts": "2026-11-19T10:00:00Z",
+  "payload": {"call_id": "uuid", "kind": "offer", "reason": "PEER_OFFLINE"}
+}
+```
+
+`call.unavailable` отправляется только инициатору текущего кадра (не всем его устройствам).
+Клиент завершает попытку звонка; повторный вызов — новый `call_id`.
+
+### 9.4 Авторизация и лимиты
+
+- Только ACTIVE-участник чата; неизвестный/чужой чат → `error` `FORBIDDEN`, `status:403`
+  (существование чата не раскрывается).
+- Только живой DIRECT-чат; GROUP → `error` `CALL_NOT_SUPPORTED`, `status:422`.
+- Лимиты payload: SDP ≤ 32 KiB (32768 байт UTF-8), `candidate` ≤ 4 KiB (4096 байт JSON),
+  весь WS-кадр ≤ 64 KiB. Превышение → `error` `CALL_PAYLOAD_TOO_LARGE`, `status:413`.
+- Rate limit — на сессию: по умолчанию 120 кадров `call.signal` за 60 с
+  (`krug.realtime.call-signal-limit` / `call-signal-window`). Превышение → `error`
+  `RATE_LIMITED`, `status:429`; кадр отбрасывается, соединение остаётся живым.
+- Любая ошибка `call.signal` (400/403/413/422/429) **не закрывает WS**: остальные кадры
+  (`typing`, `presence`, сообщения) продолжают работать.
+- Сервер не логирует `sdp`, `candidate` и IP-адреса; в debug-логе допустимы только
+  `call_id`, `kind` и число получателей. SDP передаётся как есть только в relay-кадре.

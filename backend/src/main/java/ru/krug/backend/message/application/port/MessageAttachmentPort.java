@@ -1,5 +1,6 @@
 package ru.krug.backend.message.application.port;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -23,4 +24,11 @@ public interface MessageAttachmentPort {
 
     Map<UUID, List<MessageAttachmentView>> findByMessageIds(UUID workspaceId,
                                                             List<UUID> messageIds);
+
+    /**
+     * Delete-for-all tombstone: bound attachments stop being downloadable (410
+     * ATTACHMENT_DELETED) so clearing the message body cannot leave the media reachable by
+     * URL. Idempotent; unbound/foreign rows are never touched.
+     */
+    void markDeletedForMessage(UUID workspaceId, UUID messageId, Instant deletedAt);
 }

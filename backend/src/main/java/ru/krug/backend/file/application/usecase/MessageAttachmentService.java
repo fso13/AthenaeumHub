@@ -103,6 +103,15 @@ public class MessageAttachmentService implements MessageAttachmentPort {
         return result;
     }
 
+    @Override
+    @Transactional
+    public void markDeletedForMessage(UUID workspaceId, UUID messageId, Instant deletedAt) {
+        for (Attachment attachment : attachmentRepository.findByMessageIds(workspaceId,
+                List.of(messageId))) {
+            attachmentRepository.save(attachment.markDeleted(deletedAt));
+        }
+    }
+
     private static MessageAttachmentView view(Attachment attachment) {
         return new MessageAttachmentView(attachment.id(), attachment.filename(),
                 attachment.sizeBytes(), attachment.mimeType(), attachment.scanStatus().name(),

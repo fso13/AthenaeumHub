@@ -59,4 +59,24 @@ public class RealtimeSettingsAdapter implements RealtimeSettingsPort {
     public Duration presenceTtl() {
         return properties.presenceTtl();
     }
+
+    @Override
+    public int callSignalLimit() {
+        return properties.callSignalLimit();
+    }
+
+    @Override
+    public Duration callSignalWindow() {
+        return properties.callSignalWindow();
+    }
+
+    @Override
+    public int callSdpMaxBytes() {
+        return properties.callSdpMaxBytes();
+    }
+
+    @Override
+    public int callCandidateMaxBytes() {
+        return properties.callCandidateMaxBytes();
+    }
 }

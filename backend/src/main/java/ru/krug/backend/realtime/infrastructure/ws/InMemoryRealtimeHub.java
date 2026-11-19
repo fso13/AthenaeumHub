@@ -2,6 +2,7 @@ package ru.krug.backend.realtime.infrastructure.ws;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,11 +18,13 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.WebSocketSession;
 
+import ru.krug.backend.realtime.application.model.CallSignalRelay;
 import ru.krug.backend.realtime.application.model.EphemeralEvent;
 import ru.krug.backend.realtime.application.model.RealtimeEvent;
 import ru.krug.backend.realtime.application.model.RealtimeSession;
 import ru.krug.backend.realtime.application.model.ReplayBatch;
 import ru.krug.backend.realtime.application.model.SubscriptionPlan;
+import ru.krug.backend.realtime.application.port.RealtimeCallSignalPort;
 import ru.krug.backend.realtime.application.port.RealtimePublisherPort;
 import ru.krug.backend.realtime.application.port.RealtimeSettingsPort;
 import ru.krug.backend.realtime.application.port.RealtimeSubscriptionPort;
@@ -33,7 +36,8 @@ import ru.krug.backend.realtime.application.port.RealtimeSubscriptionPort;
  * boundary and by event_id on the client.
  */
 @Component
-public class InMemoryRealtimeHub implements RealtimePublisherPort, RealtimeSubscriptionPort {
+public class InMemoryRealtimeHub
+        implements RealtimePublisherPort, RealtimeSubscriptionPort, RealtimeCallSignalPort {
 
     private static final Logger log = LoggerFactory.getLogger(InMemoryRealtimeHub.class);
 
@@ -150,6 +154,29 @@ public class InMemoryRealtimeHub implements RealtimePublisherPort, RealtimeSubsc
             }
             connection.enqueue(OutboundFrame.text(json, true, event.chatId(), null));
         }
+    }
+
+    /**
+     * 1:1 call relay. Recipients are the live sessions of the other DIRECT-chat member in
+     * the same workspace; chat subscription is deliberately not required, so a ringing call
+     * reaches a peer whose UI has not opened that chat. Ephemeral frame, best-effort count.
+     */
+    @Override
+    public int relay(CallSignalRelay relay, String excludeSessionId) {
+        String json = codec.callSignal(relay);
+        int delivered = 0;
+        for (RealtimeConnection connection : connections.values()) {
+            RealtimeSession session = connection.session();
+            if (session.sessionId().equals(excludeSessionId)
+                    || !relay.recipientUserIds().contains(session.userId())
+                    || !Objects.equals(relay.workspaceId(), session.workspaceId())
+                    || connection.isClosed()) {
+                continue;
+            }
+            connection.enqueue(OutboundFrame.text(json, true, relay.chatId(), null));
+            delivered++;
+        }
+        return delivered;
     }
 
     @Override

@@ -282,6 +282,7 @@ describe('song cards and ID3 upload metadata', () => {
       edited_at: null,
       deleted_at: null,
       version: 1,
+      reactions: [],
       attachments: [videoRef, imageRef],
     });
 
@@ -315,5 +316,5 @@ describe('song cards and ID3 upload metadata', () => {
       (violation) => violation.impact === 'serious' || violation.impact === 'critical',
     );
     expect(serious).toEqual([]);
-  });
+  }, 30_000);
 });

@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -12,6 +14,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.Test;
 
+import ru.krug.backend.realtime.application.model.CallKind;
+import ru.krug.backend.realtime.application.model.CallSignal;
+import ru.krug.backend.realtime.application.model.CallSignalRelay;
 import ru.krug.backend.realtime.application.model.EphemeralEvent;
 import ru.krug.backend.realtime.application.model.MessageSnapshot;
 import ru.krug.backend.realtime.application.model.RealtimeEvent;
@@ -110,6 +115,64 @@ class RealtimeFrameContractTest {
         WsFrameContract.assertValid("error", codec.error("WS_FRAME_INVALID", "bad",
                 "req_1", chatId));
         WsFrameContract.assertValid("sessionRevoked", codec.sessionRevoked("DEVICE_REVOKED"));
+    }
+
+    @Test
+    void callSignalMatchesContractAndCarriesNoSeqOrEventId() throws Exception {
+        UUID callId = UUID.randomUUID();
+        UUID fromDeviceId = UUID.randomUUID();
+        CallSignal signal = new CallSignal(callId, CallKind.OFFER, true,
+                "v=0\r\no=- 1 2 IN IP4 0.0.0.0\r\n", null);
+        CallSignalRelay relay = new CallSignalRelay(workspaceId, chatId, Set.of(userId),
+                userId, fromDeviceId, signal, NOW);
+
+        String frame = codec.callSignal(relay);
+        WsFrameContract.assertValid("callSignal", frame);
+        JsonNode node = mapper.readTree(frame);
+        assertThat(node.get("type").asText()).isEqualTo("event");
+        assertThat(node.get("event").asText()).isEqualTo("call.signal");
+        assertThat(node.has("seq")).isFalse();
+        assertThat(node.has("event_id")).isFalse();
+        JsonNode payload = node.get("payload");
+        assertThat(payload.get("call_id").asText()).isEqualTo(callId.toString());
+        assertThat(payload.get("kind").asText()).isEqualTo("offer");
+        assertThat(payload.get("video").asBoolean()).isTrue();
+        assertThat(node.get("from_user_id").asText()).isEqualTo(userId.toString());
+        assertThat(node.get("from_device_id").asText()).isEqualTo(fromDeviceId.toString());
+        assertThat(payload.get("sdp").asText()).contains("v=0");
+    }
+
+    @Test
+    void callUnavailableMatchesContractAndCarriesNoSeqOrEventId() throws Exception {
+        UUID callId = UUID.randomUUID();
+        String frame = codec.callUnavailable(workspaceId, chatId, callId, CallKind.OFFER,
+                "PEER_OFFLINE", NOW);
+        WsFrameContract.assertValid("callUnavailable", frame);
+        JsonNode node = mapper.readTree(frame);
+        assertThat(node.get("event").asText()).isEqualTo("call.unavailable");
+        assertThat(node.has("seq")).isFalse();
+        assertThat(node.has("event_id")).isFalse();
+        assertThat(node.get("payload").get("reason").asText()).isEqualTo("PEER_OFFLINE");
+        assertThat(node.get("payload").get("call_id").asText()).isEqualTo(callId.toString());
+    }
+
+    @Test
+    void callSignalToStringNeverLeaksSdpOrCandidate() {
+        CallSignal signal = new CallSignal(UUID.randomUUID(), CallKind.ICE, false, null,
+                Map.of("candidate", "candidate:1 1 UDP 1 203.0.113.7 5000 typ host"));
+
+        assertThat(signal.toString()).contains("<redacted>");
+        assertThat(signal.toString()).doesNotContain("203.0.113.7");
+        assertThat(signal.toString()).doesNotContain("candidate:1");
+    }
+
+    @Test
+    void callErrorCarriesSemanticStatus() throws Exception {
+        String frame = codec.error("CALL_NOT_SUPPORTED", "Calls are supported only in DIRECT",
+                "ws_1", chatId, 422);
+
+        WsFrameContract.assertValid("error", frame);
+        assertThat(mapper.readTree(frame).get("status").asInt()).isEqualTo(422);
     }
 
     @Test

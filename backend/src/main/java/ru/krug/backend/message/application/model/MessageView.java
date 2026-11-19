@@ -13,6 +13,7 @@ import ru.krug.backend.sticker.application.model.StickerRefView;
  * never import domain classes. {@code cryptoScheme} stays internal (it is not part of the
  * OpenAPI {@code Message}); {@code crypto} is the envelope for the requesting device only.
  * {@code threadSummary} is attached to thread roots only and is never present for E2EE.
+ * {@code reactions} is an aggregated, caller-relative projection of message_reactions.
  */
 public record MessageView(
         UUID id,
@@ -34,10 +35,12 @@ public record MessageView(
         Object crypto,
         UUID stickerId,
         MessageStickerView sticker,
-        List<MessageAttachmentView> attachments) {
+        List<MessageAttachmentView> attachments,
+        List<ReactionSummaryView> reactions) {
 
     public MessageView {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        reactions = reactions == null ? List.of() : List.copyOf(reactions);
     }
 
     public static MessageView from(Message message) {
@@ -47,7 +50,7 @@ public record MessageView(
                 message.body() == null ? null : message.body().value(), message.replyToId(),
                 message.threadRootId(), null, message.createdAt(), message.editedAt(),
                 message.deletedAt(), message.version(), message.clientMessageId(), null,
-                message.stickerId(), null, List.of());
+                message.stickerId(), null, List.of(), List.of());
     }
 
     public boolean isE2ee() {
@@ -58,21 +61,26 @@ public record MessageView(
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
                 version, clientMessageId, crypto, stickerId, sticker,
-                values == null ? List.of() : values);
+                values == null ? List.of() : values, reactions);
     }
 
     public MessageView withSticker(StickerRefView value) {
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
                 version, clientMessageId, crypto, stickerId,
-                value == null ? null : MessageStickerView.from(value), attachments);
+                value == null ? null : MessageStickerView.from(value), attachments, reactions);
     }
 
     /** Attaches the envelope of the requesting device (E2EE) or clears it (managed). */
     public MessageView withCrypto(Object value) {
+        // A tombstone never carries an envelope: delete-for-all purges E2EE envelopes and
+        // this guard keeps the response safe even if a legacy row still has one.
+        if (deletedAt != null) {
+            return this;
+        }
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
-                version, clientMessageId, value, stickerId, sticker, attachments);
+                version, clientMessageId, value, stickerId, sticker, attachments, reactions);
     }
 
     /** Server-computed summary for a thread root; null for replies and empty threads. */
@@ -80,6 +88,28 @@ public record MessageView(
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, value == null ? null : ThreadSummaryView.from(value),
                 createdAt, editedAt, deletedAt, version, clientMessageId, crypto, stickerId,
-                sticker, attachments);
+                sticker, attachments, reactions);
+    }
+
+    /** Aggregated reactions for this message, already caller-relative. */
+    public MessageView withReactions(List<ReactionSummaryView> values) {
+        return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
+                text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
+                version, clientMessageId, crypto, stickerId, sticker, attachments,
+                values == null ? List.of() : values);
+    }
+
+    /**
+     * Delete-for-all projection: content and content-derived metadata must not be returned
+     * even if a row was cleared only partially (legacy/direct SQL). The row, seq and timestamps
+     * remain so the client can render a tombstone in place.
+     */
+    public MessageView asTombstone() {
+        if (deletedAt == null) {
+            return this;
+        }
+        return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
+                null, replyToId, threadRootId, null, createdAt, editedAt, deletedAt, version,
+                clientMessageId, null, null, null, List.of(), List.of());
     }
 }

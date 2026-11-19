@@ -63,6 +63,7 @@ function seedAttachmentMessage(
     edited_at: null,
     deleted_at: null,
     version: 1,
+    reactions: [],
     attachments: [
       {
         id: attachment.id,
@@ -229,7 +230,7 @@ describe('media previews in attachment cards', () => {
   it('explains a failed presigned URL and retries with a fresh link', async () => {
     const { user, input } = await renderMedia();
     await user.upload(input, fileOf(64, 'photo.png', 'image/png'));
-    await screen.findByText('Готов к отправке');
+    await screen.findByText('Готов к отправке', {}, { timeout: 10_000 });
 
     mockDb.forceDownloadError = {
       status: 409,

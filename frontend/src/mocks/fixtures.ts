@@ -225,6 +225,8 @@ interface DraftMessage {
   sticker?: StickerRef;
   reply_to_id?: string | null;
   deleted_at?: string | null;
+  /** #61: seeds the visible reaction chips (aggregate by emoji). */
+  reactions?: ApiMessage['reactions'];
 }
 
 function buildGroupDrafts(): DraftMessage[] {
@@ -279,7 +281,23 @@ function buildGroupDrafts(): DraftMessage[] {
     stickerMessage.type = 'STICKER';
     stickerMessage.text = '';
     stickerMessage.sticker = builtinSticker('krug', 2);
+    // The history sticker belongs to the viewer so the edit control can show
+    // the honest "only text is editable" disabled state.
+    stickerMessage.sender = { id: IDS.user, name: MOCK_DISPLAY_NAME };
   }
+
+  // #61: reaction aggregates from the backend (`me` belongs to IDS.user).
+  const reacted = drafts.find((draft) => draft.seq === 2);
+  if (reacted) {
+    reacted.reactions = [
+      { emoji: '👍', count: 3, me: true },
+      { emoji: '🔥', count: 1, me: false },
+    ];
+  }
+  const peerReacted = drafts.find((draft) => draft.seq === 31);
+  if (peerReacted) peerReacted.reactions = [{ emoji: '❤️', count: 2, me: false }];
+  const popular = drafts.find((draft) => draft.seq === 37);
+  if (popular) popular.reactions = [{ emoji: '🎉', count: 4, me: true }];
 
   return drafts;
 }
@@ -298,6 +316,7 @@ function toMessage(chatId: string, draft: DraftMessage): ApiMessage {
     edited_at: null,
     deleted_at: draft.deleted_at ?? null,
     version: 1,
+    reactions: draft.reactions ?? [],
     ...(draft.sticker ? { sticker_id: draft.sticker.id, sticker: { ...draft.sticker } } : {}),
   };
 }

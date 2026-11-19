@@ -29,6 +29,10 @@ interface ChatHeaderProps {
   /** D1 UX: right details panel toggle. */
   detailsOpen: boolean;
   onToggleDetails: () => void;
+  /** §9: start an audio (`false`) or video (`true`) 1:1 call. */
+  onStartCall?: (video: boolean) => void;
+  /** A call is already ringing/connected, so a second attempt is disabled. */
+  callActive?: boolean;
 }
 
 const REALTIME_LABEL: Record<AppState['realtimeStatus'], MessageKey> = {
@@ -50,6 +54,8 @@ export function ChatHeader({
   onToggleSearch,
   detailsOpen,
   onToggleDetails,
+  onStartCall,
+  callActive = false,
 }: ChatHeaderProps) {
   const name = chatDisplayName(
     chat,
@@ -67,6 +73,20 @@ export function ChatHeader({
   ).length;
   const membersCount = state.workspaceMembers.items.length;
   const realtimeLabel = t(REALTIME_LABEL[state.realtimeStatus]);
+  const callsAvailable =
+    chat?.type === 'DIRECT' &&
+    state.realtimeStatus === 'online' &&
+    !callActive &&
+    Boolean(onStartCall);
+  const callsDisabledReason = callActive
+    ? t('calls.alreadyActive')
+    : chat?.type !== 'DIRECT'
+      ? t('calls.directOnly')
+      : state.realtimeStatus !== 'online'
+        ? t('calls.realtimeRequired')
+        : null;
+  const callTitle = callsDisabledReason ?? t('chat.call');
+  const videoCallTitle = callsDisabledReason ?? t('chat.videoCall');
 
   const meta =
     chatType === 'DIRECT'
@@ -169,18 +189,20 @@ export function ChatHeader({
         <button
           type="button"
           className="icon-button chat-head__call"
-          disabled
+          disabled={!callsAvailable}
+          onClick={() => onStartCall?.(false)}
           aria-label={t('chat.call')}
-          title={t('chat.callsUnavailable')}
+          title={callTitle}
         >
           <PhoneIcon aria-hidden="true" />
         </button>
         <button
           type="button"
           className="icon-button chat-head__video"
-          disabled
+          disabled={!callsAvailable}
+          onClick={() => onStartCall?.(true)}
           aria-label={t('chat.videoCall')}
-          title={t('chat.callsUnavailable')}
+          title={videoCallTitle}
         >
           <VideoIcon aria-hidden="true" />
         </button>

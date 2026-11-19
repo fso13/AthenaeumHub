@@ -33,7 +33,7 @@ public class ChatAccessService implements ChatAccessPort {
         ChatMember member = chatRepository.findMember(chatId, userId)
                 .filter(ChatMember::isActive)
                 .orElseThrow(() -> DomainException.notFound("Chat not found"));
-        return new ChatAccess(chatId, workspaceId, member.role().name(),
+        return new ChatAccess(chatId, workspaceId, chat.type().name(), member.role().name(),
                 chat.securityMode().name(), chatRepository.lastSeq(chatId));
     }
 
@@ -50,7 +50,8 @@ public class ChatAccessService implements ChatAccessPort {
         }
         return chatRepository.findMember(chatId, userId)
                 .filter(ChatMember::isActive)
-                .map(member -> new ChatAccess(chatId, workspaceId, member.role().name(),
-                        chat.securityMode().name(), chatRepository.lastSeq(chatId)));
+                .map(member -> new ChatAccess(chatId, workspaceId, chat.type().name(),
+                        member.role().name(), chat.securityMode().name(),
+                        chatRepository.lastSeq(chatId)));
     }
 }

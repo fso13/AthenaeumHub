@@ -109,6 +109,22 @@ const shortDateFormatter = new Intl.DateTimeFormat('ru-RU', {
   month: 'short',
 });
 
+/** #62: full local timestamp for the "изменено" tooltip/title. */
+const dateTimeFormatter = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return dateTimeFormatter.format(date);
+}
+
 export function formatShortDate(iso: string | null | undefined, now: Date = new Date()): string {
   if (!iso) return '';
   const date = new Date(iso);

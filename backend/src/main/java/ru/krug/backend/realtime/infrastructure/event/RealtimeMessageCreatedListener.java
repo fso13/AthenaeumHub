@@ -8,11 +8,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import ru.krug.backend.message.application.event.MessageCreatedNotification;
 import ru.krug.backend.message.application.model.MessageView;
-import ru.krug.backend.realtime.application.model.AttachmentMediaSnapshot;
-import ru.krug.backend.realtime.application.model.AttachmentSnapshot;
-import ru.krug.backend.realtime.application.model.MessageSnapshot;
-import ru.krug.backend.realtime.application.model.StickerSnapshot;
 import ru.krug.backend.realtime.application.port.RealtimePublisherPort;
+import ru.krug.backend.realtime.application.service.MessageSnapshotMapper;
 import ru.krug.backend.realtime.application.service.RealtimeEventFactory;
 import ru.krug.backend.shared.application.port.E2eeSettingsPort;
 
@@ -44,35 +41,12 @@ public class RealtimeMessageCreatedListener {
             if (view.isE2ee() && !e2eeSettings.enabled()) {
                 return;
             }
-            MessageSnapshot snapshot = new MessageSnapshot(notification.workspaceId(), view.id(),
-                    view.chatId(), view.seq(), view.type(), view.senderId(),
-                    view.senderDisplayName(), view.text(), view.replyToId(),
-                    view.threadRootId(), view.createdAt(), view.editedAt(), view.deletedAt(),
-                    view.version(), view.clientMessageId(), view.crypto(), view.stickerId(),
-                    view.sticker() == null ? null : new StickerSnapshot(view.sticker().id(),
-                            view.sticker().packId(), view.sticker().alt(),
-                            view.sticker().url(), view.sticker().favorite()),
-                    view.attachments().stream()
-                            .map(attachment -> new AttachmentSnapshot(attachment.id(),
-                                    attachment.filename(), attachment.sizeBytes(),
-                                    attachment.mimeType(), attachment.scanStatus(),
-                                    media(attachment.media())))
-                            .toList());
+            var snapshot = MessageSnapshotMapper.from(notification.workspaceId(), view);
             publisher.publish(RealtimeEventFactory.messageCreated(snapshot,
                     notification.cryptoByDevice()));
         } catch (RuntimeException ex) {
             log.warn("realtime.message_fanout_failed message_id={}",
                     notification.message().id());
         }
-    }
-
-    private static AttachmentMediaSnapshot media(
-            ru.krug.backend.message.application.model.AttachmentMediaView media) {
-        if (media == null) {
-            return null;
-        }
-        return new AttachmentMediaSnapshot(media.kind(), media.durationMs(), media.width(),
-                media.height(), media.title(), media.artist(), media.album(), media.year(),
-                media.genre(), media.artworkUrl(), media.metadataSource());
     }
 }

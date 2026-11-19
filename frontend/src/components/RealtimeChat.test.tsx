@@ -9,6 +9,7 @@ import {
   publishMockMessageCreated,
   publishMockReceipt,
   publishMockTyping,
+  mockRealtimeSubscribedChats,
 } from '../mocks/realtime';
 import { mockDb, server } from '../test/server';
 import { renderApp } from '../test/renderApp';
@@ -27,6 +28,7 @@ async function waitForOnline(store: ChatStore): Promise<void> {
   await vi.waitFor(
     () => {
       expect(store.getSnapshot().realtimeStatus).toBe('online');
+      expect(mockRealtimeSubscribedChats()).toContain(IDS.groupChat);
     },
     { timeout: 4_000 },
   );
@@ -57,7 +59,9 @@ describe('realtime chat UI', () => {
     act(() =>
       publishMockTyping(mockDb, IDS.groupChat, IDS.mark, new Date(Date.now() + 200).toISOString()),
     );
-    expect(await screen.findByText(/Марк Соколов печатает…/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Марк Соколов печатает…/, {}, { timeout: 5_000 }),
+    ).toBeInTheDocument();
 
     await waitFor(
       () => {

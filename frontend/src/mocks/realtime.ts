@@ -1,5 +1,6 @@
 import type { ApiMessage } from '../api/types';
 import type { EventFrame, PresenceStatus, ServerFrame, SubscribedChat } from '../realtime/protocol';
+import type { CallSignalPayload } from '../calls/types';
 import type { RealtimeSocket, SocketCloseEvent, SocketFactory } from '../realtime/socket';
 import type { MockDb } from './db';
 import { newUuid } from '../lib/ids';
@@ -20,11 +21,28 @@ interface MockConnection {
 
 const connections = new Set<MockConnection>();
 
+/**
+ * §9 call frames sent by the client under test. The mock has no second peer,
+ * so it accepts `call.signal`, records it and waits for the test to publish an
+ * answer/ICE frame explicitly. This also documents the exact payload shape.
+ */
+export interface MockCallSignal {
+  chat_id: string;
+  payload: CallSignalPayload;
+}
+
+let sentCallSignals: MockCallSignal[] = [];
+
+export function mockSentCallSignals(): readonly MockCallSignal[] {
+  return sentCallSignals;
+}
+
 export function resetMockRealtime(): void {
   for (const connection of [...connections]) {
     connection.socket.close(1000, 'mock reset');
   }
   connections.clear();
+  sentCallSignals = [];
 }
 
 export function dropMockRealtimeConnections(code = 1013, reason = 'SLOW_CONSUMER'): void {
@@ -35,6 +53,16 @@ export function dropMockRealtimeConnections(code = 1013, reason = 'SLOW_CONSUMER
 
 export function mockRealtimeConnectionCount(): number {
   return connections.size;
+}
+
+/** Test helper: chats the open mock connections have subscribed to. */
+export function mockRealtimeSubscribedChats(): string[] {
+  const chats = new Set<string>();
+  for (const connection of connections) {
+    if (!connection.open) continue;
+    for (const chatId of connection.subscriptions.keys()) chats.add(chatId);
+  }
+  return [...chats];
 }
 
 export function publishMockMessageCreated(_db: MockDb, message: ApiMessage): void {
@@ -48,6 +76,60 @@ export function publishMockMessageCreated(_db: MockDb, message: ApiMessage): voi
     payload: { message },
   };
   broadcastToChat(message.chat_id, frame);
+}
+
+/** #62: live edit fan-out; payload is the flat `Message` (ws-protocol §3). */
+export function publishMockMessageUpdated(_db: MockDb, message: ApiMessage): void {
+  broadcastToChat(message.chat_id, {
+    type: 'event',
+    event_id: newUuid(),
+    event: 'message.updated',
+    chat_id: message.chat_id,
+    seq: message.seq,
+    ts: message.edited_at ?? new Date().toISOString(),
+    payload: { message },
+  });
+}
+
+/** #63: delete-for-all tombstone; delete-for-me is never published. */
+export function publishMockMessageDeleted(
+  _db: MockDb,
+  chatId: string,
+  messageId: string,
+  deletedAt: string,
+  deletedBy: string | null,
+): void {
+  broadcastToChat(chatId, {
+    type: 'event',
+    event_id: newUuid(),
+    event: 'message.deleted',
+    chat_id: chatId,
+    payload: {
+      message_id: messageId,
+      deleted_at: deletedAt,
+      deleted_by: deletedBy,
+      scope: 'all',
+    },
+  });
+}
+
+/** #61: `count` is the server aggregate; the store replaces, never increments. */
+export function publishMockReactionChanged(
+  _db: MockDb,
+  chatId: string,
+  messageId: string,
+  userId: string,
+  emoji: string,
+  action: 'ADDED' | 'REMOVED',
+  count: number,
+): void {
+  broadcastToChat(chatId, {
+    type: 'event',
+    event_id: newUuid(),
+    event: 'message.reaction.changed',
+    chat_id: chatId,
+    payload: { message_id: messageId, user_id: userId, emoji, action, count },
+  });
 }
 
 export function publishMockReceipt(
@@ -92,6 +174,55 @@ export function publishMockPresence(
       status,
       last_seen_at: lastSeenAt,
     });
+  }
+}
+
+/**
+ * Deliver a relayed `call.signal` to every open mock connection, i.e. the
+ * server-side fan-out from §9.2. The chat subscription is irrelevant.
+ */
+export function publishMockCallSignal(input: {
+  chat_id: string;
+  payload: CallSignalPayload;
+  from_user_id?: string | null;
+  from_device_id?: string | null;
+}): void {
+  // The real server relays calls as `type:"event"`, `event:"call.signal"` with
+  // `from_*` on the envelope (§9.2); the mock reproduces that shape exactly.
+  const frame = {
+    type: 'event',
+    event: 'call.signal',
+    chat_id: input.chat_id,
+    ...(input.from_user_id ? { from_user_id: input.from_user_id } : {}),
+    ...(input.from_device_id ? { from_device_id: input.from_device_id } : {}),
+    payload: input.payload,
+  } as unknown as ServerFrame;
+  for (const connection of connections) {
+    if (!connection.open) continue;
+    connection.socket.deliver(frame);
+  }
+}
+
+/** Deliver `call.unavailable` to the caller's sessions (§9.3). */
+export function publishMockCallUnavailable(input: {
+  chat_id: string;
+  call_id: string;
+  kind?: CallSignalPayload['kind'];
+  reason?: string;
+}): void {
+  const frame = {
+    type: 'event',
+    event: 'call.unavailable',
+    chat_id: input.chat_id,
+    payload: {
+      call_id: input.call_id,
+      kind: input.kind ?? 'offer',
+      reason: input.reason ?? 'PEER_OFFLINE',
+    },
+  } as unknown as ServerFrame;
+  for (const connection of connections) {
+    if (!connection.open) continue;
+    connection.socket.deliver(frame);
   }
 }
 
@@ -222,6 +353,32 @@ class MockRealtimeSocket implements RealtimeSocket {
       case 'typing':
         // No other demo participant to notify; tests publish directly.
         break;
+      case 'call.signal': {
+        const chatId = typeof parsed.chat_id === 'string' ? parsed.chat_id : '';
+        const body = parsed.payload;
+        if (
+          !chatId ||
+          !isRecord(body) ||
+          typeof body.call_id !== 'string' ||
+          typeof body.kind !== 'string' ||
+          typeof body.video !== 'boolean'
+        ) {
+          this.deliver({
+            type: 'error',
+            code: 'WS_FRAME_INVALID',
+            message: 'Invalid call.signal payload',
+            request_id: `mock-${newUuid()}`,
+          });
+          break;
+        }
+        // No second demo peer exists: record the frame for assertions. Tests
+        // publish the peer's answer/ICE/hangup explicitly.
+        sentCallSignals.push({
+          chat_id: chatId,
+          payload: body as unknown as CallSignalPayload,
+        });
+        break;
+      }
       default:
         this.deliver({
           type: 'error',

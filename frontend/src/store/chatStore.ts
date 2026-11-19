@@ -14,9 +14,12 @@ import type {
   MeResponse,
   MeUser,
   MessageCreateBody,
+  MessageDeleteScope,
+  MessageEdit,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
+  ReactionSummary,
   Session,
   StickerRef,
   SyncResponse,
@@ -68,6 +71,8 @@ import { isE2eeError } from '../e2ee/errors';
 import type { WireCryptoEnvelope } from '../e2ee/api/deviceKeys';
 import type { OutboxEntry, OutboxSendResult } from '../e2ee/outbox/types';
 import type { SessionResetBody } from '../e2ee/session/reset';
+import { CallController } from '../calls/CallController';
+import { idleCallState, type CallState } from '../calls/types';
 import {
   RealtimeClient,
   type RealtimeFailure,
@@ -75,6 +80,8 @@ import {
   type RealtimeStatus,
 } from '../realtime/RealtimeClient';
 import type {
+  CallSignalFrame,
+  CallUnavailableFrame,
   ErrorFrame,
   EventFrame,
   PresenceFrame,
@@ -129,6 +136,17 @@ export interface E2eeMessageView {
   readonly code?: string;
 }
 
+/** #61–#63: last failed message action, rendered next to the affected row. */
+export type MessageActionKind = 'reaction' | 'edit' | 'delete';
+
+export interface MessageActionError {
+  kind: MessageActionKind;
+  messageId: string;
+  /** Present for reaction failures only. */
+  emoji?: string;
+  error: ApiError;
+}
+
 export interface ChatSlice {
   chatId: string;
   status: 'idle' | 'loading' | 'ready' | 'error';
@@ -146,6 +164,23 @@ export interface ChatSlice {
   receipts: Record<string, number>;
   /** E7-F5: decrypted/control/unavailable views, keyed by server message id. */
   e2ee: Record<string, E2eeMessageView>;
+  /** #61: `${messageId}:${emoji}` with an in-flight idempotent POST/DELETE. */
+  pendingReactions: string[];
+  /** #62/#63: message ids with an in-flight edit or delete. */
+  pendingMessageIds: string[];
+  /** Last failed action of this chat; cleared by the next action on the row. */
+  actionError: MessageActionError | null;
+}
+
+/** Matches `ReactionCreate.emoji`: 1..32 code points, no HTML/space/control. */
+export function isReactionEmoji(value: string): boolean {
+  const codePoints = Array.from(value);
+  if (codePoints.length < 1 || codePoints.length > 32) return false;
+  if (/[\s<>"'`&]/.test(value)) return false;
+  return codePoints.every((char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code >= 0x20 && code !== 0x7f;
+  });
 }
 
 /** D1-FE3: why a thread panel cannot load or accept replies. */
@@ -374,6 +409,8 @@ export interface AppState {
   typing: Record<string, TypingEntry[]>;
   /** Ephemeral presence keyed by user; TTL-cleaned, never persisted. */
   presence: Record<string, PresenceEntry>;
+  /** §9 1:1 audio/video call state; media streams are in-memory only. */
+  call: CallState;
   /** E6-F: bell badge, panel list and read state. */
   notifications: NotificationsState;
   /** E6-F: preferences loaded lazily by the settings dialog. */
@@ -409,6 +446,10 @@ export interface ChatStoreDeps {
   e2eeBridge?: E2eeBridge | null;
   /** Test seam for the feature flag; defaults to `VITE_E2EE_ENABLED`. */
   e2eeEnabled?: boolean;
+  /** Test seam: getUserMedia for 1:1 calls (defaults to navigator.mediaDevices). */
+  callMediaDevices?: Pick<MediaDevices, 'getUserMedia'>;
+  /** Test seam: RTCPeerConnection factory for 1:1 calls. */
+  callCreatePeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
 }
 
 const MAX_TEXT_LENGTH = 8000;
@@ -497,6 +538,9 @@ export function createEmptySlice(chatId: string, unread = 0): ChatSlice {
     lastSeq: 0,
     receipts: {},
     e2ee: {},
+    pendingReactions: [],
+    pendingMessageIds: [],
+    actionError: null,
   };
 }
 
@@ -580,6 +624,8 @@ export class ChatStore {
   private readonly readKeys = new Map<string, string>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly realtime: RealtimeClient | null;
+  /** §9 call engine; owns getUserMedia/RTCPeerConnection and all media cleanup. */
+  private readonly calls: CallController;
   private readonly seenEventIds: string[] = [];
   private readonly seenEventIdSet = new Set<string>();
   private readonly gapInFlight = new Set<string>();
@@ -658,6 +704,7 @@ export class ChatStore {
       realtimeIssue: null,
       typing: {},
       presence: {},
+      call: idleCallState(),
       notifications: createEmptyNotificationsState(),
       notificationPreferences: createEmptyNotificationPreferencesState(),
       e2ee: createE2eeState(this.e2eeEnabled && this.e2eeBridge !== null),
@@ -702,10 +749,22 @@ export class ChatStore {
               onGap: (frame) => void this.handleResumeGap(frame),
               onTyping: (frame) => this.handleTyping(frame),
               onPresence: (frame) => this.handlePresence(frame),
+              onCallSignal: (frame) => this.handleCallSignal(frame),
+              onCallUnavailable: (frame) => this.handleCallUnavailable(frame),
               onBeforeReconnect: () => this.syncForReconnect(),
             },
           })
         : null;
+
+    this.calls = new CallController({
+      sendSignal: (chatId, payload) => this.realtime?.sendCallSignal(chatId, payload) ?? false,
+      onChange: (call) => this.patch({ call }),
+      createId: () => this.createId(),
+      iceServers: this.config.webrtcIceServers,
+      now: () => this.now(),
+      mediaDevices: deps.callMediaDevices,
+      createPeerConnection: deps.callCreatePeerConnection,
+    });
   }
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -720,6 +779,7 @@ export class ChatStore {
   dispose(): void {
     this.disposed = true;
     this.realtime?.stop();
+    this.calls.dispose();
     this.files.dispose();
     this.stickers.dispose();
     this.ops.dispose();
@@ -1000,6 +1060,7 @@ export class ChatStore {
 
   private async activateWorkspace(workspace: WorkspaceSummary): Promise<void> {
     this.realtime?.stop();
+    this.calls.stop();
     this.notificationEpoch += 1;
     writeDeviceWorkspaceId(workspace.id);
     this.files.setWorkspace(workspace.id, workspace.role ?? null);
@@ -1036,6 +1097,7 @@ export class ChatStore {
       realtimeIssue: null,
       typing: {},
       presence: {},
+      call: idleCallState(),
       notifications: createEmptyNotificationsState(),
       notificationPreferences: createEmptyNotificationPreferencesState(),
       e2ee: { ...this.state.e2ee, chats: {} },
@@ -1852,6 +1914,7 @@ export class ChatStore {
   /** Drop all user-scoped state on logout or account switch. */
   reset(): void {
     this.realtime?.stop();
+    this.calls.stop();
     this.notificationEpoch += 1;
     this.files.reset();
     this.stickers.reset();
@@ -1894,6 +1957,7 @@ export class ChatStore {
       realtimeIssue: null,
       typing: {},
       presence: {},
+      call: idleCallState(),
       notifications: createEmptyNotificationsState(),
       notificationPreferences: createEmptyNotificationPreferencesState(),
       e2ee: createE2eeState(this.e2eeEnabled && this.e2eeBridge !== null),
@@ -2041,6 +2105,432 @@ export class ChatStore {
         loadMoreError: apiError,
       });
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* #61–#63: reactions, edit and delete (managed-only metadata)         */
+  /* ------------------------------------------------------------------ */
+
+  private reactionKey(messageId: string, emoji: string): string {
+    return `${messageId}:${emoji}`;
+  }
+
+  /**
+   * Finds a message in the main feed or in any cached thread of the chat.
+   * Thread replies are never stored in `ChatSlice.messages` (D1-FE3).
+   */
+  private findMessageLocation(
+    chatId: string,
+    messageId: string,
+  ): { message: ApiMessage; threadRootId: string | null } | null {
+    const main = this.state.slices[chatId]?.messages.find((message) => message.id === messageId);
+    if (main) return { message: main, threadRootId: null };
+    for (const thread of Object.values(this.state.threads)) {
+      if (thread.chatId !== chatId) continue;
+      const reply = thread.replies.find((message) => message.id === messageId);
+      if (reply) return { message: reply, threadRootId: thread.rootId };
+    }
+    return null;
+  }
+
+  /**
+   * Applies a pure update to one message wherever it lives. Returning `null`
+   * removes the row (delete-for-me). Returns `true` when a row changed.
+   */
+  private updateMessageInChat(
+    chatId: string,
+    messageId: string,
+    update: (message: ApiMessage) => ApiMessage | null,
+  ): boolean {
+    let changed = false;
+    const slice = this.state.slices[chatId];
+    if (slice) {
+      const index = slice.messages.findIndex((message) => message.id === messageId);
+      if (index >= 0) {
+        const next = update(slice.messages[index]!);
+        const messages =
+          next === null
+            ? slice.messages.filter((message) => message.id !== messageId)
+            : slice.messages.map((message) => (message.id === messageId ? next : message));
+        this.patchSlice(chatId, {
+          messages,
+          ...(next === null ? { beforeSeq: minSeq(messages) } : {}),
+        });
+        if (
+          next === null &&
+          this.state.activeThread?.chatId === chatId &&
+          this.state.activeThread.rootId === messageId
+        ) {
+          this.closeThread();
+        }
+        changed = true;
+      }
+    }
+    for (const thread of Object.values(this.state.threads)) {
+      if (thread.chatId !== chatId) continue;
+      const index = thread.replies.findIndex((message) => message.id === messageId);
+      if (index < 0) continue;
+      const next = update(thread.replies[index]!);
+      const replies =
+        next === null
+          ? thread.replies.filter((message) => message.id !== messageId)
+          : thread.replies.map((message) => (message.id === messageId ? next : message));
+      this.patchThread(threadKey(chatId, thread.rootId), {
+        replies,
+        ...(next === null ? { beforeSeq: minSeq(replies) } : {}),
+      });
+      changed = true;
+    }
+    return changed;
+  }
+
+  /** Merges an authoritative server message (edit result or `message.updated`). */
+  private mergeServerMessage(chatId: string, message: ApiMessage): void {
+    if (message.chat_id !== chatId) return;
+    const normalized: ApiMessage = { ...message, reactions: message.reactions ?? [] };
+    if (this.updateMessageInChat(chatId, normalized.id, () => normalized)) return;
+    const slice = this.state.slices[chatId];
+    if (!slice || slice.status !== 'ready' || normalized.thread_root_id) return;
+    const messages = mergeMessages(slice.messages, [normalized]);
+    this.patchSlice(chatId, { messages, beforeSeq: minSeq(messages) });
+  }
+
+  /** Removes the decrypted view together with a tombstone/removal. */
+  private dropE2eeView(chatId: string, messageId: string): void {
+    const slice = this.state.slices[chatId];
+    if (!slice || !(messageId in slice.e2ee)) return;
+    const e2ee = { ...slice.e2ee };
+    delete e2ee[messageId];
+    this.patchSlice(chatId, { e2ee });
+  }
+
+  private setActionError(chatId: string, value: MessageActionError): void {
+    this.patchSlice(chatId, { actionError: value });
+  }
+
+  private clearActionErrorFor(chatId: string, messageId: string): void {
+    const current = this.state.slices[chatId]?.actionError ?? null;
+    if (current !== null && current.messageId === messageId) {
+      this.patchSlice(chatId, { actionError: null });
+    }
+  }
+
+  clearMessageActionError(chatId: string): void {
+    if (this.state.slices[chatId]?.actionError) this.patchSlice(chatId, { actionError: null });
+  }
+
+  /** Applies one aggregate row to `message.reactions` (idempotent by emoji). */
+  private applyReactionState(
+    chatId: string,
+    messageId: string,
+    emoji: string,
+    next: { count: number; me: boolean },
+  ): void {
+    this.updateMessageInChat(chatId, messageId, (message) => {
+      if (message.deleted_at) return message;
+      const reactions = [...(message.reactions ?? [])];
+      const index = reactions.findIndex((reaction) => reaction.emoji === emoji);
+      const count = Math.max(0, Math.trunc(next.count));
+      if (count === 0) {
+        if (index < 0) return message;
+        reactions.splice(index, 1);
+      } else if (index >= 0) {
+        reactions[index] = { emoji, count, me: next.me };
+      } else {
+        reactions.push({ emoji, count, me: next.me });
+      }
+      return { ...message, reactions };
+    });
+  }
+
+  private reactionGuard(chatId: string, message: ApiMessage): ApiError | null {
+    // Managed-only metadata: an E2EE chat must never send emoji/user_id.
+    if (this.isE2eeChat(chatId)) {
+      return ApiError.client(
+        'E2EE_METADATA_FORBIDDEN',
+        'Reactions are not available in an E2EE chat',
+        422,
+      );
+    }
+    if (message.deleted_at) {
+      return ApiError.client('NOT_FOUND', 'Message is deleted', 404);
+    }
+    if (message.type === 'SYSTEM') {
+      return ApiError.client(
+        'MESSAGE_NOT_EDITABLE',
+        'System messages do not accept reactions',
+        422,
+      );
+    }
+    return null;
+  }
+
+  /** Idempotent add; optimistically shows `me`/`count` and rolls back on error. */
+  async addReaction(chatId: string, messageId: string, emoji: string): Promise<boolean> {
+    return this.mutateReaction(chatId, messageId, emoji, 'add');
+  }
+
+  /** Idempotent remove — only the viewer's own reaction is removed server-side. */
+  async removeReaction(chatId: string, messageId: string, emoji: string): Promise<boolean> {
+    return this.mutateReaction(chatId, messageId, emoji, 'remove');
+  }
+
+  async toggleReaction(chatId: string, messageId: string, emoji: string): Promise<boolean> {
+    const found = this.findMessageLocation(chatId, messageId);
+    if (!found) return false;
+    const mine = (found.message.reactions ?? []).some(
+      (reaction) => reaction.emoji === emoji && reaction.me,
+    );
+    return mine
+      ? this.removeReaction(chatId, messageId, emoji)
+      : this.addReaction(chatId, messageId, emoji);
+  }
+
+  private async mutateReaction(
+    chatId: string,
+    messageId: string,
+    emoji: string,
+    mode: 'add' | 'remove',
+  ): Promise<boolean> {
+    const slice = this.state.slices[chatId];
+    if (!slice) return false;
+    const found = this.findMessageLocation(chatId, messageId);
+    if (!found) return false;
+
+    if (!isReactionEmoji(emoji)) {
+      this.setActionError(chatId, {
+        kind: 'reaction',
+        messageId,
+        emoji,
+        error: ApiError.client('VALIDATION_FAILED', 'Invalid reaction emoji', 422),
+      });
+      return false;
+    }
+
+    const guard = this.reactionGuard(chatId, found.message);
+    if (guard !== null) {
+      this.setActionError(chatId, { kind: 'reaction', messageId, emoji, error: guard });
+      return false;
+    }
+
+    const key = this.reactionKey(messageId, emoji);
+    if (slice.pendingReactions.includes(key)) return false;
+
+    const current = (found.message.reactions ?? []).find((reaction) => reaction.emoji === emoji);
+    this.clearActionErrorFor(chatId, messageId);
+    this.patchSlice(chatId, {
+      pendingReactions: [...(this.state.slices[chatId]?.pendingReactions ?? []), key],
+    });
+
+    // Only the viewer's own row is optimistic: another user's reaction is
+    // never guessed. A repeated add/remove is idempotent server-side.
+    const optimistic: ReactionSummary | null =
+      mode === 'add'
+        ? current?.me
+          ? null
+          : { emoji, count: (current?.count ?? 0) + 1, me: true }
+        : current?.me
+          ? { emoji, count: Math.max(0, (current?.count ?? 1) - 1), me: false }
+          : null;
+    if (optimistic) this.applyReactionState(chatId, messageId, emoji, optimistic);
+
+    try {
+      if (mode === 'add') {
+        const summary = await this.api.addReaction(chatId, messageId, emoji);
+        const latest = this.findMessageLocation(chatId, messageId)?.message.reactions?.find(
+          (reaction) => reaction.emoji === emoji,
+        );
+        // The server aggregate wins, but a concurrent WS increment must not be
+        // rolled back by a response that was committed a moment earlier.
+        this.applyReactionState(chatId, messageId, emoji, {
+          count: Math.max(summary.count, latest?.count ?? 0),
+          me: true,
+        });
+      } else {
+        await this.api.removeReaction(chatId, messageId, emoji);
+      }
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (optimistic) {
+        this.applyReactionState(
+          chatId,
+          messageId,
+          emoji,
+          current ? { count: current.count, me: current.me } : { count: 0, me: false },
+        );
+      }
+      this.setActionError(chatId, { kind: 'reaction', messageId, emoji, error: apiError });
+      return false;
+    } finally {
+      const after = this.state.slices[chatId];
+      if (after) {
+        this.patchSlice(chatId, {
+          pendingReactions: after.pendingReactions.filter((pending) => pending !== key),
+        });
+      }
+    }
+  }
+
+  /**
+   * #62: edit own managed TEXT. The optional `version` is the optimistic lock;
+   * `409 VERSION_CONFLICT` keeps the draft in the dialog, re-reads the row and
+   * reports the conflict instead of overwriting someone else's edit.
+   */
+  async editMessage(
+    chatId: string,
+    messageId: string,
+    text: string,
+    version: number | null = null,
+  ): Promise<boolean> {
+    const slice = this.state.slices[chatId];
+    if (!slice) return false;
+    const found = this.findMessageLocation(chatId, messageId);
+    if (!found) return false;
+    const message = found.message;
+
+    const fail = (error: ApiError): false => {
+      this.setActionError(chatId, { kind: 'edit', messageId, error });
+      return false;
+    };
+
+    if (this.isE2eeChat(chatId)) {
+      return fail(
+        ApiError.client('E2EE_METADATA_FORBIDDEN', 'Editing is not available in an E2EE chat', 422),
+      );
+    }
+    if (message.deleted_at) return fail(ApiError.client('NOT_FOUND', 'Message is deleted', 404));
+    if (message.type !== 'TEXT') {
+      return fail(ApiError.client('MESSAGE_NOT_EDITABLE', 'Only TEXT messages can be edited', 422));
+    }
+    if (message.sender_id !== this.viewerId()) {
+      return fail(ApiError.client('FORBIDDEN', 'Only the author can edit this message', 403));
+    }
+
+    const trimmed = text.trim();
+    if (trimmed.length < 1 || trimmed.length > MAX_TEXT_LENGTH) {
+      return fail(
+        ApiError.client('VALIDATION_FAILED', 'Message text must be 1..8000 characters', 422),
+      );
+    }
+    if (slice.pendingMessageIds.includes(messageId)) return false;
+
+    this.clearActionErrorFor(chatId, messageId);
+    this.patchSlice(chatId, {
+      pendingMessageIds: [...(this.state.slices[chatId]?.pendingMessageIds ?? []), messageId],
+    });
+    try {
+      const body: MessageEdit = { text: trimmed, ...(version !== null ? { version } : {}) };
+      const updated = await this.api.editMessage(chatId, messageId, body);
+      this.mergeServerMessage(chatId, updated);
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      // The row is stale: fetch the current server copy so the next save (and
+      // the visible text after closing the dialog) is based on reality.
+      if (apiError.status === 409) {
+        await this.refreshMessageFromServer(chatId, messageId, found.threadRootId);
+      }
+      return fail(apiError);
+    } finally {
+      const after = this.state.slices[chatId];
+      if (after) {
+        this.patchSlice(chatId, {
+          pendingMessageIds: after.pendingMessageIds.filter((id) => id !== messageId),
+        });
+      }
+    }
+  }
+
+  /** Re-reads one message page after a 409; failures are intentionally silent. */
+  private async refreshMessageFromServer(
+    chatId: string,
+    messageId: string,
+    threadRootId: string | null,
+  ): Promise<void> {
+    try {
+      const page = await this.api.listMessages(chatId, {
+        limit: this.config.historyPageSize,
+        ...(threadRootId ? { threadRootId } : {}),
+      });
+      const fresh = page.items.find((message) => message.id === messageId);
+      if (fresh) this.mergeServerMessage(chatId, fresh);
+    } catch {
+      // The action error already explains the conflict; a refresh failure must
+      // not replace it or escalate into a global chat error.
+    }
+  }
+
+  /**
+   * #63: `scope=me` hides locally only after the server confirms the per-user
+   * marker; `scope=all` is never optimistic and is author-only (403 otherwise).
+   * A confirmed delete-for-all becomes a tombstone with all content cleared.
+   */
+  async deleteMessage(
+    chatId: string,
+    messageId: string,
+    scope: MessageDeleteScope,
+  ): Promise<boolean> {
+    const slice = this.state.slices[chatId];
+    if (!slice) return false;
+    const found = this.findMessageLocation(chatId, messageId);
+    if (!found) return false;
+    const message = found.message;
+
+    if (scope === 'all' && message.sender_id !== this.viewerId()) {
+      this.setActionError(chatId, {
+        kind: 'delete',
+        messageId,
+        error: ApiError.client('FORBIDDEN', 'Only the author can delete for everyone', 403),
+      });
+      return false;
+    }
+    if (slice.pendingMessageIds.includes(messageId)) return false;
+
+    this.clearActionErrorFor(chatId, messageId);
+    this.patchSlice(chatId, {
+      pendingMessageIds: [...(this.state.slices[chatId]?.pendingMessageIds ?? []), messageId],
+    });
+    try {
+      await this.api.deleteMessage(chatId, messageId, scope);
+      if (scope === 'me') {
+        this.updateMessageInChat(chatId, messageId, () => null);
+        this.dropE2eeView(chatId, messageId);
+      } else {
+        this.applyTombstone(chatId, messageId, new Date().toISOString());
+      }
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.setActionError(chatId, { kind: 'delete', messageId, error: apiError });
+      return false;
+    } finally {
+      const after = this.state.slices[chatId];
+      if (after) {
+        this.patchSlice(chatId, {
+          pendingMessageIds: after.pendingMessageIds.filter((id) => id !== messageId),
+        });
+      }
+    }
+  }
+
+  private applyTombstone(chatId: string, messageId: string, deletedAt: string): void {
+    this.updateMessageInChat(chatId, messageId, (message) => ({
+      ...message,
+      text: null,
+      deleted_at: deletedAt,
+      reactions: [],
+      attachments: [],
+      // The generated schema intersects StickerRef with `null`; `undefined`
+      // clears the old object without inventing a contract field.
+      sticker: undefined,
+      sticker_id: null,
+      crypto: null,
+    }));
+    this.dropE2eeView(chatId, messageId);
   }
 
   /* ------------------------------------------------------------------ */
@@ -4458,6 +4948,65 @@ export class ChatStore {
     this.realtime?.sendTyping(chatId);
   }
 
+  /* ---------------------------------------------------------------------- */
+  /* §9 1:1 calls                                                            */
+  /* ---------------------------------------------------------------------- */
+
+  /**
+   * Start an outgoing 1:1 call. DIRECT only; the server rejects GROUP with
+   * `CALL_NOT_SUPPORTED`, so the guard here mirrors that rule for an honest UI.
+   * No media is requested until the user presses the header button.
+   */
+  startCall(chatId: string, video: boolean): void {
+    if (this.state.call.phase !== 'idle') return;
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    if (!chat || chat.type !== 'DIRECT') return;
+    if (this.state.realtimeStatus !== 'online') {
+      this.patch({
+        call: { ...idleCallState(), notice: { code: 'signaling_failed' } },
+      });
+      return;
+    }
+    this.calls.start(chatId, chat.peer_id ?? null, video);
+  }
+
+  acceptIncomingCall(): void {
+    this.calls.accept();
+  }
+
+  rejectIncomingCall(): void {
+    this.calls.reject();
+  }
+
+  /** Explicit hangup; the overlay confirms before calling this for a live call. */
+  endCall(): void {
+    this.calls.hangup();
+  }
+
+  toggleCallMute(): void {
+    this.calls.toggleMute();
+  }
+
+  toggleCallCamera(): void {
+    this.calls.toggleCamera();
+  }
+
+  dismissCallNotice(): void {
+    this.calls.dismissNotice();
+  }
+
+  private handleCallSignal(frame: CallSignalFrame): void {
+    // Defence in depth: the relay is DIRECT-only server-side, but a stale or
+    // malformed frame for a GROUP/unknown chat must never create call UI.
+    const chat = this.state.chats.find((item) => item.id === frame.chat_id) ?? null;
+    if (chat && chat.type !== 'DIRECT') return;
+    this.calls.handleSignal(frame);
+  }
+
+  private handleCallUnavailable(frame: CallUnavailableFrame): void {
+    this.calls.handleUnavailable(frame.payload.call_id);
+  }
+
   async sync(): Promise<void> {
     const { activeWorkspaceId, session, online, sessionStatus, onboardingRequired } = this.state;
     const workspaceId = activeWorkspaceId ?? session?.workspace.id;
@@ -4615,6 +5164,23 @@ export class ChatStore {
   }
 
   private handleRealtimeServerError(frame: ErrorFrame): void {
+    // §9.4: call-signal errors are recoverable and must only fail the active
+    // call, never the WS or messaging. RATE_LIMITED/FORBIDDEN are shared with
+    // other frames, so they are attributed to the call only when one is live.
+    const callActive = this.state.call.phase !== 'idle';
+    if (
+      frame.code === 'CALL_NOT_SUPPORTED' ||
+      frame.code === 'CALL_PAYLOAD_TOO_LARGE' ||
+      (callActive &&
+        (frame.code === 'RATE_LIMITED' ||
+          frame.code === 'FORBIDDEN' ||
+          frame.code === 'WS_FRAME_INVALID'))
+    ) {
+      this.calls.handleServerError(frame.code);
+      // Do not surface a call-only rejection as a global realtime outage.
+      return;
+    }
+
     const kind: RealtimeFailureKind =
       frame.code === 'FORBIDDEN'
         ? 'forbidden'
@@ -4632,6 +5198,7 @@ export class ChatStore {
   }
 
   private handleRealtimeRevoked(reason: string): void {
+    this.calls.stop();
     const error = ApiError.client('SESSION_REVOKED', reason || 'Realtime session was revoked', 403);
     this.patch({
       realtimeStatus: 'revoked',
@@ -4687,6 +5254,18 @@ export class ChatStore {
     }
     if (frame.event === 'message.receipt') {
       this.applyMessageReceipt(frame);
+      return;
+    }
+    if (frame.event === 'message.updated') {
+      this.applyMessageUpdated(frame);
+      return;
+    }
+    if (frame.event === 'message.deleted') {
+      this.applyMessageDeleted(frame);
+      return;
+    }
+    if (frame.event === 'message.reaction.changed') {
+      this.applyReactionChanged(frame);
       return;
     }
     if (frame.event === 'chat.keys.changed') {
@@ -4841,6 +5420,69 @@ export class ChatStore {
     if (this.state.activeChatId === chatId) {
       this.realtime?.sendAck(message.seq);
     }
+  }
+
+  /**
+   * #62 live event: the flat `Message` is authoritative for text, version,
+   * `edited_at` and `reactions`. E2EE is never updated through plaintext
+   * metadata (the backend must not emit this event for E2EE).
+   */
+  private applyMessageUpdated(frame: EventFrame): void {
+    if (this.isE2eeChat(frame.chat_id)) return;
+    const message = readApiMessage(frame.payload.message) ?? readApiMessage(frame.payload);
+    if (!message || message.chat_id !== frame.chat_id) return;
+    this.mergeServerMessage(frame.chat_id, message);
+  }
+
+  /**
+   * #63 live tombstone (`scope=all` only; delete-for-me is local and never
+   * published). The server owns `deleted_at`; the client clears content,
+   * reactions, attachments and the decrypted view immediately.
+   */
+  private applyMessageDeleted(frame: EventFrame): void {
+    const scope = frame.payload.scope;
+    if (scope !== undefined && scope !== 'all') return;
+    const messageId = frame.payload.message_id;
+    if (typeof messageId !== 'string' || messageId.length === 0) return;
+    const found = this.findMessageLocation(frame.chat_id, messageId);
+    if (!found) return;
+    const deletedAt =
+      typeof frame.payload.deleted_at === 'string' &&
+      !Number.isNaN(Date.parse(frame.payload.deleted_at))
+        ? frame.payload.deleted_at
+        : new Date().toISOString();
+    this.applyTombstone(frame.chat_id, messageId, deletedAt);
+  }
+
+  /**
+   * #61 live aggregate: `count` is the server total, so repeated/late frames are
+   * idempotent. `me` follows the viewer's user id; other users' rows never
+   * change the local `me` flag. A zero count removes the chip.
+   */
+  private applyReactionChanged(frame: EventFrame): void {
+    if (this.isE2eeChat(frame.chat_id)) return;
+    const messageId = frame.payload.message_id;
+    const emoji = frame.payload.emoji;
+    const action = frame.payload.action;
+    if (typeof messageId !== 'string' || messageId.length === 0) return;
+    if (typeof emoji !== 'string' || !isReactionEmoji(emoji)) return;
+    if (action !== 'ADDED' && action !== 'REMOVED') return;
+
+    const found = this.findMessageLocation(frame.chat_id, messageId);
+    if (!found || found.message.deleted_at) return;
+    const existing = (found.message.reactions ?? []).find((reaction) => reaction.emoji === emoji);
+    const userId = typeof frame.payload.user_id === 'string' ? frame.payload.user_id : null;
+    const self = userId !== null && userId === this.viewerId();
+    const rawCount = frame.payload.count;
+    const hasCount = typeof rawCount === 'number' && Number.isFinite(rawCount);
+    const count =
+      action === 'ADDED'
+        ? Math.max(1, hasCount ? Math.floor(rawCount) : (existing?.count ?? 0) + 1)
+        : Math.max(0, hasCount ? Math.floor(rawCount) : (existing?.count ?? 1) - 1);
+    this.applyReactionState(frame.chat_id, messageId, emoji, {
+      count,
+      me: self ? action === 'ADDED' : (existing?.me ?? false),
+    });
   }
 
   private applyMessageReceipt(frame: EventFrame): void {

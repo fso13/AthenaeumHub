@@ -11,6 +11,12 @@ export type ChatList = components['schemas']['ChatList'];
 export type ApiMessage = components['schemas']['Message'];
 /** D1-FE3: server-computed reply summary; present on managed thread roots only. */
 export type ThreadSummary = NonNullable<ApiMessage['thread_summary']>;
+/** #61: aggregated reaction row (`emoji`/`count`/`me`) from the contract. */
+export type ReactionSummary = components['schemas']['ReactionSummary'];
+/** #62: managed-only edit body; `version` enables the optimistic lock. */
+export type MessageEdit = components['schemas']['MessageEdit'];
+/** #63: delete scope; `me` is the default, `all` is author-only. */
+export type MessageDeleteScope = 'me' | 'all';
 export type MessageCreateBody = components['schemas']['MessageCreate'];
 export type MessagePage = components['schemas']['MessagePage'];
 export type MessagePageMeta = MessagePage['page'];

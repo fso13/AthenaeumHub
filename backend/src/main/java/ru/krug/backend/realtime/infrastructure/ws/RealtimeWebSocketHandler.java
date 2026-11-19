@@ -14,6 +14,8 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import ru.krug.backend.realtime.application.model.CallSignal;
+import ru.krug.backend.realtime.application.model.CallSignalOutcome;
 import ru.krug.backend.realtime.application.model.ChatSubscription;
 import ru.krug.backend.realtime.application.model.PresenceStatus;
 import ru.krug.backend.realtime.application.model.RealtimeSession;
@@ -21,7 +23,9 @@ import ru.krug.backend.realtime.application.model.SubscribedChat;
 import ru.krug.backend.realtime.application.model.SubscriptionPlan;
 import ru.krug.backend.realtime.application.port.RealtimeDevicePort;
 import ru.krug.backend.realtime.application.port.RealtimeSettingsPort;
+import ru.krug.backend.realtime.application.usecase.CallSignalingService;
 import ru.krug.backend.realtime.application.usecase.SubscriptionService;
+import ru.krug.backend.realtime.domain.exception.CallSignalRejectedException;
 import ru.krug.backend.realtime.domain.exception.RealtimeSessionRevokedException;
 import ru.krug.backend.realtime.domain.exception.RealtimeTicketInvalidException;
 import ru.krug.backend.realtime.domain.exception.SubscriptionLimitExceededException;
@@ -40,22 +44,28 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
 
     private final InMemoryRealtimeHub hub;
     private final SubscriptionService subscriptionService;
+    private final CallSignalingService callSignaling;
     private final RealtimeDevicePort devicePort;
     private final RealtimeSettingsPort settings;
     private final WsFrameCodec codec;
+    private final CallSignalParser callSignalParser;
     private final ObjectMapper mapper;
 
     public RealtimeWebSocketHandler(InMemoryRealtimeHub hub,
                                     SubscriptionService subscriptionService,
+                                    CallSignalingService callSignaling,
                                     RealtimeDevicePort devicePort,
                                     RealtimeSettingsPort settings,
                                     WsFrameCodec codec,
+                                    CallSignalParser callSignalParser,
                                     ObjectMapper mapper) {
         this.hub = hub;
         this.subscriptionService = subscriptionService;
+        this.callSignaling = callSignaling;
         this.devicePort = devicePort;
         this.settings = settings;
         this.codec = codec;
+        this.callSignalParser = callSignalParser;
         this.mapper = mapper;
     }
 
@@ -116,6 +126,7 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                 case "ping" -> connection.enqueue(OutboundFrame.control(
                         codec.pong(java.time.Instant.now())));
                 case "typing" -> typing(connection, realtimeSession, frame);
+                case "call.signal" -> callSignal(connection, realtimeSession, frame);
                 default -> reject(connection, realtimeSession, ErrorCode.WS_FRAME_INVALID,
                         "Unknown frame type", null);
             }
@@ -197,6 +208,35 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
         subscriptionService.typing(session, chatId);
     }
 
+    /**
+     * 1:1 call signalling. Unlike other malformed frames, a rejected call frame does not
+     * close the socket: calls are an additive feature and a bad offer must not kill chat.
+     * The error message is generic and never includes SDP or ICE data.
+     */
+    private void callSignal(RealtimeConnection connection, RealtimeSession session,
+                            JsonNode frame) {
+        UUID chatId = CallSignalParser.parseUuid(frame.path("chat_id").asText(null));
+        log.debug("ws.call_signal session_id={} chat_id={}", session.sessionId(), chatId);
+        try {
+            if (chatId == null) {
+                throw CallSignalRejectedException.malformed("chat_id must be a UUID");
+            }
+            CallSignal signal = callSignalParser.parse(frame.get("payload"),
+                    settings.callSdpMaxBytes(), settings.callCandidateMaxBytes());
+            CallSignalOutcome outcome = callSignaling.signal(session, chatId, signal);
+            if (outcome == CallSignalOutcome.UNAVAILABLE) {
+                connection.enqueue(OutboundFrame.text(codec.callUnavailable(
+                        session.workspaceId(), chatId, signal.callId(), signal.kind(),
+                        "PEER_OFFLINE", java.time.Instant.now()), true, chatId, null));
+            }
+        } catch (CallSignalRejectedException ex) {
+            log.debug("ws.call_signal_rejected session_id={} code={}", session.sessionId(),
+                    ex.code());
+            connection.enqueue(OutboundFrame.control(codec.error(ex.code(), ex.getMessage(),
+                    session.sessionId(), chatId, ex.status())));
+        }
+    }
+
     private void reject(RealtimeConnection connection, RealtimeSession session, String code,
                         String message, UUID chatId) {
         connection.enqueue(OutboundFrame.control(codec.error(code, message,
@@ -219,6 +259,7 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         RealtimeSession realtimeSession = sessionOf(session);
         if (realtimeSession != null) {
+            callSignaling.forget(realtimeSession.sessionId());
             hub.unregister(realtimeSession.sessionId());
         }
     }
@@ -239,6 +280,7 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
                         realtimeSession.sessionId());
             }
         }
+        callSignaling.forget(realtimeSession.sessionId());
         hub.unregister(realtimeSession.sessionId());
     }
 

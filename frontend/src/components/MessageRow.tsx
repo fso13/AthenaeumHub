@@ -1,13 +1,14 @@
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
-import { formatTime, replyPreview } from '../domain/messages';
+import { formatDateTime, formatTime, replyPreview } from '../domain/messages';
 import { t } from '../i18n/ru';
 import type { E2eeMessageView, OutgoingMessage } from '../store/chatStore';
 import { isStickerMessage, stickerOf } from '../stickers/model';
 import { AttachmentList } from './AttachmentCard';
 import { Avatar } from './Avatar';
 import { ErrorDetails } from './ErrorDetails';
-import { AlertIcon, ClockIcon, ReplyIcon, RetryIcon, ThreadIcon } from './Icons';
+import { AlertIcon, ClockIcon, RetryIcon } from './Icons';
+import { MessageActions, ReactionBar } from './MessageActions';
 import { ThreadLink } from './ThreadLink';
 
 const UNKNOWN_AUTHOR = () => t('chat.unknownAuthor');
@@ -68,7 +69,15 @@ function MessageMeta({ author, mine, message, readByOthers, e2eeChat }: MessageM
       <time className="msg-time" dateTime={message.created_at}>
         {formatTime(message.created_at)}
       </time>
-      {message.edited_at ? <span className="msg-edited">{t('chat.edited')}</span> : null}
+      {message.edited_at && !e2eeChat ? (
+        <span
+          className="msg-edited"
+          title={t('message.editedTitle', { time: formatDateTime(message.edited_at) })}
+          aria-label={t('message.editedTitle', { time: formatDateTime(message.edited_at) })}
+        >
+          {t('chat.edited')}
+        </span>
+      ) : null}
       {mine && readByOthers ? <span className="receipt-state">{t('message.read')}</span> : null}
     </div>
   );
@@ -135,48 +144,6 @@ export function MessageRow({
         onOpen={() => onOpenThread(message)}
       />
     ) : null;
-  const replyAction =
-    !deleted && allowReply && onReply ? (
-      <button
-        type="button"
-        className="msg-tool"
-        onClick={() => onReply(message)}
-        aria-label={`${t('chat.reply')}: ${author}`}
-        title={t('chat.reply')}
-      >
-        <ReplyIcon aria-hidden="true" />
-      </button>
-    ) : null;
-  // With replies the always-visible `ThreadLink` is the single entry point;
-  // the hover action only creates a still-empty thread (no duplicate control
-  // with the same accessible name).
-  const threadAction =
-    canThread && threadsAvailable && onOpenThread && threadReplyCount === 0 ? (
-      <button
-        type="button"
-        className="msg-tool"
-        onClick={() => onOpenThread(message)}
-        aria-label={
-          threadReplyCount > 0
-            ? t('thread.openLabel', { count: threadReplyCount })
-            : t('thread.startLabel', { author })
-        }
-        title={threadReplyCount > 0 ? t('thread.open') : t('thread.start')}
-      >
-        <ThreadIcon aria-hidden="true" />
-      </button>
-    ) : canThread && !threadsAvailable && threadDisabledReason ? (
-      <button
-        type="button"
-        className="msg-tool"
-        disabled
-        aria-label={threadDisabledReason}
-        title={threadDisabledReason}
-      >
-        <ThreadIcon aria-hidden="true" />
-      </button>
-    ) : null;
-  const hasActions = Boolean(replyAction || threadAction);
 
   const quote = message.reply_to_id ? (
     replyTo ? (
@@ -194,13 +161,6 @@ export function MessageRow({
         <span className="quote__text">{quoteText}</span>
       </div>
     )
-  ) : null;
-
-  const tools = hasActions ? (
-    <div className="msg-tools">
-      {replyAction}
-      {threadAction}
-    </div>
   ) : null;
 
   const meta = (
@@ -247,7 +207,19 @@ export function MessageRow({
             )}
           </div>
           {threadLink}
-          {tools}
+          <ReactionBar message={message} e2eeChat={e2eeChat} />
+          <MessageActions
+            message={message}
+            author={author}
+            mine={mine}
+            e2eeChat={e2eeChat}
+            allowReply={allowReply}
+            onReply={onReply}
+            threadsAvailable={threadsAvailable}
+            threadDisabledReason={threadDisabledReason}
+            threadReplyCount={threadReplyCount}
+            onOpenThread={onOpenThread}
+          />
         </div>
       </article>
     );
@@ -268,7 +240,19 @@ export function MessageRow({
         ) : null}
         {!deleted && !e2eeChat ? <AttachmentList attachments={message.attachments ?? []} /> : null}
         {threadLink}
-        {tools}
+        <ReactionBar message={message} e2eeChat={e2eeChat} />
+        <MessageActions
+          message={message}
+          author={author}
+          mine={mine}
+          e2eeChat={e2eeChat}
+          allowReply={allowReply}
+          onReply={onReply}
+          threadsAvailable={threadsAvailable}
+          threadDisabledReason={threadDisabledReason}
+          threadReplyCount={threadReplyCount}
+          onOpenThread={onOpenThread}
+        />
       </div>
     </article>
   );

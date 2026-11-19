@@ -1665,6 +1665,152 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /chats/{chatId}/messages/{messageId}:
+    parameters:
+      - $ref: "#/components/parameters/ChatId"
+      - $ref: "#/components/parameters/DeviceId"
+      - $ref: "#/components/parameters/MessageId"
+    patch:
+      tags: [messages]
+      operationId: editMessage
+      summary: Редактировать собственное TEXT-сообщение (managed-only)
+      description: >
+        Только автор сообщения и только активный участник чата. Редактируются лишь
+        managed `TEXT`-сообщения, не удалённые (delete-for-all) и не скрытые для
+        вызывающего. `text` — 1..8000 символов. Сервер выставляет `edited_at`, увеличивает
+        `version` и публикует WS `message.updated`. Если передан `version` и он не совпал
+        с текущим — `409 VERSION_CONFLICT` (оптимистичная блокировка). E2EE-чат →
+        `422 E2EE_METADATA_FORBIDDEN` (сервер не редактирует шифротекст и не хранит
+        plaintext-метаданные); STICKER/SYSTEM → `422 MESSAGE_NOT_EDITABLE`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageEdit"
+      responses:
+        "200":
+          description: Обновлённое сообщение с новыми `version` и `edited_at`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+    delete:
+      tags: [messages]
+      operationId: deleteMessage
+      summary: Удалить сообщение для себя или для всех (только автор)
+      description: >
+        `scope=me` (по умолчанию) создаёт per-user маркер: сообщение исчезает только из
+        чтений вызывающего, остальные участники его видят. `scope=all` доступен только
+        автору сообщения (владелец/админ чата не получает это право) и является soft
+        delete: строка и `seq` остаются, `deleted_at`/`deleted_by` выставляются,
+        managed-контент очищается, вложения помечаются удалёнными, реакции удаляются;
+        публикуется WS `message.deleted` (`scope=all`). Повторный вызов идемпотентен
+        (`204`). Неизвестное/чужое сообщение → `404`; delete-for-all не автором → `403`.
+        E2EE-сообщение удаляется тем же tombstone-путём (конверты удаляются), чтобы
+        контент не оставался доступным.
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [me, all]
+            default: me
+      responses:
+        "204":
+          description: Удалено (идемпотентно)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /chats/{chatId}/messages/{messageId}/reactions:
+    parameters:
+      - $ref: "#/components/parameters/ChatId"
+      - $ref: "#/components/parameters/DeviceId"
+      - $ref: "#/components/parameters/MessageId"
+    post:
+      tags: [messages]
+      operationId: addMessageReaction
+      summary: Поставить реакцию (идемпотентно)
+      description: >
+        Managed-only: E2EE-чат → `422 E2EE_METADATA_FORBIDDEN`. Уникальность
+        `(message, user, emoji)`; повторный POST не создаёт дубль и возвращает текущий
+        агрегат. `emoji` — 1..32 символа, валидная Unicode-последовательность без HTML,
+        пробелов и control-символов. Удалённое (delete-for-all) или скрытое для
+        вызывающего сообщение → `404`. Публикуется WS `message.reaction.changed`
+        (`action=ADDED`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReactionCreate"
+      responses:
+        "200":
+          description: Текущий агрегат реакции
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReactionSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /chats/{chatId}/messages/{messageId}/reactions/{emoji}:
+    parameters:
+      - $ref: "#/components/parameters/ChatId"
+      - $ref: "#/components/parameters/DeviceId"
+      - $ref: "#/components/parameters/MessageId"
+      - $ref: "#/components/parameters/Emoji"
+    delete:
+      tags: [messages]
+      operationId: removeMessageReaction
+      summary: Снять реакцию (идемпотентно)
+      description: >
+        Удаляет только реакцию вызывающего с этим `emoji`; отсутствующая реакция тоже
+        даёт `204`. Managed-only (`422 E2EE_METADATA_FORBIDDEN`). Публикуется WS
+        `message.reaction.changed` (`action=REMOVED`).
+      responses:
+        "204":
+          description: Реакция снята (идемпотентно)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
   /chats/{chatId}/read:
     parameters:
       - $ref: "#/components/parameters/ChatId"
@@ -1732,6 +1878,18 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Emoji:
+      name: emoji
+      in: path
+      required: true
+      description: >
+        Одна emoji-последовательность в percent-encoding, без HTML/пробелов/control.
+      schema: { type: string, minLength: 1, maxLength: 32 }
     WorkspaceId:
       name: workspaceId
       in: path
@@ -1802,6 +1960,9 @@ components:
         D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an
         E2EE chat; invalid/empty name or description and an empty patch are
         VALIDATION_FAILED (422).
+        D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an
+        E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) —
+        stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000.
       properties:
         code: { type: string }
         message: { type: string }
@@ -2735,6 +2896,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AttachmentRef"
+        reactions:
+          type: array
+          description: >
+            Агрегированные реакции страницы: один элемент на emoji, `me` — ставил ли
+            реакцию вызывающий. Считается одним запросом на страницу, без N+1. Для
+            E2EE и удалённых сообщений всегда пуст.
+          items:
+            $ref: "#/components/schemas/ReactionSummary"
         client_message_id: { type: [string, "null"], format: uuid }
         crypto:
           oneOf:
@@ -2772,6 +2941,50 @@ components:
           minItems: 1
           maxItems: 10
           items: { $ref: "#/components/schemas/CryptoEnvelope" }
+
+    MessageEdit:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 8000
+          description: Новый plaintext managed-сообщения (сервер шифрует при записи).
+        version:
+          type: [integer, "null"]
+          minimum: 1
+          description: >
+            Необязательная оптимистичная блокировка: при несовпадении с текущей
+            версией — `409 VERSION_CONFLICT`. Без поля сервер всё равно увеличивает
+            `version` на единицу.
+
+    ReactionCreate:
+      type: object
+      additionalProperties: false
+      required: [emoji]
+      properties:
+        emoji:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: >
+            Emoji-последовательность (ZWJ/VS16/skin-tone допустимы); plain text,
+            без HTML/пробелов/control-символов.
+
+    ReactionSummary:
+      type: object
+      required: [emoji, count, me]
+      properties:
+        emoji: { type: string, minLength: 1, maxLength: 32 }
+        count:
+          type: integer
+          minimum: 1
+          description: Число уникальных пользователей с этой реакцией.
+        me:
+          type: boolean
+          description: Ставил ли реакцию вызывающий.
 
     MessagePage:
       type: object

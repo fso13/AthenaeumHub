@@ -21,4 +21,10 @@ public interface MessageEnvelopeRepository {
 
     /** All envelopes of one message (internal use only, e.g. idempotent replay equality). */
     List<MessageEnvelope> findByMessage(UUID workspaceId, UUID messageId);
+
+    /**
+     * Delete-for-all: purge every opaque envelope of the message so the tombstone cannot be
+     * decrypted from a leftover row. Idempotent; returns the number of removed rows.
+     */
+    int deleteByMessage(UUID workspaceId, UUID messageId);
 }
