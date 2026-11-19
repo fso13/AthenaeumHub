@@ -15,16 +15,24 @@ import type {
   AdminStorage,
   AdminUserPage,
   ApiMessage,
+  AuthUser,
   ChangeWorkspaceMemberRoleRequest,
   Chat,
   ChatCreateRequest,
   ChatUpdateRequest,
   ChatList,
+  ChatPluginState,
+  ChatPluginStateList,
+  ChatPluginUpdateRequest,
+  PluginList,
   CreateWorkspaceRequest,
   Device,
   DeviceList,
   DeviceRegistration,
   DownloadUrl,
+  FileKindFilter,
+  FilePage,
+  FileScanStatusFilter,
   MeResponse,
   MessageCreateBody,
   MessageDeleteScope,
@@ -36,6 +44,8 @@ import type {
   NotificationPreferences,
   PreflightFile,
   PreflightResponse,
+  ProfileSessions,
+  ProfileUpdate,
   ReactionSummary,
   ReadNotificationsRequest,
   RealtimeTicket,
@@ -114,6 +124,26 @@ export interface ListWorkspaceMembersQuery {
   limit?: number;
 }
 
+/**
+ * #73 file-center query. Every filter maps 1:1 to the contract parameter; the
+ * client never builds `cursor` locally (it is the opaque `next_cursor` of the
+ * previous page) and never sends object keys or presigned URLs.
+ */
+export interface ListFilesQuery {
+  workspaceId?: string;
+  chatId?: string;
+  kind?: FileKindFilter;
+  scanStatus?: FileScanStatusFilter;
+  /** Literal case-insensitive substring over filename and MIME (max 200). */
+  query?: string;
+  /** Exact MIME match (max 128). */
+  mime?: string;
+  /** Extension without the dot (max 10, `[A-Za-z0-9]`). */
+  extension?: string;
+  cursor?: string;
+  limit?: number;
+}
+
 export interface SendMessageResult {
   message: ApiMessage;
   replayed: boolean;
@@ -122,6 +152,14 @@ export interface SendMessageResult {
 export interface ChatApi {
   bootstrapDevSession(): Promise<Session>;
   getMe(): Promise<MeResponse>;
+  /** #72: partial profile update; the server owns validation and audit. */
+  updateMe(body: ProfileUpdate): Promise<AuthUser>;
+  /** #72: Keycloak sessions of the caller (no IP/username/tokens). */
+  listMySessions(): Promise<ProfileSessions>;
+  /** #72: revoke one own session; `404` means it is already gone. */
+  revokeMySession(sessionId: string): Promise<void>;
+  /** #73: file-center page with metadata-only rows and the workspace quota. */
+  listFiles(query?: ListFilesQuery): Promise<FilePage>;
 
   /* E8: first-run setup and platform admin (server enforces the admin flag). */
   /** Public; no token is required and no admin flag is read. */
@@ -170,6 +208,19 @@ export interface ChatApi {
   sync(workspaceId: string): Promise<SyncResponse>;
   /** E3: one-time ticket; each reconnect must request a fresh one. */
   createRealtimeTicket(): Promise<RealtimeTicket>;
+
+  /*
+   * D1.1 (#69): built-in plugin catalog and per-chat switches. The catalog is
+   * closed (no marketplace/install); `PATCH` is chat OWNER/ADMIN only and the
+   * server owns availability, so the UI never mutates state optimistically.
+   */
+  listPlugins(): Promise<PluginList>;
+  listChatPlugins(chatId: string): Promise<ChatPluginStateList>;
+  updateChatPlugin(
+    chatId: string,
+    pluginId: string,
+    body: ChatPluginUpdateRequest,
+  ): Promise<ChatPluginState>;
 
   /* E4-F: managed files. All shapes come from the generated contract types. */
   getWorkspaceLimits(workspaceId: string): Promise<WorkspaceLimits>;
@@ -317,6 +368,46 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
     getMe() {
       return withReauth(async () => {
         const response = await client.get<MeResponse>('/me');
+        return response.data;
+      });
+    },
+
+    updateMe(body) {
+      return withReauth(async () => {
+        // All fields are optional; the caller sends only the changed ones.
+        const response = await client.patch<AuthUser>('/me', body);
+        return response.data;
+      });
+    },
+
+    listMySessions() {
+      return withReauth(async () => {
+        const response = await client.get<ProfileSessions>('/me/sessions');
+        return response.data;
+      });
+    },
+
+    revokeMySession(sessionId) {
+      return withReauth(async () => {
+        // Success is `204`; a repeat revoke is `404` by design.
+        await client.delete(`/me/sessions/${encodeURIComponent(sessionId)}`);
+      });
+    },
+
+    listFiles(query = {}) {
+      return withReauth(async () => {
+        // Empty filters are omitted so the server applies its documented defaults.
+        const response = await client.get<FilePage>('/files', {
+          workspace_id: query.workspaceId,
+          chat_id: query.chatId,
+          kind: query.kind,
+          scan_status: query.scanStatus,
+          query: query.query?.trim() || undefined,
+          mime: query.mime?.trim() || undefined,
+          extension: query.extension?.trim() || undefined,
+          cursor: query.cursor,
+          limit: query.limit,
+        });
         return response.data;
       });
     },
@@ -569,6 +660,39 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       return withReauth(async () => {
         // Contract: POST /realtime/ticket, Bearer + X-Device-Id, no body.
         const response = await client.post<RealtimeTicket>('/realtime/ticket');
+        return response.data;
+      });
+    },
+
+    /* ------------------------------------------------------------------ */
+    /* D1.1 (#69): built-in plugins                                       */
+    /* ------------------------------------------------------------------ */
+
+    listPlugins() {
+      return withReauth(async () => {
+        // Catalog is global and authenticated; no chat/workspace is required.
+        const response = await client.get<PluginList>('/plugins');
+        return response.data;
+      });
+    },
+
+    listChatPlugins(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<ChatPluginStateList>(
+          `/chats/${encodeURIComponent(chatId)}/plugins`,
+        );
+        return response.data;
+      });
+    },
+
+    updateChatPlugin(chatId, pluginId, body) {
+      return withReauth(async () => {
+        // The server is the source of truth: callers replace their row with the
+        // returned state instead of applying the requested value locally.
+        const response = await client.patch<ChatPluginState>(
+          `/chats/${encodeURIComponent(chatId)}/plugins/${encodeURIComponent(pluginId)}`,
+          body,
+        );
         return response.data;
       });
     },

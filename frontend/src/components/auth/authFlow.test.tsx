@@ -24,8 +24,8 @@ import { resetRouterForTests } from '../../router/router';
 import { mockDb, server } from '../../test/server';
 import { renderPasswordApp } from '../../test/renderApp';
 
-const LOGIN_HEADING = 'Вход в Сову';
-const REGISTER_HEADING = 'Регистрация в Сове';
+const LOGIN_HEADING = 'Вход в Pickle';
+const REGISTER_HEADING = 'Регистрация в Pickle';
 const VERIFY_HEADING = 'Подтвердите email';
 const CHAT_HEADING = 'Команда «Восход»';
 

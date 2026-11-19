@@ -18,7 +18,7 @@ async function expectNoA11yViolations(page: Page): Promise<void> {
 async function login(page: Page): Promise<void> {
   await page.goto('/login');
   await page.getByLabel('Email').fill('demo@krug.test');
-  await page.getByLabel('Пароль', { exact: true }).fill('Krug-demo-2026');
+  await page.getByLabel('Пароль', { exact: true }).fill('Sova-demo-2026');
   await page.getByRole('button', { name: 'Войти' }).click();
 }
 

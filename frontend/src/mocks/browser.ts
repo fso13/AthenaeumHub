@@ -2,6 +2,7 @@ import { setupWorker } from 'msw/browser';
 import type {
   AdminUser,
   Notification,
+  SecurityMode,
   WorkspaceLimits,
   WorkspaceRole,
   WorkspaceSummary,
@@ -104,6 +105,8 @@ declare global {
     __krugUnreadCounts?: Record<string, number>;
     /** D1-QA1 E2E: boot with a specific workspace role (read-only settings). */
     __krugWorkspaceRole?: WorkspaceRole;
+    /** D1.1 E2E: override chat security modes before the first read. */
+    __krugChatModes?: Record<string, SecurityMode>;
   }
 }
 
@@ -254,6 +257,14 @@ export async function startMockWorker(): Promise<MockDb> {
       ...mockDb.me,
       workspaces: mockDb.me.workspaces.map((workspace) => ({ ...workspace, role })),
     };
+  }
+  if (window.__krugChatModes) {
+    // D1.1 E2E: exercise the E2EE plugin policy without a real E2EE device.
+    for (const [chatId, mode] of Object.entries(window.__krugChatModes)) {
+      const chat = mockDb.chats[chatId];
+      if (!chat || (mode !== 'MANAGED' && mode !== 'E2EE')) continue;
+      chat.summary.security_mode = mode;
+    }
   }
   if (window.__krugUnreadCounts) {
     for (const [chatId, count] of Object.entries(window.__krugUnreadCounts)) {

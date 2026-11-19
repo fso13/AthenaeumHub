@@ -119,7 +119,8 @@ export function collectFiles(state: AppState): FileEntry[] {
   return entries.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
-function chatDisplayName(chat: ChatSummary, state: AppState): string {
+/** DIRECT chats have no server name (D-S4-02); derive it from the directory. */
+export function chatDisplayName(chat: ChatSummary, state: AppState): string {
   if (chat.name) return chat.name;
   if (chat.type === 'DIRECT' && chat.peer_id) {
     return (

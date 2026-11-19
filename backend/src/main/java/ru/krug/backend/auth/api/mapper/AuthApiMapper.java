@@ -1,6 +1,7 @@
 package ru.krug.backend.auth.api.mapper;
 
 import java.util.List;
+import java.util.UUID;
 
 import ru.krug.backend.auth.api.dto.ChatKeysResponse;
 import ru.krug.backend.auth.api.dto.DeviceKeyInfoResponse;
@@ -11,9 +12,13 @@ import ru.krug.backend.auth.api.dto.MeResponse;
 import ru.krug.backend.auth.api.dto.OneTimePrekeyRequest;
 import ru.krug.backend.auth.api.dto.PrekeyBundleResponse;
 import ru.krug.backend.auth.api.dto.PrekeyUploadResultResponse;
+import ru.krug.backend.auth.api.dto.ProfileSessionResponse;
+import ru.krug.backend.auth.api.dto.ProfileSessionsResponse;
 import ru.krug.backend.auth.api.dto.SignedPrekeyResponse;
 import ru.krug.backend.auth.api.dto.UnavailableDeviceResponse;
+import ru.krug.backend.auth.api.dto.UpdateProfileRequest;
 import ru.krug.backend.auth.api.dto.VerificationResponse;
+import ru.krug.backend.auth.application.command.UpdateProfileCommand;
 import ru.krug.backend.auth.application.model.ChatKeysView;
 import ru.krug.backend.auth.application.model.DeviceKeyInfoView;
 import ru.krug.backend.auth.application.model.DeviceView;
@@ -22,7 +27,9 @@ import ru.krug.backend.auth.application.model.MeView;
 import ru.krug.backend.auth.application.model.OneTimePrekeyView;
 import ru.krug.backend.auth.application.model.PrekeyBundleView;
 import ru.krug.backend.auth.application.model.PrekeyUploadView;
+import ru.krug.backend.auth.application.model.ProfileSessionView;
 import ru.krug.backend.auth.application.model.SignedPrekeyView;
+import ru.krug.backend.auth.application.model.UserProfileView;
 import ru.krug.backend.auth.application.model.VerificationView;
 import ru.krug.backend.workspace.application.model.WorkspaceMembershipView;
 
@@ -33,11 +40,34 @@ public final class AuthApiMapper {
 
     public static MeResponse toResponse(MeView view) {
         MeResponse.User user = new MeResponse.User(view.userId(), view.displayName(),
-                view.email(), view.platformAdmin());
+                view.email(), view.platformAdmin(), view.bio(), view.phone());
         List<MeResponse.Workspace> workspaces = view.workspaces().stream()
                 .map(AuthApiMapper::toWorkspace)
                 .toList();
         return new MeResponse(user, workspaces, view.defaultWorkspaceId());
+    }
+
+    /** Flat {@code AuthUser} response shared by {@code GET/PATCH /me}. */
+    public static MeResponse.User toAuthUser(UserProfileView view) {
+        return new MeResponse.User(UUID.fromString(view.id()), view.displayName(),
+                view.email(), view.platformAdmin(), view.bio(), view.phone());
+    }
+
+    public static UpdateProfileCommand toCommand(UpdateProfileRequest request) {
+        return new UpdateProfileCommand(request.isDisplayNamePresent(), request.getDisplayName(),
+                request.isBioPresent(), request.getBio(),
+                request.isPhonePresent(), request.getPhone());
+    }
+
+    public static ProfileSessionsResponse toSessionsResponse(List<ProfileSessionView> views) {
+        return new ProfileSessionsResponse(views.stream()
+                .map(AuthApiMapper::toResponse)
+                .toList());
+    }
+
+    private static ProfileSessionResponse toResponse(ProfileSessionView view) {
+        return new ProfileSessionResponse(view.id(), view.name(), view.createdAt(),
+                view.lastAccessAt(), view.current());
     }
 
     public static DeviceResponse toResponse(DeviceView view) {

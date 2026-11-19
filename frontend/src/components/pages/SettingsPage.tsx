@@ -145,11 +145,15 @@ export function SettingsPage({
       <div className="setting-row">
         <div className="text">
           <b>{t('settings.sessions')}</b>
-          <small>{t('settings.sessionsUnavailable')}</small>
+          <small>{t('settings.sessionsAvailable')}</small>
         </div>
-        <span className="chip">{t('settings.sessionsCount', { count: devices.items.length })}</span>
-        <button type="button" className="btn btn--sm" disabled>
-          {t('settings.finishSessions')}
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={onOpenProfile}
+          disabled={!onOpenProfile}
+        >
+          {t('settings.openSessions')}
         </button>
       </div>
     </section>
@@ -540,9 +544,13 @@ export function SettingsPage({
                 </p>
               ) : null}
               <div className="form-actions">
-                <button type="button" className="btn" disabled>
-                  <LogoutIcon aria-hidden="true" />
-                  {t('settings.finishSessions')}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={onOpenProfile}
+                  disabled={!onOpenProfile}
+                >
+                  {t('settings.openSessions')}
                 </button>
               </div>
             </section>

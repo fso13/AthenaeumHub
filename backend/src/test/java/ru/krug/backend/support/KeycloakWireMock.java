@@ -86,6 +86,28 @@ public final class KeycloakWireMock {
         return TRANSFORMER.user(email);
     }
 
+    /** Pre-create one active Keycloak session for a user (used by the profile session IT). */
+    public static TestSession putSession(UUID userId, String sessionId, String clientName,
+                                         Instant createdAt, Instant lastAccessAt,
+                                         String ipAddress) {
+        return TRANSFORMER.putSession(userId, sessionId, clientName, createdAt, lastAccessAt,
+                ipAddress);
+    }
+
+    public static java.util.List<TestSession> sessions(UUID userId) {
+        return TRANSFORMER.sessions(userId);
+    }
+
+    /** Make the fake Admin sessions API return 503 (Keycloak outage test). */
+    public static void failAdminSessions(boolean fail) {
+        TRANSFORMER.failAdminSessions = fail;
+    }
+
+    /** Make the fake Admin user update return 503 (best-effort display-name sync test). */
+    public static void failUserUpdates(boolean fail) {
+        TRANSFORMER.failUserUpdates = fail;
+    }
+
     public static java.util.List<String> events() {
         return SERVER.getAllServeEvents().stream()
                 .map(event -> event.getRequest().getMethod() + " "
@@ -94,10 +116,47 @@ public final class KeycloakWireMock {
                 .toList();
     }
 
+    public static final class TestSession {
+        private final String id;
+        private final String name;
+        private final Instant createdAt;
+        private final Instant lastAccessAt;
+        private final String ipAddress;
+
+        private TestSession(String id, String name, Instant createdAt, Instant lastAccessAt,
+                            String ipAddress) {
+            this.id = id;
+            this.name = name;
+            this.createdAt = createdAt;
+            this.lastAccessAt = lastAccessAt;
+            this.ipAddress = ipAddress;
+        }
+
+        public String id() {
+            return id;
+        }
+
+        public String name() {
+            return name;
+        }
+
+        public Instant createdAt() {
+            return createdAt;
+        }
+
+        public Instant lastAccessAt() {
+            return lastAccessAt;
+        }
+
+        public String ipAddress() {
+            return ipAddress;
+        }
+    }
+
     public static final class TestUser {
         private final UUID id;
         private final String email;
-        private final String name;
+        private volatile String name;
         private volatile String password;
         private volatile boolean enabled;
         private volatile boolean emailVerified;
@@ -139,6 +198,10 @@ public final class KeycloakWireMock {
         private final Map<UUID, TestUser> byId = new ConcurrentHashMap<>();
         private final Map<String, UUID> accessTokens = new ConcurrentHashMap<>();
         private final Map<String, UUID> refreshTokens = new ConcurrentHashMap<>();
+        private final Map<UUID, java.util.List<TestSession>> sessionsByUser =
+                new ConcurrentHashMap<>();
+        private volatile boolean failAdminSessions;
+        private volatile boolean failUserUpdates;
 
         @Override
         public String getName() {
@@ -150,6 +213,22 @@ public final class KeycloakWireMock {
             byId.clear();
             accessTokens.clear();
             refreshTokens.clear();
+            sessionsByUser.clear();
+            failAdminSessions = false;
+            failUserUpdates = false;
+        }
+
+        TestSession putSession(UUID userId, String sessionId, String clientName,
+                               Instant createdAt, Instant lastAccessAt, String ipAddress) {
+            TestSession session = new TestSession(sessionId, clientName, createdAt, lastAccessAt,
+                    ipAddress);
+            sessionsByUser.computeIfAbsent(userId,
+                    ignored -> new java.util.concurrent.CopyOnWriteArrayList<>()).add(session);
+            return session;
+        }
+
+        java.util.List<TestSession> sessions(UUID userId) {
+            return java.util.List.copyOf(sessionsByUser.getOrDefault(userId, java.util.List.of()));
         }
 
         TestUser putUser(String email, String name, String password, boolean enabled,
@@ -198,6 +277,9 @@ public final class KeycloakWireMock {
                     return listUsers(request.getUrl());
                 }
                 if (path.startsWith("/admin/realms/krug/users/")) {
+                    if (path.contains("/sessions")) {
+                        return sessions(path, method);
+                    }
                     if (path.endsWith("/logout") && method.equals("POST")) {
                         return adminLogout(path);
                     }
@@ -320,6 +402,49 @@ public final class KeycloakWireMock {
          * revoke stateless access tokens on this call, and the integration test asserts the
          * refresh/login consequences.
          */
+        private Response sessions(String path, String method) {
+            if (failAdminSessions) {
+                return json(503, "{\"error\":\"service_unavailable\"}");
+            }
+            String[] parts = path.split("/");
+            if (parts.length < 7 || parts.length > 8) {
+                return json(404, "{\"error\":\"not_found\"}");
+            }
+            UUID userId;
+            try {
+                userId = UUID.fromString(parts[5]);
+            } catch (IllegalArgumentException ex) {
+                return json(404, "{\"error\":\"not_found\"}");
+            }
+            if (parts.length == 8) {
+                if (!method.equals("DELETE")) {
+                    return json(405, "{\"error\":\"method_not_allowed\"}");
+                }
+                String sessionId = parts[6 + 1];
+                sessionsByUser.computeIfPresent(userId, (ignored, list) -> {
+                    list.removeIf(session -> session.id().equals(sessionId));
+                    return list;
+                });
+                return Response.response().status(204).build();
+            }
+            if (!method.equals("GET")) {
+                return json(405, "{\"error\":\"method_not_allowed\"}");
+            }
+            List<Map<String, Object>> payload = new ArrayList<>();
+            TestUser user = byId.get(userId);
+            for (TestSession session : sessionsByUser.getOrDefault(userId, List.of())) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", session.id());
+                row.put("username", user == null ? "" : user.email);
+                row.put("ipAddress", session.ipAddress());
+                row.put("startTime", session.createdAt().toEpochMilli());
+                row.put("lastAccess", session.lastAccessAt().toEpochMilli());
+                row.put("clients", Map.of("krug-web", session.name()));
+                payload.add(row);
+            }
+            return json(200, toJson(payload));
+        }
+
         private Response adminLogout(String path) {
             String[] parts = path.split("/");
             UUID id;
@@ -357,12 +482,19 @@ public final class KeycloakWireMock {
                 return Response.response().status(204).build();
             }
             if (method.equals("PUT")) {
+                if (failUserUpdates) {
+                    return json(503, "{\"error\":\"service_unavailable\"}");
+                }
                 Map<String, Object> payload = readMap(body);
                 if (payload.containsKey("enabled")) {
                     user.enabled = Boolean.TRUE.equals(payload.get("enabled"));
                 }
                 if (payload.containsKey("emailVerified")) {
                     user.emailVerified = Boolean.TRUE.equals(payload.get("emailVerified"));
+                }
+                String firstName = string(payload.get("firstName"));
+                if (firstName != null && !firstName.isBlank()) {
+                    user.name = firstName;
                 }
                 return Response.response().status(204).build();
             }

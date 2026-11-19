@@ -64,16 +64,18 @@ function addSecondWorkspaceWithUnread(unread: number): void {
 }
 
 function addAttachmentFixture(): void {
-  const messages = mockDb.chats[GROUP]?.messages ?? [];
-  const message = messages[messages.length - 1];
-  if (!message) throw new Error('mock message missing');
-  message.attachments = [
+  // #73: the Files page reads GET /files, not the loaded message history.
+  mockDb.fileCenterItems = [
     {
       id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       filename: 'atlas-cover.png',
       size_bytes: 1024,
       mime_type: 'image/png',
       scan_status: 'CLEAN',
+      chat_id: GROUP,
+      chat_name: 'Команда «Восход»',
+      message_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      created_at: '2026-11-18T10:00:00.000Z',
     },
     {
       id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
@@ -81,6 +83,10 @@ function addAttachmentFixture(): void {
       size_bytes: 2048,
       mime_type: 'audio/mp4',
       scan_status: 'CLEAN',
+      chat_id: GROUP,
+      chat_name: 'Команда «Восход»',
+      message_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      created_at: '2026-11-17T10:00:00.000Z',
     },
   ];
 }
@@ -234,15 +240,13 @@ describe('D1-FE1 shell, pages and routing', () => {
 
   it('renders Files with limits, search and empty state, then filters loaded attachments', async () => {
     addAttachmentFixture();
-    const { user, store } = renderApp();
+    const { user } = renderApp();
     await waitForChat();
-    expect(
-      store.getSnapshot().slices[GROUP]?.messages.some((m) => (m.attachments?.length ?? 0) > 0),
-    ).toBe(true);
+    expect(mockDb.fileCenterItems).toHaveLength(2);
     await user.click(screen.getByRole('button', { name: 'Файлы' }));
     await screen.findByRole('heading', { name: 'Файлы' });
 
-    expect(screen.getByText('atlas-cover.png')).toBeInTheDocument();
+    expect(await screen.findByText('atlas-cover.png')).toBeInTheDocument();
     expect(screen.getByText('interview-team.m4a')).toBeInTheDocument();
     expect(screen.getByText('Team')).toBeInTheDocument();
     expect(screen.getByText(/До .* на файл/)).toBeInTheDocument();
@@ -251,12 +255,13 @@ describe('D1-FE1 shell, pages and routing', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow');
 
     await user.type(screen.getByLabelText('Поиск файлов'), 'нет-такого');
-    expect(screen.getByText('Ничего не найдено')).toBeInTheDocument();
+    expect(await screen.findByText('Ничего не найдено')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Сбросить фильтры' }));
+    await screen.findByText('atlas-cover.png');
 
     await user.click(screen.getByRole('button', { name: 'Аудио' }));
-    expect(screen.getByText('interview-team.m4a')).toBeInTheDocument();
-    expect(screen.queryByText('atlas-cover.png')).not.toBeInTheDocument();
+    expect(await screen.findByText('interview-team.m4a')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('atlas-cover.png')).not.toBeInTheDocument());
   });
 
   it('shows the Files limits error and retries it', async () => {
@@ -278,15 +283,15 @@ describe('D1-FE1 shell, pages and routing', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 
-  it('renders honest disabled Plugins and Protection pages without fake controls', async () => {
+  it('renders server-backed Plugins and the honest Protection page', async () => {
     const { user } = renderApp();
     await waitForChat();
 
     await user.click(screen.getByRole('button', { name: 'Плагины' }));
     await screen.findByRole('heading', { name: 'Плагины' });
-    expect(screen.getByText('Каталог плагинов пока недоступен')).toBeInTheDocument();
-    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Опросы' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Задачи' })).toBeInTheDocument();
+    expect(screen.getAllByRole('switch')).toHaveLength(5);
 
     await user.click(screen.getByRole('button', { name: 'Защита' }));
     await screen.findByRole('heading', { name: 'Защита' });
@@ -336,7 +341,7 @@ describe('D1-FE1 shell, pages and routing', () => {
     await screen.findByRole('heading', { name: 'Файлы' });
     // Card-based rows: there is no table that could overflow at 390 px.
     expect(container.querySelector('table')).toBeNull();
-    expect(container.querySelectorAll('.file-row').length).toBeGreaterThan(0);
+    await waitFor(() => expect(container.querySelectorAll('.file-row').length).toBeGreaterThan(0));
   });
 
   it('passes an axe audit on the Overview page', async () => {

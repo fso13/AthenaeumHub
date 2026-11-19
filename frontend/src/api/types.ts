@@ -2,7 +2,7 @@
  * Types are generated from contracts/openapi.yaml (npm run api:types).
  * Do not edit schema.d.ts manually; the contract is the only source of truth.
  */
-import type { components } from './schema';
+import type { components, operations } from './schema';
 
 export type ApiErrorBody = components['schemas']['Error'];
 export type Session = components['schemas']['Session'];
@@ -29,6 +29,13 @@ export type ChatType = ChatSummary['type'];
 export type SecurityMode = ChatSummary['security_mode'];
 export type MeResponse = components['schemas']['MeResponse'];
 export type MeUser = MeResponse['user'];
+/** #72: `AuthUser` is the `GET/PATCH /me` profile projection (`bio`/`phone` nullable). */
+export type AuthUser = components['schemas']['AuthUser'];
+/** #72: PATCH body — absent field means "leave unchanged", null clears bio/phone. */
+export type ProfileUpdate = components['schemas']['ProfileUpdate'];
+/** #72: one Keycloak session (no IP, username or tokens in the contract). */
+export type ProfileSession = components['schemas']['ProfileSession'];
+export type ProfileSessions = components['schemas']['ProfileSessions'];
 export type WorkspaceSummary = components['schemas']['WorkspaceSummary'];
 export type WorkspaceRole = WorkspaceSummary['role'];
 export type CreateWorkspaceRequest = components['schemas']['CreateWorkspaceRequest'];
@@ -133,6 +140,18 @@ export type ApiAttachment = components['schemas']['AttachmentRef'];
 export type AttachmentMedia = NonNullable<ApiAttachment['media']>;
 export type AttachmentScanStatus = ApiAttachment['scan_status'];
 export type DownloadUrl = components['schemas']['DownloadUrl'];
+/** #73: file-center row — attachment metadata + chat/message provenance. */
+export type FileItem = components['schemas']['FileItem'];
+/** #73: workspace quota snapshot rendered in the file-center header. */
+export type FileQuotaSummary = components['schemas']['FileQuotaSummary'];
+/** #73: one cursor page; `next_cursor` stays opaque and is never built locally. */
+export type FilePage = components['schemas']['FilePage'];
+export type FilePageMeta = FilePage['page'];
+/** Server-side kind filter (the contract enum, not the UI tile classifier). */
+export type FileKindFilter = NonNullable<operations['listFiles']['parameters']['query']>['kind'];
+export type FileScanStatusFilter = NonNullable<
+  operations['listFiles']['parameters']['query']
+>['scan_status'];
 
 /* ------------------------------------------------------------------------- */
 /* E5-F: built-in stickers                                                   */
@@ -141,6 +160,27 @@ export type DownloadUrl = components['schemas']['DownloadUrl'];
 export type StickerRef = components['schemas']['StickerRef'];
 export type StickerPack = components['schemas']['StickerPack'];
 export type StickerPackList = components['schemas']['StickerPackList'];
+
+/* ------------------------------------------------------------------------- */
+/* D1.1 (#69): built-in plugin catalog and per-chat state                     */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Built-in first-party plugin metadata: id/name/description/icon, descriptive
+ * permission tokens, allowed security modes and the catalog kill switch. There
+ * is no manifest, archive, version, signature or executable code in the
+ * contract, and the UI never invents any.
+ */
+export type Plugin = components['schemas']['Plugin'];
+export type PluginList = components['schemas']['PluginList'];
+export type PluginPermission = Plugin['permissions'][number];
+export type PluginMode = Plugin['modes'][number];
+export type PluginCatalogState = NonNullable<Plugin['state']>;
+/** Per-chat toggle plus the server-computed effective availability. */
+export type ChatPluginState = components['schemas']['ChatPluginState'];
+export type ChatPluginStateList = components['schemas']['ChatPluginStateList'];
+export type ChatPluginUnavailableReason = NonNullable<ChatPluginState['reason']>;
+export type ChatPluginUpdateRequest = components['schemas']['ChatPluginUpdateRequest'];
 
 /* ------------------------------------------------------------------------- */
 /* E6-F: in-app notifications and preferences                                */

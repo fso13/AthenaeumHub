@@ -110,7 +110,7 @@ export function resolveConfig(env: Record<string, string | boolean | undefined>)
       true,
     ),
     authMode,
-    deviceName: readString(env.VITE_DEVICE_NAME) || 'Сова — браузер',
+    deviceName: readString(env.VITE_DEVICE_NAME) || 'Pickle — браузер',
     appVersion: readString(env.VITE_APP_VERSION) || '0.1.0',
     requestTimeoutMs: 10_000,
     historyPageSize: 30,

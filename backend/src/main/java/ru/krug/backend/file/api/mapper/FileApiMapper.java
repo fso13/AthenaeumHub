@@ -1,6 +1,10 @@
 package ru.krug.backend.file.api.mapper;
 
 import ru.krug.backend.file.api.dto.DownloadUrlResponse;
+import ru.krug.backend.file.api.dto.FileItemResponse;
+import ru.krug.backend.file.api.dto.FileMediaResponse;
+import ru.krug.backend.file.api.dto.FilePageResponse;
+import ru.krug.backend.file.api.dto.FileQuotaSummaryResponse;
 import ru.krug.backend.file.api.dto.MediaMetadataRequest;
 import ru.krug.backend.file.api.dto.PreflightDecisionResponse;
 import ru.krug.backend.file.api.dto.PreflightQuotaResponse;
@@ -10,6 +14,10 @@ import ru.krug.backend.file.api.dto.UploadSessionResponse;
 import ru.krug.backend.file.api.dto.WorkspaceLimitsResponse;
 import ru.krug.backend.file.api.dto.WorkspaceUsageResponse;
 import ru.krug.backend.file.application.model.DownloadUrlView;
+import ru.krug.backend.file.application.model.FileItemView;
+import ru.krug.backend.file.application.model.FileMediaView;
+import ru.krug.backend.file.application.model.FilePageView;
+import ru.krug.backend.file.application.model.FileQuotaSummaryView;
 import ru.krug.backend.file.application.model.MediaMetadataInput;
 import ru.krug.backend.file.application.model.PreflightView;
 import ru.krug.backend.file.application.model.UploadPartView;
@@ -64,5 +72,36 @@ public final class FileApiMapper {
                         .map(file -> new PreflightDecisionResponse(file.name(), file.allowed(),
                                 file.error(), file.details(), file.partSize()))
                         .toList());
+    }
+
+    public static FilePageResponse toResponse(FilePageView view) {
+        return new FilePageResponse(view.items().stream()
+                .map(FileApiMapper::toResponse)
+                .toList(),
+                new FilePageResponse.PageInfo(view.nextCursor(), view.hasMore()),
+                quota(view.quota()));
+    }
+
+    private static FileItemResponse toResponse(FileItemView view) {
+        return new FileItemResponse(view.id(), view.filename(), view.sizeBytes(),
+                view.mimeType(), view.scanStatus(), media(view.media()), view.chatId(),
+                view.chatName(), view.messageId(), view.createdAt());
+    }
+
+    private static FileMediaResponse media(FileMediaView media) {
+        if (media == null) {
+            return null;
+        }
+        return new FileMediaResponse(media.kind(), media.durationMs(), media.width(),
+                media.height(), media.title(), media.artist(), media.album(), media.year(),
+                media.genre(), media.artworkUrl(), media.metadataSource());
+    }
+
+    private static FileQuotaSummaryResponse quota(FileQuotaSummaryView quota) {
+        if (quota == null) {
+            return null;
+        }
+        return new FileQuotaSummaryResponse(quota.usedBytes(), quota.reservedBytes(),
+                quota.storageBytes(), quota.percent());
     }
 }

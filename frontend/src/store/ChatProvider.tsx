@@ -3,6 +3,7 @@ import type { AppState, ChatStore } from './chatStore';
 import type { FilesState, FilesStore } from './filesStore';
 import type { AdminDirectoryState, AdminDirectoryStore } from '../ops/adminDirectory';
 import type { OpsState, OpsStore } from '../ops/store';
+import type { PluginsState, PluginsStore } from '../plugins/store';
 import type { StickersState, StickersStore } from '../stickers/store';
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
@@ -37,6 +38,16 @@ export function useStickersStore(): StickersStore {
 
 export function useStickersState(): StickersState {
   const store = useStickersStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** D1.1 (#69): built-in plugin catalog and per-chat switches. */
+export function usePluginsStore(): PluginsStore {
+  return useChatStore().plugins;
+}
+
+export function usePluginsState(): PluginsState {
+  const store = usePluginsStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 

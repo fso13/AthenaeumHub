@@ -99,7 +99,7 @@ test.describe('D1 chat settings', () => {
 });
 
 test.describe('D1 profile', () => {
-  test('/me identity + registered devices + disabled 2FA/sessions', async ({ page }) => {
+  test('/me identity + registered devices + honest 2FA and live sessions', async ({ page }) => {
     await openDashboard(page);
     await disableAnimations(page);
 
@@ -117,19 +117,22 @@ test.describe('D1 profile', () => {
     // GET /devices: the password bootstrap registered this browser.
     await expect(dialog.getByRole('heading', { name: 'Устройства' })).toBeVisible();
     await expect(dialog.getByText('Это устройство')).toBeVisible();
-    await expect(dialog.getByText('WEB')).toBeVisible();
+    await expect(dialog.getByText('WEB', { exact: true })).toBeVisible();
     await expect(dialog.getByText('Устройства ещё не зарегистрированы.')).toHaveCount(0);
 
-    // 2FA/sessions are honest disabled rows, not invented toggles.
+    // 2FA stays an honest disabled row; sessions are the real Keycloak list
+    // from GET /me/sessions (client labels, timestamps, current flag only).
     await expect(
       dialog.getByText('В этом срезе нет API 2FA — переключатель не показывается.'),
     ).toBeVisible();
-    await expect(
-      dialog.getByText(
-        'API управления сессиями нет. Завершить текущую сессию можно кнопкой «Выйти».',
-      ),
-    ).toBeVisible();
     await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+    await expect(dialog.getByRole('heading', { name: 'Активные сессии' })).toBeVisible();
+    await expect(dialog.getByText('krug-web · Chrome')).toBeVisible();
+    await expect(dialog.getByText('Текущая')).toBeVisible();
+    await expect(
+      dialog.getByRole('button', { name: 'Завершить сессию: krug-web · Safari' }),
+    ).toBeVisible();
+    await expect(dialog).not.toContainText(/access_token|refresh_token|ip_address/i);
 
     await expectNoA11yViolations(page);
     await expectNoHorizontalScroll(page);
@@ -137,6 +140,62 @@ test.describe('D1 profile', () => {
     await page.keyboard.press('Escape');
     await expect(dialog).toBeHidden();
     await expect(trigger).toBeFocused();
+  });
+
+  test('edits the profile incrementally and revokes a session after confirmation', async ({
+    page,
+  }) => {
+    await openDashboard(page);
+    await disableAnimations(page);
+    await page.getByRole('button', { name: 'Профиль' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Профиль' });
+    await expect(dialog).toBeVisible();
+
+    await dialog.getByRole('button', { name: 'Редактировать' }).click();
+    const name = dialog.getByLabel('Имя');
+    await expect(name).toBeFocused();
+    await name.fill('Дмитрий К.');
+    await dialog.getByLabel('О себе').fill('Люблю наводить порядок в файлах.');
+    await dialog.getByLabel('Телефон').fill('+7 999 123-45-67');
+
+    const patch = page.waitForRequest(
+      (request) =>
+        request.method() === 'PATCH' && new URL(request.url()).pathname.endsWith('/api/v1/me'),
+    );
+    await dialog.getByRole('button', { name: 'Сохранить' }).click();
+    expect((await patch).postDataJSON()).toEqual({
+      display_name: 'Дмитрий К.',
+      bio: 'Люблю наводить порядок в файлах.',
+      phone: '+7 999 123-45-67',
+    });
+    await expect(dialog.getByText('Профиль сохранён.')).toBeVisible();
+    await expect(dialog.getByRole('heading', { level: 3 })).toHaveText('Дмитрий К.');
+
+    // Second save carries only the changed field (incremental PATCH).
+    await dialog.getByRole('button', { name: 'Редактировать' }).click();
+    await dialog.getByLabel('Имя').fill('Дмитрий Крылов');
+    const secondPatch = page.waitForRequest(
+      (request) =>
+        request.method() === 'PATCH' && new URL(request.url()).pathname.endsWith('/api/v1/me'),
+    );
+    await dialog.getByRole('button', { name: 'Сохранить' }).click();
+    expect((await secondPatch).postDataJSON()).toEqual({ display_name: 'Дмитрий Крылов' });
+
+    const revoke = page.waitForRequest(
+      (request) => request.method() === 'DELETE' && request.url().includes('/api/v1/me/sessions/'),
+    );
+    await dialog.getByRole('button', { name: 'Завершить сессию: krug-web · Safari' }).click();
+    const confirm = page.getByRole('dialog', { name: 'Завершить сессию?' });
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole('button', { name: 'Завершить' }).click();
+    await revoke;
+    await expect(dialog.getByText('krug-web · Safari')).toHaveCount(0);
+    await expect(dialog.getByText('Сессия завершена.')).toBeVisible();
+
+    await expectNoA11yViolations(page);
+    await expectNoHorizontalScroll(page);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
   });
 
   test('empty device list renders the honest empty state', async ({ page }) => {

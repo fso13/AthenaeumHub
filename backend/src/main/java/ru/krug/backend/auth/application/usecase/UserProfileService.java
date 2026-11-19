@@ -36,6 +36,6 @@ public class UserProfileService implements UserProfilePort {
 
     private static UserProfileView toView(User user) {
         return new UserProfileView(user.id().toString(), user.displayName().value(), user.email(),
-                user.isPlatformAdmin());
+                user.isPlatformAdmin(), user.bio().value(), user.phone().value());
     }
 }

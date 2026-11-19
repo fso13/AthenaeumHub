@@ -2,7 +2,7 @@ import type { RailSpace } from '../domain/unread';
 import { formatUnreadBadge, unreadLabel } from '../domain/unread';
 import { t } from '../i18n/ru';
 import { Avatar } from './Avatar';
-import { ChatIcon, PlusIcon } from './Icons';
+import { PlusIcon } from './Icons';
 
 interface SpaceRailProps {
   spaces: RailSpace[];
@@ -23,7 +23,7 @@ export function SpaceRail({ spaces, activeSpaceId, unreadBySpace, onSelect }: Sp
   return (
     <nav className="space-rail" aria-label={t('rail.label')}>
       <span className="space-rail__brand" aria-hidden="true">
-        <ChatIcon />
+        <img src="/icons/sova-icon-64.png" alt="" width={40} height={40} />
       </span>
       <ul className="space-rail__items">
         {spaces.map((space) => {

@@ -1,8 +1,10 @@
 package ru.krug.backend.auth.application.port;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import ru.krug.backend.auth.application.model.KeycloakSessionView;
 import ru.krug.backend.auth.application.model.KeycloakUserView;
 
 /**
@@ -42,6 +44,28 @@ public interface KeycloakAdminPort {
      * without sessions is not an error.
      */
     void logoutAllSessions(UUID userId);
+
+    /**
+     * Best-effort profile display-name sync. Sets {@code firstName}/{@code lastName} to
+     * the same value, matching {@link #createUser(String, String)}. A missing Keycloak user
+     * is treated as a no-op.
+     */
+    void updateDisplayName(UUID userId, String displayName);
+
+    /**
+     * Active sessions of the user. Only id, a client-derived label and timestamps cross the
+     * port: IP addresses and usernames are intentionally not exposed.
+     *
+     * @throws ProviderUnavailableException on transport/5xx failures
+     */
+    List<KeycloakSessionView> listSessions(UUID userId);
+
+    /**
+     * Revoke one session. A session that is already gone is not an error.
+     *
+     * @throws ProviderUnavailableException on transport/5xx failures
+     */
+    void revokeSession(UUID userId, String sessionId);
 
     /** Best-effort delete used for rollback/cleanup; a missing user is not an error. */
     void deleteUser(UUID userId);

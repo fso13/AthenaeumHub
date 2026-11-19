@@ -1,9 +1,11 @@
-import type { ChatApi } from '../api/endpoints';
+import type { ChatApi, ListFilesQuery } from '../api/endpoints';
 import { ApiError, toApiError } from '../api/problem';
 import type {
   ApiAttachment,
   AttachmentScanStatus,
   DownloadUrl,
+  FileItem,
+  FileQuotaSummary,
   PreflightFile,
   UploadInitRequest,
   UploadMediaMetadata,
@@ -83,12 +85,30 @@ export interface FilesState {
   tasks: UploadTask[];
   preflightStatus: 'idle' | 'preflighting' | 'error';
   preflightError: ApiError | null;
+  /** #73: server-backed file-center page (independent from loaded history). */
+  fileCenter: FileCenterState;
+}
+
+/**
+ * One cursor page of `GET /files`. `nextCursor` is only ever the server's
+ * opaque value; the store never constructs or mutates it.
+ */
+export interface FileCenterState {
+  items: FileItem[];
+  status: 'idle' | 'loading' | 'ready' | 'error' | 'loadingMore';
+  error: ApiError | null;
+  hasMore: boolean;
+  nextCursor: string | null;
+  quota: FileQuotaSummary | null;
+  /** Last applied filter set (without `cursor`). */
+  query: ListFilesQuery;
 }
 
 export interface FilesStoreDeps {
   api: Pick<
     ChatApi,
     | 'getWorkspaceLimits'
+    | 'listFiles'
     | 'preflightUpload'
     | 'initUpload'
     | 'getUpload'
@@ -134,6 +154,18 @@ export function uploadedBytesOf(task: UploadTask): number {
   return Math.min(task.size, bytes);
 }
 
+function initialFileCenter(): FileCenterState {
+  return {
+    items: [],
+    status: 'idle',
+    error: null,
+    hasMore: false,
+    nextCursor: null,
+    quota: null,
+    query: {},
+  };
+}
+
 function initialState(): FilesState {
   return {
     workspaceId: null,
@@ -144,6 +176,7 @@ function initialState(): FilesState {
     tasks: [],
     preflightStatus: 'idle',
     preflightError: null,
+    fileCenter: initialFileCenter(),
   };
 }
 
@@ -165,6 +198,8 @@ export class FilesStore {
   >();
   private readonly downloadInFlight = new Map<string, Promise<DownloadUrl>>();
   private limitsPromise: Promise<void> | null = null;
+  /** #73: invalidates stale file-center responses after filter/workspace changes. */
+  private fileCenterSeq = 0;
   private disposed = false;
 
   constructor(deps: FilesStoreDeps) {
@@ -205,7 +240,9 @@ export class FilesStore {
       limits: changed ? null : this.state.limits,
       limitsStatus: workspaceId ? 'loading' : 'idle',
       limitsError: null,
+      ...(changed ? { fileCenter: initialFileCenter() } : {}),
     });
+    if (changed) this.fileCenterSeq += 1;
     if (workspaceId) void this.refreshLimits();
   }
 
@@ -228,6 +265,120 @@ export class FilesStore {
       }
     })();
     return this.limitsPromise;
+  }
+
+  /**
+   * #73: replace the current page with a fresh server query. The workspace id
+   * defaults to the active one; an absent workspace is a client-side error, so
+   * the page can render an explicit retry state instead of an invented list.
+   */
+  async loadFiles(query: ListFilesQuery = {}): Promise<void> {
+    if (this.disposed) return;
+    const workspaceId = query.workspaceId ?? this.state.workspaceId ?? undefined;
+    const seq = ++this.fileCenterSeq;
+    if (!workspaceId) {
+      this.patch({
+        fileCenter: {
+          ...this.state.fileCenter,
+          items: [],
+          status: 'error',
+          error: ApiError.client(
+            'WORKSPACE_REQUIRED',
+            'No active workspace for the file center',
+            409,
+          ),
+          hasMore: false,
+          nextCursor: null,
+          query: { ...query, cursor: undefined },
+        },
+      });
+      return;
+    }
+
+    const applied: ListFilesQuery = { ...query, workspaceId, cursor: undefined };
+    this.patch({
+      fileCenter: {
+        ...this.state.fileCenter,
+        items: [],
+        status: 'loading',
+        error: null,
+        hasMore: false,
+        nextCursor: null,
+        query: applied,
+      },
+    });
+
+    try {
+      const page = await this.api.listFiles(applied);
+      if (this.disposed || seq !== this.fileCenterSeq) return;
+      this.patch({
+        fileCenter: {
+          items: page.items,
+          status: 'ready',
+          error: null,
+          hasMore: page.page.has_more,
+          nextCursor: page.page.next_cursor ?? null,
+          quota: page.quota,
+          query: applied,
+        },
+      });
+    } catch (error) {
+      if (this.disposed || seq !== this.fileCenterSeq) return;
+      this.patch({
+        fileCenter: {
+          ...this.state.fileCenter,
+          items: [],
+          status: 'error',
+          error: toApiError(error),
+          hasMore: false,
+          nextCursor: null,
+        },
+      });
+    }
+  }
+
+  /** #73: append exactly one server cursor page; never duplicates a row. */
+  async loadMoreFiles(): Promise<void> {
+    if (this.disposed) return;
+    const center = this.state.fileCenter;
+    if (center.status === 'loading' || center.status === 'loadingMore') return;
+    if (!center.hasMore || !center.nextCursor) return;
+
+    const seq = ++this.fileCenterSeq;
+    this.patch({
+      fileCenter: { ...center, status: 'loadingMore', error: null },
+    });
+
+    try {
+      const page = await this.api.listFiles({
+        ...center.query,
+        cursor: center.nextCursor,
+      });
+      if (this.disposed || seq !== this.fileCenterSeq) return;
+      const seen = new Set(center.items.map((item) => item.id));
+      const appended = page.items.filter((item) => !seen.has(item.id));
+      this.patch({
+        fileCenter: {
+          ...this.state.fileCenter,
+          items: [...center.items, ...appended],
+          status: 'ready',
+          error: null,
+          hasMore: page.page.has_more,
+          nextCursor: page.page.next_cursor ?? null,
+          quota: page.quota ?? center.quota,
+          query: center.query,
+        },
+      });
+    } catch (error) {
+      if (this.disposed || seq !== this.fileCenterSeq) return;
+      this.patch({
+        fileCenter: {
+          ...this.state.fileCenter,
+          status: 'error',
+          error: toApiError(error),
+        },
+      });
+    }
   }
 
   tasksFor(chatId: string | null): UploadTask[] {
@@ -511,6 +662,7 @@ export class FilesStore {
   }
 
   reset(): void {
+    this.fileCenterSeq += 1;
     this.abortControllers();
     this.patch(initialState());
     this.downloadCache.clear();

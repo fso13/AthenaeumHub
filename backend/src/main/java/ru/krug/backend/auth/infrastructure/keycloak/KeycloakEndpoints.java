@@ -64,6 +64,16 @@ public class KeycloakEndpoints {
         return adminUserUrl(userId) + "/logout";
     }
 
+    /** List the user's active sessions (Keycloak Admin API). */
+    public String adminUserSessionsUrl(String userId) {
+        return adminUserUrl(userId) + "/sessions";
+    }
+
+    /** Revoke one session of the user (Keycloak Admin API). */
+    public String adminUserSessionUrl(String userId, String sessionId) {
+        return adminUserSessionsUrl(userId) + "/" + sessionId;
+    }
+
     private static String resolveBase(String configured, String issuer) {
         String candidate = configured == null ? "" : configured.strip();
         if (candidate.isEmpty() && issuer != null && !issuer.isBlank()) {

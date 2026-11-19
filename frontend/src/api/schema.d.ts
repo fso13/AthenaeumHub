@@ -453,6 +453,50 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        /**
+         * Обновить свой профиль
+         * @description Частичное обновление только собственного профиля. Отсутствующее поле не меняется; `bio`/`phone` со значением `null` или пустой строкой очищают поле. Email, пароль, статус, платформенная роль и E2EE-ключи устройств через этот endpoint недоступны. Неизвестные поля (включая `email`/`password`) игнорируются. Текстовые значения хранятся как plain text и не интерпретируются сервером как HTML.
+         */
+        patch: operations["updateMe"];
+        trace?: never;
+    };
+    "/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Активные сессии Keycloak текущего пользователя
+         * @description Только сессии вызывающего пользователя. IP-адрес и username Keycloak в ответ не попадают; `name` — метка клиента. `current=true` у сессии, на которую указывает claim `sid` текущего access token. Если Keycloak недоступен — `503 AUTH_UNAVAILABLE`.
+         */
+        get: operations["listMySessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отозвать собственную сессию Keycloak
+         * @description Отзывает ровно одну сессию, принадлежащую вызывающему. Чужая или уже отозванная сессия неотличимы и дают `404 NOT_FOUND` без побочных эффектов. Текущую сессию также можно отозвать. Недоступный Keycloak — `503 AUTH_UNAVAILABLE`.
+         */
+        delete: operations["revokeMySession"];
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -628,6 +672,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Встроенный каталог плагинов
+         * @description Курируемый список first-party плагинов. Marketplace, установка, манифесты, подписи, версии и выполнение кода отсутствуют — это только метаданные каталога. `permissions` — закрытый словарь отображаемых прав (`MESSAGES`, `MEMBERS`, `FILES`, `WEBHOOKS`); в этом срезе они не являются выданными capability-грантами. `modes` — контуры, в которых плагин допустим: `MANAGED` (серверный) и/или `E2EE` (только клиентский). `state` — состояние каталога: `ACTIVE` или `DISABLED` (продуктовый kill switch: плагин остаётся видимым, но не включается). `icon` — закрытый клиентский токен, не URL и не HTML. Требуется аутентификация; членство в воркспейсе не требуется. Ответ стабильно отсортирован по каталогу.
+         */
+        get: operations["listPlugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/stickers/{stickerId}/favorite": {
         parameters: {
             query?: never;
@@ -786,6 +850,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * File-center — список файлов воркспейса
+         * @description Независимый от загруженной истории список вложений (file-center, #73). Возвращает только метаданные: без содержимого, object key, sha256 и presigned URL; скачивание остаётся за `GET /attachments/{attachmentId}/download-url`. Вызывающий должен быть ACTIVE-участником воркспейса, а для каждого элемента — ACTIVE-участником его чата. Файлы E2EE-чатов и сообщений с E2EE-схемой никогда не возвращаются. Удалённые (delete-for-all), скрытые для вызывающего (delete-for-me) и ещё не привязанные к сообщению вложения не возвращаются. `workspace_id` необязателен, если токен несёт workspace claim (dev) или задан `chat_id`; иначе — `400 VALIDATION_FAILED`. `query` — literal-подстрока без учёта регистра по имени файла и MIME; `%` и `_` не являются wildcard. `mime` — точное совпадение без учёта регистра, `extension` — расширение без точки. Сортировка стабильная: `created_at DESC, id DESC`; `cursor` непрозрачен, привязан к воркспейсу и к этому эндпоинту.
+         */
+        get: operations["listFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chats/{chatId}": {
         parameters: {
             query?: never;
@@ -804,6 +888,46 @@ export interface paths {
          * @description Merged-патч настроек чата: `name` и/или `description`. Вызывающий должен быть ACTIVE-участником воркспейса чата с ролью `OWNER` или `ADMIN` (роли чата не используются). `MEMBER`/`GUEST` получают `403 FORBIDDEN`; неизвестный, удалённый или чужой чат — `404` без раскрытия существования. Тело без `name` и `description` — `422 VALIDATION_FAILED`. `name` после trim/collapse пробелов — 1..120 символов, `description` — до 500 символов, `description: ""` очищает описание в `null`. Строки — plain text: управляющие символы (кроме `\n`/`\t` в описании) и `<`/`>` отклоняются `422 VALIDATION_FAILED`; сервер ничего не экранирует и не интерпретирует как HTML. В E2EE-чате разрешён только `name`: `description` (включая очистку) отклоняется `422 CHAT_SETTINGS_E2EE_UNSUPPORTED` без частичного применения. `security_mode` неизменяем. Идемпотентность и оптимистическая блокировка не требуются; успешный запрос пишет audit `chat.updated` (metadata — только имена изменённых полей, без значений).
          */
         patch: operations["updateChat"];
+        trace?: never;
+    };
+    "/chats/{chatId}/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Состояние встроенных плагинов в чате
+         * @description По одной записи на каждый встроенный плагин. Вызывающий должен быть ACTIVE- участником чата; неизвестный, удалённый или чужой чат — `404` без раскрытия существования, не-участник воркспейса — `403`. `enabled` — сохранённый переключатель (нет строки — `false`), `available` — эффективная доступность с учётом неизменяемого `security_mode` чата и `state` каталога. `reason` присутствует только при `available=false`: `PLUGIN_NOT_AVAILABLE` (серверный плагин в E2EE-чате) или `PLUGIN_DISABLED` (kill switch каталога). Контент сообщений, ключи и E2EE-plaintext не возвращаются.
+         */
+        get: operations["listChatPlugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/plugins/{pluginId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Включить/выключить встроенный плагин в чате (chat OWNER/ADMIN)
+         * @description Меняет только per-chat переключатель. Вызывающий должен быть ACTIVE-участником чата с ролью `OWNER` или `ADMIN`; `MODERATOR`/`MEMBER`/`GUEST` получают `403 FORBIDDEN`, неизвестный/удалённый/чужой чат — `404` без раскрытия существования, не-участник воркспейса — `403`. Плагин обязан существовать во встроенном каталоге: неизвестный `pluginId` — `404 PLUGIN_NOT_FOUND`. Плагин должен быть доступен в режиме чата: серверный (`MANAGED`-only) плагин в E2EE-чате — `422 PLUGIN_NOT_AVAILABLE`, `state=DISABLED` — `422 PLUGIN_DISABLED`; частичного применения нет. Операция идемпотентна: повтор с тем же `enabled` возвращает `200`, не меняет `updated_by`/`updated_at` и не пишет второй audit. Успешное изменение пишет audit `chat.plugin.changed` с metadata только `plugin_id` и `enabled`; имена, описания, права, сообщения и секреты не пишутся. Плагин не исполняется и внешних вызовов не делает.
+         */
+        patch: operations["updateChatPlugin"];
         trace?: never;
     };
     "/chats/{chatId}/keys": {
@@ -986,7 +1110,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. */
+        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. */
         Error: {
             code: string;
             message: string;
@@ -1025,16 +1149,42 @@ export interface components {
                 type: "GROUP";
             };
         };
+        /** @description Профиль пользователя для `GET/PATCH /me`. `bio`/`phone` всегда присутствуют в ответах сервера (возможно `null`); в схеме они необязательны для совместимости со старыми клиентами. */
+        AuthUser: {
+            /** Format: uuid */
+            id: string;
+            display_name: string;
+            /** Format: email */
+            email: string;
+            /** @description Серверный флаг auth.users.is_platform_admin (R-03) */
+            is_platform_admin: boolean;
+            /** @description Plain-text bio; `null` — не заполнено */
+            bio?: string | null;
+            /** @description Plain-text контактный телефон; `null` — не заполнено */
+            phone?: string | null;
+        };
+        /** @description Все поля опциональны. Отсутствие поля означает «не менять»; `null` для `bio`/ `phone` очищает поле. `display_name=null`/пустой — `400 VALIDATION_FAILED`. Пустой объект — `422 VALIDATION_FAILED` (`reason=empty_patch`). Email и пароль здесь не принимаются. */
+        ProfileUpdate: {
+            display_name?: string;
+            bio?: string | null;
+            phone?: string | null;
+        };
+        /** @description Сессия Keycloak без IP-адреса, username и токенов. `name` — метка клиента (например `krug-web`); `current` вычисляется по claim `sid`. */
+        ProfileSession: {
+            /** @description Идентификатор сессии Keycloak */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_access_at: string;
+            current: boolean;
+        };
+        ProfileSessions: {
+            sessions: components["schemas"]["ProfileSession"][];
+        };
         MeResponse: {
-            user: {
-                /** Format: uuid */
-                id: string;
-                display_name: string;
-                /** Format: email */
-                email: string;
-                /** @description Серверный флаг auth.users.is_platform_admin (R-03) */
-                is_platform_admin: boolean;
-            };
+            user: components["schemas"]["AuthUser"];
             workspaces: components["schemas"]["WorkspaceSummary"][];
             /** Format: uuid */
             default_workspace_id: string | null;
@@ -1382,6 +1532,42 @@ export interface components {
         StickerPackList: {
             items: components["schemas"]["StickerPack"][];
         };
+        /** @description D1.1 (#69) built-in first-party plugin metadata. No manifest, archive, version, signature or executable code is represented; permissions are descriptive only. */
+        Plugin: {
+            id: string;
+            name: string;
+            description: string;
+            /** @description Closed client-side icon token, never a URL or HTML. */
+            icon?: string | null;
+            permissions: ("MESSAGES" | "MEMBERS" | "FILES" | "WEBHOOKS")[];
+            modes: ("MANAGED" | "E2EE")[];
+            /**
+             * @description Catalog lifecycle. Optional for additive compatibility; the server always emits it. DISABLED is a product kill switch.
+             * @enum {string}
+             */
+            state?: "ACTIVE" | "DISABLED";
+        };
+        PluginList: {
+            items: components["schemas"]["Plugin"][];
+        };
+        ChatPluginState: {
+            plugin_id: string;
+            /** @description Stored per-chat toggle; missing row means false. */
+            enabled: boolean;
+            /** @description Effective availability for this chat's immutable security mode and the catalog state. */
+            available: boolean;
+            /**
+             * @description Present only when available is false.
+             * @enum {string}
+             */
+            reason?: "PLUGIN_NOT_AVAILABLE" | "PLUGIN_DISABLED";
+        };
+        ChatPluginStateList: {
+            items: components["schemas"]["ChatPluginState"][];
+        };
+        ChatPluginUpdateRequest: {
+            enabled: boolean;
+        };
         WorkspaceLimits: {
             /** @enum {string} */
             tariff: "COMMUNITY" | "FAMILY" | "TEAM" | "ENTERPRISE";
@@ -1532,6 +1718,34 @@ export interface components {
             /** Format: int64 */
             size_bytes: number;
             sha256: string;
+        };
+        /** @description File-center element (#73): `AttachmentRef` metadata plus chat/message provenance. Never contains the object key, content, sha256 or a presigned URL; download goes through `attachmentDownloadUrl`. `chat_name` is null for DIRECT chats (the client derives the peer name, D-S4-02). `message_id` is always present: unbound uploads are not part of the file center. */
+        FileItem: components["schemas"]["AttachmentRef"] & {
+            /** Format: uuid */
+            chat_id: string;
+            chat_name?: string | null;
+            /** Format: uuid */
+            message_id: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description Workspace-level quota snapshot for the file-center header. `percent` is `used + reserved` against the storage limit, clamped to 100. Null when the workspace limits/usage rows cannot be read. */
+        FileQuotaSummary: {
+            /** Format: int64 */
+            used_bytes: number;
+            /** Format: int64 */
+            reserved_bytes: number;
+            /** Format: int64 */
+            storage_bytes: number;
+            percent: number;
+        };
+        FilePage: {
+            items: components["schemas"]["FileItem"][];
+            page: {
+                next_cursor?: string | null;
+                has_more: boolean;
+            };
+            quota: components["schemas"]["FileQuotaSummary"] | null;
         };
         RealtimeTicket: {
             ticket: string;
@@ -2023,6 +2237,8 @@ export interface components {
         WorkspaceId: string;
         WorkspaceIdQuery: string;
         StickerId: string;
+        /** @description Slug встроенного плагина из `plugin.catalog`. */
+        PluginId: string;
         UploadId: string;
         AttachmentId: string;
         PartNo: number;
@@ -2863,6 +3079,80 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    updateMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Обновлённый профиль пользователя */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthUser"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    listMySessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Сессии пользователя, сначала недавно использованные */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileSessions"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    revokeMySession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Идентификатор сессии Keycloak */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Сессия отозвана (или уже была недействительна) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
     listDevices: {
         parameters: {
             query?: never;
@@ -3198,6 +3488,27 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    listPlugins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Встроенный каталог плагинов */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
     favoriteSticker: {
         parameters: {
             query?: never;
@@ -3515,6 +3826,42 @@ export interface operations {
             };
         };
     };
+    listFiles: {
+        parameters: {
+            query?: {
+                workspace_id?: string;
+                chat_id?: string;
+                kind?: "IMAGE" | "VIDEO" | "AUDIO" | "FILE";
+                scan_status?: "PENDING" | "CLEAN" | "INFECTED" | "FAILED" | "SKIPPED";
+                query?: string;
+                mime?: string;
+                extension?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница файлов и сводка квоты воркспейса */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilePage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     updateChat: {
         parameters: {
             query?: never;
@@ -3546,6 +3893,68 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    listChatPlugins: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Состояние плагинов в чате */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPluginStateList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateChatPlugin: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                /** @description Slug встроенного плагина из `plugin.catalog`. */
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatPluginUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Состояние плагина после операции */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPluginState"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
         };
     };

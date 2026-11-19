@@ -9,6 +9,9 @@ public interface UserIdentityRepository {
 
     Optional<UserIdentity> findByProviderAndSubject(String provider, String subject);
 
+    /** The caller's own identity link; used to address Keycloak Admin APIs by subject. */
+    Optional<UserIdentity> findByUserIdAndProvider(UUID userId, String provider);
+
     /**
      * @return true when the row was inserted, false when another transaction already
      *         created the same (provider, subject) link.

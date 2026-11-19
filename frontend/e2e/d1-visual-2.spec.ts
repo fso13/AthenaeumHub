@@ -61,8 +61,8 @@ test('1600 light: overview/files/plugins/security/settings pages', async ({ page
 
   await goToView(page, 'Плагины');
   await expectPageContract(page);
-  await expect(page.locator('.plugin-card')).toHaveCount(6);
-  await expect(page.getByRole('switch')).toHaveCount(0);
+  await expect(page.locator('.plugin-card')).toHaveCount(5);
+  await expect(page.getByRole('switch')).toHaveCount(5);
   await shot(page, 'pages-plugins-light');
 
   await goToView(page, 'Защита');

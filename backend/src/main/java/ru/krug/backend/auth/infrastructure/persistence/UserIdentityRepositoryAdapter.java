@@ -35,6 +35,21 @@ public class UserIdentityRepositoryAdapter implements UserIdentityRepository {
     }
 
     @Override
+    public Optional<UserIdentity> findByUserIdAndProvider(UUID userId, String provider) {
+        @SuppressWarnings("unchecked")
+        java.util.List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT id, user_id, provider, subject
+                          FROM auth.user_identities
+                         WHERE user_id = ?1 AND provider = ?2
+                        """)
+                .setParameter(1, userId)
+                .setParameter(2, provider)
+                .getResultList();
+        return rows.stream().findFirst().map(row -> new UserIdentity(
+                (UUID) row[0], (UUID) row[1], (String) row[2], (String) row[3]));
+    }
+
+    @Override
     public boolean insertIfAbsent(UserIdentity identity) {
         int inserted = entityManager.createNativeQuery("""
                         INSERT INTO auth.user_identities (id, user_id, provider, subject)

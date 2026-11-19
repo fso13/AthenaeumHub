@@ -7,8 +7,12 @@ import jakarta.persistence.EntityManager;
 
 import org.springframework.stereotype.Repository;
 
+import ru.krug.backend.auth.domain.model.Bio;
+import ru.krug.backend.auth.domain.model.DisplayName;
+import ru.krug.backend.auth.domain.model.Phone;
 import ru.krug.backend.auth.domain.model.User;
 import ru.krug.backend.auth.domain.repository.UserRepository;
+import ru.krug.backend.shared.error.DomainException;
 
 @Repository
 public class UserRepositoryAdapter implements UserRepository {
@@ -80,6 +84,27 @@ public class UserRepositoryAdapter implements UserRepository {
                 .setParameter(4, user.status().name())
                 .setParameter(5, user.isPlatformAdmin())
                 .executeUpdate();
+    }
+
+    @Override
+    public void updateProfile(UUID userId, DisplayName displayName, Bio bio, Phone phone) {
+        int updated = entityManager.createNativeQuery("""
+                        UPDATE auth.users
+                           SET display_name = ?2,
+                               bio = ?3,
+                               phone = ?4,
+                               updated_at = now()
+                         WHERE id = ?1
+                        """)
+                .setParameter(1, userId)
+                .setParameter(2, displayName.value())
+                .setParameter(3, bio == null ? null : bio.value())
+                .setParameter(4, phone == null ? null : phone.value())
+                .executeUpdate();
+        if (updated == 0) {
+            // The row disappeared between the read and the write (or RLS hid it).
+            throw DomainException.notFound("User not found");
+        }
     }
 
     @Override

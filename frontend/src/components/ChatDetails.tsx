@@ -3,7 +3,14 @@ import type { ChatSummary, WorkspaceMemberRole } from '../api/types';
 import { chatDisplayName } from '../domain/chatLabel';
 import { isSafePreviewImage, safeHttpUrl } from '../files/format';
 import { t, type MessageKey } from '../i18n/ru';
-import { useChatState, useChatStore, useFilesStore } from '../store/ChatProvider';
+import { enabledPluginCount } from '../plugins/model';
+import {
+  useChatState,
+  useChatStore,
+  useFilesStore,
+  usePluginsState,
+  usePluginsStore,
+} from '../store/ChatProvider';
 import type { ChatSlice } from '../store/chatStore';
 import { Avatar } from './Avatar';
 import {
@@ -173,6 +180,8 @@ export function ChatDetails({
 }: ChatDetailsProps) {
   const store = useChatStore();
   const state = useChatState();
+  const pluginsStore = usePluginsStore();
+  const pluginsState = usePluginsState();
   const [expanded, setExpanded] = useState<'privacy' | 'members' | 'plugins' | 'media' | null>(
     'media',
   );
@@ -225,6 +234,21 @@ export function ChatDetails({
 
   const viewerId = state.user?.id ?? state.session?.user.id ?? null;
   const { items: media, total: mediaTotal } = useMemo(() => mediaItems(slice), [slice]);
+  /**
+   * D1.1 (#69): the row shows the real server count for this chat. The store
+   * caches one chat at a time, so the panel only trusts rows whose `chatId`
+   * matches; a loading/error row renders `—` instead of a fake number.
+   */
+  const pluginChatId = chat?.id ?? null;
+  const pluginChatIsDirect = chat?.type === 'DIRECT';
+  const pluginRows = pluginsState.chatId === pluginChatId ? pluginsState.chatStates : [];
+  const pluginChatReady =
+    pluginsState.chatId === pluginChatId && pluginsState.chatStatus === 'ready';
+  const enabledPlugins = pluginChatReady ? enabledPluginCount(pluginRows) : null;
+  const pluginChatError =
+    pluginsState.chatId === pluginChatId && pluginsState.chatStatus === 'error'
+      ? pluginsState.chatError
+      : null;
   const cover = isDirect
     ? COVER_BY_MODE.direct
     : isE2ee
@@ -246,6 +270,13 @@ export function ChatDetails({
       void store.loadWorkspaceMembers();
     }
   }, [open, state.workspaceMembers.items.length, state.workspaceMembers.status, store]);
+
+  useEffect(() => {
+    // Plugin state is chat-scoped and loaded lazily by the panel. Deduped by
+    // the store, so reopening details does not spend a second GET.
+    if (!open || !pluginChatId || pluginChatIsDirect) return;
+    void pluginsStore.ensureChat(pluginChatId);
+  }, [open, pluginChatId, pluginChatIsDirect, pluginsStore]);
 
   const toggle = (panel: 'privacy' | 'members' | 'plugins' | 'media') => {
     setExpanded((current) => (current === panel ? null : panel));
@@ -458,18 +489,44 @@ export function ChatDetails({
               >
                 <PlugIcon aria-hidden="true" />
                 <span>{t('details.plugins')}</span>
-                <span className="count">—</span>
+                <span className="count">{enabledPlugins !== null ? enabledPlugins : '—'}</span>
                 <ChevronDownIcon className="chev" aria-hidden="true" />
               </button>
               {expanded === 'plugins' ? (
                 <div className="panel-expand">
-                  <p>{t('details.pluginsEmpty')}</p>
+                  {pluginChatReady ? (
+                    <>
+                      <p>
+                        {enabledPlugins === 0
+                          ? t('details.pluginsNone')
+                          : t('details.pluginsCount', {
+                              enabled: enabledPlugins ?? 0,
+                              total: pluginRows.length,
+                            })}
+                      </p>
+                      <p className="hint">
+                        {isE2ee ? t('details.pluginsE2ee') : t('details.pluginsHint')}
+                      </p>
+                    </>
+                  ) : pluginChatError ? (
+                    <>
+                      <p>{t('details.pluginsError')}</p>
+                      <button
+                        type="button"
+                        className="btn-sm"
+                        onClick={() => chat && void pluginsStore.loadChat(chat.id, true)}
+                      >
+                        {t('details.pluginsRetry')}
+                      </button>
+                    </>
+                  ) : (
+                    <p>{t('details.pluginsLoading')}</p>
+                  )}
                   <button
                     type="button"
                     className="btn-sm"
                     onClick={() => onNavigate('plugins')}
-                    disabled={isE2ee}
-                    title={isE2ee ? t('plugins.noteE2ee') : undefined}
+                    title={isE2ee ? t('plugins.e2eeChat') : undefined}
                   >
                     <PlugIcon aria-hidden="true" />
                     {t('details.openPlugins')}

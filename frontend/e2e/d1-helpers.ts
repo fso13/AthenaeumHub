@@ -8,7 +8,7 @@ export const WORKSPACE_NAME = 'Студия «Восход»';
 export const GROUP_CHAT_NAME = 'Команда «Восход»';
 export const DIRECT_CHAT_NAME = 'Анна Петрова';
 export const MOCK_DEMO_EMAIL = 'demo@krug.test';
-export const MOCK_DEMO_PASSWORD = 'Krug-demo-2026';
+export const MOCK_DEMO_PASSWORD = 'Sova-demo-2026';
 
 export type D1WorkspaceRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'GUEST';
 
@@ -22,6 +22,7 @@ type D1Window = Window & {
   __krugMocks?: D1MockControls;
   __krugUnreadCounts?: Record<string, number>;
   __krugWorkspaceRole?: D1WorkspaceRole;
+  __krugChatModes?: Record<string, 'MANAGED' | 'E2EE'>;
 };
 
 /**
@@ -55,6 +56,16 @@ export async function setWorkspaceRole(page: Page, role: D1WorkspaceRole): Promi
   await page.addInitScript((value) => {
     (window as D1Window).__krugWorkspaceRole = value;
   }, role);
+}
+
+/** Boot chat security modes (D1.1 E2EE plugin policy without real keys). */
+export async function setChatModes(
+  page: Page,
+  modes: Record<string, 'MANAGED' | 'E2EE'>,
+): Promise<void> {
+  await page.addInitScript((value) => {
+    (window as D1Window).__krugChatModes = value;
+  }, modes);
 }
 
 /** Clear the mock device list for the honest profile empty state. */

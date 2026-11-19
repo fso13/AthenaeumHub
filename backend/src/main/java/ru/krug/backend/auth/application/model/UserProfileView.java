@@ -5,9 +5,14 @@ package ru.krug.backend.auth.application.model;
  * context for other contexts (sender display name).
  */
 public record UserProfileView(String id, String displayName, String email,
-                              boolean platformAdmin) {
+                              boolean platformAdmin, String bio, String phone) {
 
     public UserProfileView(String id, String displayName, String email) {
-        this(id, displayName, email, false);
+        this(id, displayName, email, false, null, null);
+    }
+
+    public UserProfileView(String id, String displayName, String email,
+                           boolean platformAdmin) {
+        this(id, displayName, email, platformAdmin, null, null);
     }
 }

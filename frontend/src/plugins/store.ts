@@ -1,0 +1,236 @@
+import type { ChatApi } from '../api/endpoints';
+import { toApiError, type ApiError } from '../api/problem';
+import type { ChatPluginState, Plugin } from '../api/types';
+
+export type PluginsLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+/**
+ * Feedback for the last server-confirmed PATCH. `changed` is derived by
+ * comparing the previous server row with the response: a no-op PATCH returns
+ * `200` but the backend deliberately writes no audit event.
+ */
+export interface PluginToggleResult {
+  pluginId: string;
+  enabled: boolean;
+  changed: boolean;
+  at: number;
+}
+
+export interface PluginsState {
+  catalogStatus: PluginsLoadStatus;
+  catalog: Plugin[];
+  catalogError: ApiError | null;
+  /** Chat whose per-chat rows are currently loaded. */
+  chatId: string | null;
+  chatStatus: PluginsLoadStatus;
+  chatStates: ChatPluginState[];
+  chatError: ApiError | null;
+  /** Plugin ids with an in-flight PATCH; their switches stay at the server value. */
+  pendingPluginIds: string[];
+  /** Inline PATCH failure; never replaces the last known server state. */
+  toggleError: ApiError | null;
+  lastToggle: PluginToggleResult | null;
+}
+
+export interface PluginsStoreDeps {
+  api: Pick<ChatApi, 'listPlugins' | 'listChatPlugins' | 'updateChatPlugin'>;
+  now?: () => number;
+}
+
+export const EMPTY_PLUGINS_STATE: PluginsState = {
+  catalogStatus: 'idle',
+  catalog: [],
+  catalogError: null,
+  chatId: null,
+  chatStatus: 'idle',
+  chatStates: [],
+  chatError: null,
+  pendingPluginIds: [],
+  toggleError: null,
+  lastToggle: null,
+};
+
+/**
+ * D1.1 (#69) plugins read model. Deliberately has no optimistic update: a
+ * switch only moves after `PATCH /chats/{chatId}/plugins/{pluginId}` returns
+ * the server row, and a failed call leaves the last known state untouched.
+ */
+export class PluginsStore {
+  private readonly api: PluginsStoreDeps['api'];
+  private readonly now: () => number;
+  private state: PluginsState = { ...EMPTY_PLUGINS_STATE };
+  private readonly listeners = new Set<() => void>();
+  private catalogPromise: Promise<void> | null = null;
+  private chatPromise: Promise<void> | null = null;
+  private chatLoadId: string | null = null;
+  private disposed = false;
+
+  constructor(deps: PluginsStoreDeps) {
+    this.api = deps.api;
+    this.now = deps.now ?? (() => Date.now());
+  }
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  readonly getSnapshot = (): PluginsState => this.state;
+
+  dispose(): void {
+    this.disposed = true;
+    this.listeners.clear();
+  }
+
+  private emit(): void {
+    if (this.disposed) return;
+    for (const listener of this.listeners) listener();
+  }
+
+  private patch(patch: Partial<PluginsState>): void {
+    this.state = { ...this.state, ...patch };
+    this.emit();
+  }
+
+  /** Read the catalog once per session unless a forced reload is requested. */
+  async ensureCatalog(): Promise<void> {
+    if (this.state.catalogStatus === 'ready') return;
+    if (this.state.catalogStatus === 'loading' && this.catalogPromise) {
+      return this.catalogPromise;
+    }
+    return this.loadCatalog();
+  }
+
+  async loadCatalog(force = false): Promise<void> {
+    if (!force && this.state.catalogStatus === 'ready') return;
+    if (this.state.catalogStatus === 'loading' && this.catalogPromise) {
+      return this.catalogPromise;
+    }
+
+    this.patch({ catalogStatus: 'loading', catalogError: null });
+    this.catalogPromise = this.runLoadCatalog().finally(() => {
+      this.catalogPromise = null;
+    });
+    return this.catalogPromise;
+  }
+
+  private async runLoadCatalog(): Promise<void> {
+    try {
+      const response = await this.api.listPlugins();
+      if (this.disposed) return;
+      this.patch({ catalogStatus: 'ready', catalog: response.items, catalogError: null });
+    } catch (error) {
+      if (this.disposed) return;
+      this.patch({ catalogStatus: 'error', catalogError: toApiError(error) });
+    }
+  }
+
+  /** Load per-chat rows once per chat; switching chats drops the old rows. */
+  async ensureChat(chatId: string): Promise<void> {
+    if (this.state.chatStatus === 'ready' && this.state.chatId === chatId) return;
+    if (this.state.chatStatus === 'loading' && this.chatLoadId === chatId && this.chatPromise) {
+      return this.chatPromise;
+    }
+    return this.loadChat(chatId);
+  }
+
+  async loadChat(chatId: string, force = false): Promise<void> {
+    if (!force && this.state.chatStatus === 'ready' && this.state.chatId === chatId) return;
+    if (this.state.chatStatus === 'loading' && this.chatLoadId === chatId && this.chatPromise) {
+      return this.chatPromise;
+    }
+
+    this.chatLoadId = chatId;
+    const sameChat = this.state.chatId === chatId;
+    this.patch({
+      chatId,
+      chatStatus: 'loading',
+      chatError: null,
+      toggleError: null,
+      lastToggle: null,
+      ...(sameChat ? {} : { chatStates: [], pendingPluginIds: [] }),
+    });
+
+    this.chatPromise = this.runLoadChat(chatId).finally(() => {
+      this.chatPromise = null;
+      this.chatLoadId = null;
+    });
+    return this.chatPromise;
+  }
+
+  private async runLoadChat(chatId: string): Promise<void> {
+    try {
+      const response = await this.api.listChatPlugins(chatId);
+      if (this.disposed || this.state.chatId !== chatId) return;
+      this.patch({ chatStatus: 'ready', chatStates: response.items, chatError: null });
+    } catch (error) {
+      if (this.disposed || this.state.chatId !== chatId) return;
+      this.patch({ chatStatus: 'error', chatError: toApiError(error) });
+    }
+  }
+
+  /**
+   * Change one switch. There is no optimistic update: until the server
+   * responds the row keeps its previous value and the toggle is disabled by
+   * `pendingPluginIds`. The response replaces only that row.
+   */
+  async toggle(chatId: string, pluginId: string, enabled: boolean): Promise<void> {
+    if (this.disposed || this.state.chatId !== chatId) return;
+    if (this.state.pendingPluginIds.includes(pluginId)) return;
+
+    const previous = this.state.chatStates.find((item) => item.plugin_id === pluginId);
+    this.patch({
+      pendingPluginIds: [...this.state.pendingPluginIds, pluginId],
+      toggleError: null,
+      lastToggle: null,
+    });
+
+    try {
+      const response = await this.api.updateChatPlugin(chatId, pluginId, { enabled });
+      if (this.disposed || this.state.chatId !== chatId) return;
+      const changed = previous ? previous.enabled !== response.enabled : response.enabled;
+      this.patch({
+        chatStates: this.replaceState(pluginId, response),
+        pendingPluginIds: this.state.pendingPluginIds.filter((id) => id !== pluginId),
+        lastToggle: {
+          pluginId,
+          enabled: response.enabled,
+          changed,
+          at: this.now(),
+        },
+      });
+    } catch (error) {
+      if (this.disposed || this.state.chatId !== chatId) return;
+      this.patch({
+        pendingPluginIds: this.state.pendingPluginIds.filter((id) => id !== pluginId),
+        toggleError: toApiError(error),
+      });
+    }
+  }
+
+  private replaceState(pluginId: string, next: ChatPluginState): ChatPluginState[] {
+    const found = this.state.chatStates.some((item) => item.plugin_id === pluginId);
+    if (!found) return [...this.state.chatStates, next];
+    return this.state.chatStates.map((item) => (item.plugin_id === pluginId ? next : item));
+  }
+
+  clearToggleError(): void {
+    if (!this.state.toggleError) return;
+    this.patch({ toggleError: null });
+  }
+
+  /** Drop all user-scoped state on logout/account switch. */
+  reset(): void {
+    this.catalogPromise = null;
+    this.chatPromise = null;
+    this.chatLoadId = null;
+    this.state = { ...EMPTY_PLUGINS_STATE, catalog: [], chatStates: [] };
+    this.emit();
+  }
+}
+
+export function createPluginsStore(deps: PluginsStoreDeps): PluginsStore {
+  return new PluginsStore(deps);
+}

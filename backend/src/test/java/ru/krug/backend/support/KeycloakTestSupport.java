@@ -16,17 +16,28 @@ public final class KeycloakTestSupport {
 
     public static RequestPostProcessor keycloakJwt(String subject, String email,
                                                    String preferredUsername, String name) {
+        return keycloakJwt(subject, email, preferredUsername, name, null);
+    }
+
+    /** Keycloak JWT with the {@code sid} claim, so {@code current} session detection works. */
+    public static RequestPostProcessor keycloakJwt(String subject, String email,
+                                                   String preferredUsername, String name,
+                                                   String sessionId) {
         Instant now = Instant.now();
-        return jwt().jwt(builder -> builder
-                .subject(subject)
-                .audience(List.of("krug-api"))
-                .claim("azp", "krug-web")
-                .claim("email", email)
-                .claim("email_verified", true)
-                .claim("preferred_username", preferredUsername)
-                .claim("name", name)
-                .issuedAt(now)
-                .expiresAt(now.plusSeconds(600)));
+        return jwt().jwt(builder -> {
+            builder.subject(subject)
+                    .audience(List.of("krug-api"))
+                    .claim("azp", "krug-web")
+                    .claim("email", email)
+                    .claim("email_verified", true)
+                    .claim("preferred_username", preferredUsername)
+                    .claim("name", name)
+                    .issuedAt(now)
+                    .expiresAt(now.plusSeconds(600));
+            if (sessionId != null) {
+                builder.claim("sid", sessionId);
+            }
+        });
     }
 
     public static String uniqueSubject(String prefix) {

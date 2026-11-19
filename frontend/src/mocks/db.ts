@@ -13,15 +13,18 @@ import type {
   Chat,
   ChatSummary,
   Device,
+  FileItem,
   MeResponse,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
   PreflightFile,
+  ProfileSession,
   ReadNotificationsRequest,
   Session,
   StickerPack,
   StickerRef,
+  Plugin,
   UploadCompleteRequest,
   UploadInitRequest,
   UploadSessionStatus,
@@ -384,6 +387,25 @@ export interface MockDb {
   chatSettingsRequests: MockChatSettingsRequestRecord[];
   chatSettingsDelayMs: number;
   forceChatSettingsError: ForcedSendError | null;
+  /** D1.1 (#69): built-in plugin catalog and per-chat switches. */
+  pluginCatalog: Plugin[];
+  pluginCatalogRequests: number;
+  pluginCatalogDelayMs: number;
+  forcePluginCatalogError: ForcedSendError | null;
+  chatPlugins: Map<string, Map<string, boolean>>;
+  chatPluginListRequests: Array<{ chatId: string; deviceId: string | null }>;
+  chatPluginRequests: Array<{
+    chatId: string;
+    pluginId: string;
+    body: Record<string, unknown>;
+    deviceId: string | null;
+  }>;
+  /** Mirrors the backend audit: only actual changes are recorded. */
+  chatPluginAudit: Array<{ pluginId: string; enabled: boolean }>;
+  chatPluginsDelayMs: number;
+  chatPluginPatchDelayMs: number;
+  forceChatPluginsError: ForcedSendError | null;
+  forceChatPluginPatchError: ForcedSendError | null;
   chats: Record<string, ChatRecord>;
   idempotency: Map<string, IdempotencyRecord>;
   readReceipts: Record<string, number>;
@@ -444,6 +466,21 @@ export interface MockDb {
   forcePartError: ForcedFileError | null;
   forceCompleteError: ForcedFileError | null;
   forceDownloadError: ForcedFileError | null;
+
+  /* #73 file-center (`GET /files`) */
+  fileCenterItems: FileItem[];
+  fileCenterRequests: Array<Record<string, string | null>>;
+  fileCenterDelayMs: number;
+  forceFileCenterError: ForcedSendError | null;
+
+  /* #72 profile edit + Keycloak sessions */
+  profileUpdateRequests: Array<{ body: Record<string, unknown>; deviceId: string | null }>;
+  forceProfileUpdateError: ForcedSendError | null;
+  profileSessions: ProfileSession[];
+  profileSessionListRequests: number;
+  profileSessionRevokeRequests: string[];
+  forceProfileSessionsError: ForcedSendError | null;
+  forceSessionRevokeError: ForcedSendError | null;
 
   /* E5-F built-in stickers */
   stickerPacks: StickerPack[];
@@ -532,6 +569,57 @@ export function createMockLimits(): WorkspaceLimits {
   };
 }
 
+/** D1.1 (#69) seed mirrors V34: five first-party MANAGED plugins, fixed order. */
+export function createMockPluginCatalog(): Plugin[] {
+  return [
+    {
+      id: 'polls',
+      name: 'Опросы',
+      description: 'Голосования и быстрые решения прямо в переписке.',
+      icon: 'poll',
+      permissions: ['MESSAGES', 'MEMBERS'],
+      modes: ['MANAGED'],
+      state: 'ACTIVE',
+    },
+    {
+      id: 'tasks',
+      name: 'Задачи',
+      description: 'Чек-листы, дедлайны и напоминания в чате.',
+      icon: 'task',
+      permissions: ['MESSAGES'],
+      modes: ['MANAGED'],
+      state: 'ACTIVE',
+    },
+    {
+      id: 'translate',
+      name: 'Перевод',
+      description: 'Перевод входящих сообщений на лету.',
+      icon: 'translate',
+      permissions: ['MESSAGES'],
+      modes: ['MANAGED'],
+      state: 'ACTIVE',
+    },
+    {
+      id: 'telegram',
+      name: 'Мост в Telegram',
+      description: 'Двусторонний мост для внешних команд и подрядчиков.',
+      icon: 'plug',
+      permissions: ['MESSAGES', 'MEMBERS', 'WEBHOOKS'],
+      modes: ['MANAGED'],
+      state: 'ACTIVE',
+    },
+    {
+      id: 'dlp',
+      name: 'DLP-подсказки',
+      description: 'Предупреждает об отправке чувствительных данных.',
+      icon: 'shield',
+      permissions: ['MESSAGES', 'FILES'],
+      modes: ['MANAGED'],
+      state: 'ACTIVE',
+    },
+  ];
+}
+
 export function createMockAdminState(): MockAdminState {
   const now = new Date().toISOString();
   return {
@@ -570,6 +658,26 @@ export function createMockAdminState(): MockAdminState {
   };
 }
 
+/** #72: two Keycloak sessions; the second is the current browser. */
+export function createMockProfileSessions(): ProfileSession[] {
+  return [
+    {
+      id: '90000000-0000-4000-8000-000000000001',
+      name: 'krug-web · Safari',
+      created_at: '2026-11-01T09:12:00.000Z',
+      last_access_at: '2026-11-19T12:40:00.000Z',
+      current: false,
+    },
+    {
+      id: '90000000-0000-4000-8000-000000000002',
+      name: 'krug-web · Chrome',
+      created_at: '2026-11-18T18:05:00.000Z',
+      last_access_at: '2026-11-19T14:55:00.000Z',
+      current: true,
+    },
+  ];
+}
+
 export function createMockDb(): MockDb {
   return {
     session: clone(mockSession),
@@ -593,6 +701,18 @@ export function createMockDb(): MockDb {
     chatSettingsRequests: [],
     chatSettingsDelayMs: 0,
     forceChatSettingsError: null,
+    pluginCatalog: createMockPluginCatalog(),
+    pluginCatalogRequests: 0,
+    pluginCatalogDelayMs: 0,
+    forcePluginCatalogError: null,
+    chatPlugins: new Map(),
+    chatPluginListRequests: [],
+    chatPluginRequests: [],
+    chatPluginAudit: [],
+    chatPluginsDelayMs: 0,
+    chatPluginPatchDelayMs: 0,
+    forceChatPluginsError: null,
+    forceChatPluginPatchError: null,
     chats: buildChats(),
     idempotency: new Map(),
     readReceipts: {},
@@ -632,6 +752,19 @@ export function createMockDb(): MockDb {
     forcePartError: null,
     forceCompleteError: null,
     forceDownloadError: null,
+
+    fileCenterItems: [],
+    fileCenterRequests: [],
+    fileCenterDelayMs: 0,
+    forceFileCenterError: null,
+
+    profileUpdateRequests: [],
+    forceProfileUpdateError: null,
+    profileSessions: createMockProfileSessions(),
+    profileSessionListRequests: 0,
+    profileSessionRevokeRequests: [],
+    forceProfileSessionsError: null,
+    forceSessionRevokeError: null,
 
     stickerPacks: buildStickerPacks(),
     stickerFavorites: new Set(),
@@ -710,6 +843,18 @@ export function resetMockDb(db: MockDb): void {
   db.chatSettingsRequests = [];
   db.chatSettingsDelayMs = 0;
   db.forceChatSettingsError = null;
+  db.pluginCatalog = fresh.pluginCatalog;
+  db.pluginCatalogRequests = 0;
+  db.pluginCatalogDelayMs = 0;
+  db.forcePluginCatalogError = null;
+  db.chatPlugins.clear();
+  db.chatPluginListRequests = [];
+  db.chatPluginRequests = [];
+  db.chatPluginAudit = [];
+  db.chatPluginsDelayMs = 0;
+  db.chatPluginPatchDelayMs = 0;
+  db.forceChatPluginsError = null;
+  db.forceChatPluginPatchError = null;
   db.chats = fresh.chats;
   db.idempotency.clear();
   db.readReceipts = {};
@@ -748,6 +893,19 @@ export function resetMockDb(db: MockDb): void {
   db.forcePartError = null;
   db.forceCompleteError = null;
   db.forceDownloadError = null;
+
+  db.fileCenterItems = [];
+  db.fileCenterRequests = [];
+  db.fileCenterDelayMs = 0;
+  db.forceFileCenterError = null;
+
+  db.profileUpdateRequests = [];
+  db.forceProfileUpdateError = null;
+  db.profileSessions = fresh.profileSessions;
+  db.profileSessionListRequests = 0;
+  db.profileSessionRevokeRequests = [];
+  db.forceProfileSessionsError = null;
+  db.forceSessionRevokeError = null;
 
   db.stickerPacks = fresh.stickerPacks;
   db.stickerFavorites.clear();

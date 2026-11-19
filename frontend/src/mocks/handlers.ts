@@ -17,12 +17,15 @@ import type {
   AuthRegisterRequest,
   AuthSession,
   Chat,
+  ChatPluginState,
   CreateWorkspaceRequest,
   DeviceRegistration,
+  FileItem,
   MessageCreateBody,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
+  Plugin,
   PreflightDecision,
   PreflightFile,
   ReadNotificationsRequest,
@@ -40,6 +43,7 @@ import type {
 } from '../api/types';
 import { sha256Bytes } from '../files/hash';
 import { newUuid } from '../lib/ids';
+import { pluginUnavailableReason } from '../plugins/model';
 import {
   countActiveChatsForUser,
   countActiveChatsInWorkspace,
@@ -818,6 +822,45 @@ function handleUserStatusChange(
  * Contract-shaped MSW handlers. The same handler set is used by the browser
  * worker (dev) and by the Node server in tests.
  */
+/** #73: server kind derivation (media metadata first, then MIME). */
+function fileItemKind(item: FileItem): 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE' {
+  if (item.media?.kind) return item.media.kind;
+  const mime = (item.mime_type ?? '').toLowerCase();
+  if (mime.startsWith('image/')) return 'IMAGE';
+  if (mime.startsWith('video/')) return 'VIDEO';
+  if (mime.startsWith('audio/')) return 'AUDIO';
+  return 'FILE';
+}
+
+/** The list never exposes object keys, hashes or presigned URLs. */
+function fileItemView(item: FileItem): FileItem {
+  const view: FileItem = {
+    id: item.id,
+    size_bytes: item.size_bytes,
+    scan_status: item.scan_status,
+    chat_id: item.chat_id,
+    message_id: item.message_id,
+    created_at: item.created_at,
+    chat_name: item.chat_name ?? null,
+    filename: item.filename ?? null,
+    mime_type: item.mime_type ?? null,
+  };
+  if (item.media) view.media = { ...item.media };
+  return view;
+}
+
+/** Mirrors the backend Bio/Phone control-character guard. */
+function hasForbiddenControl(value: string, allowLineBreaks: boolean): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code === 0) return true;
+    if (code < 0x20 || code === 0x7f) {
+      if (!allowLineBreaks || (char !== '\n' && char !== '\r' && char !== '\t')) return true;
+    }
+  }
+  return false;
+}
+
 export function createHandlers(db: MockDb) {
   return [
     http.get(`${API}/health`, () => HttpResponse.json({ status: 'ok' })),
@@ -1015,6 +1058,153 @@ export function createHandlers(db: MockDb) {
       const unauthorized = requireBearer(request);
       if (unauthorized) return unauthorized;
       return HttpResponse.json(db.me);
+    }),
+
+    /* #72: partial profile update (display_name/bio/phone only). */
+    http.patch(`${API}/me`, async ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+
+      db.profileUpdateRequests.push({
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceProfileUpdateError) {
+        const forced = db.forceProfileUpdateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const hasField = (name: string) => Object.prototype.hasOwnProperty.call(body, name);
+      if (!hasField('display_name') && !hasField('bio') && !hasField('phone')) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'At least one field is required', {
+          details: { reason: 'empty_patch' },
+        });
+      }
+
+      let displayName = db.me.user.display_name;
+      let bio = db.me.user.bio ?? null;
+      let phone = db.me.user.phone ?? null;
+
+      if (hasField('display_name')) {
+        const raw = body.display_name;
+        if (typeof raw !== 'string') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'display_name must be a string', {
+            details: { field: 'display_name' },
+          });
+        }
+        const normalized = raw.trim();
+        if (normalized.length === 0) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'display_name must not be blank', {
+            details: { field: 'display_name', reason: 'blank' },
+          });
+        }
+        if (normalized.length > 80) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'display_name is too long', {
+            details: { field: 'display_name', max_length: 80 },
+          });
+        }
+        displayName = normalized;
+      }
+
+      if (hasField('bio')) {
+        const raw = body.bio;
+        if (raw !== null && typeof raw !== 'string') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'bio must be a string', {
+            details: { field: 'bio' },
+          });
+        }
+        const normalized = typeof raw === 'string' ? raw.trim() : '';
+        if (normalized.length > 280) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'bio is too long', {
+            details: { field: 'bio', max_length: 280 },
+          });
+        }
+        if (hasForbiddenControl(normalized, true)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'bio must be plain text', {
+            details: { field: 'bio', reason: 'control_characters' },
+          });
+        }
+        bio = normalized.length > 0 ? normalized : null;
+      }
+
+      if (hasField('phone')) {
+        const raw = body.phone;
+        if (raw !== null && typeof raw !== 'string') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'phone must be a string', {
+            details: { field: 'phone' },
+          });
+        }
+        const normalized = typeof raw === 'string' ? raw.trim() : '';
+        if (normalized.length > 32) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'phone is too long', {
+            details: { field: 'phone', max_length: 32 },
+          });
+        }
+        if (hasForbiddenControl(normalized, false)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'phone must be plain text', {
+            details: { field: 'phone', reason: 'control_characters' },
+          });
+        }
+        phone = normalized.length > 0 ? normalized : null;
+      }
+
+      db.me = {
+        ...db.me,
+        user: { ...db.me.user, display_name: displayName, bio, phone },
+      };
+      const authUser = db.authUsers.find((user) => user.id === db.me.user.id);
+      if (authUser) authUser.displayName = displayName;
+      db.session = {
+        ...db.session,
+        user: { ...db.session.user, display_name: displayName },
+      };
+      return HttpResponse.json(db.me.user);
+    }),
+
+    /* #72: Keycloak sessions of the caller (no IP/username/tokens). */
+    http.get(`${API}/me/sessions`, ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      db.profileSessionListRequests += 1;
+      if (db.forceProfileSessionsError) {
+        const forced = db.forceProfileSessionsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const sessions = [...db.profileSessions].sort((left, right) =>
+        right.last_access_at.localeCompare(left.last_access_at),
+      );
+      return HttpResponse.json({ sessions });
+    }),
+
+    http.delete(`${API}/me/sessions/:sessionId`, ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const sessionId = String(params.sessionId);
+      if (!UUID_RE.test(sessionId)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'sessionId must be a UUID', {
+          details: { field: 'sessionId' },
+        });
+      }
+      db.profileSessionRevokeRequests.push(sessionId);
+      if (db.forceSessionRevokeError) {
+        const forced = db.forceSessionRevokeError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const index = db.profileSessions.findIndex((session) => session.id === sessionId);
+      if (index < 0) return errorResponse(404, 'NOT_FOUND', 'Session not found');
+      db.profileSessions.splice(index, 1);
+      return new HttpResponse(null, { status: 204 });
     }),
 
     /* E8/R-03..R-04: public setup status + platform admin. */
@@ -1421,6 +1611,138 @@ export function createHandlers(db: MockDb) {
       db.stickerFavorites.delete(stickerId);
       db.stickerFavoriteRequests.push({ stickerId, action: 'DELETE' });
       return new HttpResponse(null, { status: 204 });
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* D1.1 (#69): built-in plugins                                       */
+    /* ------------------------------------------------------------------ */
+
+    http.get(`${API}/plugins`, async ({ request }) => {
+      // Contract: authenticated but workspace/chat independent, so no
+      // X-Device-Id requirement here.
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      db.pluginCatalogRequests += 1;
+      if (db.pluginCatalogDelayMs > 0) await delay(db.pluginCatalogDelayMs);
+      if (db.forcePluginCatalogError) {
+        const forced = db.forcePluginCatalogError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      return HttpResponse.json({
+        items: db.pluginCatalog.map((plugin) => ({
+          ...plugin,
+          permissions: [...plugin.permissions],
+          modes: [...plugin.modes],
+        })),
+      });
+    }),
+
+    http.get(`${API}/chats/:chatId/plugins`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      db.chatPluginListRequests.push({
+        chatId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.chatPluginsDelayMs > 0) await delay(db.chatPluginsDelayMs);
+      if (db.forceChatPluginsError) {
+        const forced = db.forceChatPluginsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const record = db.chats[chatId];
+      const workspace = record
+        ? db.me.workspaces.find((item) => item.id === record.workspaceId)
+        : undefined;
+      if (!record || !workspace) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+
+      const stored = db.chatPlugins.get(chatId);
+      const items: ChatPluginState[] = db.pluginCatalog.map((plugin) => {
+        const reason = pluginUnavailableReason(plugin, record.summary.security_mode);
+        return {
+          plugin_id: plugin.id,
+          enabled: stored?.get(plugin.id) ?? false,
+          available: reason === null,
+          ...(reason ? { reason } : {}),
+        };
+      });
+      return HttpResponse.json({ items });
+    }),
+
+    http.patch(`${API}/chats/:chatId/plugins/:pluginId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const pluginId = String(params.pluginId);
+      const rawBody = await readJson(request);
+      const body = asRecord(rawBody);
+      db.chatPluginRequests.push({
+        chatId,
+        pluginId,
+        body: body ?? {},
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.chatPluginPatchDelayMs > 0) await delay(db.chatPluginPatchDelayMs);
+      if (db.forceChatPluginPatchError) {
+        const forced = db.forceChatPluginPatchError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const record = db.chats[chatId];
+      const workspace = record
+        ? db.me.workspaces.find((item) => item.id === record.workspaceId)
+        : undefined;
+      if (!record || !workspace) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+
+      // The mock has one role per workspace member; the backend checks the
+      // chat role in the same OWNER/ADMIN direction.
+      if (workspace.role !== 'OWNER' && workspace.role !== 'ADMIN') {
+        return errorResponse(403, 'FORBIDDEN', 'Not a chat owner/admin');
+      }
+
+      const plugin: Plugin | undefined = db.pluginCatalog.find((item) => item.id === pluginId);
+      if (!plugin) return errorResponse(404, 'PLUGIN_NOT_FOUND', 'Plugin not found');
+      if (typeof body.enabled !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'enabled must be a boolean', {
+          details: { field: 'enabled' },
+        });
+      }
+
+      const reason = pluginUnavailableReason(plugin, record.summary.security_mode);
+      if (reason) {
+        return errorResponse(
+          422,
+          reason,
+          reason === 'PLUGIN_DISABLED'
+            ? 'Plugin is disabled in the catalog'
+            : 'Plugin is not available in this chat mode',
+        );
+      }
+
+      const stored = db.chatPlugins.get(chatId) ?? new Map<string, boolean>();
+      const previous = stored.get(pluginId) ?? false;
+      stored.set(pluginId, body.enabled);
+      db.chatPlugins.set(chatId, stored);
+      // Mirrors the backend: a no-op PATCH writes no audit event.
+      if (previous !== body.enabled) {
+        db.chatPluginAudit.push({ pluginId, enabled: body.enabled });
+      }
+      return HttpResponse.json({
+        plugin_id: pluginId,
+        enabled: body.enabled,
+        available: true,
+      });
     }),
 
     http.post(`${API}/devices`, async ({ request }) => {
@@ -2066,6 +2388,131 @@ export function createHandlers(db: MockDb) {
       db.chatRequests.set(idempotencyKey, { bodyHash, chat });
       db.chatCreateRequests.push({ idempotencyKey, body });
       return HttpResponse.json(chat, { status: 201 });
+    }),
+
+    /* #73: metadata-only file center with filters, cursor and quota. */
+    http.get(`${API}/files`, async ({ request }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const url = new URL(request.url);
+      const record: Record<string, string | null> = {};
+      for (const key of [
+        'workspace_id',
+        'chat_id',
+        'kind',
+        'scan_status',
+        'query',
+        'mime',
+        'extension',
+        'cursor',
+        'limit',
+      ]) {
+        record[key] = url.searchParams.get(key);
+      }
+      db.fileCenterRequests.push(record);
+      if (db.fileCenterDelayMs > 0) await delay(db.fileCenterDelayMs);
+      if (db.forceFileCenterError) {
+        const forced = db.forceFileCenterError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const workspaceId = record.workspace_id;
+      if (workspaceId) {
+        const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+        if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      }
+
+      const kind = record.kind;
+      if (kind && !['IMAGE', 'VIDEO', 'AUDIO', 'FILE'].includes(kind)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'kind is invalid', {
+          details: { field: 'kind' },
+        });
+      }
+      const scanStatus = record.scan_status;
+      if (
+        scanStatus &&
+        !['PENDING', 'CLEAN', 'INFECTED', 'FAILED', 'SKIPPED'].includes(scanStatus)
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'scan_status is invalid', {
+          details: { field: 'scan_status' },
+        });
+      }
+      const limitRaw = record.limit;
+      const limit = limitRaw === null ? 50 : Number(limitRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'limit must be 1..100', {
+          details: { field: 'limit' },
+        });
+      }
+
+      let offset = 0;
+      if (record.cursor) {
+        try {
+          const decoded = atob(record.cursor);
+          if (!decoded.startsWith('file-center:')) throw new Error('bad prefix');
+          offset = Number(decoded.slice('file-center:'.length));
+          if (!Number.isInteger(offset) || offset < 0) throw new Error('bad offset');
+        } catch {
+          return errorResponse(400, 'VALIDATION_FAILED', 'cursor is invalid', {
+            details: { field: 'cursor' },
+          });
+        }
+      }
+
+      const query = record.query?.toLowerCase() ?? null;
+      const mime = record.mime?.toLowerCase() ?? null;
+      const extension = record.extension?.toLowerCase() ?? null;
+      const filtered = db.fileCenterItems
+        .filter((item) => !record.chat_id || item.chat_id === record.chat_id)
+        .filter((item) => !kind || fileItemKind(item) === kind)
+        .filter((item) => !scanStatus || item.scan_status === scanStatus)
+        .filter((item) => {
+          if (!query) return true;
+          return (
+            (item.filename ?? '').toLowerCase().includes(query) ||
+            (item.mime_type ?? '').toLowerCase().includes(query)
+          );
+        })
+        .filter((item) => !mime || (item.mime_type ?? '').toLowerCase() === mime)
+        .filter(
+          (item) =>
+            !extension || (item.filename ?? '').split('.').pop()?.toLowerCase() === extension,
+        )
+        .sort((left, right) => {
+          const byDate = right.created_at.localeCompare(left.created_at);
+          return byDate !== 0 ? byDate : right.id.localeCompare(left.id);
+        });
+
+      const pageItems = filtered.slice(offset, offset + limit);
+      const nextOffset = offset + pageItems.length;
+      const hasMore = nextOffset < filtered.length;
+      const quota = {
+        used_bytes: db.limits.usage.used,
+        reserved_bytes: db.limits.usage.reserved,
+        storage_bytes: db.limits.storage_bytes,
+        percent:
+          db.limits.storage_bytes > 0
+            ? Math.min(
+                100,
+                Math.round(
+                  ((db.limits.usage.used + db.limits.usage.reserved) * 100) /
+                    db.limits.storage_bytes,
+                ),
+              )
+            : 0,
+      };
+
+      return HttpResponse.json({
+        items: pageItems.map(fileItemView),
+        page: {
+          next_cursor: hasMore ? btoa(`file-center:${nextOffset}`) : null,
+          has_more: hasMore,
+        },
+        quota,
+      });
     }),
 
     http.get(`${API}/workspaces/:workspaceId/limits`, async ({ request, params }) => {

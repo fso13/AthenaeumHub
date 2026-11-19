@@ -142,6 +142,12 @@ public final class ErrorCode {
     public static final String MESSAGE_NOT_EDITABLE = "MESSAGE_NOT_EDITABLE";
     public static final String VERSION_CONFLICT = "VERSION_CONFLICT";
 
+    // D1.1 (#69): built-in plugin catalog and per-chat toggles. No execution or marketplace;
+    // E2EE chats cannot enable a server-side (MANAGED-only) plugin.
+    public static final String PLUGIN_NOT_FOUND = "PLUGIN_NOT_FOUND";
+    public static final String PLUGIN_NOT_AVAILABLE = "PLUGIN_NOT_AVAILABLE";
+    public static final String PLUGIN_DISABLED = "PLUGIN_DISABLED";
+
     private ErrorCode() {
     }
 }

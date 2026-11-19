@@ -5,6 +5,7 @@ import type {
   ApiAttachment,
   ApiMessage,
   AssignableMemberRole,
+  AuthUser,
   ChangeWorkspaceMemberRoleRequest,
   Chat,
   ChatCreateRequest,
@@ -19,6 +20,8 @@ import type {
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
+  ProfileSession,
+  ProfileUpdate,
   ReactionSummary,
   Session,
   StickerRef,
@@ -30,6 +33,7 @@ import type {
   WorkspaceSummary,
 } from '../api/types';
 import { createFilesStore, type FilesStore } from './filesStore';
+import { createPluginsStore, type PluginsStore } from '../plugins/store';
 import { createStickersStore, type StickersStore } from '../stickers/store';
 import { createOpsStore, type OpsStore } from '../ops/store';
 import { readDeviceWorkspaceId, writeDeviceWorkspaceId } from '../workspace/deviceWorkspace';
@@ -368,6 +372,18 @@ export function createEmptyDevicesState(): DevicesState {
   return { items: [], status: 'idle', error: null };
 }
 
+/** #72: result of a partial `PATCH /me` (the server response is authoritative). */
+export interface ProfileUpdateResult {
+  user: AuthUser | null;
+  error: ApiError | null;
+}
+
+/** #72: result of `GET /me/sessions`; the component owns the list state. */
+export interface ProfileSessionsResult {
+  sessions: ProfileSession[];
+  error: ApiError | null;
+}
+
 export interface AppState {
   sessionStatus: 'idle' | 'loading' | 'ready' | 'error';
   /** Dev-profile session (F-01). Null in password/Auth BFF mode. */
@@ -613,6 +629,8 @@ export class ChatStore {
   readonly files: FilesStore;
   /** E5-F sticker catalog, favorites and local recent list. */
   readonly stickers: StickersStore;
+  /** D1.1 (#69): built-in plugin catalog and per-chat state. */
+  readonly plugins: PluginsStore;
   /** E8: setup status and platform-admin settings/overview. */
   readonly ops: OpsStore;
 
@@ -640,6 +658,8 @@ export class ChatStore {
   private membersLoadMoreInFlight = false;
   /** D1-FE5: dedupes profile device reads; reset on workspace switch. */
   private devicesInFlight: Promise<void> | null = null;
+  /** #72: dedupes the profile-modal `/me` read. */
+  private profileInFlight: Promise<void> | null = null;
   /** Guards a single-read rollback that races with a successful read-all. */
   private notificationReadGeneration = 0;
   /** Invalidates in-flight notification responses across logout/workspace switch. */
@@ -728,6 +748,8 @@ export class ChatStore {
 
     this.stickers = createStickersStore({ api: deps.api });
 
+    this.plugins = createPluginsStore({ api: deps.api });
+
     this.realtime =
       deps.config.realtimeEnabled && this.config.realtimeEnabled
         ? new RealtimeClient({
@@ -782,6 +804,7 @@ export class ChatStore {
     this.calls.dispose();
     this.files.dispose();
     this.stickers.dispose();
+    this.plugins.dispose();
     this.ops.dispose();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
@@ -1047,7 +1070,7 @@ export class ChatStore {
 
     const device = await this.api.registerDevice(
       {
-        name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
+        name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
         platform: 'WEB',
         app_version: this.config.appVersion.slice(0, 40),
       },
@@ -1709,6 +1732,74 @@ export class ChatStore {
     }
   }
 
+  /** #72: load `/me` once for the profile modal (dev sessions lack bio/email). */
+  async loadProfile(force = false): Promise<void> {
+    if (!force && this.state.me) return;
+    if (this.profileInFlight) return this.profileInFlight;
+    this.profileInFlight = (async () => {
+      try {
+        const me = await this.api.getMe();
+        this.patch({ me, user: me.user });
+      } catch (error) {
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        if (apiError.status === 401) {
+          this.patch({ authExpired: true });
+        }
+      } finally {
+        this.profileInFlight = null;
+      }
+    })();
+    return this.profileInFlight;
+  }
+
+  /**
+   * #72: partial profile update. Only changed fields are sent; the returned
+   * `AuthUser` replaces `me.user`/`user` so every surface reads server state.
+   * No local optimistic patch is applied on failure.
+   */
+  async updateProfile(patch: ProfileUpdate): Promise<ProfileUpdateResult> {
+    try {
+      const user = await this.api.updateMe(patch);
+      this.patch({
+        user,
+        me: this.state.me ? { ...this.state.me, user } : this.state.me,
+      });
+      return { user, error: null };
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      return { user: null, error: apiError };
+    }
+  }
+
+  /** #72: Keycloak sessions of the caller (server owns `current`). */
+  async listMySessions(): Promise<ProfileSessionsResult> {
+    try {
+      const response = await this.api.listMySessions();
+      return { sessions: response.sessions, error: null };
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      return { sessions: [], error: apiError };
+    }
+  }
+
+  /**
+   * #72: revoke one own session. `null` means the server returned `204`; the
+   * caller re-reads the list instead of removing the row optimistically.
+   */
+  async revokeMySession(sessionId: string): Promise<ApiError | null> {
+    try {
+      await this.api.revokeMySession(sessionId);
+      return null;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      return apiError;
+    }
+  }
+
   /** D1-FE5 profile: one deduped `GET /devices` read (no keys are rendered). */
   async loadDevices(force = false): Promise<void> {
     if (!force && this.state.devices.status === 'ready') return;
@@ -1918,6 +2009,7 @@ export class ChatStore {
     this.notificationEpoch += 1;
     this.files.reset();
     this.stickers.reset();
+    this.plugins.reset();
     this.ops.reset();
     this.chatLimitsPromise = null;
     this.unreadWorkspaceRequests.clear();
@@ -3017,7 +3109,7 @@ export class ChatStore {
       try {
         const self = await this.e2eeBridge!.initialize({
           userId,
-          name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
+          name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
           appVersion: this.config.appVersion.slice(0, 40),
         });
         this.patchE2ee({

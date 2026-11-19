@@ -24,6 +24,12 @@ public class UserEntity {
     @Column(name = "display_name", nullable = false)
     private String displayName;
 
+    @Column(name = "bio")
+    private String bio;
+
+    @Column(name = "phone")
+    private String phone;
+
     @Column(name = "status", nullable = false)
     private String status;
 
@@ -46,6 +52,14 @@ public class UserEntity {
 
     public String getDisplayName() {
         return displayName;
+    }
+
+    public String getBio() {
+        return bio;
+    }
+
+    public String getPhone() {
+        return phone;
     }
 
     public String getStatus() {

@@ -47,7 +47,12 @@ public class PrincipalArgumentResolver implements HandlerMethodArgumentResolver 
         }
         Jwt jwt = token.getToken();
         return new Principal(actor.userId(), actor.deviceId(), workspaceClaim(jwt),
-                RequestIdFilter.requestId(request));
+                RequestIdFilter.requestId(request), sessionClaim(jwt));
+    }
+
+    private static String sessionClaim(Jwt jwt) {
+        String value = jwt.getClaimAsString("sid");
+        return value == null || value.isBlank() ? null : value.strip();
     }
 
     private static UUID workspaceClaim(Jwt jwt) {

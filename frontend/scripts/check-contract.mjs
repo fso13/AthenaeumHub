@@ -77,6 +77,10 @@ const operations = {
   'POST /admin/users/{userId}/activate': spec.paths?.['/admin/users/{userId}/activate']?.post,
   'DELETE /admin/chats/{chatId}': spec.paths?.['/admin/chats/{chatId}']?.delete,
   'PATCH /chats/{chatId}': spec.paths?.['/chats/{chatId}']?.patch,
+  'PATCH /me': spec.paths?.['/me']?.patch,
+  'GET /me/sessions': spec.paths?.['/me/sessions']?.get,
+  'DELETE /me/sessions/{sessionId}': spec.paths?.['/me/sessions/{sessionId}']?.delete,
+  'GET /files': spec.paths?.['/files']?.get,
   'PATCH /chats/{chatId}/messages/{messageId}':
     spec.paths?.['/chats/{chatId}/messages/{messageId}']?.patch,
   'DELETE /chats/{chatId}/messages/{messageId}':
@@ -85,6 +89,10 @@ const operations = {
     spec.paths?.['/chats/{chatId}/messages/{messageId}/reactions']?.post,
   'DELETE /chats/{chatId}/messages/{messageId}/reactions/{emoji}':
     spec.paths?.['/chats/{chatId}/messages/{messageId}/reactions/{emoji}']?.delete,
+  'GET /plugins': spec.paths?.['/plugins']?.get,
+  'GET /chats/{chatId}/plugins': spec.paths?.['/chats/{chatId}/plugins']?.get,
+  'PATCH /chats/{chatId}/plugins/{pluginId}':
+    spec.paths?.['/chats/{chatId}/plugins/{pluginId}']?.patch,
   'GET /admin/audit': spec.paths?.['/admin/audit']?.get,
   'GET /me': spec.paths?.['/me']?.get,
   'POST /devices': spec.paths?.['/devices']?.post,
@@ -220,6 +228,13 @@ const requiredFields = {
   UploadCompleteRequest: ['sha256', 'parts_count'],
   AttachmentRef: ['id', 'size_bytes', 'scan_status'],
   DownloadUrl: ['url', 'expires_at', 'size_bytes', 'sha256'],
+  // #73: the file center is metadata-only and cursor paged.
+  FilePage: ['items', 'page', 'quota'],
+  FileQuotaSummary: ['used_bytes', 'reserved_bytes', 'storage_bytes', 'percent'],
+  // #72: profile patch + Keycloak sessions.
+  AuthUser: ['id', 'display_name', 'email', 'is_platform_admin'],
+  ProfileSession: ['id', 'name', 'created_at', 'last_access_at', 'current'],
+  ProfileSessions: ['sessions'],
   RealtimeTicket: ['ticket', 'expires_at', 'ws_url'],
   ChatSummary: ['id', 'name', 'type', 'security_mode', 'unread_count', 'last_seq'],
   ChatList: ['items'],
@@ -325,11 +340,15 @@ for (const [schemaName, fields] of Object.entries(requiredFields)) {
   }
 }
 
+const meUserProperty = schemas.MeResponse?.properties?.user;
+// `GET /me` now reuses `AuthUser`; resolve the local $ref instead of silently
+// skipping the check when the contract switches to a shared schema.
+const meUserSchema = meUserProperty?.$ref
+  ? schemas[meUserProperty.$ref.split('/').pop()]
+  : meUserProperty;
 check(
-  Array.isArray(schemas.MeResponse?.properties?.user?.required) &&
-    ['id', 'display_name', 'email'].every((field) =>
-      schemas.MeResponse.properties.user.required.includes(field),
-    ),
+  Array.isArray(meUserSchema?.required) &&
+    ['id', 'display_name', 'email'].every((field) => meUserSchema.required.includes(field)),
   'MeResponse.user must require id, display_name and email',
 );
 
@@ -439,6 +458,50 @@ check(
       schemas.WorkspaceLimits.properties.usage.required.includes(field),
   ),
   'WorkspaceLimits.usage must require used/reserved/limit',
+);
+
+// --- 4a. #72/#73 profile and file-center invariants ----------------------
+check(
+  schemas.FileItem?.allOf?.some((entry) => entry?.$ref === '#/components/schemas/AttachmentRef'),
+  'FileItem must stay AttachmentRef + provenance (no invented fields)',
+);
+for (const field of ['object_key', 'sha256', 'url', 'content']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.FileItem?.properties ?? {}, field),
+    `FileItem must not expose ${field}`,
+  );
+}
+check(
+  schemas.FilePage?.properties?.page?.properties?.has_more?.type === 'boolean',
+  'FilePage.page.has_more must stay a boolean',
+);
+check(
+  Array.isArray(schemas.FilePage?.properties?.quota?.oneOf) &&
+    schemas.FilePage.properties.quota.oneOf.some((entry) => entry?.type === 'null'),
+  'FilePage.quota must stay nullable',
+);
+for (const field of ['ip', 'ip_address', 'username', 'access_token', 'refresh_token']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.ProfileSession?.properties ?? {}, field),
+    `ProfileSession must not expose ${field}`,
+  );
+}
+check(
+  schemas.ProfileUpdate?.properties?.email === undefined &&
+    schemas.ProfileUpdate?.properties?.password === undefined,
+  'ProfileUpdate must not accept email/password',
+);
+check(
+  schemas.ProfileUpdate?.properties?.display_name?.maxLength === 80,
+  'ProfileUpdate.display_name maxLength must stay 80',
+);
+check(
+  schemas.ProfileUpdate?.properties?.bio?.maxLength === 280,
+  'ProfileUpdate.bio maxLength must stay 280',
+);
+check(
+  schemas.ProfileUpdate?.properties?.phone?.maxLength === 32,
+  'ProfileUpdate.phone maxLength must stay 32',
 );
 
 // --- 5a. E7/I-01 invariants ----------------------------------------------
@@ -587,18 +650,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 51,
-  'Contract must expose exactly 51 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions)',
+  Object.keys(spec.paths ?? {}).length === 57,
+  'Contract must expose exactly 57 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 60,
-  'Contract check must cover exactly 60 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions)',
+  Object.keys(operations).length === 67,
+  'Contract check must cover exactly 67 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files)',
 );
 check(
-  Object.keys(schemas).length === 91,
-  'Contract must expose exactly 91 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions)',
+  Object.keys(schemas).length === 103,
+  'Contract must expose exactly 103 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files)',
 );
 
 check(

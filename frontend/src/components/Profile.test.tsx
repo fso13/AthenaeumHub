@@ -44,7 +44,7 @@ describe('D1-FE5 profile modal', () => {
     expect(dialog.textContent).not.toMatch(/fingerprint|identity_|signed_prekey|one_time_prekey/i);
   });
 
-  it('renders honest disabled 2FA/session rows instead of invented controls', async () => {
+  it('keeps 2FA honest while showing the real Keycloak sessions from /me/sessions', async () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openProfile(user);
 
@@ -52,14 +52,20 @@ describe('D1-FE5 profile modal', () => {
     expect(
       within(dialog).getByText('В этом срезе нет API 2FA — переключатель не показывается.'),
     ).toBeInTheDocument();
-    expect(within(dialog).getByText('Активные сессии')).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(
-        'API управления сессиями нет. Завершить текущую сессию можно кнопкой «Выйти».',
-      ),
-    ).toBeInTheDocument();
-    expect(within(dialog).getAllByText('Недоступно')).toHaveLength(2);
+    expect(within(dialog).getAllByText('Активные сессии').length).toBeGreaterThan(0);
+    expect(within(dialog).getAllByText('Недоступно')).toHaveLength(1);
     expect(within(dialog).queryByRole('checkbox')).toBeNull();
+
+    // Contract fields only: client label, timestamps, current flag. No IP,
+    // username or session tokens are rendered.
+    expect(await within(dialog).findByText('krug-web · Chrome')).toBeInTheDocument();
+    expect(within(dialog).getByText('krug-web · Safari')).toBeInTheDocument();
+    expect(within(dialog).getByText('Текущая')).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('button', { name: /^Завершить сессию:/ })).toHaveLength(2);
+    expect(dialog.textContent).not.toMatch(/ipAddress|ip_address|access_token|refresh_token/i);
+    expect(dialog.textContent).not.toContain(
+      mockDb.profileSessions[0]?.id.slice(0, 8) ?? 'no-session-id',
+    );
   });
 
   it('switches the theme and opens the existing notification preferences', async () => {
@@ -101,7 +107,7 @@ describe('D1-FE5 profile modal', () => {
     ).toBeInTheDocument();
 
     await user.click(within(confirm).getByRole('button', { name: 'Выйти' }));
-    expect(await screen.findByRole('heading', { name: 'Вход в Сову' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Вход в Pickle' })).toBeInTheDocument();
     await waitFor(() => expect(mockDb.authLogoutRequests).toHaveLength(1));
   });
 
@@ -137,5 +143,167 @@ describe('D1-FE5 profile modal', () => {
     );
     expect(serious).toEqual([]);
     expect(dialog).toBeInTheDocument();
+  });
+});
+
+describe('D1-FE5/#72 profile edit and sessions', () => {
+  it('saves display_name/bio/phone as an incremental PATCH and updates /me', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Редактировать' }));
+    const name = within(dialog).getByLabelText('Имя');
+    expect(name).toHaveFocus();
+
+    await user.clear(name);
+    await user.type(name, 'Дмитрий К.');
+    await user.type(within(dialog).getByLabelText('О себе'), 'Люблю наводить порядок в файлах.');
+    await user.type(within(dialog).getByLabelText('Телефон'), '+7 999 123-45-67');
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => expect(mockDb.profileUpdateRequests).toHaveLength(1));
+    expect(mockDb.profileUpdateRequests[0]?.body).toEqual({
+      display_name: 'Дмитрий К.',
+      bio: 'Люблю наводить порядок в файлах.',
+      phone: '+7 999 123-45-67',
+    });
+    expect(mockDb.me.user.display_name).toBe('Дмитрий К.');
+    expect(await within(dialog).findByText('Профиль сохранён.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { level: 3 })).toHaveTextContent('Дмитрий К.');
+
+    // Second save sends only the changed field; unchanged bio/phone are absent.
+    await user.click(within(dialog).getByRole('button', { name: 'Редактировать' }));
+    await user.clear(within(dialog).getByLabelText('Имя'));
+    await user.type(within(dialog).getByLabelText('Имя'), 'Дмитрий Крылов');
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => expect(mockDb.profileUpdateRequests).toHaveLength(2));
+    expect(mockDb.profileUpdateRequests[1]?.body).toEqual({ display_name: 'Дмитрий Крылов' });
+  });
+
+  it('validates the 80/280/32 bounds locally and never sends an invalid patch', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Редактировать' }));
+    const name = within(dialog).getByLabelText('Имя');
+    await user.clear(name);
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+    expect(within(dialog).getByText('Укажите имя.')).toBeInTheDocument();
+    expect(name).toHaveAttribute('aria-invalid', 'true');
+    expect(mockDb.profileUpdateRequests).toHaveLength(0);
+
+    await user.type(name, 'a'.repeat(81));
+    await user.type(within(dialog).getByLabelText('О себе'), 'b'.repeat(281));
+    await user.type(within(dialog).getByLabelText('Телефон'), '9'.repeat(33));
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+    expect(within(dialog).getByText('Имя — не больше 80 символов.')).toBeInTheDocument();
+    expect(within(dialog).getByText('О себе — не больше 280 символов.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Телефон — не больше 32 символов.')).toBeInTheDocument();
+    expect(mockDb.profileUpdateRequests).toHaveLength(0);
+  });
+
+  it('keeps the form open and shows a server error without an optimistic update', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Редактировать' }));
+    await user.clear(within(dialog).getByLabelText('Имя'));
+    await user.type(within(dialog).getByLabelText('Имя'), 'Новое имя');
+    mockDb.forceProfileUpdateError = {
+      status: 500,
+      code: 'INTERNAL',
+      message: 'profile failed',
+    };
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('Не удалось сохранить профиль.');
+    expect(mockDb.me.user.display_name).toBe('Дмитрий Крылов');
+    expect(within(dialog).getByRole('button', { name: 'Сохранить' })).toBeInTheDocument();
+  });
+
+  it('revokes a session only after confirmation and re-reads the server list', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+    await within(dialog).findByText('krug-web · Safari');
+
+    const target = mockDb.profileSessions.find((session) => !session.current);
+    expect(target).toBeDefined();
+    await user.click(
+      within(dialog).getByRole('button', { name: `Завершить сессию: ${target!.name}` }),
+    );
+
+    const confirm = await screen.findByRole('dialog', { name: 'Завершить сессию?' });
+    expect(within(confirm).getByText(`Сессия «${target!.name}» будет отозвана.`)).toBeVisible();
+    expect(within(confirm).getByText(/Устройство потеряет доступ/)).toBeVisible();
+
+    // Nothing is removed until the server confirms.
+    expect(mockDb.profileSessionRevokeRequests).toHaveLength(0);
+    await user.click(within(confirm).getByRole('button', { name: 'Завершить' }));
+
+    await waitFor(() => expect(mockDb.profileSessionRevokeRequests).toEqual([target!.id]));
+    await waitFor(() => expect(within(dialog).queryByText(target!.name)).not.toBeInTheDocument());
+    expect(await within(dialog).findByText('Сессия завершена.')).toBeInTheDocument();
+  });
+
+  it('shows a 503 sessions error, retries, and surfaces a revoke failure honestly', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+    await within(dialog).findByText('krug-web · Chrome');
+
+    mockDb.forceProfileSessionsError = {
+      status: 503,
+      code: 'AUTH_UNAVAILABLE',
+      message: 'Keycloak unavailable',
+      retryAfterSeconds: 5,
+    };
+    await user.click(within(dialog).getByRole('button', { name: 'Обновить' }));
+    const sessionAlert = await within(dialog).findByRole('alert');
+    expect(sessionAlert).toHaveTextContent('Сервис сессий недоступен. Повторите позже.');
+
+    mockDb.forceProfileSessionsError = null;
+    await user.click(within(sessionAlert).getByRole('button', { name: 'Повторить' }));
+    expect(await within(dialog).findByText('krug-web · Chrome')).toBeInTheDocument();
+
+    const target = mockDb.profileSessions.find((session) => !session.current);
+    mockDb.forceSessionRevokeError = {
+      status: 503,
+      code: 'AUTH_UNAVAILABLE',
+      message: 'Keycloak unavailable',
+      retryAfterSeconds: 5,
+    };
+    await user.click(
+      within(dialog).getByRole('button', { name: `Завершить сессию: ${target!.name}` }),
+    );
+    const confirm = await screen.findByRole('dialog', { name: 'Завершить сессию?' });
+    await user.click(within(confirm).getByRole('button', { name: 'Завершить' }));
+
+    expect(await within(confirm).findByRole('alert')).toHaveTextContent(
+      'Сервис сессий недоступен. Повторите позже.',
+    );
+    // The row is still there: revoke is never optimistic.
+    expect(within(dialog).getByText(target!.name)).toBeInTheDocument();
+
+    mockDb.forceSessionRevokeError = null;
+    await user.click(within(confirm).getByRole('button', { name: 'Повторить' }));
+    await waitFor(() => expect(within(dialog).queryByText(target!.name)).not.toBeInTheDocument());
+  });
+
+  it('passes an axe audit in edit mode with sessions visible', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Редактировать' }));
+    await within(dialog).findByText('krug-web · Chrome');
+
+    const results = await axe.run(dialog, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    const serious = results.violations.filter(
+      (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+    );
+    expect(serious).toEqual([]);
   });
 });

@@ -1,6 +1,8 @@
 package ru.krug.backend.auth.infrastructure.keycloak;
 
 import java.net.URI;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import ru.krug.backend.auth.application.model.KeycloakSessionView;
 import ru.krug.backend.auth.application.model.KeycloakUserView;
 import ru.krug.backend.auth.application.port.KeycloakAdminPort;
 import ru.krug.backend.auth.application.port.PasswordRejectedException;
@@ -223,6 +226,80 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     }
 
     @Override
+    public void updateDisplayName(UUID userId, String displayName) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("firstName", displayName);
+        body.put("lastName", displayName);
+        try {
+            http.restClient().put()
+                    .uri(http.endpoints().adminUserUrl(userId.toString()))
+                    .header(HttpHeaders.AUTHORIZATION, bearer())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .exchange((request, response) -> {
+                        int status = response.getStatusCode().value();
+                        // 404: the Keycloak user is gone; a best-effort sync cannot help.
+                        if (status != 204 && status != 200 && status != 404) {
+                            throw new ProviderUnavailableException();
+                        }
+                        return null;
+                    });
+        } catch (ProviderUnavailableException ex) {
+            throw ex;
+        } catch (RestClientException ex) {
+            throw new ProviderUnavailableException();
+        }
+    }
+
+    @Override
+    public List<KeycloakSessionView> listSessions(UUID userId) {
+        try {
+            return http.restClient().get()
+                    .uri(http.endpoints().adminUserSessionsUrl(userId.toString()))
+                    .header(HttpHeaders.AUTHORIZATION, bearer())
+                    .exchange((request, response) -> {
+                        int status = response.getStatusCode().value();
+                        if (status == 404) {
+                            return List.<KeycloakSessionView>of();
+                        }
+                        if (status != 200) {
+                            throw new ProviderUnavailableException();
+                        }
+                        List<Map<String, Object>> sessions = http.objectMapper().readValue(
+                                response.getBody(),
+                                new TypeReference<List<Map<String, Object>>>() {
+                                });
+                        return sessions.stream().map(this::mapSession).toList();
+                    });
+        } catch (ProviderUnavailableException ex) {
+            throw ex;
+        } catch (RestClientException ex) {
+            throw new ProviderUnavailableException();
+        }
+    }
+
+    @Override
+    public void revokeSession(UUID userId, String sessionId) {
+        try {
+            http.restClient().delete()
+                    .uri(http.endpoints().adminUserSessionUrl(userId.toString(), sessionId))
+                    .header(HttpHeaders.AUTHORIZATION, bearer())
+                    .exchange((request, response) -> {
+                        int status = response.getStatusCode().value();
+                        // 404: already revoked concurrently; DELETE stays idempotent.
+                        if (status != 204 && status != 200 && status != 404) {
+                            throw new ProviderUnavailableException();
+                        }
+                        return null;
+                    });
+        } catch (ProviderUnavailableException ex) {
+            throw ex;
+        } catch (RestClientException ex) {
+            throw new ProviderUnavailableException();
+        }
+    }
+
+    @Override
     public void deleteUser(UUID userId) {
         try {
             http.restClient().delete()
@@ -244,6 +321,41 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
 
     private String bearer() {
         return "Bearer " + http.adminToken();
+    }
+
+    private KeycloakSessionView mapSession(Map<String, Object> session) {
+        String id = KeycloakHttp.stringValue(session.get("id"));
+        long created = KeycloakHttp.longValue(session.get("startTime"), 0L);
+        long lastAccess = KeycloakHttp.longValue(session.get("lastAccess"), created);
+        return new KeycloakSessionView(id, sessionName(session),
+                Instant.ofEpochMilli(created), Instant.ofEpochMilli(lastAccess));
+    }
+
+    /**
+     * Keycloak has no first-class device name in a session. The client names registered in
+     * the session are the only safe, non-identifying label; the IP address and username are
+     * deliberately ignored.
+     */
+    private String sessionName(Map<String, Object> session) {
+        Object clients = session.get("clients");
+        if (!(clients instanceof Map<?, ?> clientMap) || clientMap.isEmpty()) {
+            return "Keycloak session";
+        }
+        List<String> labels = new ArrayList<>();
+        for (Map.Entry<?, ?> entry : clientMap.entrySet()) {
+            String label = KeycloakHttp.stringValue(entry.getValue());
+            if (label == null || label.isBlank()) {
+                label = KeycloakHttp.stringValue(entry.getKey());
+            }
+            if (label != null && !label.isBlank() && !labels.contains(label)) {
+                labels.add(label.strip());
+            }
+        }
+        if (labels.isEmpty()) {
+            return "Keycloak session";
+        }
+        String joined = String.join(", ", labels);
+        return joined.length() > 120 ? joined.substring(0, 120) : joined;
     }
 
     private KeycloakUserView map(Map<String, Object> user) {

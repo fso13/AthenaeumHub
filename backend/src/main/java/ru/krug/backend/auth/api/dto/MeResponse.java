@@ -9,10 +9,15 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record MeResponse(User user, List<Workspace> workspaces, UUID defaultWorkspaceId) {
 
     public record User(UUID id, String displayName, String email,
-                       @JsonProperty("is_platform_admin") boolean platformAdmin) {
+                       @JsonProperty("is_platform_admin") boolean platformAdmin,
+                       String bio, String phone) {
 
         public User(UUID id, String displayName, String email) {
-            this(id, displayName, email, false);
+            this(id, displayName, email, false, null, null);
+        }
+
+        public User(UUID id, String displayName, String email, boolean platformAdmin) {
+            this(id, displayName, email, platformAdmin, null, null);
         }
     }
 

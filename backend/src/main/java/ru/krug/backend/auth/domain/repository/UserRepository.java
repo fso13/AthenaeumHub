@@ -3,6 +3,9 @@ package ru.krug.backend.auth.domain.repository;
 import java.util.Optional;
 import java.util.UUID;
 
+import ru.krug.backend.auth.domain.model.Bio;
+import ru.krug.backend.auth.domain.model.DisplayName;
+import ru.krug.backend.auth.domain.model.Phone;
 import ru.krug.backend.auth.domain.model.User;
 
 public interface UserRepository {
@@ -23,4 +26,11 @@ public interface UserRepository {
     boolean claimPlatformAdmin();
 
     void save(User user);
+
+    /**
+     * Self-service profile write. Only the three profile columns are touched:
+     * email/password/status/platform-admin and E2EE device keys are never changed here.
+     * The caller's RLS context must be active.
+     */
+    void updateProfile(UUID userId, DisplayName displayName, Bio bio, Phone phone);
 }

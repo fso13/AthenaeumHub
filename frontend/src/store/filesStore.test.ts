@@ -352,3 +352,67 @@ describe('managed files store', () => {
     expect(failed?.error?.code).toBe('ATTACHMENT_NOT_READY');
   });
 });
+describe('#73 file-center store', () => {
+  function fileItem(id: string, filename: string, mime: string, created: string) {
+    return {
+      id,
+      filename,
+      size_bytes: 1024,
+      mime_type: mime,
+      scan_status: 'CLEAN' as const,
+      chat_id: IDS.groupChat,
+      chat_name: 'Команда «Восход»',
+      message_id: `00000000-0000-4000-8000-${id.slice(-12)}`,
+      created_at: created,
+    };
+  }
+
+  it('sends every typed filter, keeps the cursor opaque and appends one page', async () => {
+    mockDb.fileCenterItems = [
+      fileItem(
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'atlas-cover.png',
+        'image/png',
+        '2026-11-18T10:00:00.000Z',
+      ),
+      fileItem(
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        'atlas-photo.png',
+        'image/png',
+        '2026-11-17T10:00:00.000Z',
+      ),
+    ];
+    const store = await boot();
+
+    await store.files.loadFiles({
+      workspaceId: IDS.workspace,
+      kind: 'IMAGE',
+      scanStatus: 'CLEAN',
+      query: 'atlas',
+      mime: 'image/png',
+      extension: 'png',
+      limit: 1,
+    });
+
+    expect(mockDb.fileCenterRequests[0]).toMatchObject({
+      workspace_id: IDS.workspace,
+      kind: 'IMAGE',
+      scan_status: 'CLEAN',
+      query: 'atlas',
+      mime: 'image/png',
+      extension: 'png',
+      limit: '1',
+      cursor: null,
+    });
+    expect(store.files.getSnapshot().fileCenter.items).toHaveLength(1);
+    expect(store.files.getSnapshot().fileCenter.hasMore).toBe(true);
+
+    const cursor = store.files.getSnapshot().fileCenter.nextCursor;
+    expect(cursor).toBeTruthy();
+    await store.files.loadMoreFiles();
+
+    expect(mockDb.fileCenterRequests[1]?.cursor).toBe(cursor);
+    expect(store.files.getSnapshot().fileCenter.items).toHaveLength(2);
+    expect(store.files.getSnapshot().fileCenter.hasMore).toBe(false);
+  });
+});

@@ -40,6 +40,6 @@ public class MeQueryService {
                 workspaceDirectory.listActiveMemberships(principal.userId());
         UUID defaultWorkspaceId = workspaces.isEmpty() ? null : workspaces.get(0).id();
         return new MeView(principal.userId(), user.displayName(), user.email(),
-                user.platformAdmin(), workspaces, defaultWorkspaceId);
+                user.platformAdmin(), user.bio(), user.phone(), workspaces, defaultWorkspaceId);
     }
 }
