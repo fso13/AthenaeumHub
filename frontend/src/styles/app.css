@@ -14516,9 +14516,12 @@ html[data-theme='dark'] .recent-thumb--video {
 }
 .voice-message {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 10px;
+  width: 100%;
   min-height: 56px;
+  flex-wrap: nowrap;
   padding: 7px 12px 7px 7px;
   border-radius: 28px;
   background: var(--accent-soft);
