@@ -191,7 +191,9 @@ npm run security:check
 npm test
 npm run build
 npm run check
-npm run test:e2e:d1   # MSW dashboard suite (selectors unchanged)
+# MSW dashboard suite (local browsers, selectors unchanged)
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.playwright-browsers" \
+  npx playwright test --config playwright.dashboard.config.ts --retries=1
 ```
 
 ## 6. Result
@@ -199,5 +201,9 @@ npm run test:e2e:d1   # MSW dashboard suite (selectors unchanged)
 **DONE.** Safe Markdown, fenced code blocks with lightweight highlighting/copy,
 and workspace-member `@mentions` (including `@all`) are integrated into the
 managed feed, composer, replies, quotes and thread panel. E2EE messages remain
-plain text. The D1 flat-feed selectors and layout are unchanged; the MSW
-dashboard e2e suite is green.
+plain text. The D1 flat-feed selectors and layout are unchanged.
+
+D1 e2e: **33/33 passed** (`playwright.dashboard.config.ts`, 1.1 m). The first
+cold-start attempt can time out on the three login/dashboard tests while Vite
+and the MSW service worker warm up; the retry run is fully green and the
+rich-text-relevant suites (`d1-msg-actions`, `d1-threads`, `d1-visual*`) pass.
