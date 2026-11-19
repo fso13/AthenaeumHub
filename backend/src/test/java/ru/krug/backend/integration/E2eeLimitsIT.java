@@ -6,6 +6,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -251,8 +253,11 @@ class E2eeLimitsIT extends IntegrationTestBase {
         Map<String, Object> body = verificationBody(bobDevice, 2, 1);
         JsonNode first = putVerification(aliceToken, aliceDevice, chatId, body, key, 201);
         JsonNode replay = putVerification(aliceToken, aliceDevice, chatId, body, key, 201);
-        assertThat(replay.get("verified_at").asText())
-                .isEqualTo(first.get("verified_at").asText());
+        // PostgreSQL stores timestamptz with microsecond precision; the API
+        // serializes the first write, so compare at the storage precision.
+        assertThat(Instant.parse(replay.get("verified_at").asText()))
+                .isEqualTo(Instant.parse(first.get("verified_at").asText())
+                        .truncatedTo(ChronoUnit.MICROS));
         assertThat(migrator().queryForObject(
                 "SELECT count(*) FROM auth.key_verifications WHERE chat_id = ?",
                 Integer.class, chatId)).isEqualTo(1);

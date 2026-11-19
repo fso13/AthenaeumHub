@@ -690,7 +690,7 @@ describe('R-15 orchestration', () => {
       };
     });
 
-    await waitFor(() => mockDb.sendAttempts.length === 1);
+    await waitFor(() => bridge.sentConfirmations.length === 1);
     expect(bridge.sends[0]?.text).toBe('переотправлено');
     expect(mockDb.sendBodies[0]?.text).toBeUndefined();
     expect(store.getSnapshot().slices[CHAT]!.e2ee[control.id]?.status).toBe('control');
