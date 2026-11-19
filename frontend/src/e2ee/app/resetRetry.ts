@@ -5,12 +5,16 @@
  * `prepareE2eeSend` and sends each draft separately, exactly as §5.5 requires
  * (one `POST /messages` per message, its own `seq`).
  *
- * The specification anchors the window at `retry_of_client_message_id`. F4's
- * outbox stores the exact send order in `createdAt`, which is the local send
- * index used here. The secondary fallback from the spec (`header.dh`/`n`) is
- * **not implementable** with the F4 record shape (the outbox row does not
- * persist the per-envelope header); if the anchor is unknown locally the reset
- * is ignored rather than guessing a wider window (see E7-F5-REPORT Risks).
+ * The specification anchors the window at `retry_of_client_message_id`. The
+ * exact local order is the durable `sendOrder` assigned by
+ * `commitOutgoingMessage`; `header.n` is per-chain and resets after a ratchet,
+ * so it must never order the window (G4d P1-05). The secondary fallback from
+ * the spec (`header.dh`/`n`) uses the envelopes persisted in the outbox row.
+ *
+ * G4e #30 adds a third state to the window: a message whose replacement row is
+ * already pending/failed must not be re-encrypted again. Those rows are
+ * reported as `pendingReplacements` and drained by their original
+ * `Idempotency-Key` instead.
  */
 import type { WireCryptoEnvelope } from '../api/deviceKeys';
 import type { E2eeErrorCode } from '../errors';
@@ -163,12 +167,18 @@ export interface RetryWindowResult {
    * skipped instead of aborting the whole reset.
    */
   readonly skipped: number;
+  /**
+   * G4e #30: replacement rows in the window that still need the durable drain.
+   * When > 0 no new replacement is created (the existing exact bytes are
+   * replayed by their `Idempotency-Key`), which prevents duplicate delivery.
+   */
+  readonly pendingReplacements: number;
 }
 
 /**
- * Local send order for the failed session is the message counter `header.n` of
- * that session's envelope. `createdAt` alone is not unique (two sends can share
- * a millisecond) and a random `client_message_id` would reorder the window.
+ * Envelope of the failed session as persisted in the outbox row. Used only for
+ * the `(failed_chain_dh, failed_n)` fallback when the server omitted the
+ * anchor; ordering always comes from `sendOrder`.
  */
 function failedEnvelope(entry: OutboxEntry, failedSessionId: string): WireCryptoEnvelope | null {
   return entry.envelopes.find((candidate) => candidate.session_id === failedSessionId) ?? null;
@@ -196,6 +206,7 @@ export interface RetryWindowSelection {
   readonly status: 'pending' | 'empty' | 'anchor_unknown';
   readonly selected: readonly OutboxEntry[];
   readonly remaining: number;
+  readonly pendingReplacements: number;
 }
 
 /**
@@ -214,7 +225,14 @@ export function selectRetryWindowEntries(
   if (anchorIndex < 0) {
     anchorIndex = all.findIndex((entry) => matchesFailedChain(entry, reset));
   }
-  if (anchorIndex < 0) return { status: 'anchor_unknown', selected: [], remaining: 0 };
+  if (anchorIndex < 0) {
+    return { status: 'anchor_unknown', selected: [], remaining: 0, pendingReplacements: 0 };
+  }
+  const replaced = new Set(
+    entries
+      .map((entry) => entry.retryOfClientMessageId)
+      .filter((id): id is string => id !== null && id !== undefined),
+  );
   const window = all
     .slice(anchorIndex)
     .filter(
@@ -222,12 +240,31 @@ export function selectRetryWindowEntries(
         entry.status !== 'superseded' &&
         (entry.supersededAt === undefined || entry.supersededAt === null),
     );
-  if (window.length === 0) return { status: 'empty', selected: [], remaining: 0 };
-  const selected = window.slice(0, Math.max(1, maxBatch));
+  // A live replacement is the exact bytes for its original; wait for the drain
+  // instead of re-encrypting the same plaintext a second time.
+  const pendingReplacements = window.filter(
+    (entry) =>
+      entry.retryOfClientMessageId !== null &&
+      entry.retryOfClientMessageId !== undefined &&
+      (entry.status === 'pending' || entry.status === 'failed'),
+  ).length;
+  if (pendingReplacements > 0) {
+    return { status: 'pending', selected: [], remaining: 0, pendingReplacements };
+  }
+  const retriable = window.filter(
+    (entry) =>
+      (entry.retryOfClientMessageId === null || entry.retryOfClientMessageId === undefined) &&
+      !replaced.has(entry.clientMessageId),
+  );
+  if (retriable.length === 0) {
+    return { status: 'empty', selected: [], remaining: 0, pendingReplacements: 0 };
+  }
+  const selected = retriable.slice(0, Math.max(1, maxBatch));
   return {
-    status: selected.length > 0 ? 'pending' : 'empty',
+    status: 'pending',
     selected,
-    remaining: Math.max(0, window.length - selected.length),
+    remaining: Math.max(0, retriable.length - selected.length),
+    pendingReplacements: 0,
   };
 }
 
@@ -250,15 +287,45 @@ export async function selectRetryWindow(
     readonly maxBatch?: number;
   },
 ): Promise<RetryWindowResult> {
-  const all = (await listOutboxEntries(storage, kStorage)).filter(
-    (entry) =>
-      entry.chatId === input.chatId &&
-      entry.envelopes.some((envelope) => envelope.session_id === input.failedSessionId) &&
-      entry.type === 'TEXT_JSON',
+  const chatEntries = (await listOutboxEntries(storage, kStorage)).filter(
+    (entry) => entry.chatId === input.chatId && entry.type === 'TEXT_JSON',
   );
+  // G4e #30: a replacement is sent in a *fresh prekey session*, so it does not
+  // carry the failed session id itself. It still belongs to the window through
+  // `retryOfClientMessageId` → original, which does carry the failed session.
+  const failedEntries = chatEntries.filter((entry) =>
+    entry.envelopes.some((envelope) => envelope.session_id === input.failedSessionId),
+  );
+  const failedIds = new Set(failedEntries.map((entry) => entry.clientMessageId));
+  const replacements = chatEntries.filter(
+    (entry) =>
+      entry.retryOfClientMessageId !== null &&
+      entry.retryOfClientMessageId !== undefined &&
+      failedIds.has(entry.retryOfClientMessageId),
+  );
+  const all = [
+    ...new Map(
+      [...failedEntries, ...replacements].map((entry) => [entry.clientMessageId, entry]),
+    ).values(),
+  ];
   const selection = selectRetryWindowEntries(all, input.reset, input.maxBatch);
   if (selection.status !== 'pending') {
-    return { status: selection.status, candidates: [], remaining: 0, skipped: 0 };
+    return {
+      status: selection.status,
+      candidates: [],
+      remaining: 0,
+      skipped: 0,
+      pendingReplacements: 0,
+    };
+  }
+  if (selection.pendingReplacements > 0) {
+    return {
+      status: 'pending',
+      candidates: [],
+      remaining: 0,
+      skipped: 0,
+      pendingReplacements: selection.pendingReplacements,
+    };
   }
   const candidates: E2eeRetryCandidate[] = [];
   let skipped = 0;
@@ -292,5 +359,6 @@ export async function selectRetryWindow(
     // from this device and are surfaced separately by the local-copy UI.
     remaining: selection.remaining,
     skipped,
+    pendingReplacements: 0,
   };
 }

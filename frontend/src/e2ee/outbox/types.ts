@@ -48,6 +48,17 @@ export interface StoredOutboxEntry {
   readonly sendOrder?: number;
   /** Set when R-15 replaced this row after it was already `sent`. */
   readonly supersededAt?: number | null;
+  /**
+   * G4e #30: mirror of the sealed payload's `retryOfClientMessageId` so the
+   * "replacement confirmed" transition can supersede the original in the same
+   * IndexedDB transaction (a failing follow-up `markSuperseded` can then never
+   * lose the replacement or resurrect the original).
+   */
+  readonly retryOfClientMessageId?: string | null;
+  /** Durable retry deadline; `null` means "not scheduled" (or permanent failure). */
+  readonly nextAttemptAt?: number | null;
+  /** Last time a send attempt started (durable across reload). */
+  readonly lastAttemptAt?: number | null;
   readonly payload: EncryptedRecord;
 }
 
@@ -73,6 +84,9 @@ export interface OutboxEntry {
   readonly localMessageId: string;
   readonly sendOrder: number;
   readonly supersededAt?: number | null;
+  /** Durable retry deadline; `null` means not scheduled or a permanent failure. */
+  readonly nextAttemptAt: number | null;
+  readonly lastAttemptAt: number | null;
 }
 
 export interface LocalCopyPayloadV1 {
@@ -139,4 +153,13 @@ export interface OutboxSendResult {
   readonly serverMessageId: string;
   readonly seq: number;
   readonly warning?: string | null;
+}
+
+export interface OutboxDrainResult {
+  readonly sent: readonly string[];
+  readonly failed: ReadonlyArray<{ readonly clientMessageId: string; readonly code: string }>;
+  /** Earliest durable retry deadline left after this pass, or `null`. */
+  readonly nextAttemptAt: number | null;
+  /** Rows that were not due yet / not auto-retryable during this pass. */
+  readonly skipped: number;
 }

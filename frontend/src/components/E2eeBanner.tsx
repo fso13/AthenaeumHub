@@ -64,6 +64,10 @@ export function E2eeBanner({
         <div className="banner banner--warning" role="status">
           <AlertIcon aria-hidden="true" />
           <span>{t('e2ee.retryPending', { count: chatState.retryPendingCount })}</span>
+          <button type="button" className="button button--small" onClick={onRetryReset}>
+            <RefreshIcon aria-hidden="true" />
+            {t('e2ee.retryReset')}
+          </button>
         </div>
       ) : null}
     </>

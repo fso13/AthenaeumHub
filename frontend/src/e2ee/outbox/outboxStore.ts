@@ -11,7 +11,13 @@
  * gone (cache cleared), `lookupLocalCopy` reports `available:false` instead of
  * inventing a message.
  */
-import { MAX_ENVELOPES_PER_MESSAGE, MAX_INNER_BODY_BYTES, MAX_TEXT_CHARS } from '../constants';
+import {
+  KEY_BYTES,
+  MAX_ENVELOPES_PER_MESSAGE,
+  MAX_HEADER_COUNTER,
+  MAX_INNER_BODY_BYTES,
+  MAX_TEXT_CHARS,
+} from '../constants';
 import { E2eeError, isE2eeError } from '../errors';
 import { isUuid, utf8, zeroBytes } from '../encoding/bytes';
 import { decodeBase64Url, encodeBase64Url } from '../encoding/base64url';
@@ -31,12 +37,14 @@ import {
 import { consumeOneTimePrekeyInTransaction } from '../session/prekeyStore';
 import type { SessionState, StoredSessionRecord } from '../session/types';
 import { OUTBOX_LOCK, type E2eeLockManager } from '../locks/locks';
+import type { SessionResetBody, SessionResetReason } from '../session/reset';
 import type {
   LocalCopyDirection,
   LocalCopyLookup,
   LocalCopyPayloadV1,
   LocalCopyStatus,
   LocalMessageCopy,
+  OutboxDrainResult,
   OutboxEntry,
   OutboxPayloadV1,
   OutboxSendResult,
@@ -47,10 +55,63 @@ import type {
 } from './types';
 
 const OUTBOX_PREFIX = 'outbox:';
+const RETRY_PREFIX = 'retry:';
 const LOCAL_COPY_PREFIX = 'local:';
 const STORED_VERSION = 1;
 const MIN_CIPHERTEXT_BYTES = 272;
 const MAX_CIPHERTEXT_BYTES = 33040;
+
+/**
+ * G4e #30 durable retry policy. The schedule is persisted (`nextAttemptAt`), so
+ * a reload/tab switch continues the same backoff instead of hammering the
+ * server. No jitter: one worker per profile (single-flight) makes a herd
+ * unlikely, and a deterministic schedule keeps the retry contract testable.
+ */
+export const OUTBOX_BACKOFF_BASE_MS = 2_000;
+export const OUTBOX_BACKOFF_MAX_MS = 5 * 60_000;
+
+/** Transport/API error codes that are worth retrying automatically. */
+const RETRYABLE_OUTBOX_CODES: ReadonlySet<string> = new Set([
+  'NETWORK',
+  'NETWORK_ERROR',
+  'TIMEOUT',
+  'E2EE_UNAVAILABLE',
+  'IDEMPOTENCY_IN_PROGRESS',
+  'RATE_LIMITED',
+  'TOO_MANY_REQUESTS',
+  'SERVICE_UNAVAILABLE',
+  'INTERNAL',
+  'INTERNAL_ERROR',
+  'HTTP_500',
+  'HTTP_502',
+  'HTTP_503',
+  'HTTP_504',
+]);
+
+export function isRetryableOutboxCode(code: string): boolean {
+  if (RETRYABLE_OUTBOX_CODES.has(code)) return true;
+  return /^HTTP_5\d\d$/.test(code);
+}
+
+export function outboxBackoffMs(attempts: number): number {
+  const safe = Number.isFinite(attempts) ? Math.max(1, Math.floor(attempts)) : 1;
+  return Math.min(OUTBOX_BACKOFF_BASE_MS * 2 ** Math.min(safe - 1, 16), OUTBOX_BACKOFF_MAX_MS);
+}
+
+/**
+ * Durable R-15 retry intent. It holds only reset metadata (session id, public
+ * chain DH, counter, reason, anchor client id) — never plaintext or keys — and
+ * lets a reload resume the pending retry UI/drain and clean up the failed
+ * session once every replacement has been confirmed.
+ */
+export interface StoredRetryState {
+  readonly v: 1;
+  readonly chatId: string;
+  readonly senderDeviceId: string;
+  readonly reset: SessionResetBody;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
 
 export interface OutboxDraft {
   readonly chatId: string;
@@ -146,11 +207,6 @@ export interface PreparedIncomingMessage {
   readonly localCopy: StoredLocalMessageCopy;
   readonly oneTimePrekeyId: string | null;
   readonly now: number;
-}
-
-export interface OutboxDrainResult {
-  readonly sent: readonly string[];
-  readonly failed: ReadonlyArray<{ readonly clientMessageId: string; readonly code: string }>;
 }
 
 export function outboxStorageKey(clientMessageId: string): string {
@@ -388,6 +444,9 @@ export async function prepareOutboxEntry(
     serverMessageId: null,
     seq: null,
     warning: null,
+    retryOfClientMessageId: draft.retryOfClientMessageId ?? null,
+    nextAttemptAt: null,
+    lastAttemptAt: null,
     payload: encrypted,
   };
 }
@@ -832,6 +891,24 @@ async function decryptOutboxEntry(
   if (!Number.isInteger(stored.attempts) || stored.attempts < 0) {
     throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'outbox attempts are invalid');
   }
+  // G4e #30: these transition fields participate in anchor/supersede ordering,
+  // so a locally tampered row must fail closed instead of silently reordering
+  // the retry window.
+  if (stored.sendOrder !== undefined) {
+    if (!Number.isInteger(stored.sendOrder) || stored.sendOrder < 0) {
+      throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'outbox sendOrder is invalid');
+    }
+  }
+  if (stored.supersededAt !== undefined && stored.supersededAt !== null) {
+    requireTimestamp(stored.supersededAt, 'supersededAt');
+  }
+  if (stored.nextAttemptAt !== undefined && stored.nextAttemptAt !== null) {
+    requireTimestamp(stored.nextAttemptAt, 'nextAttemptAt');
+  }
+  if (stored.lastAttemptAt !== undefined && stored.lastAttemptAt !== null) {
+    requireTimestamp(stored.lastAttemptAt, 'lastAttemptAt');
+  }
+  requireUuidOrNull(stored.retryOfClientMessageId ?? null, 'retry_of_client_message_id');
   const plaintext = await decryptRecord(kStorage, stored.payload, {
     sessionId: stored.sessionId,
     clientMessageId: stored.clientMessageId,
@@ -848,7 +925,9 @@ async function decryptOutboxEntry(
     payload.chatId !== stored.chatId ||
     payload.sessionId !== stored.sessionId ||
     payload.senderDeviceId !== stored.senderDeviceId ||
-    payload.localMessageId !== stored.localMessageId
+    payload.localMessageId !== stored.localMessageId ||
+    (stored.retryOfClientMessageId !== undefined &&
+      payload.retryOfClientMessageId !== (stored.retryOfClientMessageId ?? null))
   ) {
     throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'outbox record metadata was tampered with');
   }
@@ -873,6 +952,8 @@ async function decryptOutboxEntry(
     localMessageId: payload.localMessageId,
     sendOrder: stored.sendOrder ?? 0,
     supersededAt: stored.supersededAt ?? null,
+    nextAttemptAt: stored.nextAttemptAt ?? null,
+    lastAttemptAt: stored.lastAttemptAt ?? null,
   };
 }
 
@@ -996,24 +1077,39 @@ export async function restorePendingOutbox(
   return listOutboxEntries(storage, kStorage, { status: 'pending' });
 }
 
+/**
+ * Starts one durable attempt. A `failed` row may be picked up again only when
+ * it is due (or when the caller forces a manual retry through
+ * `retryOutboxEntry`); `sent`/`superseded` are terminal and never resurrect.
+ */
 export async function markOutboxAttempt(
   storage: E2eeStorage,
   clientMessageId: string,
   options: { readonly now?: number } = {},
 ): Promise<number> {
   const key = outboxStorageKey(clientMessageId);
-  return storage.transact(['outbox'], 'readwrite', async (transaction) => {
+  const now = options.now ?? Date.now();
+  return storage.transact(['outbox', 'localMessages'], 'readwrite', async (transaction) => {
     const stored = await transaction.get<StoredOutboxEntry>('outbox', key);
     if (stored === null) throw new E2eeError('OUTBOX_CONFLICT', 'outbox entry does not exist');
-    if (stored.status !== 'pending') {
-      throw new E2eeError('OUTBOX_CONFLICT', 'outbox entry is not pending');
+    if (stored.status === 'sent' || stored.status === 'superseded') {
+      throw new E2eeError('OUTBOX_CONFLICT', 'outbox entry is terminal');
+    }
+    const due = stored.nextAttemptAt ?? null;
+    if (due !== null && due > now) {
+      throw new E2eeError('OUTBOX_CONFLICT', 'outbox entry is not due yet');
     }
     const attempts = stored.attempts + 1;
     await transaction.put<StoredOutboxEntry>('outbox', key, {
       ...stored,
+      status: 'pending',
       attempts,
-      updatedAt: options.now ?? Date.now(),
+      lastErrorCode: null,
+      lastAttemptAt: now,
+      nextAttemptAt: null,
+      updatedAt: now,
     });
+    await updateLocalCopyStatus(transaction, stored, 'pending', now);
     return attempts;
   });
 }
@@ -1044,6 +1140,13 @@ async function updateLocalCopyStatus(
   });
 }
 
+/**
+ * Confirms one row and, when it is an R-15 replacement, supersedes its original
+ * **in the same IndexedDB transaction**. This is the G4e #30 fix for the
+ * `confirmSent` → `markSuperseded` gap: a failure in the follow-up call can no
+ * longer leave a sent replacement with a still-pending original (which the next
+ * reset would re-encrypt as a duplicate).
+ */
 export async function markOutboxSent(
   storage: E2eeStorage,
   clientMessageId: string,
@@ -1061,7 +1164,10 @@ export async function markOutboxSent(
     const stored = await transaction.get<StoredOutboxEntry>('outbox', key);
     if (stored === null) throw new E2eeError('OUTBOX_CONFLICT', 'outbox entry does not exist');
     if (stored.status === 'sent') {
-      if (stored.serverMessageId === result.serverMessageId && stored.seq === result.seq) return;
+      if (stored.serverMessageId === result.serverMessageId && stored.seq === result.seq) {
+        await supersedeOriginalInTransaction(transaction, stored, now);
+        return;
+      }
       throw new E2eeError('OUTBOX_CONFLICT', 'outbox entry was already sent with another id');
     }
     if (stored.status === 'superseded') {
@@ -1074,17 +1180,58 @@ export async function markOutboxSent(
       seq: result.seq,
       warning: result.warning ?? null,
       lastErrorCode: null,
+      nextAttemptAt: null,
       updatedAt: now,
     });
     await updateLocalCopyStatus(transaction, stored, 'sent', now);
+    await supersedeOriginalInTransaction(transaction, stored, now);
   });
+}
+
+/**
+ * Marks the original of a confirmed replacement as replaced. The outbox row of
+ * an already-`sent` original stays terminal `sent` (P1-01a) but receives
+ * `supersededAt`; a pending/failed original becomes `superseded`, which is the
+ * durable barrier against resurrecting it later.
+ */
+async function supersedeOriginalInTransaction(
+  transaction: E2eeTransaction,
+  replacement: StoredOutboxEntry,
+  now: number,
+): Promise<void> {
+  const originalId = replacement.retryOfClientMessageId ?? null;
+  if (originalId === null || originalId === replacement.clientMessageId) return;
+  const originalKey = outboxStorageKey(originalId);
+  const original = await transaction.get<StoredOutboxEntry>('outbox', originalKey);
+  if (original === null || original.chatId !== replacement.chatId) return;
+  if (original.status === 'superseded' || (original.supersededAt ?? null) !== null) return;
+  const next: StoredOutboxEntry =
+    original.status === 'sent'
+      ? { ...original, supersededAt: now, nextAttemptAt: null, updatedAt: now }
+      : {
+          ...original,
+          status: 'superseded',
+          supersededAt: now,
+          nextAttemptAt: null,
+          updatedAt: now,
+        };
+  await transaction.put<StoredOutboxEntry>('outbox', originalKey, next);
+  await updateLocalCopyStatus(transaction, original, 'superseded', now);
+}
+
+export interface OutboxFailureOptions {
+  readonly now?: number;
+  /** `false` schedules nothing (permanent 4xx/validation failure). */
+  readonly retryable?: boolean;
+  /** Server `Retry-After` hint; falls back to the persisted exponential backoff. */
+  readonly retryAfterMs?: number;
 }
 
 export async function markOutboxFailed(
   storage: E2eeStorage,
   clientMessageId: string,
   errorCode: string,
-  options: { readonly now?: number } = {},
+  options: OutboxFailureOptions = {},
 ): Promise<void> {
   const key = outboxStorageKey(clientMessageId);
   const now = options.now ?? Date.now();
@@ -1095,10 +1242,16 @@ export async function markOutboxFailed(
     // CR1c: a superseded row belongs to a successful replacement. Downgrading
     // it to `failed` would let `retryOutboxEntry` resurrect a replaced message.
     if (stored.status === 'superseded') return;
+    const retryable = options.retryable ?? isRetryableOutboxCode(errorCode);
+    const delay = Math.max(
+      0,
+      options.retryAfterMs ?? outboxBackoffMs(Math.max(1, stored.attempts)),
+    );
     await transaction.put<StoredOutboxEntry>('outbox', key, {
       ...stored,
       status: 'failed',
       lastErrorCode: errorCode,
+      nextAttemptAt: retryable ? now + delay : null,
       updatedAt: now,
     });
     await updateLocalCopyStatus(transaction, stored, 'failed', now);
@@ -1115,15 +1268,20 @@ export async function markOutboxSuperseded(
   await storage.transact(['outbox', 'localMessages'], 'readwrite', async (transaction) => {
     const stored = await transaction.get<StoredOutboxEntry>('outbox', key);
     if (stored === null) return;
-    if (stored.status === 'superseded') return;
+    // G4e #30: supersede is idempotent by timestamp too. A repeated call (e.g.
+    // a resumed retry batch) must not rewrite `supersededAt` with a newer time,
+    // otherwise anchor/order diagnostics stop matching the original transition.
+    if (stored.status === 'superseded' || (stored.supersededAt ?? null) !== null) return;
     // R-15 may supersede a message after `confirmSent` already moved the row to
     // `sent`. The outbox row stays terminal `sent`, but the sealed local copy
     // must become `superseded`, otherwise reload renders the original next to
-    // its replacement (G4b P1-01).
+    // its replacement (G4b P1-01). A pending/failed original becomes terminal
+    // `superseded`, so no later `retryOutboxEntry`/drain can resurrect it.
     if (stored.status === 'sent') {
       await transaction.put<StoredOutboxEntry>('outbox', key, {
         ...stored,
         supersededAt: now,
+        nextAttemptAt: null,
         updatedAt: now,
       });
     } else {
@@ -1131,6 +1289,7 @@ export async function markOutboxSuperseded(
         ...stored,
         status: 'superseded',
         supersededAt: now,
+        nextAttemptAt: null,
         updatedAt: now,
       });
     }
@@ -1150,11 +1309,20 @@ export async function retryOutboxEntry(
     if (stored === null) return;
     // Only an explicitly failed row may be retried; `sent`/`superseded` are
     // terminal for this entry (the replacement has its own client id).
-    if (stored.status !== 'failed') return;
+    if (stored.status !== 'failed' || (stored.supersededAt ?? null) !== null) return;
+    // G4e #30: never resurrect an original that already has a replacement row.
+    // Its pending/failed replacement is drained instead, so the same plaintext
+    // cannot be re-encrypted (and duplicated) a second time.
+    for (const otherKey of await transaction.keys('outbox')) {
+      if (!otherKey.startsWith(OUTBOX_PREFIX) || otherKey === key) continue;
+      const other = await transaction.get<StoredOutboxEntry>('outbox', otherKey);
+      if (other?.retryOfClientMessageId === clientMessageId) return;
+    }
     await transaction.put<StoredOutboxEntry>('outbox', key, {
       ...stored,
       status: 'pending',
       lastErrorCode: null,
+      nextAttemptAt: null,
       updatedAt: now,
     });
     await updateLocalCopyStatus(transaction, stored, 'pending', now);
@@ -1166,6 +1334,335 @@ export async function removeOutboxEntry(
   clientMessageId: string,
 ): Promise<void> {
   await storage.delete('outbox', outboxStorageKey(clientMessageId));
+}
+
+/* ------------------------------------------------------------------ */
+/* G4e #30: durable R-15 retry intent + reconcile/drain state machine  */
+/* ------------------------------------------------------------------ */
+
+const RESET_REASONS: ReadonlySet<string> = new Set<SessionResetReason>([
+  'SPK_DELETED',
+  'UNKNOWN_SPK',
+  'DECRYPT_FAILED',
+  'NO_SESSION',
+  'KEY_HANDSHAKE_INVALID',
+]);
+
+export function retryStateStorageKey(chatId: string, failedSessionId: string): string {
+  requireUuid(chatId, 'chat_id');
+  requireSessionId(failedSessionId);
+  return `${RETRY_PREFIX}${chatId}:${failedSessionId}`;
+}
+
+function requireResetBody(value: unknown): SessionResetBody {
+  if (typeof value !== 'object' || value === null) {
+    throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'retry reset body is malformed');
+  }
+  const candidate = value as Partial<SessionResetBody>;
+  if (
+    typeof candidate.failedSessionId !== 'string' ||
+    typeof candidate.failedChainDh !== 'string' ||
+    typeof candidate.failedN !== 'number' ||
+    !Number.isInteger(candidate.failedN) ||
+    candidate.failedN < 0 ||
+    candidate.failedN > MAX_HEADER_COUNTER ||
+    typeof candidate.reason !== 'string' ||
+    !RESET_REASONS.has(candidate.reason) ||
+    (candidate.retryOfClientMessageId !== null &&
+      (typeof candidate.retryOfClientMessageId !== 'string' ||
+        !isUuid(candidate.retryOfClientMessageId)))
+  ) {
+    throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'retry reset body is malformed');
+  }
+  requireSessionId(candidate.failedSessionId);
+  try {
+    decodeBase64Url(candidate.failedChainDh, KEY_BYTES);
+  } catch {
+    throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'retry failed_chain_dh is invalid');
+  }
+  return {
+    failedSessionId: candidate.failedSessionId,
+    failedChainDh: candidate.failedChainDh,
+    failedN: candidate.failedN,
+    reason: candidate.reason as SessionResetReason,
+    retryOfClientMessageId: candidate.retryOfClientMessageId,
+  };
+}
+
+/**
+ * Persists the retry intent before any replacement is sent. Only metadata is
+ * stored (no plaintext/key material), and the record stays in place until every
+ * replacement of that failed session is confirmed.
+ */
+export async function putRetryState(
+  storage: E2eeStorage,
+  input: {
+    readonly chatId: string;
+    readonly senderDeviceId: string;
+    readonly reset: SessionResetBody;
+  },
+  options: { readonly now?: number } = {},
+): Promise<StoredRetryState> {
+  const now = options.now ?? Date.now();
+  const reset = requireResetBody(input.reset);
+  const record: StoredRetryState = {
+    v: 1,
+    chatId: requireUuid(input.chatId, 'chat_id'),
+    senderDeviceId: requireUuid(input.senderDeviceId, 'sender_device_id'),
+    reset,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await storage.put('outbox', retryStateStorageKey(record.chatId, reset.failedSessionId), record);
+  return record;
+}
+
+export async function getRetryState(
+  storage: E2eeStorage,
+  chatId: string,
+  failedSessionId: string,
+): Promise<StoredRetryState | null> {
+  const stored = await storage.get<StoredRetryState>(
+    'outbox',
+    retryStateStorageKey(chatId, failedSessionId),
+  );
+  if (stored === null) return null;
+  return validateRetryState(stored);
+}
+
+export async function listRetryStates(
+  storage: E2eeStorage,
+  chatId?: string,
+): Promise<StoredRetryState[]> {
+  const keys = await storage.keys('outbox');
+  const states: StoredRetryState[] = [];
+  for (const key of keys) {
+    if (!key.startsWith(RETRY_PREFIX)) continue;
+    const stored = await storage.get<StoredRetryState>('outbox', key);
+    if (stored === null) continue;
+    const validated = validateRetryState(stored);
+    if (chatId !== undefined && validated.chatId !== chatId) continue;
+    states.push(validated);
+  }
+  return states.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function validateRetryState(stored: StoredRetryState): StoredRetryState {
+  if (stored.v !== 1) {
+    throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'retry state version is unsupported');
+  }
+  const reset = requireResetBody(stored.reset);
+  requireUuid(stored.chatId, 'chat_id');
+  requireUuid(stored.senderDeviceId, 'sender_device_id');
+  requireTimestamp(stored.createdAt, 'createdAt');
+  requireTimestamp(stored.updatedAt, 'updatedAt');
+  return { ...stored, reset };
+}
+
+export async function deleteRetryState(
+  storage: E2eeStorage,
+  chatId: string,
+  failedSessionId: string,
+): Promise<void> {
+  await storage.delete('outbox', retryStateStorageKey(chatId, failedSessionId));
+}
+
+export interface OutboxRetryStatus {
+  readonly chatId: string;
+  /** Pending rows plus retryable failed rows that still have a schedule. */
+  readonly pending: number;
+  /** Failed rows that need an explicit user retry (no schedule). */
+  readonly permanent: number;
+  /** Earliest scheduled retry, or `null` when nothing is scheduled. */
+  readonly nextAttemptAt: number | null;
+}
+
+/** Aggregate durable retry state per chat (UI `retry_pending` count). */
+export async function outboxRetryStatus(
+  storage: E2eeStorage,
+  kStorage: KStorage,
+  options: { readonly chatId?: string; readonly now?: number } = {},
+): Promise<OutboxRetryStatus[]> {
+  const now = options.now ?? Date.now();
+  const entries = (await listOutboxEntries(storage, kStorage)).filter(
+    (entry) => options.chatId === undefined || entry.chatId === options.chatId,
+  );
+  const replaced = new Set(
+    entries
+      .map((entry) => entry.retryOfClientMessageId)
+      .filter((id): id is string => id !== null && id !== undefined),
+  );
+  const byChat = new Map<string, { pending: number; permanent: number; next: number | null }>();
+  for (const entry of entries) {
+    if (entry.status === 'sent' || entry.status === 'superseded') continue;
+    if (entry.retryOfClientMessageId === null && replaced.has(entry.clientMessageId)) continue;
+    const bucket = byChat.get(entry.chatId) ?? { pending: 0, permanent: 0, next: null };
+    if (entry.status === 'pending') {
+      bucket.pending += 1;
+      bucket.next = now;
+    } else if (entry.nextAttemptAt !== null) {
+      bucket.pending += 1;
+      bucket.next =
+        bucket.next === null ? entry.nextAttemptAt : Math.min(bucket.next, entry.nextAttemptAt);
+    } else {
+      bucket.permanent += 1;
+    }
+    byChat.set(entry.chatId, bucket);
+  }
+  return [...byChat.entries()]
+    .map(([chatId, bucket]) => ({
+      chatId,
+      pending: bucket.pending,
+      permanent: bucket.permanent,
+      nextAttemptAt: bucket.pending > 0 ? bucket.next : null,
+    }))
+    .sort((a, b) => a.chatId.localeCompare(b.chatId));
+}
+
+/** Rows the durable worker may send now (single-flight handled by the caller). */
+export async function listDrainCandidates(
+  storage: E2eeStorage,
+  kStorage: KStorage,
+  options: { readonly now?: number; readonly chatId?: string; readonly force?: boolean } = {},
+): Promise<OutboxEntry[]> {
+  const now = options.now ?? Date.now();
+  const entries = await listOutboxEntries(storage, kStorage);
+  const replaced = new Set(
+    entries
+      .map((entry) => entry.retryOfClientMessageId)
+      .filter((id): id is string => id !== null && id !== undefined),
+  );
+  return entries
+    .filter((entry) => {
+      if (options.chatId !== undefined && entry.chatId !== options.chatId) return false;
+      if (entry.status === 'sent' || entry.status === 'superseded') return false;
+      // An original with a replacement must never be sent; its replacement is
+      // the durable single copy of that plaintext.
+      if (entry.retryOfClientMessageId === null && replaced.has(entry.clientMessageId)) {
+        return false;
+      }
+      if (entry.status === 'failed') {
+        if (entry.nextAttemptAt === null) return false;
+        if (!options.force && entry.nextAttemptAt > now) return false;
+      }
+      if (entry.status === 'pending' && !options.force && (entry.nextAttemptAt ?? 0) > now) {
+        return false;
+      }
+      return true;
+    })
+    .sort(
+      (a, b) =>
+        a.sendOrder - b.sendOrder ||
+        a.createdAt - b.createdAt ||
+        a.clientMessageId.localeCompare(b.clientMessageId),
+    );
+}
+
+export interface OutboxReconcileResult {
+  /** Replacement rows that were made terminal by the reconcile pass. */
+  readonly superseded: readonly string[];
+  /** Failed sessions whose replacement(s) are all confirmed. */
+  readonly completedFailedSessionIds: readonly string[];
+}
+
+/**
+ * Idempotent load/chat-switch reconcile (G4e #30):
+ *
+ * - a confirmed replacement always supersedes its original, even if the
+ *   separate `markOutboxSuperseded` call crashed;
+ * - one original never has two live replacements (the lowest `sendOrder` wins);
+ * - a failed session is reported complete only when every replacement that
+ *   belongs to it is `sent`/`superseded`.
+ *
+ * Only downgrades to `superseded` are ever applied; nothing is resurrected.
+ */
+export async function reconcileOutbox(
+  storage: E2eeStorage,
+  kStorage: KStorage,
+  options: { readonly chatId?: string; readonly now?: number } = {},
+): Promise<OutboxReconcileResult> {
+  const now = options.now ?? Date.now();
+  const entries = (await listOutboxEntries(storage, kStorage)).filter(
+    (entry) => options.chatId === undefined || entry.chatId === options.chatId,
+  );
+  const byId = new Map(entries.map((entry) => [entry.clientMessageId, entry]));
+  const replacements = new Map<string, OutboxEntry[]>();
+  for (const entry of entries) {
+    const originalId = entry.retryOfClientMessageId;
+    if (originalId === null) continue;
+    const group = replacements.get(originalId) ?? [];
+    group.push(entry);
+    replacements.set(originalId, group);
+  }
+
+  const plan = new Set<string>();
+  for (const [originalId, group] of replacements) {
+    const live = group.filter((entry) => entry.status !== 'superseded');
+    const sent = live.find((entry) => entry.status === 'sent');
+    const winner =
+      sent ??
+      [...live].sort(
+        (a, b) => a.sendOrder - b.sendOrder || a.clientMessageId.localeCompare(b.clientMessageId),
+      )[0];
+    for (const row of live) {
+      if (winner !== undefined && row.clientMessageId !== winner.clientMessageId) {
+        plan.add(row.clientMessageId);
+      }
+    }
+    const original = byId.get(originalId);
+    if (original !== undefined && original.supersededAt === null) {
+      plan.add(original.clientMessageId);
+    }
+  }
+
+  const superseded: string[] = [];
+  if (plan.size > 0) {
+    await storage.transact(['outbox', 'localMessages'], 'readwrite', async (transaction) => {
+      for (const clientMessageId of plan) {
+        const stored = await transaction.get<StoredOutboxEntry>(
+          'outbox',
+          outboxStorageKey(clientMessageId),
+        );
+        if (stored === null) continue;
+        if (stored.status === 'superseded' || (stored.supersededAt ?? null) !== null) {
+          continue;
+        }
+        const next: StoredOutboxEntry =
+          stored.status === 'sent'
+            ? { ...stored, supersededAt: now, nextAttemptAt: null, updatedAt: now }
+            : {
+                ...stored,
+                status: 'superseded',
+                supersededAt: now,
+                nextAttemptAt: null,
+                updatedAt: now,
+              };
+        await transaction.put<StoredOutboxEntry>('outbox', outboxStorageKey(clientMessageId), next);
+        await updateLocalCopyStatus(transaction, stored, 'superseded', now);
+        superseded.push(clientMessageId);
+      }
+    });
+  }
+
+  const completedFailedSessionIds: string[] = [];
+  for (const entry of entries) {
+    if (entry.retryOfClientMessageId !== null) continue;
+    const originalId = entry.clientMessageId;
+    const group = replacements.get(originalId);
+    if (group === undefined || group.length === 0) continue;
+    const active = group.some(
+      (replacement) => replacement.status === 'pending' || replacement.status === 'failed',
+    );
+    if (active) continue;
+    // The original itself may belong to multiple sessions (fan-out); report the
+    // failed session only when the caller can match it (see resolve below).
+    for (const envelope of entry.envelopes) {
+      if (!completedFailedSessionIds.includes(envelope.session_id)) {
+        completedFailedSessionIds.push(envelope.session_id);
+      }
+    }
+  }
+  return { superseded, completedFailedSessionIds };
 }
 
 export async function readLocalMessageCopy(
@@ -1394,49 +1891,145 @@ function parseLocalCopyPayload(bytes: Uint8Array): LocalCopyPayloadV1 {
   };
 }
 
+export interface OutboxErrorInfo {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
+}
+
+export interface OutboxDrainOptions {
+  readonly now?: number;
+  readonly chatId?: string;
+  /** Manual "retry now": ignore the persisted backoff deadline. */
+  readonly force?: boolean;
+  /** Upper bound for one pass; the next scheduled pass continues. */
+  readonly maxPerDrain?: number;
+  readonly classifyError?: (error: unknown) => OutboxErrorInfo;
+  /**
+   * Ambiguous-POST resolver: called for rows that already have attempts when
+   * the previous response may have been lost. Returning a result marks the row
+   * sent without a second POST; `null` falls back to the idempotent replay.
+   */
+  readonly lookup?: (entry: OutboxEntry) => Promise<OutboxSendResult | null>;
+}
+
+export const DEFAULT_DRAIN_BATCH = 20;
+
 function errorCodeOf(error: unknown): string {
   if (isE2eeError(error)) return error.code;
+  if (typeof error === 'object' && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code;
+  }
   return 'NETWORK';
 }
 
+function classifyOutboxError(
+  error: unknown,
+  classify?: OutboxDrainOptions['classifyError'],
+): OutboxErrorInfo {
+  if (classify !== undefined) {
+    try {
+      return classify(error);
+    } catch {
+      // Fall through to the structural default.
+    }
+  }
+  const code = errorCodeOf(error);
+  return { code, retryable: isRetryableOutboxCode(code) };
+}
+
 /**
- * Outbox worker core (no network of its own): every entry is processed under
- * `krug-outbox`, re-read inside the lock, and sent with its stored bytes.
- * A crash after `send` but before `markOutboxSent` leaves it pending; the next
- * drain replays the same idempotency key, which the server must deduplicate.
+ * Outbox worker core (no network of its own): every due entry is processed
+ * under `krug-outbox`, re-read inside the lock, and sent with its stored bytes.
+ *
+ * G4e #30 durable retry:
+ * - `pending` and retryable `failed` rows are both picked up;
+ * - the persisted `nextAttemptAt` implements exponential backoff across reloads;
+ * - an ambiguous POST is first resolved through `lookup` (server row by
+ *   `client_message_id`), then by replaying the very same `Idempotency-Key`;
+ * - a confirmed replacement supersedes its original in the same transaction.
+ *
+ * A crash after `send` but before `markOutboxSent` leaves the row pending; the
+ * next drain replays the same idempotency key, which the server deduplicates.
  */
 export async function drainOutbox(
   storage: E2eeStorage,
   kStorage: KStorage,
   locks: E2eeLockManager,
   send: (entry: OutboxEntry) => Promise<OutboxSendResult>,
-  options: { readonly now?: number } = {},
+  options: OutboxDrainOptions = {},
 ): Promise<OutboxDrainResult> {
+  const now = options.now ?? Date.now();
   return locks.withLock(OUTBOX_LOCK, async (fence) => {
     const sent: string[] = [];
     const failed: Array<{ clientMessageId: string; code: string }> = [];
-    for (const pending of await restorePendingOutbox(storage, kStorage)) {
+    const candidates = await listDrainCandidates(storage, kStorage, {
+      now,
+      chatId: options.chatId,
+      force: options.force,
+    });
+    const max = Math.max(1, options.maxPerDrain ?? DEFAULT_DRAIN_BATCH);
+    let skipped = Math.max(0, candidates.length - max);
+    for (const candidate of candidates.slice(0, max)) {
       // The fallback lease is not a security boundary: if it was lost while we
       // were waiting, do not mutate the outbox at all (P1-06).
       fence.assertValid();
-      const current = await readOutboxEntry(storage, kStorage, pending.clientMessageId);
-      if (!current || current.status !== 'pending') continue;
-      await markOutboxAttempt(storage, pending.clientMessageId, options);
+      const current = await readOutboxEntry(storage, kStorage, candidate.clientMessageId);
+      if (!current || current.status === 'sent' || current.status === 'superseded') continue;
+      if (current.nextAttemptAt !== null && !options.force && current.nextAttemptAt > now) {
+        skipped += 1;
+        continue;
+      }
+      // Ambiguous previous POST: resolve it through the server before replaying.
+      if (current.attempts > 0 && options.lookup !== undefined) {
+        let existing: OutboxSendResult | null = null;
+        try {
+          existing = await options.lookup(current);
+        } catch {
+          // A failed lookup must not block the idempotent replay below.
+          existing = null;
+        }
+        if (existing !== null) {
+          fence.assertValid();
+          await markOutboxSent(storage, current.clientMessageId, existing, { now });
+          sent.push(current.clientMessageId);
+          continue;
+        }
+      }
+      try {
+        await markOutboxAttempt(storage, current.clientMessageId, { now });
+      } catch {
+        // Lost a cross-tab race or became terminal: never send it now.
+        continue;
+      }
       let result: OutboxSendResult;
       try {
         result = await send(current);
       } catch (error) {
         fence.assertValid();
-        const code = errorCodeOf(error);
-        await markOutboxFailed(storage, pending.clientMessageId, code, options);
-        failed.push({ clientMessageId: pending.clientMessageId, code });
+        const info = classifyOutboxError(error, options.classifyError);
+        await markOutboxFailed(storage, current.clientMessageId, info.code, {
+          now,
+          retryable: info.retryable,
+          retryAfterMs: info.retryAfterMs,
+        });
+        failed.push({ clientMessageId: current.clientMessageId, code: info.code });
         continue;
       }
       fence.assertValid();
-      await markOutboxSent(storage, pending.clientMessageId, result, options);
-      sent.push(pending.clientMessageId);
+      await markOutboxSent(storage, current.clientMessageId, result, { now });
+      sent.push(current.clientMessageId);
     }
-    return { sent, failed };
+    const statuses = await outboxRetryStatus(storage, kStorage, {
+      now,
+      chatId: options.chatId,
+    });
+    const nextAttemptAt = statuses.reduce<number | null>((next, status) => {
+      if (status.pending === 0 || status.nextAttemptAt === null) return next;
+      return next === null ? status.nextAttemptAt : Math.min(next, status.nextAttemptAt);
+    }, null);
+    return { sent, failed, nextAttemptAt, skipped };
   });
 }
 

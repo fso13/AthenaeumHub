@@ -355,3 +355,126 @@ describe('R-15 receiver helpers', () => {
     expect(second.sessionId).toBe(first.sessionId);
   });
 });
+
+describe('G4e #30 pending replacement in the R-15 window', () => {
+  it('never re-encrypts an original whose replacement is still pending', async () => {
+    const a1 = await createTestWorld({ userId: SESSION_IDS.userA, deviceId: SESSION_IDS.a1 });
+    const b1 = await createTestWorld({ userId: SESSION_IDS.userB, deviceId: SESSION_IDS.b1 });
+    const context = {
+      storage: a1.storage,
+      kStorage: a1.kStorage,
+      identity: a1.identity,
+      now: a1.now,
+    };
+    const first = await sendE2eeMessage(context, {
+      chatId: SESSION_IDS.chat,
+      body: { type: 'TEXT_JSON', text: 'first' },
+      recipients: [recipientPlan(await claimBundleFromWorld(b1))],
+      expectedPeerDeviceIds: [b1.deviceId],
+    });
+    const replacement = await sendE2eeMessage(context, {
+      chatId: SESSION_IDS.chat,
+      body: { type: 'TEXT_JSON', text: 'first' },
+      // A real R-15 replacement uses a fresh prekey session, i.e. its envelope
+      // does not carry the failed session id; the window must still find it.
+      recipients: [recipientPlan(await claimBundleFromWorld(b1), { freshPrekey: true })],
+      expectedPeerDeviceIds: [b1.deviceId],
+      retryOfClientMessageId: first.clientMessageId,
+    });
+    expect(replacement.clientMessageId).not.toBe(first.clientMessageId);
+    expect(replacement.sessionId).not.toBe(first.sessionId);
+    const envelope = first.envelopes[0]!;
+    const reset: SessionResetBody = {
+      failedSessionId: first.sessionId,
+      failedChainDh: envelope.header.dh,
+      failedN: envelope.header.n,
+      reason: 'DECRYPT_FAILED',
+      retryOfClientMessageId: first.clientMessageId,
+    };
+
+    const pending = await selectRetryWindow(a1.storage, a1.kStorage, {
+      chatId: SESSION_IDS.chat,
+      failedSessionId: first.sessionId,
+      reset,
+    });
+    expect(pending.status).toBe('pending');
+    expect(pending.candidates).toEqual([]);
+    expect(pending.pendingReplacements).toBe(1);
+
+    // The durable drain confirms the exact replacement bytes; no second
+    // encryption of the same plaintext happens.
+    await markOutboxSent(a1.storage, replacement.clientMessageId, {
+      serverMessageId: '11111111-1111-4111-8111-111111111111',
+      seq: 2,
+    });
+    const done = await selectRetryWindow(a1.storage, a1.kStorage, {
+      chatId: SESSION_IDS.chat,
+      failedSessionId: first.sessionId,
+      reset,
+    });
+    expect(done.status).toBe('empty');
+    expect(done.candidates).toEqual([]);
+    expect(done.pendingReplacements).toBe(0);
+  });
+
+  it('pure selector skips replaced originals and reports pending replacements', () => {
+    const reset: SessionResetBody = {
+      failedSessionId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+      failedChainDh: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI',
+      failedN: 0,
+      reason: 'DECRYPT_FAILED',
+      retryOfClientMessageId: '11111111-1111-4111-8111-111111111111',
+    };
+    const entry = (
+      sendOrder: number,
+      clientMessageId: string,
+      retryOfClientMessageId: string | null,
+      status: 'pending' | 'sent' | 'failed' | 'superseded',
+    ) =>
+      ({
+        clientMessageId,
+        chatId: SESSION_IDS.chat,
+        sessionId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+        senderDeviceId: SESSION_IDS.a1,
+        status,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        attempts: 0,
+        lastErrorCode: null,
+        serverMessageId: null,
+        seq: null,
+        warning: null,
+        type: 'TEXT_JSON',
+        idempotencyKey: '33333333-3333-4333-8333-333333333333',
+        envelopes: [
+          {
+            session_id: 'AQEBAQEBAQEBAQEBAQEBAQ',
+            header: { v: 1, dh: reset.failedChainDh, pn: 0, n: 0 },
+            recipient_device_id: SESSION_IDS.b1,
+            ciphertext: 'x',
+          },
+        ],
+        recipientDeviceIds: [SESSION_IDS.b1],
+        retryOfClientMessageId,
+        localMessageId: '44444444-4444-4444-8444-444444444444',
+        sendOrder,
+        supersededAt: null,
+        nextAttemptAt: null,
+        lastAttemptAt: null,
+      }) as unknown as OutboxEntry;
+    const entries = [
+      entry(1, '11111111-1111-4111-8111-111111111111', null, 'sent'),
+      entry(
+        2,
+        '22222222-2222-4222-8222-222222222222',
+        '11111111-1111-4111-8111-111111111111',
+        'pending',
+      ),
+      entry(3, '33333333-3333-4333-8333-333333333333', null, 'sent'),
+    ];
+    const selection = selectRetryWindowEntries(entries, reset);
+    expect(selection.status).toBe('pending');
+    expect(selection.selected).toEqual([]);
+    expect(selection.pendingReplacements).toBe(1);
+  });
+});

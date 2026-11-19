@@ -57,14 +57,24 @@ import { computeVerificationHash } from '../verification/verificationHash';
 import { requireE2eeSupport } from '../crypto/support';
 import { randomUuid } from '../device/identity';
 import {
+  deleteRetryState,
+  drainOutbox as drainStoredOutbox,
+  listRetryStates,
   lookupIncomingLocalCopy,
   lookupLocalCopy,
+  markOutboxAttempt,
   markOutboxFailed,
   markOutboxSent,
   markOutboxSuperseded,
+  outboxRetryStatus,
+  putRetryState,
   readOutboxEntry,
+  reconcileOutbox,
+  type OutboxDrainOptions,
+  type StoredRetryState,
 } from '../outbox/outboxStore';
-import type { OutboxEntry } from '../outbox/types';
+import type { OutboxDrainResult, OutboxEntry, OutboxSendResult } from '../outbox/types';
+import { createE2eeLockManager, type E2eeLockManager } from '../locks/locks';
 import {
   ResetDeduplicator,
   ResetRateLimiter,
@@ -189,9 +199,54 @@ export interface E2eeBridge {
     clientMessageId: string,
     result: { serverMessageId: string; seq: number; warning?: string | null },
   ): Promise<void>;
-  markFailed(clientMessageId: string, code: string): Promise<void>;
+  markAttempt(clientMessageId: string): Promise<number>;
+  markFailed(
+    clientMessageId: string,
+    code: string,
+    options?: { readonly retryable?: boolean },
+  ): Promise<void>;
   markSuperseded(clientMessageId: string): Promise<void>;
+  /** G4e #30: persists the R-15 retry intent before any replacement is sent. */
+  saveRetryState(input: {
+    readonly chatId: string;
+    readonly senderDeviceId: string;
+    readonly reset: SessionResetBody;
+  }): Promise<void>;
+  clearRetryState(chatId: string, failedSessionId: string): Promise<void>;
+  /**
+   * Idempotent load/chat-switch reconcile: heals a `confirmSent` →
+   * `markSuperseded` gap, deduplicates replacement rows and removes a failed
+   * session once all of its replacements are confirmed.
+   */
+  reconcileRetryState(chatId?: string): Promise<E2eeRetryReconcileResult>;
+  /** Durable outbox wake-up. Single-flight/backoff live in the outbox store. */
+  drainOutbox(
+    send: (entry: OutboxEntry) => Promise<OutboxSendResult>,
+    options?: OutboxDrainOptions,
+  ): Promise<OutboxDrainResult>;
   invalidateChat(chatId?: string): void;
+}
+
+export interface E2eeDurableReset {
+  readonly chatId: string;
+  readonly senderDeviceId: string;
+  readonly reset: SessionResetBody;
+}
+
+export interface E2eeRetryStatus {
+  readonly chatId: string;
+  /** Pending/retryable rows that the durable worker will send. */
+  readonly pending: number;
+  /** Failed rows without a schedule; they need an explicit user retry. */
+  readonly permanent: number;
+  readonly nextAttemptAt: number | null;
+  readonly retries: readonly E2eeDurableReset[];
+}
+
+export interface E2eeRetryReconcileResult {
+  readonly statuses: readonly E2eeRetryStatus[];
+  readonly completedFailedSessionIds: readonly string[];
+  readonly superseded: readonly string[];
 }
 
 export interface E2eeBridgeOptions {
@@ -202,6 +257,14 @@ export interface E2eeBridgeOptions {
 
 const CHAT_KEYS_TTL_MS = 60_000;
 const KEY_BYTES = 32;
+
+function toDurableReset(state: StoredRetryState): E2eeDurableReset {
+  return {
+    chatId: state.chatId,
+    senderDeviceId: state.senderDeviceId,
+    reset: state.reset,
+  };
+}
 
 interface CachedKeys {
   readonly infos: readonly VerifiedDeviceKeyInfo[];
@@ -226,6 +289,15 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
   let identity: LoadedDeviceIdentity | null = null;
   let kStorage: KStorage | null = null;
   let userId: string | null = null;
+  /**
+   * One durable-drain lock per bridge. It serialises tabs (Web Locks) and makes
+   * the retry worker single-flight even when a load and a chat switch race.
+   */
+  let outboxLocks: E2eeLockManager | null = null;
+  function getOutboxLocks(): E2eeLockManager {
+    outboxLocks ??= createE2eeLockManager();
+    return outboxLocks;
+  }
 
   function ownIdentity(): LoadedDeviceIdentity {
     if (identity === null || identity.record.deviceId === null) {
@@ -873,7 +945,26 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
         await deleteSession(context.storage, failedSessionId);
         return { status: 'ignored', reason: 'anchor_unknown' };
       }
-      if (window.status === 'empty' || window.candidates.length === 0) {
+      if (window.status === 'empty') {
+        resetDeduplicator.forget(input.reset);
+        await deleteSession(context.storage, failedSessionId);
+        return { status: 'ignored', reason: 'empty' };
+      }
+      if (window.candidates.length === 0) {
+        const pendingReplacements = window.pendingReplacements ?? 0;
+        if (pendingReplacements > 0) {
+          // G4e #30: the exact replacement bytes are already durable. Never
+          // encrypt a second copy; the worker replays them by idempotency key.
+          resettingSessions.add(failedSessionId);
+          return {
+            status: 'pending',
+            failedSessionId,
+            candidates: [],
+            remaining: 0,
+            skipped: window.skipped,
+            pendingReplacements,
+          };
+        }
         resetDeduplicator.forget(input.reset);
         await deleteSession(context.storage, failedSessionId);
         return { status: 'ignored', reason: 'empty' };
@@ -899,6 +990,7 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
           // The failed session must never be used again; new messages arrive
           // in a fresh prekey session.
           await deleteSession(context.storage, input.failedSessionId);
+          await deleteRetryState(context.storage, input.chatId, input.failedSessionId);
         } catch (error) {
           // Do not leave the reset marked as processed if the broken session
           // could not be removed: the next reset must still be able to retry.
@@ -942,14 +1034,105 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
       await markOutboxSent(context.storage, clientMessageId, result, { now: now() });
     },
 
-    async markFailed(clientMessageId, code) {
+    async markAttempt(clientMessageId) {
       const context = ownContext();
-      await markOutboxFailed(context.storage, clientMessageId, code, { now: now() });
+      return markOutboxAttempt(context.storage, clientMessageId, { now: now() });
+    },
+
+    async markFailed(clientMessageId, code, options = {}) {
+      const context = ownContext();
+      await markOutboxFailed(context.storage, clientMessageId, code, {
+        now: now(),
+        ...(options.retryable !== undefined ? { retryable: options.retryable } : {}),
+      });
     },
 
     async markSuperseded(clientMessageId) {
       const context = ownContext();
       await markOutboxSuperseded(context.storage, clientMessageId, { now: now() });
+    },
+
+    async saveRetryState(input) {
+      const context = ownContext();
+      await putRetryState(
+        context.storage,
+        { chatId: input.chatId, senderDeviceId: input.senderDeviceId, reset: input.reset },
+        { now: now() },
+      );
+    },
+
+    async clearRetryState(chatId, failedSessionId) {
+      const context = ownContext();
+      await deleteRetryState(context.storage, chatId, failedSessionId);
+    },
+
+    async reconcileRetryState(chatId) {
+      const context = ownContext();
+      const states = await listRetryStates(context.storage, chatId);
+      const reconciled = await reconcileOutbox(context.storage, context.kStorage, {
+        chatId,
+        now: now(),
+      });
+      const completed: string[] = [];
+      for (const state of states) {
+        if (!reconciled.completedFailedSessionIds.includes(state.reset.failedSessionId)) {
+          continue;
+        }
+        try {
+          // The replacement bytes are confirmed; the broken session must never
+          // be selected again. A failure here keeps the retry state so the next
+          // reconcile retries the exact same cleanup.
+          await deleteSession(context.storage, state.reset.failedSessionId);
+          await deleteRetryState(context.storage, state.chatId, state.reset.failedSessionId);
+          resettingSessions.delete(state.reset.failedSessionId);
+          completed.push(state.reset.failedSessionId);
+        } catch {
+          // Retried on the next load/chat switch.
+        }
+      }
+      const liveStates = states.filter((state) => !completed.includes(state.reset.failedSessionId));
+      const statuses = await outboxRetryStatus(context.storage, context.kStorage, {
+        chatId,
+        now: now(),
+      });
+      const byChat = new Map<string, { pending: number; permanent: number; next: number | null }>(
+        statuses.map((status) => [
+          status.chatId,
+          {
+            pending: status.pending,
+            permanent: status.permanent,
+            next: status.nextAttemptAt,
+          },
+        ]),
+      );
+      for (const state of liveStates) {
+        if (!byChat.has(state.chatId)) {
+          byChat.set(state.chatId, { pending: 0, permanent: 0, next: null });
+        }
+      }
+      return {
+        statuses: [...byChat.entries()]
+          .map(([statusChatId, bucket]) => ({
+            chatId: statusChatId,
+            pending: bucket.pending,
+            permanent: bucket.permanent,
+            nextAttemptAt: bucket.next,
+            retries: liveStates
+              .filter((state) => state.chatId === statusChatId)
+              .map((state) => toDurableReset(state)),
+          }))
+          .sort((a, b) => a.chatId.localeCompare(b.chatId)),
+        completedFailedSessionIds: completed,
+        superseded: reconciled.superseded,
+      };
+    },
+
+    async drainOutbox(send, options = {}) {
+      const context = ownContext();
+      return drainStoredOutbox(context.storage, context.kStorage, getOutboxLocks(), send, {
+        ...options,
+        now: options.now ?? now(),
+      });
     },
 
     invalidateChat(chatId) {

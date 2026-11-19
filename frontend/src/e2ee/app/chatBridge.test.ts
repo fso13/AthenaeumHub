@@ -572,3 +572,49 @@ describe('E2EE chat bridge', () => {
     expect(outcome).toEqual({ status: 'ignored', reason: 'anchor_unknown' });
   });
 });
+
+describe('G4e #30 durable retry state', () => {
+  it('keeps the failed session while a replacement is pending and deletes it after confirmation', async () => {
+    const { alice, bob } = await makeWorlds();
+    const aliceSide = await makeSide(alice, () => bob, await opkQueue(bob));
+
+    const original = await aliceSide.bridge.sendText({ chatId: CHAT, text: 'first' });
+    await aliceSide.bridge.confirmSent(original.clientMessageId, {
+      serverMessageId: '00000000-0000-4000-8000-000000000201',
+      seq: 1,
+    });
+    const replacement = await aliceSide.bridge.sendText({
+      chatId: CHAT,
+      text: 'first',
+      retryOfClientMessageId: original.clientMessageId,
+    });
+    const envelope = original.envelopes[0]!;
+    const reset = {
+      failedSessionId: original.sessionId,
+      failedChainDh: envelope.header.dh,
+      failedN: envelope.header.n,
+      reason: 'DECRYPT_FAILED' as const,
+      retryOfClientMessageId: original.clientMessageId,
+    };
+    await aliceSide.bridge.saveRetryState({
+      chatId: CHAT,
+      senderDeviceId: alice.deviceId,
+      reset,
+    });
+
+    const pending = await aliceSide.bridge.reconcileRetryState(CHAT);
+    expect(pending.statuses[0]).toMatchObject({ chatId: CHAT, pending: 1 });
+    expect(pending.statuses[0]?.retries).toHaveLength(1);
+    expect(pending.completedFailedSessionIds).toEqual([]);
+    expect(await listSessionIds(alice.storage)).toContain(original.sessionId);
+
+    await aliceSide.bridge.confirmSent(replacement.clientMessageId, {
+      serverMessageId: '00000000-0000-4000-8000-000000000202',
+      seq: 2,
+    });
+    const completed = await aliceSide.bridge.reconcileRetryState(CHAT);
+    expect(completed.completedFailedSessionIds).toContain(original.sessionId);
+    expect(completed.statuses[0]?.retries ?? []).toEqual([]);
+    expect(await listSessionIds(alice.storage)).not.toContain(original.sessionId);
+  });
+});

@@ -14,7 +14,7 @@ import { loadSession, sessionStorageKey } from './session/sessionStore';
 import { kdfChainKey } from './protocol/kdf';
 import { createSession } from './test/sessionTestWrites';
 import type { SessionState } from './session/types';
-import type { OutboxEntry, StoredLocalMessageCopy } from './outbox/types';
+import type { OutboxEntry, StoredLocalMessageCopy, StoredOutboxEntry } from './outbox/types';
 import type { OutgoingMessageDraft, PreparedOutgoingMessage } from './outbox/outboxStore';
 import {
   commitIncomingMessage,
@@ -22,11 +22,19 @@ import {
   drainOutbox,
   localCopyStorageKey,
   lookupLocalCopy,
+  listDrainCandidates,
   markOutboxAttempt,
   markOutboxFailed,
   markOutboxSent,
   markOutboxSuperseded,
+  outboxBackoffMs,
+  outboxRetryStatus,
   outboxStorageKey,
+  putRetryState,
+  listRetryStates,
+  getRetryState,
+  deleteRetryState,
+  reconcileOutbox,
   prepareIncomingMessage,
   prepareOutgoingMessage,
   readLocalMessageCopy,
@@ -947,6 +955,354 @@ describe('CR1b P1-01R/P2-02 — envelope scope and prepared-state binding', () =
       'superseded',
     );
     expect(await restorePendingOutbox(storage, kStorage)).toEqual([]);
+    await storage.close();
+  });
+});
+
+/**
+ * G4e #30 — durable retry/drain regression.
+ *
+ * The replacement row is the exact bytes of an R-15 retry; its original must
+ * never be sent/re-encrypted again. These tests cover the ambiguous-POST path,
+ * a lost `markOutboxSuperseded`, reload drain, backoff and deduplication.
+ */
+describe('G4e #30 durable retry/drain', () => {
+  const FIRST = {
+    clientMessageId: 'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1',
+    localMessageId: 'a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2',
+    idempotencyKey: 'a3a3a3a3-a3a3-4a3a-8a3a-a3a3a3a3a3a3',
+  } as const;
+  const REPLACEMENT = {
+    clientMessageId: 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1',
+    localMessageId: 'b2b2b2b2-b2b2-4b2b-8b2b-b2b2b2b2b2b2',
+    idempotencyKey: 'b3b3b3b3-b3b3-4b3b-8b3b-b3b3b3b3b3b3',
+  } as const;
+
+  async function commitReplacement(): Promise<{
+    storage: ReturnType<typeof createMemoryE2eeStorage>;
+    kStorage: Awaited<ReturnType<typeof loadOrCreateKStorage>>;
+    session: SessionState;
+    last: SessionState;
+    first: OutgoingMessageDraft;
+    replacement: OutgoingMessageDraft;
+  }> {
+    const { storage, kStorage, session } = await setup();
+    const first = await makeOutgoingDraft(session, { ...FIRST, text: 'original' });
+    const afterFirst = (await commitOutgoingMessage(
+      storage,
+      await prepareOutgoingMessage(kStorage, first),
+      { ifRevision: session.revision },
+    )) as SessionState;
+    const replacement = await makeOutgoingDraft(afterFirst, {
+      ...REPLACEMENT,
+      retryOfClientMessageId: first.clientMessageId,
+      text: 'original',
+    });
+    const last = (await commitOutgoingMessage(
+      storage,
+      await prepareOutgoingMessage(kStorage, replacement),
+      { ifRevision: afterFirst.revision },
+    )) as SessionState;
+    return { storage, kStorage, session: afterFirst, last, first, replacement };
+  }
+
+  it('confirms a replacement by atomically superseding its original (markSuperseded failure)', async () => {
+    const { storage, kStorage, first, replacement } = await commitReplacement();
+    // No explicit markOutboxSuperseded: delete/IDB failure in that follow-up
+    // must not leave a live original behind.
+    await markOutboxSent(
+      storage,
+      replacement.clientMessageId,
+      { serverMessageId: IDS.serverMessage, seq: 9 },
+      { now: 500 },
+    );
+
+    const original = await readOutboxEntry(storage, kStorage, first.clientMessageId);
+    expect(original).toMatchObject({ status: 'superseded', supersededAt: 500 });
+    const originalCopy = await lookupLocalCopy(storage, kStorage, IDS.chat, first.clientMessageId);
+    expect(originalCopy.available && originalCopy.copy.status).toBe('superseded');
+    expect(await restorePendingOutbox(storage, kStorage)).toEqual([]);
+
+    // A failed/old client can never resurrect the replaced original.
+    await retryOutboxEntry(storage, first.clientMessageId);
+    expect((await readOutboxEntry(storage, kStorage, first.clientMessageId))?.status).toBe(
+      'superseded',
+    );
+    await storage.close();
+  });
+
+  it('keeps supersede idempotent by timestamp for pending and sent originals', async () => {
+    const { storage, kStorage, session } = await setup();
+    const draft = await makeOutgoingDraft(session);
+    await commitOutgoingMessage(storage, await prepareOutgoingMessage(kStorage, draft), {
+      ifRevision: session.revision,
+    });
+    await markOutboxSuperseded(storage, draft.clientMessageId, { now: 10 });
+    await markOutboxSuperseded(storage, draft.clientMessageId, { now: 20 });
+    expect((await readOutboxEntry(storage, kStorage, draft.clientMessageId))?.supersededAt).toBe(
+      10,
+    );
+
+    const { storage: sentStorage, kStorage: sentK, session: sentSession } = await setup();
+    const sentDraft = await makeOutgoingDraft(sentSession);
+    await commitOutgoingMessage(sentStorage, await prepareOutgoingMessage(sentK, sentDraft), {
+      ifRevision: sentSession.revision,
+    });
+    await markOutboxSent(sentStorage, sentDraft.clientMessageId, {
+      serverMessageId: IDS.serverMessage,
+      seq: 1,
+    });
+    await markOutboxSuperseded(sentStorage, sentDraft.clientMessageId, { now: 10 });
+    await markOutboxSuperseded(sentStorage, sentDraft.clientMessageId, { now: 20 });
+    const sent = await readOutboxEntry(sentStorage, sentK, sentDraft.clientMessageId);
+    expect(sent).toMatchObject({ status: 'sent', supersededAt: 10 });
+    await storage.close();
+    await sentStorage.close();
+  });
+
+  it('heals a lost confirmSent → markSuperseded transition on reconcile', async () => {
+    const { storage, kStorage, first, replacement } = await commitReplacement();
+    const key = outboxStorageKey(first.clientMessageId);
+    const pendingOriginal = (await storage.get('outbox', key)) as StoredOutboxEntry;
+    await markOutboxSent(storage, replacement.clientMessageId, {
+      serverMessageId: IDS.serverMessage,
+      seq: 3,
+    });
+    // Simulate the old non-atomic order: replacement is sent, original row was
+    // left untouched (its copy is still pending).
+    await storage.put('outbox', key, pendingOriginal);
+
+    const reconciled = await reconcileOutbox(storage, kStorage, { now: 1_000 });
+    expect(reconciled.superseded).toContain(first.clientMessageId);
+    expect(await readOutboxEntry(storage, kStorage, first.clientMessageId)).toMatchObject({
+      status: 'superseded',
+      supersededAt: 1_000,
+    });
+    // Reconcile is idempotent and never resurrects anything.
+    await reconcileOutbox(storage, kStorage, { now: 2_000 });
+    expect(await readOutboxEntry(storage, kStorage, first.clientMessageId)).toMatchObject({
+      status: 'superseded',
+      supersededAt: 1_000,
+    });
+    await storage.close();
+  });
+
+  it('drains a pending replacement after reload with its exact idempotency key', async () => {
+    const { storage, kStorage, session, first, replacement } = await commitReplacement();
+    // A fresh lock manager/storage read models a page reload: no in-memory state.
+    const locks = createE2eeLockManager({ locks: createFakeWebLocks() });
+    const calls: Array<{ clientMessageId: string; key: string }> = [];
+    const result = await drainOutbox(storage, kStorage, locks, async (entry) => {
+      calls.push({ clientMessageId: entry.clientMessageId, key: entry.idempotencyKey });
+      return { serverMessageId: IDS.serverMessage, seq: 11 };
+    });
+    expect(result.sent).toEqual([replacement.clientMessageId]);
+    expect(calls).toEqual([
+      { clientMessageId: replacement.clientMessageId, key: replacement.idempotencyKey },
+    ]);
+    expect((await readOutboxEntry(storage, kStorage, first.clientMessageId))?.status).toBe(
+      'superseded',
+    );
+    expect(await restorePendingOutbox(storage, kStorage)).toEqual([]);
+    const reconciled = await reconcileOutbox(storage, kStorage, { now: 12 });
+    expect(reconciled.completedFailedSessionIds).toContain(session.sessionId);
+    locks.close();
+    await storage.close();
+  });
+
+  it('resolves an ambiguous POST through server lookup without a second POST', async () => {
+    const { storage, kStorage, session } = await setup();
+    const draft = await makeOutgoingDraft(session);
+    await commitOutgoingMessage(storage, await prepareOutgoingMessage(kStorage, draft), {
+      ifRevision: session.revision,
+    });
+    const locks = createE2eeLockManager({ locks: createFakeWebLocks() });
+    const server = new Map<string, { serverMessageId: string; seq: number }>();
+    let posts = 0;
+    const send = async (entry: OutboxEntry) => {
+      posts += 1;
+      // The server accepted the message, but the response never arrived.
+      server.set(entry.idempotencyKey, { serverMessageId: IDS.serverMessage, seq: 4 });
+      throw new Error('connection reset after upload');
+    };
+    const first = await drainOutbox(storage, kStorage, locks, send, { now: 1_000 });
+    expect(first.sent).toEqual([]);
+    expect(first.failed).toHaveLength(1);
+    expect(posts).toBe(1);
+    expect((await readOutboxEntry(storage, kStorage, draft.clientMessageId))?.status).toBe(
+      'failed',
+    );
+
+    // Next due pass: the server row is found by client_message_id; no duplicate.
+    const second = await drainOutbox(
+      storage,
+      kStorage,
+      locks,
+      async () => {
+        posts += 1;
+        return { serverMessageId: IDS.serverMessage, seq: 4 };
+      },
+      {
+        now: 1_000 + outboxBackoffMs(1),
+        lookup: async (entry) => {
+          const found = server.get(entry.idempotencyKey);
+          return found === undefined ? null : found;
+        },
+      },
+    );
+    expect(second.sent).toEqual([draft.clientMessageId]);
+    expect(posts).toBe(1);
+    expect(server.size).toBe(1);
+    expect((await readOutboxEntry(storage, kStorage, draft.clientMessageId))?.status).toBe('sent');
+    locks.close();
+    await storage.close();
+  });
+
+  it('persists exponential backoff across passes and skips a not-due row', async () => {
+    const { storage, kStorage, session } = await setup();
+    const draft = await makeOutgoingDraft(session);
+    await commitOutgoingMessage(storage, await prepareOutgoingMessage(kStorage, draft), {
+      ifRevision: session.revision,
+    });
+    const locks = createE2eeLockManager({ locks: createFakeWebLocks() });
+    let posts = 0;
+    const result = await drainOutbox(
+      storage,
+      kStorage,
+      locks,
+      async () => {
+        posts += 1;
+        throw new Error('offline');
+      },
+      { now: 1_000 },
+    );
+    expect(result.failed).toHaveLength(1);
+    expect(result.nextAttemptAt).toBe(1_000 + outboxBackoffMs(1));
+    const status = await outboxRetryStatus(storage, kStorage, { now: 1_001 });
+    expect(status[0]).toMatchObject({ chatId: IDS.chat, pending: 1 });
+
+    const early = await drainOutbox(
+      storage,
+      kStorage,
+      locks,
+      async () => {
+        posts += 1;
+        return { serverMessageId: IDS.serverMessage, seq: 1 };
+      },
+      { now: 1_500 },
+    );
+    expect(early.sent).toEqual([]);
+    expect(posts).toBe(1);
+
+    const due = await drainOutbox(
+      storage,
+      kStorage,
+      locks,
+      async () => {
+        posts += 1;
+        return { serverMessageId: IDS.serverMessage, seq: 1 };
+      },
+      { now: 1_000 + outboxBackoffMs(1) },
+    );
+    expect(due.sent).toEqual([draft.clientMessageId]);
+    expect(posts).toBe(2);
+    locks.close();
+    await storage.close();
+  });
+
+  it('does not auto-retry a permanent failure but keeps it for an explicit retry', async () => {
+    const { storage, kStorage, session } = await setup();
+    const draft = await makeOutgoingDraft(session);
+    await commitOutgoingMessage(storage, await prepareOutgoingMessage(kStorage, draft), {
+      ifRevision: session.revision,
+    });
+    await markOutboxAttempt(storage, draft.clientMessageId, { now: 1_000 });
+    await markOutboxFailed(storage, draft.clientMessageId, 'E2EE_DISABLED', {
+      now: 1_000,
+      retryable: false,
+    });
+    expect(await listDrainCandidates(storage, kStorage, { now: 1_000_000 })).toEqual([]);
+    expect((await outboxRetryStatus(storage, kStorage))[0]).toMatchObject({
+      pending: 0,
+      permanent: 1,
+    });
+    await retryOutboxEntry(storage, draft.clientMessageId);
+    expect(
+      (await listDrainCandidates(storage, kStorage, { now: 1_000_000 })).map(
+        (entry) => entry.clientMessageId,
+      ),
+    ).toEqual([draft.clientMessageId]);
+    await storage.close();
+  });
+
+  it('drains only the newest partial-batch replacement, never a sent one', async () => {
+    const { storage, kStorage, last, replacement } = await commitReplacement();
+    // First replacement is already confirmed; its original is superseded. A
+    // second original + pending replacement models a partial batch.
+    await markOutboxSent(storage, replacement.clientMessageId, {
+      serverMessageId: IDS.serverMessage,
+      seq: 1,
+    });
+    const secondOriginal = await makeOutgoingDraft(last, {
+      clientMessageId: 'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1',
+      localMessageId: 'c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2',
+      idempotencyKey: 'c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3',
+      text: 'second',
+    });
+    const afterSecond = (await commitOutgoingMessage(
+      storage,
+      await prepareOutgoingMessage(kStorage, secondOriginal),
+      { ifRevision: last.revision },
+    )) as SessionState;
+    const secondReplacement = await makeOutgoingDraft(afterSecond, {
+      clientMessageId: 'd1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1',
+      localMessageId: 'd2d2d2d2-d2d2-4d2d-8d2d-d2d2d2d2d2d2',
+      idempotencyKey: 'd3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d3d3',
+      retryOfClientMessageId: secondOriginal.clientMessageId,
+      text: 'second',
+    });
+    await commitOutgoingMessage(
+      storage,
+      await prepareOutgoingMessage(kStorage, secondReplacement),
+      { ifRevision: afterSecond.revision },
+    );
+
+    const locks = createE2eeLockManager({ locks: createFakeWebLocks() });
+    const calls: string[] = [];
+    const result = await drainOutbox(storage, kStorage, locks, async (entry) => {
+      calls.push(entry.clientMessageId);
+      return { serverMessageId: IDS.serverMessage, seq: 2 };
+    });
+    expect(result.sent).toEqual([secondReplacement.clientMessageId]);
+    expect(calls).toEqual([secondReplacement.clientMessageId]);
+    expect((await readOutboxEntry(storage, kStorage, secondOriginal.clientMessageId))?.status).toBe(
+      'superseded',
+    );
+    locks.close();
+    await storage.close();
+  });
+
+  it('persists and clears the R-15 retry intent (metadata only)', async () => {
+    const { storage } = await setup();
+    const reset = {
+      failedSessionId: testSessionId(1),
+      failedChainDh: b64(bytes(32, 9)),
+      failedN: 2,
+      reason: 'DECRYPT_FAILED' as const,
+      retryOfClientMessageId: FIRST.clientMessageId,
+    };
+    await putRetryState(
+      storage,
+      { chatId: IDS.chat, senderDeviceId: IDS.recipientDevice, reset },
+      { now: 100 },
+    );
+    const states = await listRetryStates(storage, IDS.chat);
+    expect(states).toHaveLength(1);
+    expect(states[0]?.reset).toEqual(reset);
+    expect(await getRetryState(storage, IDS.chat, reset.failedSessionId)).not.toBeNull();
+    expect(dumpText(await dumpStorage(storage))).not.toContain('hello E2EE');
+    await deleteRetryState(storage, IDS.chat, reset.failedSessionId);
+    expect(await listRetryStates(storage)).toEqual([]);
     await storage.close();
   });
 });

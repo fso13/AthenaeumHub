@@ -834,3 +834,79 @@ describe('R-15 orchestration', () => {
     expect(mockDb.sendAttempts).toHaveLength(0);
   });
 });
+
+describe('G4e #30 durable retry after reload', () => {
+  const resetBody: SessionResetBody = {
+    failedSessionId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+    failedChainDh: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI',
+    failedN: 0,
+    reason: 'DECRYPT_FAILED',
+    retryOfClientMessageId: '88888888-8888-4888-8888-888888888888',
+  };
+
+  it('restores retry_pending and the pending replacement after a page reload', async () => {
+    mockDb.chats[CHAT]!.summary.security_mode = 'E2EE';
+    const bridge = createFakeE2eeBridge({
+      deviceId: () => getDeviceId() ?? '33333333-3333-4333-8333-333333333333',
+      snapshot: BASE_SNAPSHOT,
+    });
+    const controlId = insertMockMessage(mockDb, CHAT, 'x').id;
+    const control = mockDb.chats[CHAT]!.messages.find((message) => message.id === controlId)!;
+    control.text = null;
+    control.client_message_id = newUuid();
+    control.crypto = makeEnvelope(CHAT, PEER_DEVICE, BASE_SNAPSHOT.selfDeviceId as string);
+    bridge.receiveQueue.push({
+      kind: 'control',
+      sessionId: resetBody.failedSessionId,
+      reset: resetBody,
+      senderDeviceId: PEER_DEVICE,
+    });
+    bridge.resetOutcome = {
+      status: 'pending',
+      failedSessionId: resetBody.failedSessionId,
+      candidates: [
+        {
+          originalClientMessageId: resetBody.retryOfClientMessageId as string,
+          originalServerMessageId: null,
+          text: 'первое',
+          replyToId: null,
+        },
+      ],
+      remaining: 0,
+      skipped: 0,
+    };
+
+    // The replacement is committed durably, but the POST fails (ambiguous
+    // server/network outcome). No in-memory retry may be needed after reload.
+    mockDb.failNextSend = 1;
+    const first = createTestStore(createTestConfig(), { enabled: true, bridge });
+    await first.bootstrap();
+    await waitFor(() => first.getSnapshot().slices[CHAT]?.status === 'ready');
+    await waitFor(() => first.getSnapshot().e2ee.chats[CHAT]?.status === 'ready');
+    await waitFor(() => bridge.finishedResets.length === 1);
+    await waitFor(() => first.getSnapshot().e2ee.chats[CHAT]?.retryPendingCount === 1);
+    expect(bridge.finishedResets[0]).toEqual({
+      failedSessionId: resetBody.failedSessionId,
+      status: 'failed',
+    });
+    const pending = [...bridge.outgoing.values()].filter(
+      (entry) => entry.status === 'pending' || entry.status === 'failed',
+    );
+    expect(pending).toHaveLength(1);
+    const replacementId = pending[0]!.clientMessageId;
+    first.reset();
+
+    // Reload: a brand-new store with the same durable bridge/outbox state.
+    const second = createTestStore(createTestConfig(), { enabled: true, bridge });
+    await second.bootstrap();
+    await waitFor(() => second.getSnapshot().slices[CHAT]?.status === 'ready');
+    await waitFor(() => second.getSnapshot().e2ee.chats[CHAT]?.status === 'ready');
+    await waitFor(() => second.getSnapshot().e2ee.chats[CHAT]?.retryPendingCount === 1);
+    expect(second.getSnapshot().e2ee.chats[CHAT]?.resetProgress).toMatchObject({
+      status: 'failed',
+    });
+    // Exactly the same durable replacement survived; it was not re-encrypted.
+    expect([...bridge.outgoing.keys()].filter((id) => id === replacementId)).toHaveLength(1);
+    expect(bridge.sends.filter((send) => send.text === 'первое')).toHaveLength(1);
+  });
+});

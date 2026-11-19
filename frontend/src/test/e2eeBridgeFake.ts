@@ -7,7 +7,14 @@
 import { encodeBase64Url } from '../e2ee/encoding/base64url';
 import { newUuid } from '../lib/ids';
 import { ResetDeduplicator, ResetRateLimiter } from '../e2ee/app/resetRetry';
-import type { E2eeBridge, E2eeChatInput, E2eeIncomingMessage } from '../e2ee/app/chatBridge';
+import type {
+  E2eeBridge,
+  E2eeChatInput,
+  E2eeDurableReset,
+  E2eeIncomingMessage,
+  E2eeRetryReconcileResult,
+  E2eeRetryStatus,
+} from '../e2ee/app/chatBridge';
 import type { SessionResetBody } from '../e2ee/session/reset';
 import type { WireCryptoEnvelope } from '../e2ee/api/deviceKeys';
 import type { OutboxEntry } from '../e2ee/outbox/types';
@@ -45,6 +52,8 @@ export interface FakeBridge extends E2eeBridge {
   setSnapshot(patch: Partial<E2eeChatSnapshot>): void;
   setIncomingText(text: string): void;
   readonly outgoing: Map<string, OutboxEntry>;
+  /** G4e #30: durable R-15 intents saved by the store, keyed by chat/session. */
+  readonly savedRetries: Map<string, E2eeDurableReset>;
   readonly localCopies: Map<string, E2eeLocalCopyView>;
   readonly incomingLocalCopies: Map<string, E2eeLocalCopyView>;
   resetOutcome: E2eeResetOutcome | null;
@@ -100,8 +109,46 @@ export function createFakeE2eeBridge(options: FakeBridgeOptions): FakeBridge {
   const reuseRequests: FakeBridge['reuseRequests'] = [];
   const confirmedManaged: string[] = [];
   const outgoing = new Map<string, OutboxEntry>();
+  const savedRetries = new Map<string, E2eeDurableReset>();
   const localCopies = new Map<string, E2eeLocalCopyView>();
   const incomingLocalCopies = new Map<string, E2eeLocalCopyView>();
+  let sendOrder = 0;
+
+  const retryKey = (chatId: string, failedSessionId: string) => `${chatId}:${failedSessionId}`;
+
+  function replacementEntries(): OutboxEntry[] {
+    return [...outgoing.values()].sort((a, b) => a.sendOrder - b.sendOrder);
+  }
+
+  function statusesFor(chatId?: string): E2eeRetryStatus[] {
+    const entries = replacementEntries().filter(
+      (entry) => chatId === undefined || entry.chatId === chatId,
+    );
+    const chats = new Set<string>([
+      ...entries.map((entry) => entry.chatId),
+      ...[...savedRetries.values()]
+        .filter((state) => chatId === undefined || state.chatId === chatId)
+        .map((state) => state.chatId),
+    ]);
+    const result: E2eeRetryStatus[] = [];
+    for (const id of chats) {
+      const own = entries.filter((entry) => entry.chatId === id);
+      const pending = own.filter((entry) => entry.status === 'pending').length;
+      const scheduled = own.filter((entry) => entry.status === 'failed');
+      const nextAttemptAt = own.reduce<number | null>((next, entry) => {
+        if (entry.status !== 'failed' || entry.nextAttemptAt === null) return next;
+        return next === null ? entry.nextAttemptAt : Math.min(next, entry.nextAttemptAt);
+      }, null);
+      result.push({
+        chatId: id,
+        pending: pending + scheduled.filter((entry) => entry.nextAttemptAt !== null).length,
+        permanent: scheduled.filter((entry) => entry.nextAttemptAt === null).length,
+        nextAttemptAt,
+        retries: [...savedRetries.values()].filter((state) => state.chatId === id),
+      });
+    }
+    return result.sort((a, b) => a.chatId.localeCompare(b.chatId));
+  }
   const resetRateLimiter = new ResetRateLimiter(() => Date.now());
   const resetDeduplicator = new ResetDeduplicator();
   let counter = 0;
@@ -155,6 +202,7 @@ export function createFakeE2eeBridge(options: FakeBridgeOptions): FakeBridge {
     reuseRequests,
     confirmedManaged,
     outgoing,
+    savedRetries,
     localCopies,
     incomingLocalCopies,
     receiveQueue,
@@ -177,7 +225,36 @@ export function createFakeE2eeBridge(options: FakeBridgeOptions): FakeBridge {
       reuseRequests.push(input.reuseSessionIds);
       const result = prepared('text', input.chatId, input.text);
       sends.push({ kind: 'text', chatId: input.chatId, text: input.text });
-      return { ...result, retryOfClientMessageId: input.retryOfClientMessageId ?? null };
+      const retryOf = input.retryOfClientMessageId ?? null;
+      if (retryOf !== null) {
+        // Durable R-15 replacement survives a store "reload" because the same
+        // fake bridge instance is reused by the second store in the test.
+        outgoing.set(result.clientMessageId, {
+          clientMessageId: result.clientMessageId,
+          chatId: result.chatId,
+          sessionId: result.sessionId,
+          senderDeviceId: options.deviceId(),
+          status: 'pending',
+          createdAt: result.createdAt,
+          updatedAt: result.createdAt,
+          attempts: 0,
+          lastErrorCode: null,
+          serverMessageId: null,
+          seq: null,
+          warning: null,
+          type: 'TEXT_JSON',
+          idempotencyKey: result.idempotencyKey,
+          envelopes: result.envelopes,
+          recipientDeviceIds: [snapshot.peerDeviceIds[0] ?? b64(16, 9)],
+          retryOfClientMessageId: retryOf,
+          localMessageId: result.localMessageId,
+          sendOrder: ++sendOrder,
+          supersededAt: null,
+          nextAttemptAt: null,
+          lastAttemptAt: null,
+        });
+      }
+      return { ...result, retryOfClientMessageId: retryOf };
     },
 
     async sendReset(input) {
@@ -270,13 +347,131 @@ export function createFakeE2eeBridge(options: FakeBridgeOptions): FakeBridge {
       return outgoing.get(clientMessageId) ?? null;
     },
 
-    async confirmSent(clientMessageId) {
+    async confirmSent(clientMessageId, result) {
       sentConfirmations.push(clientMessageId);
+      const entry = outgoing.get(clientMessageId);
+      if (entry === undefined) return;
+      outgoing.set(clientMessageId, {
+        ...entry,
+        status: 'sent',
+        serverMessageId: result.serverMessageId,
+        seq: result.seq,
+        nextAttemptAt: null,
+      });
+      if (entry.retryOfClientMessageId !== null) {
+        const original = outgoing.get(entry.retryOfClientMessageId);
+        if (original !== undefined && original.supersededAt === null) {
+          outgoing.set(original.clientMessageId, {
+            ...original,
+            status: original.status === 'sent' ? 'sent' : 'superseded',
+            supersededAt: Date.now(),
+            nextAttemptAt: null,
+          });
+        }
+      }
     },
 
-    async markFailed() {},
+    async markAttempt(clientMessageId) {
+      const entry = outgoing.get(clientMessageId);
+      if (entry === undefined) return 0;
+      const attempts = entry.attempts + 1;
+      outgoing.set(clientMessageId, {
+        ...entry,
+        status: 'pending',
+        attempts,
+        lastAttemptAt: Date.now(),
+        nextAttemptAt: null,
+      });
+      return attempts;
+    },
 
-    async markSuperseded() {},
+    async markFailed(clientMessageId, code) {
+      const entry = outgoing.get(clientMessageId);
+      if (entry === undefined) return;
+      outgoing.set(clientMessageId, {
+        ...entry,
+        status: 'failed',
+        lastErrorCode: code,
+        nextAttemptAt: Date.now() + 2_000,
+      });
+    },
+
+    async markSuperseded(clientMessageId) {
+      const entry = outgoing.get(clientMessageId);
+      if (entry === undefined) return;
+      outgoing.set(clientMessageId, {
+        ...entry,
+        status: entry.status === 'sent' ? 'sent' : 'superseded',
+        supersededAt: entry.supersededAt ?? Date.now(),
+        nextAttemptAt: null,
+      });
+    },
+
+    async saveRetryState(input) {
+      savedRetries.set(retryKey(input.chatId, input.reset.failedSessionId), {
+        chatId: input.chatId,
+        senderDeviceId: input.senderDeviceId,
+        reset: input.reset,
+      });
+    },
+
+    async clearRetryState(chatId, failedSessionId) {
+      savedRetries.delete(retryKey(chatId, failedSessionId));
+    },
+
+    async reconcileRetryState(chatId): Promise<E2eeRetryReconcileResult> {
+      for (const state of [...savedRetries.values()]) {
+        if (chatId !== undefined && state.chatId !== chatId) continue;
+        const rows = replacementEntries().filter(
+          (entry) =>
+            entry.chatId === state.chatId &&
+            entry.retryOfClientMessageId === state.reset.retryOfClientMessageId,
+        );
+        if (rows.length === 0) continue;
+        if (rows.every((entry) => entry.status === 'sent' || entry.status === 'superseded')) {
+          savedRetries.delete(retryKey(state.chatId, state.reset.failedSessionId));
+        }
+      }
+      return {
+        statuses: statusesFor(chatId),
+        completedFailedSessionIds: [],
+        superseded: [],
+      };
+    },
+
+    async drainOutbox(send, options = {}) {
+      const sent: string[] = [];
+      const failed: Array<{ clientMessageId: string; code: string }> = [];
+      const now = options.now ?? Date.now();
+      const candidates = replacementEntries().filter((entry) => {
+        if (options.chatId !== undefined && entry.chatId !== options.chatId) return false;
+        if (entry.status === 'sent' || entry.status === 'superseded') return false;
+        if (entry.nextAttemptAt !== null && entry.nextAttemptAt > now && options.force !== true) {
+          return false;
+        }
+        return true;
+      });
+      for (const entry of candidates) {
+        try {
+          const result = await send(entry);
+          await bridge.confirmSent(entry.clientMessageId, result);
+          sent.push(entry.clientMessageId);
+        } catch (error) {
+          const code =
+            typeof (error as { code?: unknown }).code === 'string'
+              ? (error as { code: string }).code
+              : 'NETWORK_ERROR';
+          await bridge.markFailed(entry.clientMessageId, code);
+          failed.push({ clientMessageId: entry.clientMessageId, code });
+        }
+      }
+      const statuses = statusesFor(options.chatId);
+      const nextAttemptAt = statuses.reduce<number | null>((next, status) => {
+        if (status.nextAttemptAt === null) return next;
+        return next === null ? status.nextAttemptAt : Math.min(next, status.nextAttemptAt);
+      }, null);
+      return { sent, failed, nextAttemptAt, skipped: 0 };
+    },
 
     invalidateChat() {},
 

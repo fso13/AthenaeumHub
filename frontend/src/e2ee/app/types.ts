@@ -161,6 +161,11 @@ export type E2eeResetOutcome =
       readonly remaining: number;
       /** P2-35: corrupt local copies skipped for this window. */
       readonly skipped: number;
+      /**
+       * G4e #30: pending/failed replacement rows that the durable drain must
+       * replay before any new replacement is encrypted.
+       */
+      readonly pendingReplacements?: number;
     }
   | {
       readonly status: 'ignored';

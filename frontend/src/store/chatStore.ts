@@ -51,6 +51,8 @@ import {
   type E2eeBridge,
   type E2eeChatInput,
   type E2eeDeviceTransport,
+  type E2eeRetryReconcileResult,
+  type E2eeRetryStatus,
 } from '../e2ee/app/chatBridge';
 import {
   createE2eeState,
@@ -64,6 +66,7 @@ import {
 import { getE2eeStorage } from '../e2ee/storage/runtime';
 import { isE2eeError } from '../e2ee/errors';
 import type { WireCryptoEnvelope } from '../e2ee/api/deviceKeys';
+import type { OutboxEntry, OutboxSendResult } from '../e2ee/outbox/types';
 import type { SessionResetBody } from '../e2ee/session/reset';
 import {
   RealtimeClient,
@@ -543,6 +546,13 @@ export class ChatStore {
     string,
     { readonly reset: SessionResetBody; readonly senderDeviceId: string }
   >();
+  /**
+   * G4e #30: single-flight durable outbox drain. Only one pass may run in this
+   * realm; the bridge's outbox lock serialises tabs as well.
+   */
+  private e2eeDrainInFlight: Promise<void> | null = null;
+  private e2eeDrainTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly e2eeResumeInFlight = new Set<string>();
   /** E4-F upload queue + workspace limits; ephemeral client state. */
   readonly files: FilesStore;
   /** E5-F sticker catalog, favorites and local recent list. */
@@ -1880,6 +1890,12 @@ export class ChatStore {
     this.devicesInFlight = null;
     this.e2eeBridge?.invalidateChat();
     this.pendingResets.clear();
+    this.e2eeResumeInFlight.clear();
+    if (this.e2eeDrainTimer !== null) {
+      clearTimeout(this.e2eeDrainTimer);
+      this.e2eeDrainTimer = null;
+    }
+    this.e2eeDrainInFlight = null;
   }
 
   async setActiveChat(chatId: string): Promise<void> {
@@ -1896,9 +1912,10 @@ export class ChatStore {
       this.updateRealtimeSubscriptions();
       this.startRealtime();
     } else if (this.e2eeBridge !== null) {
-      void this.loadPersistedE2eeMarker(chatId).then(() =>
-        this.loadE2eeChat(chatId).then(() => this.decryptE2eeSlice(chatId)),
-      );
+      void this.loadPersistedE2eeMarker(chatId)
+        .then(() => this.loadE2eeChat(chatId))
+        .then(() => this.decryptE2eeSlice(chatId))
+        .then(() => this.resumeE2eeRetries(chatId));
     } else {
       void this.loadPersistedE2eeMarker(chatId);
     }
@@ -1934,7 +1951,9 @@ export class ChatStore {
       this.updateRealtimeSubscriptions();
       void this.loadPersistedE2eeMarker(chatId).then(() => {
         if (this.e2eeBridge !== null) {
-          void this.loadE2eeChat(chatId).then(() => this.decryptE2eeSlice(chatId));
+          void this.loadE2eeChat(chatId)
+            .then(() => this.decryptE2eeSlice(chatId))
+            .then(() => this.resumeE2eeRetries(chatId));
         }
       });
     } catch (error) {
@@ -2490,6 +2509,9 @@ export class ChatStore {
           keyGeneration: self.keyGeneration,
           fingerprint: self.fingerprint,
         });
+        // G4e #30: resume any durable retry window left by a previous page
+        // (pending replacements are drained by their idempotency keys).
+        void this.resumeE2eeRetries();
         // Every subsequent device-scoped request must use the keyed device id.
         // The Auth BFF session persists it via the auth storage module; the dev session is
         // in-memory only (AUTH-D-06) and is updated without touching storage.
@@ -2854,13 +2876,279 @@ export class ChatStore {
     } catch (error) {
       if (clientMessageId !== null) {
         try {
-          await bridge.markFailed(clientMessageId, failureCode(error));
+          await bridge.markFailed(clientMessageId, failureCode(error), {
+            retryable: isApiError(error) ? error.isRetryable : false,
+          });
         } catch {
           // The outbox row may not exist if prepare failed before the commit.
         }
       }
     } finally {
       this.e2eeResetInFlight.delete(key);
+    }
+  }
+
+  private retryStateKey(chatId: string, failedSessionId: string): string {
+    return `${chatId}:${failedSessionId}`;
+  }
+
+  /**
+   * G4e #30: derives the explicit `retry_pending` UI state from durable
+   * metadata, so a reload/chat switch shows the same pending count instead of
+   * relying on in-memory `pendingResets`.
+   */
+  private applyRetryStatus(status: E2eeRetryStatus): void {
+    const known =
+      this.state.chats.some((chat) => chat.id === status.chatId) ||
+      this.state.e2ee.chats[status.chatId] !== undefined;
+    if (!known) return;
+    // A durable retry intent can exist before its first replacement row was
+    // committed (prepare failed) — it still needs the explicit retry state.
+    const rows = status.pending + status.permanent;
+    const count = rows > 0 ? rows : status.retries.length > 0 ? 1 : 0;
+    const current = this.e2eeChatState(status.chatId);
+    if (count === 0) {
+      if (current.retryPendingCount !== 0 && current.resetProgress?.status !== 'completed') {
+        this.patchE2eeChat(status.chatId, { retryPendingCount: 0, resetProgress: null });
+      }
+      return;
+    }
+    // A live in-process batch owns done/failed counters; only durable leftovers
+    // are described here. Keep the richer in-memory failed counters when the
+    // durable count already matches.
+    if (current.resetProgress?.status === 'running') return;
+    if (current.resetProgress?.status === 'failed' && current.retryPendingCount === count) {
+      return;
+    }
+    this.patchE2eeChat(status.chatId, {
+      retryPendingCount: count,
+      resetProgress: {
+        status: 'failed',
+        total: count,
+        done: 0,
+        failed: status.permanent,
+        remaining: status.pending,
+        skipped: 0,
+      },
+    });
+  }
+
+  private async reconcileE2eeRetries(chatId?: string): Promise<E2eeRetryReconcileResult | null> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null || this.state.e2ee.status !== 'ready') return null;
+    try {
+      const result = await bridge.reconcileRetryState(chatId);
+      for (const status of result.statuses) {
+        this.applyRetryStatus(status);
+        await this.pruneSettledE2eeOutbox(status.chatId);
+        for (const retry of status.retries) {
+          this.pendingResets.set(this.retryStateKey(status.chatId, retry.reset.failedSessionId), {
+            reset: retry.reset,
+            senderDeviceId: retry.senderDeviceId,
+          });
+        }
+      }
+      return result;
+    } catch {
+      // Storage unavailable: the next load/chat switch reconciles again.
+      return null;
+    }
+  }
+
+  private scheduleE2eeDrain(nextAttemptAt: number | null): void {
+    if (this.e2eeDrainTimer !== null) {
+      clearTimeout(this.e2eeDrainTimer);
+      this.e2eeDrainTimer = null;
+    }
+    if (nextAttemptAt === null || this.e2eeBridge === null) return;
+    const delay = Math.max(0, nextAttemptAt - this.now());
+    this.e2eeDrainTimer = setTimeout(
+      () => {
+        this.e2eeDrainTimer = null;
+        void this.drainE2eeOutbox();
+      },
+      Math.min(delay, 60_000),
+    );
+  }
+
+  /** Server-row lookup used to resolve an ambiguous POST before replaying it. */
+  private async lookupAcceptedMessage(entry: OutboxEntry): Promise<OutboxSendResult | null> {
+    try {
+      const page = await this.api.listMessages(entry.chatId, { limit: 100 });
+      const match = page.items.find(
+        (message) => message.client_message_id === entry.clientMessageId,
+      );
+      if (match === undefined) return null;
+      return { serverMessageId: match.id, seq: match.seq, warning: entry.warning };
+    } catch {
+      return null;
+    }
+  }
+
+  private async sendStoredOutboxEntry(entry: OutboxEntry): Promise<OutboxSendResult> {
+    if (entry.attempts > 0) {
+      const existing = await this.lookupAcceptedMessage(entry);
+      if (existing !== null) return existing;
+    }
+    const result = await this.api.sendMessage(
+      entry.chatId,
+      {
+        client_message_id: entry.clientMessageId,
+        type: 'TEXT',
+        envelopes: [...entry.envelopes],
+      },
+      entry.idempotencyKey,
+    );
+    return {
+      serverMessageId: result.message.id,
+      seq: result.message.seq,
+      warning: entry.warning,
+    };
+  }
+
+  /**
+   * Durable drain: replays pending/failed replacements with their exact sealed
+   * bytes and `Idempotency-Key`, so an ambiguous POST is resolved server-side
+   * instead of creating a second message. Single-flight here + the bridge's
+   * outbox lock across tabs.
+   */
+  private async drainE2eeOutbox(
+    chatId?: string,
+    options: { readonly force?: boolean } = {},
+  ): Promise<void> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null || this.state.e2ee.status !== 'ready') return;
+    if (this.e2eeDrainInFlight !== null) return this.e2eeDrainInFlight;
+    const run = (async () => {
+      try {
+        const result = await bridge.drainOutbox((entry) => this.sendStoredOutboxEntry(entry), {
+          chatId,
+          force: options.force === true,
+          now: this.now(),
+          classifyError: (error) => ({
+            code: failureCode(error),
+            retryable: isApiError(error) ? error.isRetryable : !isE2eeError(error),
+            ...(isApiError(error) && error.retryAfterSeconds !== undefined
+              ? { retryAfterMs: error.retryAfterSeconds * 1000 }
+              : {}),
+          }),
+        });
+        if (result.sent.length > 0 && chatId !== undefined) {
+          await this.refreshDrainedMessages(chatId);
+        }
+      } catch {
+        // Transport/storage hiccup: the persisted schedule drives the next pass.
+      }
+      const reconciled = await this.reconcileE2eeRetries(chatId);
+      if (reconciled !== null) this.scheduleE2eeDrain(minNextRetry(reconciled.statuses));
+    })();
+    this.e2eeDrainInFlight = run.finally(() => {
+      this.e2eeDrainInFlight = null;
+    });
+    return this.e2eeDrainInFlight;
+  }
+
+  /**
+   * Removes optimistic rows whose durable row was settled by a drain/lookup
+   * (e.g. an ambiguous POST that the server had already accepted). Without
+   * this the UI would keep a "failed" bubble next to the delivered message.
+   */
+  private async pruneSettledE2eeOutbox(chatId: string): Promise<void> {
+    const bridge = this.e2eeBridge;
+    const slice = this.state.slices[chatId];
+    if (bridge === null || !slice || slice.outbox.length === 0) return;
+    const kept: OutgoingMessage[] = [];
+    let changed = false;
+    for (const item of slice.outbox) {
+      if (!item.e2ee) {
+        kept.push(item);
+        continue;
+      }
+      try {
+        const entry = await bridge.loadOutgoing(item.clientMessageId);
+        if (entry !== null && (entry.status === 'sent' || entry.status === 'superseded')) {
+          changed = true;
+          continue;
+        }
+      } catch {
+        // Keep the optimistic row; a later reconcile retries the read.
+      }
+      kept.push(item);
+    }
+    if (changed) {
+      const latest = this.state.slices[chatId];
+      if (latest) this.patchSlice(chatId, { outbox: kept });
+    }
+  }
+
+  /** Merges a confirmed replacement into the open slice without re-decrypting. */
+  private async refreshDrainedMessages(chatId: string): Promise<void> {
+    const slice = this.state.slices[chatId];
+    if (!slice) return;
+    try {
+      const page = await this.api.listMessages(chatId, {
+        limit: this.config.historyPageSize,
+      });
+      const current = this.state.slices[chatId];
+      if (!current) return;
+      const roots = page.items.filter((message) => !message.thread_root_id);
+      const messages = mergeMessages(current.messages, roots);
+      this.patchSlice(chatId, {
+        messages,
+        lastSeq: Math.max(current.lastSeq, maxSeq(messages)),
+        beforeSeq: minSeq(messages),
+      });
+      void this.decryptE2eeSlice(chatId);
+    } catch {
+      // The next sync/live frame fills the slice.
+    }
+  }
+
+  /**
+   * Idempotent load/chat-switch resume: reconciles durable state, drains what is
+   * due, and re-drives a durable retry window whose replacements are all gone.
+   */
+  private async resumeE2eeRetries(chatId?: string): Promise<void> {
+    const bridge = this.e2eeBridge;
+    if (bridge === null || this.state.e2ee.status !== 'ready') return;
+    if (
+      chatId !== undefined &&
+      [...this.e2eeResetInFlight].some((inflight) => inflight.startsWith(`${chatId}:`))
+    ) {
+      // A live R-15 batch owns the outbox rows for this chat; draining the same
+      // replacement concurrently would POST it twice (idempotent on the server,
+      // but it would double the visible attempt counter and can race the batch).
+      return;
+    }
+    const key = chatId ?? '*';
+    if (this.e2eeResumeInFlight.has(key)) return;
+    this.e2eeResumeInFlight.add(key);
+    try {
+      const reconciled = await this.reconcileE2eeRetries(chatId);
+      if (reconciled === null) return;
+      let statuses = reconciled.statuses;
+      if (statuses.some((status) => status.pending > 0)) {
+        await this.drainE2eeOutbox(chatId);
+        const afterDrain = await this.reconcileE2eeRetries(chatId);
+        if (afterDrain !== null) statuses = afterDrain.statuses;
+      } else {
+        this.scheduleE2eeDrain(minNextRetry(statuses));
+      }
+      const blocked = statuses.some((status) => status.pending > 0 || status.permanent > 0);
+      if (blocked) return;
+      for (const status of statuses) {
+        if (!this.state.chats.some((chat) => chat.id === status.chatId)) continue;
+        for (const retry of status.retries) {
+          if (
+            this.pendingResets.has(this.retryStateKey(status.chatId, retry.reset.failedSessionId))
+          ) {
+            continue;
+          }
+          await this.handleIncomingReset(status.chatId, retry.senderDeviceId, retry.reset);
+        }
+      }
+    } finally {
+      this.e2eeResumeInFlight.delete(key);
     }
   }
 
@@ -2890,8 +3178,14 @@ export class ChatStore {
       if (outcome.status !== 'pending') {
         // A reset that can no longer be re-driven must not leave a dead retry
         // affordance in the UI. A `duplicate` keeps any live pending window.
-        if (outcome.reason !== 'duplicate' && this.pendingResets.delete(key)) {
+        if (outcome.reason !== 'duplicate') {
+          this.pendingResets.delete(key);
           this.patchE2eeChat(chatId, { resetProgress: null, retryPendingCount: 0 });
+          try {
+            await bridge.clearRetryState(chatId, reset.failedSessionId);
+          } catch {
+            // Durable cleanup is retried by the next reconcile.
+          }
         }
         return;
       }
@@ -2900,6 +3194,33 @@ export class ChatStore {
       skipped = outcome.skipped;
       total = outcome.candidates.length + outcome.remaining;
       this.pendingResets.set(key, { reset, senderDeviceId });
+      // Persist the retry intent before the first replacement exists: a reload
+      // must be able to show `retry_pending` and clean up the failed session.
+      try {
+        await bridge.saveRetryState({ chatId, senderDeviceId, reset });
+      } catch {
+        // The outbox rows remain the durable source of truth for the drain.
+      }
+      if (outcome.candidates.length === 0) {
+        // G4e #30: exact replacement bytes are already durable; do not
+        // re-encrypt. The worker below drains them by their idempotency keys.
+        const pendingReplacements = outcome.pendingReplacements ?? 0;
+        remaining = pendingReplacements;
+        total = pendingReplacements;
+        this.patchE2eeChat(chatId, {
+          retryPendingCount: pendingReplacements,
+          resetProgress: {
+            status: 'failed',
+            total,
+            done: 0,
+            failed: 0,
+            remaining,
+            skipped,
+          },
+        });
+        void this.drainE2eeOutbox(chatId);
+        return;
+      }
       this.patchE2eeChat(chatId, {
         retryPendingCount: total,
         resetProgress: {
@@ -2917,6 +3238,7 @@ export class ChatStore {
       // fresh prekey session instead of falling back to an old live session.
       let reuseSessionIds: readonly string[] | undefined;
       for (const candidate of outcome.candidates) {
+        let preparedId: string | null = null;
         try {
           const prepared = await bridge.sendText({
             chatId,
@@ -2926,6 +3248,7 @@ export class ChatStore {
             freshPrekey: first,
             reuseSessionIds,
           });
+          preparedId = prepared.clientMessageId;
           if (first) {
             reuseSessionIds = prepared.sessionIds;
           }
@@ -2933,6 +3256,12 @@ export class ChatStore {
             coverageWarning: prepared.coverageWarning,
             unavailableDeviceIds: prepared.coverage.uncoveredDeviceIds,
           });
+          try {
+            await bridge.markAttempt(prepared.clientMessageId);
+          } catch {
+            // The durable row may already be terminal; the POST below is still
+            // idempotent and `confirmSent` settles it.
+          }
           const result = await this.api.sendMessage(
             chatId,
             {
@@ -2947,7 +3276,14 @@ export class ChatStore {
             seq: result.message.seq,
             warning: prepared.coverageWarning,
           });
-          await bridge.markSuperseded(candidate.originalClientMessageId);
+          // G4e #30: `confirmSent` already superseded the original in the same
+          // transaction. This is a retry-safe no-op; a failure here must never
+          // turn a delivered replacement into a "failed" batch item.
+          try {
+            await bridge.markSuperseded(candidate.originalClientMessageId);
+          } catch {
+            // Healed by the next reconcile (and already superseded atomically).
+          }
           first = false;
           done += 1;
           this.patchE2eeChat(chatId, {
@@ -2976,32 +3312,42 @@ export class ChatStore {
               });
             }
           }
-        } catch {
+        } catch (error) {
           failed += 1;
-          // The failed row stays `pending` in the F4 outbox; the next reset or
-          // the explicit "retry" action re-drives the window. There is no
-          // silent drop: the UI shows the explicit retry-pending state.
+          // The durable row is marked failed (retryable errors get a persisted
+          // backoff). The worker or the explicit "retry" action re-drives the
+          // window; there is no silent drop.
+          if (preparedId !== null) {
+            try {
+              await bridge.markFailed(preparedId, failureCode(error), {
+                retryable: isApiError(error) ? error.isRetryable : false,
+              });
+            } catch {
+              // Missing/terminal row: the drain state stays authoritative.
+            }
+          }
           break;
         }
       }
       const unprocessed = outcome.candidates.length - done - failed;
       remaining = outcome.remaining + Math.max(0, unprocessed);
-      const status = failed === 0 && remaining === 0 ? 'completed' : 'failed';
+      const completed = failed === 0 && remaining === 0;
       const progress: E2eeResetProgress = {
-        status,
+        status: completed ? 'completed' : 'failed',
         total,
         done,
         failed,
         remaining,
         skipped,
       };
-      if (status === 'completed') this.pendingResets.delete(key);
+      if (completed) this.pendingResets.delete(key);
       this.patchE2eeChat(chatId, {
-        retryPendingCount: status === 'completed' ? 0 : failed + remaining,
+        retryPendingCount: completed ? 0 : failed + remaining,
         resetProgress: progress,
       });
       void this.loadNotifications({ silent: true });
     } finally {
+      const completed = started && failed === 0 && remaining === 0;
       if (started) {
         // E7-F5G R-15: success deletes the failed session; a failed/partial
         // batch unmarks the reset so the next one can re-drive the window.
@@ -3010,10 +3356,20 @@ export class ChatStore {
             chatId,
             reset,
             failedSessionId: reset.failedSessionId,
-            status: failed === 0 && remaining === 0 ? 'completed' : 'failed',
+            status: completed ? 'completed' : 'failed',
           });
+          if (completed) {
+            await bridge.clearRetryState(chatId, reset.failedSessionId);
+          }
         } catch {
           // The retry outcome itself is already reflected in the UI state.
+        }
+        if (!completed) {
+          // Durable drain picks up the failed replacement with a persisted
+          // backoff; the UI already shows the explicit retry-pending state.
+          void this.reconcileE2eeRetries(chatId).then((reconciled) => {
+            if (reconciled !== null) this.scheduleE2eeDrain(minNextRetry(reconciled.statuses));
+          });
         }
       }
       this.e2eeResetInFlight.delete(key);
@@ -3026,9 +3382,17 @@ export class ChatStore {
    * reset is removed so the button can never re-send already replaced messages.
    */
   async retryPendingReset(chatId: string): Promise<void> {
+    if (this.e2eeBridge === null) return;
+    // G4e #30: drain exact pending replacement bytes first. Only when the
+    // durable outbox is clean do we re-encrypt the remaining window; otherwise
+    // the retry button could create a second copy of the same plaintext.
+    await this.drainE2eeOutbox(chatId, { force: true });
     const prefix = `${chatId}:`;
     const pending = [...this.pendingResets.entries()].filter(([key]) => key.startsWith(prefix));
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      await this.resumeE2eeRetries(chatId);
+      return;
+    }
     this.patchE2eeChat(chatId, { resetProgress: null, retryPendingCount: 0 });
     for (const [, entry] of pending) {
       await this.handleIncomingReset(chatId, entry.senderDeviceId, entry.reset);
@@ -3117,6 +3481,12 @@ export class ChatStore {
       attempts: item.attempts + 1,
     });
     try {
+      await this.e2eeBridge?.markAttempt(clientMessageId);
+    } catch {
+      // Terminal/missing row: the POST is still idempotent; the drain state
+      // (not this counter) decides whether a retry is allowed.
+    }
+    try {
       const result = await this.api.sendMessage(
         chatId,
         {
@@ -3153,13 +3523,20 @@ export class ChatStore {
       const apiError = toApiError(error);
       this.handleFailure(apiError);
       try {
-        await this.e2eeBridge?.markFailed(clientMessageId, apiError.code);
+        await this.e2eeBridge?.markFailed(clientMessageId, apiError.code, {
+          retryable: apiError.isRetryable,
+        });
       } catch {
         // Outbox row may already be gone; nothing else to do here.
       }
       this.patchOutgoing(chatId, clientMessageId, {
         status: 'failed',
         error: apiError,
+      });
+      // G4e #30: retryable failures are scheduled durably; a reload continues
+      // the same backoff instead of losing the pending send.
+      void this.reconcileE2eeRetries(chatId).then((reconciled) => {
+        if (reconciled !== null) this.scheduleE2eeDrain(minNextRetry(reconciled.statuses));
       });
       if (apiError.code === 'KEY_CHANGED' || apiError.code === 'KEY_GENERATION_MISMATCH') {
         this.e2eeBridge?.invalidateChat(chatId);
@@ -4403,6 +4780,14 @@ function failureCode(error: unknown): string {
   if (isE2eeError(error)) return error.code;
   if (isApiError(error)) return error.code;
   return 'UNKNOWN';
+}
+
+/** Earliest durable retry deadline across chats; `now` when a row is pending. */
+function minNextRetry(statuses: readonly E2eeRetryStatus[]): number | null {
+  return statuses.reduce<number | null>((next, status) => {
+    if (status.pending === 0 || status.nextAttemptAt === null) return next;
+    return next === null ? status.nextAttemptAt : Math.min(next, status.nextAttemptAt);
+  }, null);
 }
 
 /** D1-FE3: soft-deleted roots cannot accept replies (contract `THREAD_ROOT_DELETED`). */
