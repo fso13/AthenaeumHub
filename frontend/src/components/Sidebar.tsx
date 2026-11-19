@@ -6,6 +6,7 @@ import { chatDisplayName } from '../domain/chatLabel';
 import { formatUnreadBadge } from '../domain/unread';
 import { t, type MessageKey } from '../i18n/ru';
 import { Avatar } from './Avatar';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import {
   ArrowLeftIcon,
   ChevronDownIcon,
@@ -156,29 +157,20 @@ export function Sidebar({
   return (
     <aside className="sidebar" aria-label={t('sidebar.label')}>
       <div className="ws-head">
-        <div className="ws-btn">
-          <span className="ws-btn__name">
-            {workspaceName ?? (loading ? t('common.loading') : t('app.tagline'))}
-          </span>
-          {state.workspaces.length > 1 && onSelectWorkspace ? (
-            <>
-              <ChevronDownIcon className="chev" aria-hidden="true" />
-              <select
-                className="workspace-switch__select"
-                aria-label={t('workspace.switch')}
-                title={t('workspace.switchHint')}
-                value={state.activeWorkspaceId ?? ''}
-                onChange={(event) => onSelectWorkspace(event.target.value)}
-              >
-                {state.workspaces.map((workspace) => (
-                  <option key={workspace.id} value={workspace.id}>
-                    {workspace.name}
-                  </option>
-                ))}
-              </select>
-            </>
-          ) : null}
-        </div>
+        {state.workspaces.length > 1 && onSelectWorkspace ? (
+          <WorkspaceSwitcher
+            workspaces={state.workspaces}
+            activeWorkspaceId={state.activeWorkspaceId}
+            currentName={workspaceName ?? (loading ? t('common.loading') : t('app.tagline'))}
+            onSelect={onSelectWorkspace}
+          />
+        ) : (
+          <div className="ws-btn">
+            <span className="ws-btn__name">
+              {workspaceName ?? (loading ? t('common.loading') : t('app.tagline'))}
+            </span>
+          </div>
+        )}
         {onToggleCollapsed ? (
           <button
             type="button"

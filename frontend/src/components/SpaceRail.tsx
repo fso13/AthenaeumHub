@@ -1,6 +1,7 @@
 import type { RailSpace } from '../domain/unread';
 import { formatUnreadBadge, unreadLabel } from '../domain/unread';
 import { t } from '../i18n/ru';
+import { workspaceInitial } from '../domain/workspace';
 import { Avatar } from './Avatar';
 import { PlusIcon } from './Icons';
 
@@ -44,7 +45,12 @@ export function SpaceRail({ spaces, activeSpaceId, unreadBySpace, onSelect }: Sp
                 title={label}
                 onClick={() => onSelect(space.id)}
               >
-                <Avatar name={space.name} seed={space.id} size="lg" />
+                <Avatar
+                  name={space.name}
+                  seed={space.id}
+                  size="lg"
+                  short={workspaceInitial(space.name)}
+                />
                 {badge ? (
                   <span className="unread-badge space-rail__badge" aria-hidden="true">
                     {badge}

@@ -25,6 +25,11 @@ import type {
   ChatPluginStateList,
   ChatPluginUpdateRequest,
   PluginList,
+  Poll,
+  PollCloseRequest,
+  PollCreate,
+  PollList,
+  PollVoteRequest,
   CreateWorkspaceRequest,
   Device,
   DeviceList,
@@ -53,6 +58,12 @@ import type {
   SetupStatus,
   StickerPackList,
   SyncResponse,
+  Task,
+  TaskCreate,
+  TaskList,
+  TaskUpdate,
+  Translation,
+  TranslationRequest,
   TestEmailRequest,
   TestEmailResponse,
   UploadCompleteRequest,
@@ -221,6 +232,26 @@ export interface ChatApi {
     pluginId: string,
     body: ChatPluginUpdateRequest,
   ): Promise<ChatPluginState>;
+
+  /*
+   * D1.1 (#76): real plugin actions on managed chats. The server owns option
+   * ids, vote/task permissions, ordering, timestamps and the translation
+   * provider; the client never fabricates a poll/task/translation result and
+   * never applies an optimistic vote or task mutation.
+   */
+  listPolls(chatId: string): Promise<PollList>;
+  createPoll(chatId: string, body: PollCreate): Promise<Poll>;
+  closePoll(chatId: string, pollId: string, body: PollCloseRequest): Promise<Poll>;
+  votePoll(chatId: string, pollId: string, body: PollVoteRequest): Promise<Poll>;
+  listTasks(chatId: string): Promise<TaskList>;
+  createTask(chatId: string, body: TaskCreate): Promise<Task>;
+  updateTask(chatId: string, taskId: string, body: TaskUpdate): Promise<Task>;
+  /** Managed TEXT only; an unconfigured provider is an honest `503`. */
+  translateMessage(
+    chatId: string,
+    messageId: string,
+    body: TranslationRequest,
+  ): Promise<Translation>;
 
   /* E4-F: managed files. All shapes come from the generated contract types. */
   getWorkspaceLimits(workspaceId: string): Promise<WorkspaceLimits>;
@@ -691,6 +722,86 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
         // returned state instead of applying the requested value locally.
         const response = await client.patch<ChatPluginState>(
           `/chats/${encodeURIComponent(chatId)}/plugins/${encodeURIComponent(pluginId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    /* ------------------------------------------------------------------ */
+    /* D1.1 (#76): plugin actions                                         */
+    /* ------------------------------------------------------------------ */
+
+    listPolls(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<PollList>(`/chats/${encodeURIComponent(chatId)}/polls`);
+        return response.data;
+      });
+    },
+
+    createPoll(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.post<Poll>(
+          `/chats/${encodeURIComponent(chatId)}/polls`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    closePoll(chatId, pollId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<Poll>(
+          `/chats/${encodeURIComponent(chatId)}/polls/${encodeURIComponent(pollId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    votePoll(chatId, pollId, body) {
+      return withReauth(async () => {
+        // The response carries the recalculated aggregate and `my_option_id`;
+        // nothing is incremented locally.
+        const response = await client.post<Poll>(
+          `/chats/${encodeURIComponent(chatId)}/polls/${encodeURIComponent(pollId)}/votes`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    listTasks(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<TaskList>(`/chats/${encodeURIComponent(chatId)}/tasks`);
+        return response.data;
+      });
+    },
+
+    createTask(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.post<Task>(
+          `/chats/${encodeURIComponent(chatId)}/tasks`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    updateTask(chatId, taskId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<Task>(
+          `/chats/${encodeURIComponent(chatId)}/tasks/${encodeURIComponent(taskId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    translateMessage(chatId, messageId, body) {
+      return withReauth(async () => {
+        const response = await client.post<Translation>(
+          `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/translate`,
           body,
         );
         return response.data;

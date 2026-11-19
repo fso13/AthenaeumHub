@@ -17,7 +17,7 @@ export const testConfig: AppConfig = {
   useMocks: true,
   devSession: true,
   authMode: 'dev',
-  deviceName: 'Pickle — тест',
+  deviceName: 'Сова — тест',
   appVersion: '0.1.0',
   requestTimeoutMs: 5_000,
   historyPageSize: 30,

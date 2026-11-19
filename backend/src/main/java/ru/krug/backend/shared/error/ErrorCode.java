@@ -148,6 +148,16 @@ public final class ErrorCode {
     public static final String PLUGIN_NOT_AVAILABLE = "PLUGIN_NOT_AVAILABLE";
     public static final String PLUGIN_DISABLED = "PLUGIN_DISABLED";
 
+    // D1.1 (#76): plugin actions. Every action re-checks the per-chat toggle; E2EE stays
+    // managed-only. Translation has no provider by default (503) and never logs content.
+    public static final String PLUGIN_NOT_ENABLED = "PLUGIN_NOT_ENABLED";
+    public static final String POLL_CLOSED = "POLL_CLOSED";
+    public static final String POLL_OPTION_INVALID = "POLL_OPTION_INVALID";
+    public static final String POLL_STATE_INVALID = "POLL_STATE_INVALID";
+    public static final String TASK_ASSIGNEE_INVALID = "TASK_ASSIGNEE_INVALID";
+    public static final String MESSAGE_NOT_TRANSLATABLE = "MESSAGE_NOT_TRANSLATABLE";
+    public static final String TRANSLATION_UNAVAILABLE = "TRANSLATION_UNAVAILABLE";
+
     private ErrorCode() {
     }
 }

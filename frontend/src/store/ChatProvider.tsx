@@ -4,6 +4,7 @@ import type { FilesState, FilesStore } from './filesStore';
 import type { AdminDirectoryState, AdminDirectoryStore } from '../ops/adminDirectory';
 import type { OpsState, OpsStore } from '../ops/store';
 import type { PluginsState, PluginsStore } from '../plugins/store';
+import type { PluginActionsState, PluginActionsStore } from '../plugins/actionsStore';
 import type { StickersState, StickersStore } from '../stickers/store';
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
@@ -48,6 +49,16 @@ export function usePluginsStore(): PluginsStore {
 
 export function usePluginsState(): PluginsState {
   const store = usePluginsStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** D1.1 (#76): poll/task/translation actions for the active managed chat. */
+export function usePluginActionsStore(): PluginActionsStore {
+  return useChatStore().pluginActions;
+}
+
+export function usePluginActionsState(): PluginActionsState {
+  const store = usePluginActionsStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 

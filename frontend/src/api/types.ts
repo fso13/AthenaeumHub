@@ -183,6 +183,28 @@ export type ChatPluginUnavailableReason = NonNullable<ChatPluginState['reason']>
 export type ChatPluginUpdateRequest = components['schemas']['ChatPluginUpdateRequest'];
 
 /* ------------------------------------------------------------------------- */
+/* D1.1 (#76): plugin actions — polls, tasks, translation                    */
+/* ------------------------------------------------------------------------- */
+
+/** Managed-only poll metadata; there is no E2EE content path in this shape. */
+export type Poll = components['schemas']['Poll'];
+export type PollOption = components['schemas']['PollOption'];
+export type PollList = components['schemas']['PollList'];
+/** Create body; the server trims/normalizes plain text and owns option ids. */
+export type PollCreate = components['schemas']['PollCreate'];
+export type PollVoteRequest = components['schemas']['PollVoteRequest'];
+export type PollCloseRequest = components['schemas']['PollCloseRequest'];
+/** Chat-scoped task metadata; assignee/due date are optional labels only. */
+export type Task = components['schemas']['Task'];
+export type TaskList = components['schemas']['TaskList'];
+export type TaskCreate = components['schemas']['TaskCreate'];
+/** Only `done` is mutable; `completed_by`/`completed_at` are server-owned. */
+export type TaskUpdate = components['schemas']['TaskUpdate'];
+export type TranslationRequest = components['schemas']['TranslationRequest'];
+/** Server-returned plain text; absence of a provider is an honest `503`. */
+export type Translation = components['schemas']['Translation'];
+
+/* ------------------------------------------------------------------------- */
 /* E6-F: in-app notifications and preferences                                */
 /* ------------------------------------------------------------------------- */
 

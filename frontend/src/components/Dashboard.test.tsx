@@ -145,7 +145,8 @@ describe('D1-FE1 space rail', () => {
 
     await user.click(second);
     await waitFor(() => expect(store.getSnapshot().activeWorkspaceId).toBe(SECOND_WORKSPACE.id));
-    expect(screen.getByRole('button', { name: /Второе пространство/ })).toHaveAttribute(
+    const freshRail = screen.getByRole('navigation', { name: 'Пространства' });
+    expect(within(freshRail).getByRole('button', { name: /Второе пространство/ })).toHaveAttribute(
       'aria-current',
       'page',
     );

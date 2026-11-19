@@ -77,6 +77,16 @@ const operations = {
   'POST /admin/users/{userId}/activate': spec.paths?.['/admin/users/{userId}/activate']?.post,
   'DELETE /admin/chats/{chatId}': spec.paths?.['/admin/chats/{chatId}']?.delete,
   'PATCH /chats/{chatId}': spec.paths?.['/chats/{chatId}']?.patch,
+  'GET /chats/{chatId}/polls': spec.paths?.['/chats/{chatId}/polls']?.get,
+  'POST /chats/{chatId}/polls': spec.paths?.['/chats/{chatId}/polls']?.post,
+  'PATCH /chats/{chatId}/polls/{pollId}': spec.paths?.['/chats/{chatId}/polls/{pollId}']?.patch,
+  'POST /chats/{chatId}/polls/{pollId}/votes':
+    spec.paths?.['/chats/{chatId}/polls/{pollId}/votes']?.post,
+  'GET /chats/{chatId}/tasks': spec.paths?.['/chats/{chatId}/tasks']?.get,
+  'POST /chats/{chatId}/tasks': spec.paths?.['/chats/{chatId}/tasks']?.post,
+  'PATCH /chats/{chatId}/tasks/{taskId}': spec.paths?.['/chats/{chatId}/tasks/{taskId}']?.patch,
+  'POST /chats/{chatId}/messages/{messageId}/translate':
+    spec.paths?.['/chats/{chatId}/messages/{messageId}/translate']?.post,
   'PATCH /me': spec.paths?.['/me']?.patch,
   'GET /me/sessions': spec.paths?.['/me/sessions']?.get,
   'DELETE /me/sessions/{sessionId}': spec.paths?.['/me/sessions/{sessionId}']?.delete,
@@ -326,6 +336,10 @@ const requiredFields = {
   ],
   Chat: ['id', 'type', 'security_mode', 'last_seq', 'unread_count', 'created_at'],
   ChatCreateRequest: ['type'],
+  PollOption: ['id', 'text', 'position', 'votes'],
+  Poll: ['id', 'question', 'options', 'creator_id', 'closed', 'created_at', 'total_votes'],
+  Task: ['id', 'title', 'creator_id', 'done', 'created_at'],
+  Translation: ['text'],
 };
 
 for (const [schemaName, fields] of Object.entries(requiredFields)) {
@@ -650,18 +664,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 57,
-  'Contract must expose exactly 57 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files)',
+  Object.keys(spec.paths ?? {}).length === 63,
+  'Contract must expose exactly 63 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 67,
-  'Contract check must cover exactly 67 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files)',
+  Object.keys(operations).length === 75,
+  'Contract check must cover exactly 75 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions)',
 );
 check(
-  Object.keys(schemas).length === 103,
-  'Contract must expose exactly 103 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files)',
+  Object.keys(schemas).length === 115,
+  'Contract must expose exactly 115 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions)',
 );
 
 check(
@@ -785,6 +799,22 @@ check(
     );
   }),
   'Notification mutations must keep X-Device-Id and Idempotency-Key',
+);
+
+// --- 6. D1.1 (#76) plugin action invariants ------------------------------
+check(
+  schemas.PollCreate?.properties?.options?.minItems === 2 &&
+    schemas.PollCreate?.properties?.options?.maxItems === 10,
+  'PollCreate.options must stay 2..10 (poll composer bounds)',
+);
+check(schemas.Poll?.properties?.options?.maxItems === 10, 'Poll.options maxItems must stay 10');
+check(
+  schemas.Translation?.properties?.text?.maxLength === 8000,
+  'Translation.text maxLength must stay 8000',
+);
+check(
+  schemas.TaskUpdate?.required?.length === 1 && schemas.TaskUpdate.required[0] === 'done',
+  'TaskUpdate must only require done',
 );
 
 if (failures.length > 0) {

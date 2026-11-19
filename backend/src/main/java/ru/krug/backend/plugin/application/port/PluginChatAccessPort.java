@@ -17,4 +17,11 @@ public interface PluginChatAccessPort {
      *         membership, 404 when the chat is unknown/deleted/foreign (existence hidden).
      */
     PluginChatContext requireActiveChat(Principal principal, UUID chatId);
+
+    /**
+     * Non-throwing membership check for a user referenced by a plugin action (for example
+     * a task assignee). It never reveals whether the user or chat exists; false is the
+     * safe answer for an unknown, removed or foreign membership.
+     */
+    boolean isActiveChatMember(UUID workspaceId, UUID chatId, UUID userId);
 }

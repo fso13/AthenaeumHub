@@ -15,6 +15,12 @@ public interface ChatPluginRepository {
     List<ChatPlugin> findByChat(UUID workspaceId, UUID chatId);
 
     /**
+     * Effective per-chat toggle. A missing row means {@code false}; callers must still
+     * apply {@code PluginAvailabilityPolicy} (mode/kill switch) before acting.
+     */
+    boolean isEnabled(UUID workspaceId, UUID chatId, String pluginId);
+
+    /**
      * Idempotent upsert.
      *
      * @return {@code true} only when the stored value actually changed (insert or

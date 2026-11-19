@@ -18,6 +18,7 @@ import type {
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
+  Poll,
   PreflightFile,
   ProfileSession,
   ReadNotificationsRequest,
@@ -25,6 +26,7 @@ import type {
   StickerPack,
   StickerRef,
   Plugin,
+  Task,
   UploadCompleteRequest,
   UploadInitRequest,
   UploadSessionStatus,
@@ -51,6 +53,20 @@ import {
   mockSession,
   type MockMemberUser,
 } from './fixtures';
+
+/** D1.1 (#76): one mock poll plus its per-user votes (server-side state). */
+export interface MockPollRecord {
+  chatId: string;
+  poll: Poll;
+  /** user_id -> option_id; one vote per user, like the backend primary key. */
+  votes: Map<string, string>;
+}
+
+/** D1.1 (#76): one mock chat-scoped task. */
+export interface MockTaskRecord {
+  chatId: string;
+  task: Task;
+}
 
 export interface ChatRecord {
   summary: ChatSummary;
@@ -406,6 +422,38 @@ export interface MockDb {
   chatPluginPatchDelayMs: number;
   forceChatPluginsError: ForcedSendError | null;
   forceChatPluginPatchError: ForcedSendError | null;
+  /* D1.1 (#76): poll/task/translate action state and injectable failures. */
+  polls: Map<string, MockPollRecord>;
+  tasks: Map<string, MockTaskRecord>;
+  pollRequests: Array<{
+    chatId: string;
+    action: 'list' | 'create' | 'vote' | 'close';
+    pollId?: string;
+    body?: Record<string, unknown>;
+    deviceId: string | null;
+  }>;
+  taskRequests: Array<{
+    chatId: string;
+    action: 'list' | 'create' | 'update';
+    taskId?: string;
+    body?: Record<string, unknown>;
+    deviceId: string | null;
+  }>;
+  translationRequests: Array<{
+    chatId: string;
+    messageId: string;
+    body: Record<string, unknown>;
+    deviceId: string | null;
+  }>;
+  /** Mirrors the real provider switch: false makes translate return 503. */
+  translationAvailable: boolean;
+  forcePollListError: ForcedSendError | null;
+  forcePollCreateError: ForcedSendError | null;
+  forcePollMutationError: ForcedSendError | null;
+  forceTaskListError: ForcedSendError | null;
+  forceTaskCreateError: ForcedSendError | null;
+  forceTaskUpdateError: ForcedSendError | null;
+  forceTranslationError: ForcedSendError | null;
   chats: Record<string, ChatRecord>;
   idempotency: Map<string, IdempotencyRecord>;
   readReceipts: Record<string, number>;
@@ -713,6 +761,21 @@ export function createMockDb(): MockDb {
     chatPluginPatchDelayMs: 0,
     forceChatPluginsError: null,
     forceChatPluginPatchError: null,
+    polls: new Map(),
+    tasks: new Map(),
+    pollRequests: [],
+    taskRequests: [],
+    translationRequests: [],
+    // The mock stands in for a configured provider; tests can force the
+    // contract's default 503 with `translationAvailable = false`.
+    translationAvailable: true,
+    forcePollListError: null,
+    forcePollCreateError: null,
+    forcePollMutationError: null,
+    forceTaskListError: null,
+    forceTaskCreateError: null,
+    forceTaskUpdateError: null,
+    forceTranslationError: null,
     chats: buildChats(),
     idempotency: new Map(),
     readReceipts: {},
@@ -855,6 +918,19 @@ export function resetMockDb(db: MockDb): void {
   db.chatPluginPatchDelayMs = 0;
   db.forceChatPluginsError = null;
   db.forceChatPluginPatchError = null;
+  db.polls.clear();
+  db.tasks.clear();
+  db.pollRequests = [];
+  db.taskRequests = [];
+  db.translationRequests = [];
+  db.translationAvailable = true;
+  db.forcePollListError = null;
+  db.forcePollCreateError = null;
+  db.forcePollMutationError = null;
+  db.forceTaskListError = null;
+  db.forceTaskCreateError = null;
+  db.forceTaskUpdateError = null;
+  db.forceTranslationError = null;
   db.chats = fresh.chats;
   db.idempotency.clear();
   db.readReceipts = {};

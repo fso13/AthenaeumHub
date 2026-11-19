@@ -26,6 +26,7 @@ import type {
   NotificationPreference,
   NotificationPreferencePatch,
   Plugin,
+  Poll,
   PreflightDecision,
   PreflightFile,
   ReadNotificationsRequest,
@@ -33,6 +34,7 @@ import type {
   RealtimeTicket,
   StickerRef,
   SyncResponse,
+  Task,
   ThreadSummary,
   UploadInitRequest,
   UploadSession,
@@ -859,6 +861,86 @@ function hasForbiddenControl(value: string, allowLineBreaks: boolean): boolean {
     }
   }
   return false;
+}
+
+/* ------------------------------------------------------------------------- */
+/* D1.1 (#76): poll/task/translate mock helpers                               */
+/* ------------------------------------------------------------------------- */
+
+/** Chat + workspace accessible to the single mock caller, or null (→ 404). */
+function accessibleChat(
+  db: MockDb,
+  chatId: string,
+): { chat: ChatRecord; workspace: WorkspaceSummary } | null {
+  const chat = db.chats[chatId];
+  if (!chat) return null;
+  const workspace = db.me.workspaces.find((item) => item.id === chat.workspaceId);
+  return workspace ? { chat, workspace } : null;
+}
+
+/**
+ * Mirrors `PluginAvailabilityPolicy` + the per-chat switch: E2EE is always
+ * unavailable, a catalog kill switch and a disabled chat toggle both reject.
+ */
+function pluginActionGate(db: MockDb, chat: ChatRecord, pluginId: string): Response | null {
+  const plugin = db.pluginCatalog.find((item) => item.id === pluginId);
+  if (!plugin) return errorResponse(404, 'PLUGIN_NOT_FOUND', 'Plugin not found');
+  if (chat.summary.security_mode === 'E2EE') {
+    return errorResponse(422, 'PLUGIN_NOT_AVAILABLE', 'Plugin is not available in an E2EE chat');
+  }
+  if (plugin.state === 'DISABLED') {
+    return errorResponse(422, 'PLUGIN_NOT_ENABLED', 'Plugin is disabled in the catalog');
+  }
+  const enabled = db.chatPlugins.get(chat.summary.id)?.get(pluginId) ?? false;
+  if (!enabled) {
+    return errorResponse(422, 'PLUGIN_NOT_ENABLED', 'Plugin is not enabled in this chat');
+  }
+  return null;
+}
+
+/** Plain-text guard shared by poll questions/options and task titles. */
+function plainTextIssue(value: unknown, min: number, max: number): string | null {
+  if (typeof value !== 'string') return 'must be a string';
+  const trimmed = value.trim();
+  if (trimmed.length < min) return `must be ${min}..${max} characters`;
+  if (trimmed.length > max) return `must be ${min}..${max} characters`;
+  if (/[<>]/.test(trimmed) || hasDisallowedControl(trimmed, NO_CONTROL)) {
+    return 'must be plain text without HTML or control characters';
+  }
+  return null;
+}
+
+/** Poll DTO recomputed for the caller, never stored as a per-viewer row. */
+function pollView(record: { poll: Poll; votes: Map<string, string> }, viewerId: string): Poll {
+  const counts = new Map<string, number>();
+  for (const optionId of record.votes.values()) {
+    counts.set(optionId, (counts.get(optionId) ?? 0) + 1);
+  }
+  return {
+    ...record.poll,
+    options: record.poll.options.map((option) => ({
+      ...option,
+      votes: counts.get(option.id) ?? 0,
+    })),
+    my_option_id: record.votes.get(viewerId) ?? null,
+    total_votes: record.votes.size,
+  };
+}
+
+function compareCreatedDesc(a: { created_at: string }, b: { created_at: string }): number {
+  return Date.parse(b.created_at) - Date.parse(a.created_at);
+}
+
+/** Open first, then done; newest first inside each group (contract order). */
+function compareTasks(a: Task, b: Task): number {
+  const doneDelta = Number(a.done) - Number(b.done);
+  if (doneDelta !== 0) return doneDelta;
+  return compareCreatedDesc(a, b);
+}
+
+function mockTranslation(target: string, source: string): string {
+  const normalized = source.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
+  return `[${target}] ${normalized}`.slice(0, 8000);
 }
 
 export function createHandlers(db: MockDb) {
@@ -1743,6 +1825,404 @@ export function createHandlers(db: MockDb) {
         enabled: body.enabled,
         available: true,
       });
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* D1.1 (#76): poll actions                                           */
+    /* ------------------------------------------------------------------ */
+
+    http.get(`${API}/chats/:chatId/polls`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      db.pollRequests.push({
+        chatId,
+        action: 'list',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.pollRequests.length > 200) db.pollRequests.shift();
+      if (db.forcePollListError) {
+        const forced = db.forcePollListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'polls');
+      if (gate) return gate;
+      const items = [...db.polls.values()]
+        .filter((record) => record.chatId === chatId)
+        .map((record) => pollView(record, db.me.user.id))
+        .sort(compareCreatedDesc);
+      return HttpResponse.json({ items });
+    }),
+
+    http.post(`${API}/chats/:chatId/polls`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const body = asRecord(await readJson(request));
+      db.pollRequests.push({
+        chatId,
+        action: 'create',
+        body: body ?? {},
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forcePollCreateError) {
+        const forced = db.forcePollCreateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'polls');
+      if (gate) return gate;
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+
+      const questionIssue = plainTextIssue(body.question, 1, 500);
+      if (questionIssue) {
+        return errorResponse(400, 'VALIDATION_FAILED', `question ${questionIssue}`, {
+          details: { field: 'question' },
+        });
+      }
+      const rawOptions = body.options;
+      if (!Array.isArray(rawOptions) || rawOptions.length < 2 || rawOptions.length > 10) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'options must contain 2..10 items', {
+          details: { field: 'options' },
+        });
+      }
+      const options: string[] = [];
+      for (const [index, raw] of rawOptions.entries()) {
+        const issue = plainTextIssue(raw, 1, 200);
+        if (issue) {
+          return errorResponse(400, 'VALIDATION_FAILED', `options[${index}] ${issue}`, {
+            details: { field: `options[${index}]` },
+          });
+        }
+        const text = (raw as string).trim();
+        if (options.includes(text)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'options must be unique', {
+            details: { field: 'options', index },
+          });
+        }
+        options.push(text);
+      }
+
+      const createdAt = new Date().toISOString();
+      const poll: Poll = {
+        id: newUuid(),
+        question: (body.question as string).trim(),
+        options: options.map((text, position) => ({
+          id: newUuid(),
+          text,
+          position,
+          votes: 0,
+        })),
+        creator_id: db.me.user.id,
+        closed: false,
+        closed_at: null,
+        created_at: createdAt,
+        my_option_id: null,
+        total_votes: 0,
+      };
+      const record = { chatId, poll, votes: new Map<string, string>() };
+      db.polls.set(poll.id, record);
+      return HttpResponse.json(pollView(record, db.me.user.id), { status: 201 });
+    }),
+
+    http.patch(`${API}/chats/:chatId/polls/:pollId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const pollId = String(params.pollId);
+      const body = asRecord(await readJson(request));
+      db.pollRequests.push({
+        chatId,
+        action: 'close',
+        pollId,
+        body: body ?? {},
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forcePollMutationError) {
+        const forced = db.forcePollMutationError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'polls');
+      if (gate) return gate;
+      const record = db.polls.get(pollId);
+      if (!record || record.chatId !== chatId) {
+        return errorResponse(404, 'NOT_FOUND', 'Poll not found');
+      }
+      if (!body || typeof body.closed !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'closed must be a boolean', {
+          details: { field: 'closed' },
+        });
+      }
+      if (body.closed !== true) {
+        return errorResponse(422, 'POLL_STATE_INVALID', 'Only closing a poll is supported');
+      }
+      if (record.poll.creator_id !== db.me.user.id) {
+        return errorResponse(403, 'FORBIDDEN', 'Only the poll creator can close it');
+      }
+      if (!record.poll.closed) {
+        record.poll.closed = true;
+        record.poll.closed_at = new Date().toISOString();
+      }
+      return HttpResponse.json(pollView(record, db.me.user.id));
+    }),
+
+    http.post(`${API}/chats/:chatId/polls/:pollId/votes`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const pollId = String(params.pollId);
+      const body = asRecord(await readJson(request));
+      db.pollRequests.push({
+        chatId,
+        action: 'vote',
+        pollId,
+        body: body ?? {},
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forcePollMutationError) {
+        const forced = db.forcePollMutationError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'polls');
+      if (gate) return gate;
+      const record = db.polls.get(pollId);
+      if (!record || record.chatId !== chatId) {
+        return errorResponse(404, 'NOT_FOUND', 'Poll not found');
+      }
+      if (record.poll.closed) {
+        return errorResponse(422, 'POLL_CLOSED', 'The poll is closed');
+      }
+      const optionId = body?.option_id;
+      if (
+        typeof optionId !== 'string' ||
+        !record.poll.options.some((option) => option.id === optionId)
+      ) {
+        return errorResponse(422, 'POLL_OPTION_INVALID', 'Option does not belong to this poll');
+      }
+      // One vote per user; a different option replaces the previous choice and
+      // the aggregate is recomputed by `pollView`, never incremented here.
+      record.votes.set(db.me.user.id, optionId);
+      return HttpResponse.json(pollView(record, db.me.user.id));
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* D1.1 (#76): task actions                                           */
+    /* ------------------------------------------------------------------ */
+
+    http.get(`${API}/chats/:chatId/tasks`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      db.taskRequests.push({
+        chatId,
+        action: 'list',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTaskListError) {
+        const forced = db.forceTaskListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'tasks');
+      if (gate) return gate;
+      const items = [...db.tasks.values()]
+        .filter((record) => record.chatId === chatId)
+        .map((record) => record.task)
+        .sort(compareTasks);
+      return HttpResponse.json({ items });
+    }),
+
+    http.post(`${API}/chats/:chatId/tasks`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const body = asRecord(await readJson(request));
+      db.taskRequests.push({
+        chatId,
+        action: 'create',
+        body: body ?? {},
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTaskCreateError) {
+        const forced = db.forceTaskCreateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'tasks');
+      if (gate) return gate;
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+
+      const titleIssue = plainTextIssue(body.title, 1, 500);
+      if (titleIssue) {
+        return errorResponse(400, 'VALIDATION_FAILED', `title ${titleIssue}`, {
+          details: { field: 'title' },
+        });
+      }
+      let assigneeId: string | null = null;
+      if (body.assignee_id !== undefined && body.assignee_id !== null) {
+        if (
+          typeof body.assignee_id !== 'string' ||
+          !db.workspaceMembers.some((member) => member.user_id === body.assignee_id)
+        ) {
+          return errorResponse(422, 'TASK_ASSIGNEE_INVALID', 'Assignee is not an active member');
+        }
+        assigneeId = body.assignee_id;
+      }
+      let dueAt: string | null = null;
+      if (body.due_at !== undefined && body.due_at !== null) {
+        if (typeof body.due_at !== 'string' || Number.isNaN(Date.parse(body.due_at))) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'due_at must be an ISO date-time', {
+            details: { field: 'due_at' },
+          });
+        }
+        dueAt = new Date(body.due_at).toISOString();
+      }
+      const task: Task = {
+        id: newUuid(),
+        title: (body.title as string).trim(),
+        creator_id: db.me.user.id,
+        assignee_id: assigneeId,
+        due_at: dueAt,
+        done: false,
+        completed_by: null,
+        completed_at: null,
+        created_at: new Date().toISOString(),
+      };
+      db.tasks.set(task.id, { chatId, task });
+      return HttpResponse.json(task, { status: 201 });
+    }),
+
+    http.patch(`${API}/chats/:chatId/tasks/:taskId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const taskId = String(params.taskId);
+      const body = asRecord(await readJson(request));
+      db.taskRequests.push({
+        chatId,
+        action: 'update',
+        taskId,
+        body: body ?? {},
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTaskUpdateError) {
+        const forced = db.forceTaskUpdateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'tasks');
+      if (gate) return gate;
+      const record = db.tasks.get(taskId);
+      if (!record || record.chatId !== chatId) {
+        return errorResponse(404, 'NOT_FOUND', 'Task not found');
+      }
+      if (!body || typeof body.done !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'done must be a boolean', {
+          details: { field: 'done' },
+        });
+      }
+      const task = record.task;
+      const isOwnerOrAdmin = found.workspace.role === 'OWNER' || found.workspace.role === 'ADMIN';
+      if (
+        task.creator_id !== db.me.user.id &&
+        task.assignee_id !== db.me.user.id &&
+        !isOwnerOrAdmin
+      ) {
+        return errorResponse(403, 'FORBIDDEN', 'Not allowed to change this task');
+      }
+      if (task.done !== body.done) {
+        task.done = body.done;
+        task.completed_by = body.done ? db.me.user.id : null;
+        task.completed_at = body.done ? new Date().toISOString() : null;
+      }
+      return HttpResponse.json(task);
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* D1.1 (#76): managed TEXT translation                               */
+    /* ------------------------------------------------------------------ */
+
+    http.post(`${API}/chats/:chatId/messages/:messageId/translate`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const messageId = String(params.messageId);
+      const body = asRecord(await readJson(request));
+      db.translationRequests.push({
+        chatId,
+        messageId,
+        body: body ?? {},
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTranslationError) {
+        const forced = db.forceTranslationError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      // Translation may never read ciphertext; this wins over the plugin gate
+      // so the caller gets the contract's E2EE code.
+      if (found.chat.summary.security_mode === 'E2EE') {
+        return errorResponse(422, 'E2EE_METADATA_FORBIDDEN', 'E2EE messages cannot be translated');
+      }
+      const gate = pluginActionGate(db, found.chat, 'translate');
+      if (gate) return gate;
+      if (!db.translationAvailable) {
+        return errorResponse(503, 'TRANSLATION_UNAVAILABLE', 'Translation provider unavailable', {
+          retryAfterSeconds: 30,
+        });
+      }
+      const target = body?.target;
+      if (
+        typeof target !== 'string' ||
+        target.length < 2 ||
+        target.length > 16 ||
+        !/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(target)
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'target is not a supported language tag', {
+          details: { field: 'target' },
+        });
+      }
+      const message = visibleMessage(found.chat, messageId);
+      if (!message) return errorResponse(404, 'NOT_FOUND', 'Message not found');
+      if (message.deleted_at || message.type !== 'TEXT' || !message.text?.trim()) {
+        return errorResponse(422, 'MESSAGE_NOT_TRANSLATABLE', 'Message is not translatable');
+      }
+      return HttpResponse.json({ text: mockTranslation(target, message.text) });
     }),
 
     http.post(`${API}/devices`, async ({ request }) => {

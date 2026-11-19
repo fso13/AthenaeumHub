@@ -5,6 +5,8 @@ interface AvatarProps {
   seed?: string | null;
   /** 26 row-xs · 28 chat rows · 36 compact · 38 feed/header · 76 profile cover. */
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'profile';
+  /** D1-FE1: workspace rail/menu avatars use one meaningful letter. */
+  short?: string;
 }
 
 /**
@@ -12,7 +14,7 @@ interface AvatarProps {
  * `design/dashboard/styles.css` (`.av.p1…p10`). The tone is derived from the
  * same stable hue hash as before; only the visual language changed.
  */
-export function Avatar({ name, seed, size = 'sm' }: AvatarProps) {
+export function Avatar({ name, seed, size = 'sm', short }: AvatarProps) {
   const tone = Math.floor(avatarHue(seed ?? name) / 45);
   return (
     <span
@@ -20,7 +22,7 @@ export function Avatar({ name, seed, size = 'sm' }: AvatarProps) {
       aria-hidden="true"
       title={name ?? undefined}
     >
-      {initials(name)}
+      {short ?? initials(name)}
     </span>
   );
 }

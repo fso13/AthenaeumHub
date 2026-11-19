@@ -177,6 +177,16 @@ krug:
     call-signal-window: ${KRUG_REALTIME_CALL_SIGNAL_WINDOW:60s}
     call-sdp-max-bytes: ${KRUG_REALTIME_CALL_SDP_MAX_BYTES:32768}
     call-candidate-max-bytes: ${KRUG_REALTIME_CALL_CANDIDATE_MAX_BYTES:4096}
+  # D1.1 (#76): optional outbound translation. Empty URL = no provider, no external call;
+  # POST .../translate returns 503 TRANSLATION_UNAVAILABLE with Retry-After. If set, the
+  # provider must accept {"text","target"} and answer {"text"}; calls are bounded by the
+  # timeouts/size below and the source text is never logged.
+  plugins:
+    translate:
+      url: ${KRUG_PLUGINS_TRANSLATE_URL:}
+      connect-timeout: ${KRUG_PLUGINS_TRANSLATE_CONNECT_TIMEOUT:2s}
+      request-timeout: ${KRUG_PLUGINS_TRANSLATE_REQUEST_TIMEOUT:5s}
+      max-response-bytes: ${KRUG_PLUGINS_TRANSLATE_MAX_RESPONSE_BYTES:65536}
   # OIDC resource-server settings (keycloak/prod profiles). Blank here so the dev HMAC
   # decoder is completely independent; the keycloak profile supplies local defaults and
   # prod requires the environment variables (fail fast).

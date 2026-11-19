@@ -24,8 +24,8 @@ import { resetRouterForTests } from '../../router/router';
 import { mockDb, server } from '../../test/server';
 import { renderPasswordApp } from '../../test/renderApp';
 
-const LOGIN_HEADING = 'Вход в Pickle';
-const REGISTER_HEADING = 'Регистрация в Pickle';
+const LOGIN_HEADING = 'Вход в Сову';
+const REGISTER_HEADING = 'Регистрация в Сову';
 const VERIFY_HEADING = 'Подтвердите email';
 const CHAT_HEADING = 'Команда «Восход»';
 
@@ -467,6 +467,6 @@ describe('Auth BFF password flow', () => {
     await login(user);
     await screen.findByRole('heading', { name: CHAT_HEADING });
 
-    expect(screen.getByLabelText('Выбрать пространство')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Выбрать пространство/)).toBeInTheDocument();
   });
 });

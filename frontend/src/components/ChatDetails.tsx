@@ -4,10 +4,12 @@ import { chatDisplayName } from '../domain/chatLabel';
 import { isSafePreviewImage, safeHttpUrl } from '../files/format';
 import { t, type MessageKey } from '../i18n/ru';
 import { enabledPluginCount } from '../plugins/model';
+import { usePluginGate } from '../plugins/gate';
 import {
   useChatState,
   useChatStore,
   useFilesStore,
+  usePluginActionsState,
   usePluginsState,
   usePluginsStore,
 } from '../store/ChatProvider';
@@ -29,12 +31,16 @@ import {
   PhoneIcon,
   PlayIcon,
   PlugIcon,
+  PollIcon,
   SearchIcon,
+  TaskIcon,
   SettingsIcon,
   ShieldIcon,
   UserPlusIcon,
 } from './Icons';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
+import { PollPanel } from './plugins/PollPanel';
+import { TaskPanel } from './plugins/TaskPanel';
 import { extensionOf, fileKind, pluralRu } from './pages/pageData';
 
 const ROLE_LABEL: Record<WorkspaceMemberRole, MessageKey> = {
@@ -59,6 +65,8 @@ interface ChatDetailsProps {
   onStartCall?: () => void;
   /** Honest reason the details call row is disabled, or null when available. */
   callDisabledReason?: string | null;
+  /** D1.1 (#76): open the poll/task accordion after a successful create. */
+  pluginPanelRequest?: { panel: 'polls' | 'tasks'; nonce: number } | null;
 }
 
 interface MediaItem {
@@ -177,14 +185,16 @@ export function ChatDetails({
   onSearch,
   onStartCall,
   callDisabledReason = null,
+  pluginPanelRequest = null,
 }: ChatDetailsProps) {
   const store = useChatStore();
   const state = useChatState();
   const pluginsStore = usePluginsStore();
   const pluginsState = usePluginsState();
-  const [expanded, setExpanded] = useState<'privacy' | 'members' | 'plugins' | 'media' | null>(
-    'media',
-  );
+  const pluginActions = usePluginActionsState();
+  const [expanded, setExpanded] = useState<
+    'privacy' | 'members' | 'plugins' | 'media' | 'polls' | 'tasks' | null
+  >('media');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   const securityMode =
@@ -249,6 +259,22 @@ export function ChatDetails({
     pluginsState.chatId === pluginChatId && pluginsState.chatStatus === 'error'
       ? pluginsState.chatError
       : null;
+  /**
+   * D1.1 (#76): poll/task panels are chat-scoped and render only when the
+   * server says the plugin is enabled+available for this managed chat.
+   */
+  const pluginGate = usePluginGate(pluginChatId, isE2ee);
+  const pollsEnabled = !isDirect && pluginGate.enabled('polls');
+  const tasksEnabled = !isDirect && pluginGate.enabled('tasks');
+  const pluginActionsCurrent = pluginActions.chatId === pluginChatId;
+  const pollCount =
+    pluginActionsCurrent && pluginActions.pollsStatus === 'ready'
+      ? pluginActions.polls.length
+      : null;
+  const openTaskCount =
+    pluginActionsCurrent && pluginActions.tasksStatus === 'ready'
+      ? pluginActions.tasks.filter((task) => !task.done).length
+      : null;
   const cover = isDirect
     ? COVER_BY_MODE.direct
     : isE2ee
@@ -278,7 +304,12 @@ export function ChatDetails({
     void pluginsStore.ensureChat(pluginChatId);
   }, [open, pluginChatId, pluginChatIsDirect, pluginsStore]);
 
-  const toggle = (panel: 'privacy' | 'members' | 'plugins' | 'media') => {
+  useEffect(() => {
+    if (!open || !pluginPanelRequest) return;
+    setExpanded(pluginPanelRequest.panel);
+  }, [open, pluginPanelRequest]);
+
+  const toggle = (panel: 'privacy' | 'members' | 'plugins' | 'media' | 'polls' | 'tasks') => {
     setExpanded((current) => (current === panel ? null : panel));
     // The directory is read lazily: opening the panel must not spend a
     // `GET /workspaces/{id}/members` call before the user asks for members.
@@ -531,6 +562,48 @@ export function ChatDetails({
                     <PlugIcon aria-hidden="true" />
                     {t('details.openPlugins')}
                   </button>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          {pollsEnabled ? (
+            <>
+              <button
+                type="button"
+                className={`panel-row${expanded === 'polls' ? ' is-open' : ''}`}
+                aria-expanded={expanded === 'polls'}
+                onClick={() => toggle('polls')}
+              >
+                <PollIcon aria-hidden="true" />
+                <span>{t('pluginActions.pollsTitle')}</span>
+                <span className="count">{pollCount !== null ? pollCount : '—'}</span>
+                <ChevronDownIcon className="chev" aria-hidden="true" />
+              </button>
+              {expanded === 'polls' ? (
+                <div className="panel-expand panel-expand--plugin">
+                  {chat ? <PollPanel chatId={chat.id} /> : null}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          {tasksEnabled ? (
+            <>
+              <button
+                type="button"
+                className={`panel-row${expanded === 'tasks' ? ' is-open' : ''}`}
+                aria-expanded={expanded === 'tasks'}
+                onClick={() => toggle('tasks')}
+              >
+                <TaskIcon aria-hidden="true" />
+                <span>{t('pluginActions.tasksTitle')}</span>
+                <span className="count">{openTaskCount !== null ? openTaskCount : '—'}</span>
+                <ChevronDownIcon className="chev" aria-hidden="true" />
+              </button>
+              {expanded === 'tasks' ? (
+                <div className="panel-expand panel-expand--plugin">
+                  {chat ? <TaskPanel chatId={chat.id} /> : null}
                 </div>
               ) : null}
             </>

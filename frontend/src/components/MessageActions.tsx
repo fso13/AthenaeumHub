@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
 import { t } from '../i18n/ru';
-import { useChatState, useChatStore } from '../store/ChatProvider';
+import { usePluginGate } from '../plugins/gate';
+import { useChatState, useChatStore, usePluginActionsStore } from '../store/ChatProvider';
 import {
   CloseIcon,
   EditIcon,
@@ -11,6 +12,7 @@ import {
   MoreIcon,
   ReplyIcon,
   ThreadIcon,
+  TranslateIcon,
   TrashIcon,
 } from './Icons';
 
@@ -214,9 +216,11 @@ export function MessageActions({
   onOpenThread,
 }: MessageActionsProps) {
   const store = useChatStore();
+  const pluginActions = usePluginActionsStore();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [translateMenuOpen, setTranslateMenuOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -235,12 +239,15 @@ export function MessageActions({
 
   const pickerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const translateMenuRef = useRef<HTMLDivElement>(null);
   const editDialogRef = useRef<HTMLDivElement>(null);
   const confirmDialogRef = useRef<HTMLDivElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const editTriggerRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement>(null);
   const reactTriggerRef = useRef<HTMLButtonElement>(null);
+  const translateTriggerRef = useRef<HTMLButtonElement>(null);
+  const firstTranslateRef = useRef<HTMLButtonElement>(null);
   const firstReactionRef = useRef<HTMLButtonElement>(null);
   const firstMenuItemRef = useRef<HTMLButtonElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
@@ -253,6 +260,10 @@ export function MessageActions({
     setMenuOpen(false);
     deleteTriggerRef.current?.focus();
   };
+  const closeTranslateMenu = () => {
+    setTranslateMenuOpen(false);
+    translateTriggerRef.current?.focus();
+  };
   const closeEdit = () => {
     if (busy) return;
     setEditOpen(false);
@@ -264,6 +275,7 @@ export function MessageActions({
 
   useDismiss(pickerOpen, pickerRef, closePicker);
   useDismiss(menuOpen, menuRef, closeMenu);
+  useDismiss(translateMenuOpen, translateMenuRef, closeTranslateMenu);
   useModal(editOpen, editDialogRef, editTextareaRef, closeEdit);
   useModal(confirmOpen, confirmDialogRef, confirmCancelRef, closeConfirm);
 
@@ -275,12 +287,26 @@ export function MessageActions({
   useEffect(() => {
     if (menuOpen) firstMenuItemRef.current?.focus();
   }, [menuOpen]);
+  useEffect(() => {
+    if (translateMenuOpen) firstTranslateRef.current?.focus();
+  }, [translateMenuOpen]);
 
   // A WS tombstone while the dialog is open must not leave an editor over a
   // deleted row (and an E2EE switch must disable it too).
   useEffect(() => {
     if (editOpen && (message.deleted_at || e2eeChat)) setEditOpen(false);
   }, [editOpen, message.deleted_at, e2eeChat]);
+
+  // D1.1 (#76): translate is a plugin action, so it exists only while the
+  // server says `translate` is enabled+available for this managed chat, and
+  // only for a live TEXT row. E2EE never gets the affordance.
+  const pluginGate = usePluginGate(message.chat_id, e2eeChat);
+  const translateAvailable =
+    !e2eeChat && message.type === 'TEXT' && !message.deleted_at && pluginGate.enabled('translate');
+
+  useEffect(() => {
+    if (translateMenuOpen && !translateAvailable) setTranslateMenuOpen(false);
+  }, [translateMenuOpen, translateAvailable]);
 
   if (message.deleted_at) return null;
 
@@ -369,6 +395,12 @@ export function MessageActions({
     void store.toggleReaction(message.chat_id, message.id, emoji);
   };
 
+  const chooseTranslation = (target: 'ru' | 'en') => {
+    setTranslateMenuOpen(false);
+    translateTriggerRef.current?.focus();
+    void pluginActions.translateMessage(message.chat_id, message.id, target);
+  };
+
   const replyAction =
     allowReply && onReply ? (
       <button
@@ -429,6 +461,32 @@ export function MessageActions({
           </button>
         ))}
       </div>
+    </div>
+  ) : null;
+
+  const translateMenu = translateMenuOpen ? (
+    <div
+      className="msg-popover translate-menu"
+      role="dialog"
+      aria-label={t('pluginActions.translateMenuTitle')}
+      ref={translateMenuRef}
+    >
+      <p className="msg-popover__title">{t('pluginActions.translateMenuTitle')}</p>
+      <button
+        type="button"
+        ref={firstTranslateRef}
+        className="translate-menu__item"
+        onClick={() => chooseTranslation('ru')}
+      >
+        {t('pluginActions.langRu')}
+      </button>
+      <button
+        type="button"
+        className="translate-menu__item"
+        onClick={() => chooseTranslation('en')}
+      >
+        {t('pluginActions.langEn')}
+      </button>
     </div>
   ) : null;
 
@@ -647,6 +705,7 @@ export function MessageActions({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => {
             setMenuOpen(false);
+            setTranslateMenuOpen(false);
             setPickerOpen((open) => !open);
           }}
         >
@@ -665,6 +724,25 @@ export function MessageActions({
             <EditIcon aria-hidden="true" />
           </button>
         ) : null}
+        {translateAvailable ? (
+          <button
+            type="button"
+            ref={translateTriggerRef}
+            className="msg-tool"
+            aria-haspopup="dialog"
+            aria-expanded={translateMenuOpen}
+            aria-label={t('pluginActions.translateLabel', { author })}
+            title={t('pluginActions.translate')}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={() => {
+              setPickerOpen(false);
+              setMenuOpen(false);
+              setTranslateMenuOpen((open) => !open);
+            }}
+          >
+            <TranslateIcon aria-hidden="true" />
+          </button>
+        ) : null}
         <button
           type="button"
           ref={deleteTriggerRef}
@@ -676,6 +754,7 @@ export function MessageActions({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => {
             setPickerOpen(false);
+            setTranslateMenuOpen(false);
             setMenuOpen((open) => !open);
           }}
         >
@@ -684,6 +763,7 @@ export function MessageActions({
         {replyAction}
         {threadAction}
         {picker}
+        {translateMenu}
         {menu}
       </div>
       {actionFailure ? (

@@ -34,6 +34,7 @@ import type {
 } from '../api/types';
 import { createFilesStore, type FilesStore } from './filesStore';
 import { createPluginsStore, type PluginsStore } from '../plugins/store';
+import { createPluginActionsStore, type PluginActionsStore } from '../plugins/actionsStore';
 import { createStickersStore, type StickersStore } from '../stickers/store';
 import { createOpsStore, type OpsStore } from '../ops/store';
 import { readDeviceWorkspaceId, writeDeviceWorkspaceId } from '../workspace/deviceWorkspace';
@@ -631,6 +632,8 @@ export class ChatStore {
   readonly stickers: StickersStore;
   /** D1.1 (#69): built-in plugin catalog and per-chat state. */
   readonly plugins: PluginsStore;
+  /** D1.1 (#76): real poll/task/translation actions on managed chats. */
+  readonly pluginActions: PluginActionsStore;
   /** E8: setup status and platform-admin settings/overview. */
   readonly ops: OpsStore;
 
@@ -749,6 +752,7 @@ export class ChatStore {
     this.stickers = createStickersStore({ api: deps.api });
 
     this.plugins = createPluginsStore({ api: deps.api });
+    this.pluginActions = createPluginActionsStore({ api: deps.api });
 
     this.realtime =
       deps.config.realtimeEnabled && this.config.realtimeEnabled
@@ -805,6 +809,7 @@ export class ChatStore {
     this.files.dispose();
     this.stickers.dispose();
     this.plugins.dispose();
+    this.pluginActions.dispose();
     this.ops.dispose();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
@@ -1070,7 +1075,7 @@ export class ChatStore {
 
     const device = await this.api.registerDevice(
       {
-        name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
+        name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
         platform: 'WEB',
         app_version: this.config.appVersion.slice(0, 40),
       },
@@ -2010,6 +2015,7 @@ export class ChatStore {
     this.files.reset();
     this.stickers.reset();
     this.plugins.reset();
+    this.pluginActions.reset();
     this.ops.reset();
     this.chatLimitsPromise = null;
     this.unreadWorkspaceRequests.clear();
@@ -3109,7 +3115,7 @@ export class ChatStore {
       try {
         const self = await this.e2eeBridge!.initialize({
           userId,
-          name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
+          name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
           appVersion: this.config.appVersion.slice(0, 40),
         });
         this.patchE2ee({

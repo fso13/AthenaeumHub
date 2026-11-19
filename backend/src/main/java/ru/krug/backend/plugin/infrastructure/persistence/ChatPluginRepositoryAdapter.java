@@ -46,6 +46,20 @@ public class ChatPluginRepositoryAdapter implements ChatPluginRepository {
     }
 
     @Override
+    public boolean isEnabled(UUID workspaceId, UUID chatId, String pluginId) {
+        List<?> rows = entityManager.createNativeQuery("""
+                        SELECT enabled
+                          FROM chat.chat_plugins
+                         WHERE workspace_id = ?1 AND chat_id = ?2 AND plugin_id = ?3
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, chatId)
+                .setParameter(3, pluginId)
+                .getResultList();
+        return !rows.isEmpty() && Boolean.TRUE.equals(rows.get(0));
+    }
+
+    @Override
     public boolean setEnabled(UUID workspaceId, UUID chatId, String pluginId, boolean enabled,
                               UUID actorId, Instant at) {
         List<?> changed = entityManager.createNativeQuery("""

@@ -107,7 +107,7 @@ describe('D1-FE5 profile modal', () => {
     ).toBeInTheDocument();
 
     await user.click(within(confirm).getByRole('button', { name: 'Выйти' }));
-    expect(await screen.findByRole('heading', { name: 'Вход в Pickle' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Вход в Сову' })).toBeInTheDocument();
     await waitFor(() => expect(mockDb.authLogoutRequests).toHaveLength(1));
   });
 

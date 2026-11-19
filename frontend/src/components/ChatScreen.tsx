@@ -18,6 +18,8 @@ import {
   useChatState,
   useFilesState,
   useFilesStore,
+  usePluginActionsStore,
+  usePluginsStore,
   useStickersState,
   useStickersStore,
 } from '../store/ChatProvider';
@@ -35,11 +37,15 @@ import { RecordingBar } from './RecordingBar';
 import { SafetyNumberDialog } from './SafetyNumberDialog';
 import { ChatIcon, CloseIcon, LockIcon, PaperclipIcon, SearchIcon } from './Icons';
 import { MessageList } from './MessageList';
+import { PluginActionsBar } from './plugins/PluginActionsBar';
+import { PollCreateDialog } from './plugins/PollCreateDialog';
+import { TaskCreateDialog } from './plugins/TaskCreateDialog';
 import { StatePanel } from './StatePanel';
 import { StickerPicker } from './StickerPicker';
 import { ThreadPanel } from './ThreadPanel';
 import { TypingIndicator } from './TypingIndicator';
 import { UploadTray } from './UploadTray';
+import { usePluginGate } from '../plugins/gate';
 
 interface ChatScreenProps {
   /** D1-FE5: opens the chat settings dialog from the header. */
@@ -79,11 +85,21 @@ export function ChatScreen({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // D1.1 (#76): composer plugin actions and their modal/panel handoff.
+  const [pollDialogOpen, setPollDialogOpen] = useState(false);
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [pluginPanelRequest, setPluginPanelRequest] = useState<{
+    panel: 'polls' | 'tasks';
+    nonce: number;
+  } | null>(null);
+  const pluginPanelNonce = useRef(0);
 
   const filesStore = useFilesStore();
   const filesState = useFilesState();
   const stickersStore = useStickersStore();
   const stickersState = useStickersState();
+  const pluginsStore = usePluginsStore();
+  const pluginActions = usePluginActionsStore();
   const activeChatId = state.activeChatId;
   const activeChatIdRef = useRef(activeChatId);
   activeChatIdRef.current = activeChatId;
@@ -107,6 +123,9 @@ export function ChatScreen({
     setSafetyOpen(false);
     setSearchOpen(false);
     setSearchQuery('');
+    setPollDialogOpen(false);
+    setTaskDialogOpen(false);
+    setPluginPanelRequest(null);
     lastTypingSentAt.current = 0;
   }, [activeChatId]);
 
@@ -144,6 +163,19 @@ export function ChatScreen({
         : null;
   const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
   const threadsAvailable = activeChatId ? store.threadsAvailable(activeChatId) : false;
+  const isGroupChat = chatSummary?.type === 'GROUP';
+  const pluginGate = usePluginGate(activeChatId, isE2eeChat);
+  const pollsEnabled = isGroupChat && pluginGate.enabled('polls');
+  const tasksEnabled = isGroupChat && pluginGate.enabled('tasks');
+
+  // D1.1 (#76): drop the previous chat's poll/task/translation cache and load
+  // this chat's gates. E2EE chats never load server-plugin state.
+  useEffect(() => {
+    if (!activeChatId) return;
+    pluginActions.enterChat(activeChatId);
+    if (isE2eeChat) return;
+    void pluginsStore.ensureChat(activeChatId);
+  }, [activeChatId, isE2eeChat, pluginActions, pluginsStore]);
   const threadDisabledReason = threadsAvailable ? null : t('thread.e2eeDisabled');
   const mentionNames = useMemo(
     () => state.workspaceMembers.items.map((member) => member.display_name),
@@ -329,6 +361,20 @@ export function ChatScreen({
   const handleReply = (message: ApiMessage) => {
     setReplyTo(message);
     textareaRef.current?.focus();
+  };
+
+  const focusPluginPanel = (panel: 'polls' | 'tasks') => {
+    pluginPanelNonce.current += 1;
+    setPluginPanelRequest({ panel, nonce: pluginPanelNonce.current });
+    setDetailsOpen(true);
+  };
+
+  const openTaskDialog = () => {
+    if (!tasksEnabled) return;
+    // The assignee picker needs the ACTIVE workspace directory; `query: ''`
+    // returns the first page and is a no-op when it is already loaded.
+    void store.loadWorkspaceMembers({ query: '' });
+    setTaskDialogOpen(true);
   };
 
   const handleFileInput = (files: FileList | null) => {
@@ -593,6 +639,14 @@ export function ChatScreen({
                   triggerRef={stickerButtonRef}
                 />
               ) : null}
+              <PluginActionsBar
+                pollsEnabled={pollsEnabled}
+                tasksEnabled={tasksEnabled}
+                onCreatePoll={() => {
+                  if (pollsEnabled) setPollDialogOpen(true);
+                }}
+                onCreateTask={openTaskDialog}
+              />
               <Composer
                 value={draft}
                 chatName={
@@ -687,6 +741,7 @@ export function ChatScreen({
             setSearchQuery(value);
             setSearchOpen(true);
           }}
+          pluginPanelRequest={pluginPanelRequest}
           onStartCall={
             activeChatId && chatSummary?.type === 'DIRECT'
               ? () => store.startCall(activeChatId, false)
@@ -701,6 +756,31 @@ export function ChatScreen({
                   ? t('calls.alreadyActive')
                   : null
           }
+        />
+      ) : null}
+
+      {pollDialogOpen && activeChatId ? (
+        <PollCreateDialog
+          chatId={activeChatId}
+          onClose={() => setPollDialogOpen(false)}
+          onCreated={() => {
+            setPollDialogOpen(false);
+            focusPluginPanel('polls');
+          }}
+        />
+      ) : null}
+      {taskDialogOpen && activeChatId ? (
+        <TaskCreateDialog
+          chatId={activeChatId}
+          members={state.workspaceMembers.items}
+          membersLoading={
+            state.workspaceMembers.status === 'loading' || state.workspaceMembers.status === 'idle'
+          }
+          onClose={() => setTaskDialogOpen(false)}
+          onCreated={() => {
+            setTaskDialogOpen(false);
+            focusPluginPanel('tasks');
+          }}
         />
       ) : null}
     </>

@@ -930,6 +930,162 @@ export interface paths {
         patch: operations["updateChatPlugin"];
         trace?: never;
     };
+    "/chats/{chatId}/polls": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Опросы чата (плагин `polls` должен быть включён)
+         * @description Доступно только ACTIVE-участнику чата при включённом плагине `polls`; иначе `422 PLUGIN_NOT_ENABLED`. Неизвестный/удалённый/чужой чат — `404` без раскрытия существования, не-участник воркспейса — `403`. В E2EE-чате серверный плагин недоступен (`422 PLUGIN_NOT_AVAILABLE`). Вопрос, варианты и голоса — только метаданные опроса; содержимое E2EE-сообщений не читается и не возвращается. `my_option_id` — вариант, выбранный вызывающим, либо `null`.
+         */
+        get: operations["listPolls"];
+        put?: never;
+        /**
+         * Создать опрос (плагин `polls`)
+         * @description Создавать опрос может любой ACTIVE-участник чата при включённом плагине `polls`. Вопрос — plain text 1..500 символов без HTML/control-символов; 2..10 уникальных вариантов по 1..200 символов. Создатель фиксируется сервером и только он может закрыть опрос. В E2EE-чате плагин недоступен. Audit пишет только id опроса и действие — без вопроса и текста вариантов.
+         */
+        post: operations["createPoll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/polls/{pollId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                pollId: components["parameters"]["PollId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Закрыть опрос (только создатель)
+         * @description Закрыть опрос может только его создатель; другой участник, включая chat `OWNER`/`ADMIN`, получает `403 FORBIDDEN`. Неизвестный/чужой опрос — `404`. Допускается только `closed=true`; `closed=false` — `422 POLL_STATE_INVALID`. Повторное закрытие идемпотентно (`200`, без второго audit). После закрытия голосование — `422 POLL_CLOSED`. Audit содержит только id опроса.
+         */
+        patch: operations["closePoll"];
+        trace?: never;
+    };
+    "/chats/{chatId}/polls/{pollId}/votes": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                pollId: components["parameters"]["PollId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Проголосовать или изменить голос
+         * @description Один голос на пользователя (`PRIMARY KEY (poll_id, user_id)`): повторный POST с тем же вариантом — идемпотентный `200` без второго audit; другой вариант перезаписывает голос и не удваивает `total_votes`. Вариант обязан принадлежать этому опросу (`422 POLL_OPTION_INVALID`), голосовать в закрытом опросе нельзя (`422 POLL_CLOSED`). Голосовать может любой ACTIVE-участник чата; `user_id` берётся из аутентификации и не принимается в теле. В E2EE недоступно.
+         */
+        post: operations["votePoll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/tasks": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Задачи чата (плагин `tasks` должен быть включён)
+         * @description Доступно только ACTIVE-участнику чата при включённом плагине `tasks`; иначе `422 PLUGIN_NOT_ENABLED`. Неизвестный/удалённый/чужой чат — `404`, не-участник воркспейса — `403`. В E2EE серверный плагин недоступен. Сначала открытые задачи, затем выполненные; новые первыми.
+         */
+        get: operations["listTasks"];
+        put?: never;
+        /**
+         * Создать задачу (плагин `tasks`)
+         * @description Создавать задачу может любой ACTIVE-участник чата при включённом плагине `tasks`. Заголовок — plain text 1..500 символов без HTML/control. `assignee_id` необязателен, но обязан быть ACTIVE-участником этого чата; произвольный/чужой user id — `422 TASK_ASSIGNEE_INVALID`. `due_at` необязателен. Создатель фиксируется сервером. Audit — только id задачи.
+         */
+        post: operations["createTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/tasks/{taskId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                taskId: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Выполнить/переоткрыть задачу
+         * @description Менять `done` могут создатель задачи, назначенный исполнитель или ACTIVE chat `OWNER`/`ADMIN`. Остальные участники получают `403 FORBIDDEN`; неизвестная/чужая задача — `404`. Повтор с тем же `done` идемпотентен (`200`, без audit). `completed_by`/`completed_at` выставляет сервер; `user_id` из тела не принимается. В E2EE плагин недоступен.
+         */
+        patch: operations["updateTask"];
+        trace?: never;
+    };
+    "/chats/{chatId}/messages/{messageId}/translate": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Перевод managed TEXT-сообщения (плагин `translate`)
+         * @description Только ACTIVE-участник чата при включённом плагине `translate` и только для managed-сообщения типа `TEXT`, которое не удалено и не скрыто вызывающим. E2EE-чат/сообщение — `422 E2EE_METADATA_FORBIDDEN` (сервер не читает ciphertext); не-TEXT — `422 MESSAGE_NOT_TRANSLATABLE`. Внешний провайдер по умолчанию не настроен: без `krug.plugins.translate.url` запрос немедленно возвращает `503 TRANSLATION_UNAVAILABLE` с `Retry-After` и не делает сетевых вызовов. При настроенном URL сервер делает bounded HTTP-вызов (connect/read timeout, лимит размера ответа), не логирует текст, не сохраняет секреты и отклоняет HTML/control-символы в ответе. Audit — только id сообщения; вопрос, заголовок и текст никогда не пишутся.
+         */
+        post: operations["translateMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chats/{chatId}/keys": {
         parameters: {
             query?: never;
@@ -1110,7 +1266,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. */
+        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). */
         Error: {
             code: string;
             message: string;
@@ -1567,6 +1723,108 @@ export interface components {
         };
         ChatPluginUpdateRequest: {
             enabled: boolean;
+        };
+        PollOption: {
+            /** Format: uuid */
+            id: string;
+            /** @description Plain text; HTML/control-символы запрещены. */
+            text: string;
+            /** @description Порядок варианта в опросе (0-based). */
+            position: number;
+            /** @description Число уникальных пользователей, выбравших этот вариант. */
+            votes: number;
+        };
+        /** @description D1.1 (#76) server-side poll metadata for a managed chat. E2EE chats can never use this plugin; no encrypted content or keys are represented. */
+        Poll: {
+            /** Format: uuid */
+            id: string;
+            /** @description Plain text; HTML/control-символы запрещены. */
+            question: string;
+            options: components["schemas"]["PollOption"][];
+            /** Format: uuid */
+            creator_id: string;
+            closed: boolean;
+            /** Format: date-time */
+            closed_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description Вариант, выбранный вызывающим; null если голоса нет.
+             */
+            my_option_id?: string | null;
+            /** @description Число уникальных проголосовавших (один голос на пользователя). */
+            total_votes: number;
+        };
+        PollList: {
+            items: components["schemas"]["Poll"][];
+        };
+        PollCreate: {
+            /** @description Plain text без HTML/control-символов; пробелы по краям срезаются. */
+            question: string;
+            /** @description Уникальные варианты (2..10), каждый 1..200 символов. */
+            options: string[];
+        };
+        PollVoteRequest: {
+            /**
+             * Format: uuid
+             * @description Вариант этого же опроса; чужой option_id — 422 POLL_OPTION_INVALID.
+             */
+            option_id: string;
+        };
+        PollCloseRequest: {
+            /** @description Поддерживается только true; false — 422 POLL_STATE_INVALID. */
+            closed: boolean;
+        };
+        /** @description D1.1 (#76) chat-scoped task in a managed chat. There is no plugin code execution; assignee and due date are optional metadata. */
+        Task: {
+            /** Format: uuid */
+            id: string;
+            /** @description Plain text; HTML/control-символы запрещены. */
+            title: string;
+            /** Format: uuid */
+            creator_id: string;
+            /**
+             * Format: uuid
+             * @description ACTIVE-участник этого чата или null.
+             */
+            assignee_id?: string | null;
+            /** Format: date-time */
+            due_at?: string | null;
+            done: boolean;
+            /** Format: uuid */
+            completed_by?: string | null;
+            /** Format: date-time */
+            completed_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        TaskList: {
+            items: components["schemas"]["Task"][];
+        };
+        TaskCreate: {
+            /** @description Plain text без HTML/control-символов; пробелы по краям срезаются. */
+            title: string;
+            /**
+             * Format: uuid
+             * @description Необязательный ACTIVE-участник чата.
+             */
+            assignee_id?: string | null;
+            /** Format: date-time */
+            due_at?: string | null;
+        };
+        TaskUpdate: {
+            /** @description true — выполнить, false — переоткрыть. `completed_by`/`completed_at` выставляет сервер. */
+            done: boolean;
+        };
+        TranslationRequest: {
+            /** @description Целевой язык (`ru`, `en`, `de`, `pt-BR`). Не влияет на права доступа. */
+            target: string;
+        };
+        /** @description Перевод managed TEXT-сообщения. Провайдер по умолчанию не настроен; при его отсутствии/недоступности ответ — 503 TRANSLATION_UNAVAILABLE. */
+        Translation: {
+            /** @description Plain text без HTML/control-символов; сервер не логирует его. */
+            text: string;
         };
         WorkspaceLimits: {
             /** @enum {string} */
@@ -2226,6 +2484,16 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Перевод недоступен: `krug.plugins.translate.url` не настроен (по умолчанию внешних вызовов нет), провайдер вернул ошибку/таймаут или невалидный ответ. Код — `TRANSLATION_UNAVAILABLE`; `Retry-After` задаёт безопасную паузу. */
+        TranslationUnavailable: {
+            headers: {
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         DeviceId: string;
@@ -2239,6 +2507,8 @@ export interface components {
         StickerId: string;
         /** @description Slug встроенного плагина из `plugin.catalog`. */
         PluginId: string;
+        PollId: string;
+        TaskId: string;
         UploadId: string;
         AttachmentId: string;
         PartNo: number;
@@ -3956,6 +4226,265 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
+        };
+    };
+    listPolls: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Опросы чата в порядке создания (новые первыми) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PollList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    createPoll: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PollCreate"];
+            };
+        };
+        responses: {
+            /** @description Опрос создан */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Poll"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    closePoll: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                pollId: components["parameters"]["PollId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PollCloseRequest"];
+            };
+        };
+        responses: {
+            /** @description Опрос после операции */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Poll"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    votePoll: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                pollId: components["parameters"]["PollId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PollVoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Опрос с обновлёнными голосами */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Poll"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    listTasks: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Задачи чата */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    createTask: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskCreate"];
+            };
+        };
+        responses: {
+            /** @description Задача создана */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    updateTask: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                taskId: components["parameters"]["TaskId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskUpdate"];
+            };
+        };
+        responses: {
+            /** @description Задача после операции */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    translateMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: components["parameters"]["MessageId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TranslationRequest"];
+            };
+        };
+        responses: {
+            /** @description Перевод */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Translation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            503: components["responses"]["TranslationUnavailable"];
         };
     };
     getChatKeys: {

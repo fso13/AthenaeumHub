@@ -10,6 +10,7 @@ import { ErrorDetails } from './ErrorDetails';
 import { AlertIcon, ClockIcon, RetryIcon } from './Icons';
 import { MentionText } from './MentionText';
 import { MessageActions, ReactionBar } from './MessageActions';
+import { TranslatedMessage } from './plugins/TranslatedMessage';
 import { RichText } from './RichText';
 import { ThreadLink } from './ThreadLink';
 
@@ -254,6 +255,9 @@ export function MessageRow({
           ) : (
             <RichText text={text} mentions={mentionNames} className="msg-text" />
           )
+        ) : null}
+        {!deleted && !e2eeChat ? (
+          <TranslatedMessage chatId={message.chat_id} messageId={message.id} />
         ) : null}
         {!deleted && !e2eeChat ? <AttachmentList attachments={message.attachments ?? []} /> : null}
         {threadLink}

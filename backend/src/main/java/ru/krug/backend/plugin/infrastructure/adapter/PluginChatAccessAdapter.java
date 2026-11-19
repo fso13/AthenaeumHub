@@ -48,4 +48,13 @@ public class PluginChatAccessAdapter implements PluginChatAccessPort {
         ChatAccess access = chatAccess.requireActiveChat(workspaceId, chatId, principal.userId());
         return new PluginChatContext(workspaceId, access.securityMode(), access.memberRole());
     }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isActiveChatMember(UUID workspaceId, UUID chatId, UUID userId) {
+        if (workspaceId == null || chatId == null || userId == null) {
+            return false;
+        }
+        return chatAccess.findActiveChat(workspaceId, chatId, userId).isPresent();
+    }
 }
