@@ -905,6 +905,27 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
               intervals: [200, 500, 1000, 2000],
             })
             .toBe(1);
+
+          // G4f P1-01: reload the *receiver* too. The replacement marker is
+          // durable inside B's sealed incoming copy, so history replay must show
+          // exactly one copy of each logical message and no failed-original row
+          // next to its replacement.
+          await pageB.reload();
+          await expect(pageB.locator('.brand__workspace')).toHaveText(workspaceName, {
+            timeout: 60_000,
+          });
+          await expectComposerReady(pageB);
+          await expectRealtimeOnline(pageB);
+          for (const marker of [markerA, markerLost, markerR15]) {
+            await expect
+              .poll(async () => pageB.getByText(marker, { exact: true }).count(), {
+                timeout: 60_000,
+                intervals: [200, 500, 1000, 2000],
+              })
+              .toBe(1);
+          }
+          await expect(pageB.getByText('Не удалось расшифровать сообщение')).toHaveCount(0);
+          await expect(pageB.getByText('Недоступно на этом устройстве')).toHaveCount(0);
         } finally {
           pageA.off('response', onResponse);
           pageB.off('response', onBPost);

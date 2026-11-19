@@ -431,6 +431,14 @@ const E2EE_COPY_RESTORE_CODES: ReadonlySet<string> = new Set([
   'DECRYPT_FAILED',
   'KEY_CHANGE_DETECTED',
 ]);
+/**
+ * G4f P1-01: the notification DTO has no `message_id`, so an R-15 replacement
+ * notification can only be matched to its message by the server clock. The
+ * backend creates it immediately after the message commits; this tight window
+ * plus a uniqueness guard avoids touching an unrelated notification. Zero or
+ * multiple candidates leave the notification untouched (documented limitation).
+ */
+const RETRY_NOTIFICATION_MATCH_MS = 250;
 /** Contract default for GET /notifications; the panel loads one page at a time. */
 const NOTIFICATIONS_PAGE_SIZE = 30;
 /** Contract default (and cap-sane size) for the member picker. */
@@ -590,6 +598,14 @@ export class ChatStore {
   private notificationReadGeneration = 0;
   /** Invalidates in-flight notification responses across logout/workspace switch. */
   private notificationEpoch = 0;
+  /**
+   * G4f P1-01: R-15 replacements that were hidden as duplicates and whose
+   * unread contribution/notification must be suppressed. Keys are derived from
+   * sealed copy markers, so the same suppression is rebuilt after a reload.
+   */
+  private readonly suppressedRetryKeys = new Set<string>();
+  /** Replacement message times whose server notification should be hidden. */
+  private readonly suppressedNotificationTimes = new Map<string, number>();
   private disposed = false;
 
   constructor(deps: ChatStoreDeps) {
@@ -1940,6 +1956,14 @@ export class ChatStore {
       // replies; the extra filter keeps replay/REST races out of the channel.
       const roots = page.items.filter((message) => !message.thread_root_id);
       const messages = mergeMessages(current.messages, roots);
+      // G4f P1-01: the contract has no `last_read_seq`, but `unread_count` is
+      // exactly `last_seq - last_read_seq`. Reconstructing it before the first
+      // decrypt lets the reload path prove that a hidden replacement is the
+      // only unread row before issuing `POST /read` (no unrelated message is
+      // ever marked read).
+      const summary = this.state.chats.find((chat) => chat.id === chatId) ?? null;
+      const inferredReadSeq =
+        summary === null ? 0 : Math.max(0, summary.last_seq - summary.unread_count);
       this.patchSlice(chatId, {
         status: 'ready',
         messages,
@@ -1948,6 +1972,7 @@ export class ChatStore {
         // `ChatSummary.last_seq` includes thread replies, which are not in
         // `messages`; subscribe/ack must start after the true chat tail.
         lastSeq: Math.max(current.lastSeq, maxSeq(messages), this.chatLastSeq(chatId)),
+        readSeq: Math.max(current.readSeq, inferredReadSeq),
         error: null,
         loadMoreStatus: 'idle',
         loadMoreError: null,
@@ -2733,6 +2758,193 @@ export class ChatStore {
   }
 
   /**
+   * G4f P1-01: applies the v1.1 R-15 marker to one visible row.
+   *
+   * The durable sealed copy (not the in-memory receive outcome) is the source
+   * of truth after a reload. If the original row is `decrypted`/`superseded`,
+   * the replacement is hidden; otherwise the original failed/unavailable row is
+   * hidden and the replacement is the one visible copy. A queued reset for the
+   * superseded original is dropped: the replacement already delivered it.
+   */
+  private async resolveRetryDedupe(
+    chatId: string,
+    message: ApiMessage,
+    retryOf: string | null,
+    bridge: E2eeBridge,
+    current: ChatSlice,
+    views: Record<string, E2eeMessageView>,
+    resets: Array<{ reset: SessionResetBody; messageId: string }>,
+  ): Promise<{
+    readonly active: boolean;
+    readonly originalId: string | null;
+    readonly replacementHidden: boolean;
+  }> {
+    if (retryOf === null || retryOf === message.client_message_id) {
+      return { active: false, originalId: null, replacementHidden: false };
+    }
+    const original = current.messages.find(
+      (candidate) => candidate.client_message_id === retryOf && candidate.id !== message.id,
+    );
+    if (original === undefined) {
+      // Pagination may have dropped the original row; without it there is
+      // nothing to compare, so the replacement stays visible.
+      return { active: false, originalId: null, replacementHidden: false };
+    }
+    let originalView = views[original.id] ?? current.e2ee[original.id];
+    if (originalView === undefined) {
+      // The original may be processed later in this batch (or already have a
+      // durable copy from before the reload). Resolve it from the sealed copy
+      // instead of guessing from the server plaintext.
+      const copy = await this.lookupIncomingCopy(chatId, original, bridge);
+      const restored = this.copyView(copy);
+      if (restored !== null) {
+        originalView = restored;
+        views[original.id] = restored;
+      }
+    }
+    const originalDecrypted =
+      originalView?.status === 'decrypted' || originalView?.status === 'superseded';
+    if (originalDecrypted) {
+      views[message.id] = { status: 'superseded', text: null, replyToId: null };
+      return { active: true, originalId: original.id, replacementHidden: true };
+    }
+    views[original.id] = { status: 'superseded', text: null, replyToId: null };
+    // The original is failed/unavailable; its placeholder may already have
+    // queued a SESSION_RESET. It must not be sent for a delivered replacement.
+    for (let index = resets.length - 1; index >= 0; index -= 1) {
+      if (resets[index]?.messageId === original.id) resets.splice(index, 1);
+    }
+    return { active: true, originalId: original.id, replacementHidden: false };
+  }
+
+  /**
+   * Suppresses the duplicate unread/notification contribution of a deduped
+   * R-15 pair. The replacement is never counted as a second logical message.
+   *
+   * Unread is decremented only when this store counted the duplicate (hidden
+   * replacement) or the original was also unread (a visible replacement must
+   * keep exactly one unread row). `markRead` is called only when the hidden
+   * replacement is the sole unread tail, so it cannot mark an unrelated
+   * message read. Notification matching is bounded and uniqueness-checked.
+   */
+  private suppressRetryPair(
+    chatId: string,
+    message: ApiMessage,
+    originalId: string | null,
+    replacementHidden: boolean,
+  ): void {
+    if (originalId === null) return;
+    const key = `${chatId}:${message.id}`;
+    const first = !this.suppressedRetryKeys.has(key);
+    if (first) this.suppressedRetryKeys.add(key);
+
+    const slice = this.state.slices[chatId];
+    if (slice === undefined) return;
+    const original = slice.messages.find((candidate) => candidate.id === originalId) ?? null;
+    const originalUnread = original !== null && slice.readSeq < original.seq;
+    const suppressUnread = replacementHidden || originalUnread;
+
+    if (first && suppressUnread) {
+      const summary = this.state.chats.find((chat) => chat.id === chatId) ?? null;
+      this.patchSlice(chatId, { unread: Math.max(0, slice.unread - 1) });
+      if (summary !== null) {
+        this.updateChatSummary(chatId, {
+          unread_count: Math.max(0, summary.unread_count - 1),
+        });
+      }
+    }
+    if (first && replacementHidden) {
+      // Safe only when nothing else is unread: `last_read_seq` is a cursor, so
+      // marking a gap would fake-read unrelated messages.
+      const latest = this.state.slices[chatId];
+      const summary = this.state.chats.find((chat) => chat.id === chatId) ?? null;
+      if (
+        latest !== undefined &&
+        summary !== null &&
+        latest.unread === 0 &&
+        summary.unread_count === 0 &&
+        message.seq >= latest.lastSeq &&
+        latest.readSeq >= message.seq - 1
+      ) {
+        void this.markRead(chatId, message.seq);
+      }
+    }
+    this.scheduleNotificationSuppression(chatId, message.created_at);
+  }
+
+  /**
+   * After a decrypt batch, advance the server read cursor only when every row
+   * after `readSeq` that is still unread is a hidden duplicate. One `last_seq`
+   * cursor cannot skip a gap, so anything else keeps the badge (and the
+   * documented limitation) instead of fake-reading an unrelated message.
+   */
+  private markSuppressedTailReadIfSafe(chatId: string): void {
+    const slice = this.state.slices[chatId];
+    const summary = this.state.chats.find((chat) => chat.id === chatId) ?? null;
+    if (slice === undefined || summary === null) return;
+    if (slice.unread !== 0 || summary.unread_count !== 0) return;
+    if (slice.readSeq >= slice.lastSeq) return;
+    const ordered = [...slice.messages].sort((left, right) => left.seq - right.seq);
+    const tail = ordered[ordered.length - 1];
+    if (tail === undefined || tail.seq < slice.lastSeq) return;
+    // Do not infer a read across a hole in the loaded history.
+    if (slice.hasMore && (slice.beforeSeq === null || slice.beforeSeq > slice.readSeq + 1)) {
+      return;
+    }
+    for (const message of ordered) {
+      if (message.seq <= slice.readSeq) continue;
+      if (slice.e2ee[message.id]?.status !== 'superseded') return;
+    }
+    void this.markRead(chatId, tail.seq);
+  }
+
+  private scheduleNotificationSuppression(chatId: string, createdAt: string): void {
+    const at = Date.parse(createdAt);
+    if (!Number.isFinite(at)) return;
+    const key = `${chatId}:${at}`;
+    if (this.suppressedNotificationTimes.has(key)) return;
+    this.suppressedNotificationTimes.set(key, at);
+    void this.applyNotificationSuppressions();
+  }
+
+  /**
+   * Hides the replacement's server notification from the panel. The DTO has no
+   * `message_id` (only `chat_id` + `created_at`), so a match is accepted only
+   * inside a tight server-clock window and only when exactly one candidate
+   * exists. Ambiguous/no candidates are left untouched (documented PARTIAL:
+   * the server notification row itself cannot be deleted through the API).
+   */
+  private async applyNotificationSuppressions(): Promise<void> {
+    if (this.suppressedNotificationTimes.size === 0) return;
+    const epoch = this.notificationEpoch;
+    for (const [key, at] of this.suppressedNotificationTimes) {
+      if (epoch !== this.notificationEpoch) return;
+      const chatId = key.slice(0, key.lastIndexOf(':'));
+      const candidates = this.state.notifications.items.filter((item) => {
+        if (item.chat_id !== chatId) return false;
+        const created = Date.parse(item.created_at);
+        return (
+          Number.isFinite(created) && created >= at && created <= at + RETRY_NOTIFICATION_MATCH_MS
+        );
+      });
+      if (candidates.length !== 1) continue;
+      const candidate = candidates[0]!;
+      if (!candidate.read) {
+        const marked = await this.markNotificationRead(candidate.id);
+        if (!marked || epoch !== this.notificationEpoch) continue;
+      }
+      const latest = this.state.notifications;
+      if (!latest.items.some((item) => item.id === candidate.id)) continue;
+      this.patch({
+        notifications: {
+          ...latest,
+          items: latest.items.filter((item) => item.id !== candidate.id),
+        },
+      });
+    }
+  }
+
+  /**
    * Decrypts every pending E2EE message of one chat. Failures are isolated per
    * message; a control SESSION_RESET never reaches the visible list.
    */
@@ -2795,43 +3007,49 @@ export class ChatStore {
             // incoming copy by (sender device, client_message_id, message.id)
             // instead of hiding a message that was decrypted before the reload.
             const copy = await this.lookupIncomingCopy(chatId, message, bridge);
-            views[message.id] = this.copyView(copy) ?? {
-              status: 'unavailable',
+            const view = this.copyView(copy) ?? {
+              status: 'unavailable' as const,
               text: null,
               replyToId: null,
             };
+            // G4f P1-01: the durable marker lives in the sealed copy, so the
+            // reload path dedupes exactly like the live `message` outcome.
+            const dedupe = await this.resolveRetryDedupe(
+              chatId,
+              message,
+              copy?.retryOfClientMessageId ?? null,
+              bridge,
+              current,
+              views,
+              resets,
+            );
+            if (!dedupe.replacementHidden) views[message.id] = view;
+            if (dedupe.active) {
+              this.suppressRetryPair(chatId, message, dedupe.originalId, dedupe.replacementHidden);
+            }
           } else if (outcome.kind === 'message') {
             // v1.1 L3b: a re-encrypted replacement carries the original
             // client_message_id inside the sealed TEXT. If the original was
             // already decrypted, hide the replacement instead of rendering a
             // duplicate; if the original was a failed placeholder, replace it.
-            const retryOf = outcome.retryOfClientMessageId ?? null;
-            if (retryOf !== null) {
-              const original = current.messages.find(
-                (candidate) => candidate.client_message_id === retryOf,
-              );
-              if (original !== undefined && original.id !== message.id) {
-                const originalView = views[original.id] ?? current.e2ee[original.id];
-                if (originalView?.status === 'decrypted' || originalView?.status === 'superseded') {
-                  views[message.id] = {
-                    status: 'superseded',
-                    text: null,
-                    replyToId: null,
-                  };
-                  continue;
-                }
-                views[original.id] = {
-                  status: 'superseded',
-                  text: null,
-                  replyToId: null,
-                };
-              }
-            }
-            views[message.id] = {
+            const view: E2eeMessageView = {
               status: 'decrypted',
               text: outcome.text,
               replyToId: outcome.replyToId,
             };
+            const dedupe = await this.resolveRetryDedupe(
+              chatId,
+              message,
+              outcome.retryOfClientMessageId ?? null,
+              bridge,
+              current,
+              views,
+              resets,
+            );
+            if (!dedupe.replacementHidden) views[message.id] = view;
+            if (dedupe.active) {
+              this.suppressRetryPair(chatId, message, dedupe.originalId, dedupe.replacementHidden);
+            }
           } else if (outcome.kind === 'control') {
             views[message.id] = { status: 'control', text: null, replyToId: null };
             void this.handleIncomingReset(chatId, outcome.senderDeviceId, outcome.reset);
@@ -2843,11 +3061,32 @@ export class ChatStore {
             // local history: restore it before showing an error or sending
             // another reset (which could re-encrypt an already delivered
             // window at the sender).
-            const restored = E2EE_COPY_RESTORE_CODES.has(outcome.code)
-              ? this.copyView(await this.lookupIncomingCopy(chatId, message, bridge))
+            const restoredCopy = E2EE_COPY_RESTORE_CODES.has(outcome.code)
+              ? await this.lookupIncomingCopy(chatId, message, bridge)
               : null;
+            const restored = this.copyView(restoredCopy);
             if (restored !== null) {
-              views[message.id] = restored;
+              // G4f P1-01: a restored replacement copy carries the durable
+              // marker even when `receive()` failed because the old session is
+              // gone; dedupe before the error/reset path can win.
+              const dedupe = await this.resolveRetryDedupe(
+                chatId,
+                message,
+                restoredCopy?.retryOfClientMessageId ?? null,
+                bridge,
+                current,
+                views,
+                resets,
+              );
+              if (!dedupe.replacementHidden) views[message.id] = restored;
+              if (dedupe.active) {
+                this.suppressRetryPair(
+                  chatId,
+                  message,
+                  dedupe.originalId,
+                  dedupe.replacementHidden,
+                );
+              }
               continue;
             }
             views[message.id] = {
@@ -2868,6 +3107,7 @@ export class ChatStore {
         const latest = this.state.slices[chatId];
         if (!latest) return;
         this.patchSlice(chatId, { e2ee: { ...latest.e2ee, ...views } });
+        this.markSuppressedTailReadIfSafe(chatId);
         for (const reset of resets) {
           void this.sendResetControl(chatId, reset.reset);
         }
@@ -3891,6 +4131,10 @@ export class ChatStore {
             lastLoadedAt: this.now(),
           },
         });
+        // G4f P1-01: a replacement notification may arrive before the E2EE
+        // dedupe has run (or be re-fetched after a reload); apply any known
+        // suppressions to the fresh page.
+        void this.applyNotificationSuppressions();
       } catch (error) {
         const apiError = toApiError(error);
         if (epoch !== this.notificationEpoch) return;
@@ -3951,6 +4195,7 @@ export class ChatStore {
           loadMoreError: null,
         },
       });
+      void this.applyNotificationSuppressions();
     } catch (error) {
       const apiError = toApiError(error);
       if (epoch !== this.notificationEpoch) return;
@@ -4751,9 +4996,15 @@ export class ChatStore {
     for (const remote of response.chats) {
       const slice = slices[remote.chat_id];
       if (!slice) continue;
+      // G4f P1-01: `unread_count` is `last_seq - last_read_seq`, so the server
+      // read cursor is reconstructible without a contract change. Keep the
+      // local cursor monotonic (a user read in this session is never undone).
+      const inferredReadSeq = Math.max(0, remote.last_seq - remote.unread_count);
+      const readSeq = Math.max(slice.readSeq, inferredReadSeq);
       slices[remote.chat_id] = {
         ...slice,
-        unread: slice.readSeq >= remote.last_seq ? 0 : remote.unread_count,
+        readSeq,
+        unread: readSeq >= remote.last_seq ? 0 : remote.unread_count,
       };
     }
 

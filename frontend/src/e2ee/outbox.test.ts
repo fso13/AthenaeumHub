@@ -21,6 +21,7 @@ import {
   commitOutgoingMessage,
   drainOutbox,
   localCopyStorageKey,
+  lookupIncomingLocalCopy,
   lookupLocalCopy,
   listDrainCandidates,
   markOutboxAttempt,
@@ -479,6 +480,95 @@ describe('incoming atomic commit', () => {
     });
     expect(copy?.text).toBe('incoming text');
     expect(copy?.direction).toBe('incoming');
+    await storage.close();
+  });
+
+  it('persists and restores the v1.1 R-15 marker in the sealed incoming copy', async () => {
+    const { storage, kStorage } = await setup();
+    const originalClientMessageId = 'ffffffff-ffff-4fff-8fff-fffffffffff0';
+    const retryOfClientMessageId = 'ffffffff-ffff-4fff-8fff-fffffffffff1';
+    const prepared = await prepareIncomingMessage(kStorage, {
+      localCopy: makeLocalCopyDraft({
+        clientMessageId: originalClientMessageId,
+        localMessageId: 'ffffffff-ffff-4fff-8fff-fffffffffff2',
+        direction: 'incoming',
+        text: 'replacement text',
+        retryOfClientMessageId,
+      }),
+    });
+    await commitIncomingMessage(storage, prepared);
+
+    // The plaintext mirror and the sealed payload both survive a fresh read
+    // (the reload path only has IndexedDB, never the live receive outcome).
+    const stored = (await storage.get<StoredLocalMessageCopy>(
+      'localMessages',
+      prepared.localCopy.key,
+    )) as StoredLocalMessageCopy;
+    expect(stored.retryOfClientMessageId).toBe(retryOfClientMessageId);
+
+    const lookup = await lookupIncomingLocalCopy(
+      storage,
+      kStorage,
+      IDS.chat,
+      IDS.recipientDevice,
+      originalClientMessageId,
+    );
+    expect(lookup.available).toBe(true);
+    if (lookup.available) {
+      expect(lookup.copy.text).toBe('replacement text');
+      expect(lookup.copy.retryOfClientMessageId).toBe(retryOfClientMessageId);
+    }
+
+    // A normal copy (and a legacy payload without the field) reads back null.
+    const normal = await prepareIncomingMessage(kStorage, {
+      localCopy: makeLocalCopyDraft({
+        clientMessageId: 'ffffffff-ffff-4fff-8fff-fffffffffff3',
+        localMessageId: 'ffffffff-ffff-4fff-8fff-fffffffffff4',
+        direction: 'incoming',
+        text: 'normal text',
+      }),
+    });
+    await commitIncomingMessage(storage, normal);
+    const normalLookup = await lookupIncomingLocalCopy(
+      storage,
+      kStorage,
+      IDS.chat,
+      IDS.recipientDevice,
+      'ffffffff-ffff-4fff-8fff-fffffffffff3',
+    );
+    expect(normalLookup.available && normalLookup.copy.retryOfClientMessageId).toBeNull();
+    await storage.close();
+  });
+
+  it('rejects a tampered plaintext retry marker that disagrees with the sealed payload', async () => {
+    const { storage, kStorage } = await setup();
+    const prepared = await prepareIncomingMessage(kStorage, {
+      localCopy: makeLocalCopyDraft({
+        clientMessageId: 'ffffffff-ffff-4fff-8fff-fffffffffff5',
+        localMessageId: 'ffffffff-ffff-4fff-8fff-fffffffffff6',
+        direction: 'incoming',
+        text: 'sealed',
+        retryOfClientMessageId: 'ffffffff-ffff-4fff-8fff-fffffffffff7',
+      }),
+    });
+    await commitIncomingMessage(storage, prepared);
+    const stored = (await storage.get<StoredLocalMessageCopy>(
+      'localMessages',
+      prepared.localCopy.key,
+    )) as StoredLocalMessageCopy;
+    await storage.put('localMessages', prepared.localCopy.key, {
+      ...stored,
+      retryOfClientMessageId: 'ffffffff-ffff-4fff-8fff-fffffffffff8',
+    });
+    await expect(
+      lookupIncomingLocalCopy(
+        storage,
+        kStorage,
+        IDS.chat,
+        IDS.recipientDevice,
+        'ffffffff-ffff-4fff-8fff-fffffffffff5',
+      ),
+    ).rejects.toMatchObject({ code: 'KEY_STORAGE_UNAVAILABLE' });
     await storage.close();
   });
 

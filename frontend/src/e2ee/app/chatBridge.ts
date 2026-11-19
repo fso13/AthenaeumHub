@@ -819,6 +819,7 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
         contentType: found.copy.contentType,
         status: found.copy.status,
         serverMessageId: found.copy.serverMessageId,
+        retryOfClientMessageId: found.copy.retryOfClientMessageId,
       };
     },
 
@@ -839,6 +840,7 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
         contentType: found.copy.contentType,
         status: found.copy.status,
         serverMessageId: found.copy.serverMessageId,
+        retryOfClientMessageId: found.copy.retryOfClientMessageId,
       };
     },
 

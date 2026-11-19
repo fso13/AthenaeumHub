@@ -353,6 +353,9 @@ export async function commitIncomingE2eeMessage(
       ciphertexts: [opened.ciphertext],
       replyToId: opened.replyToId,
       serverMessageId: options.serverMessageId ?? null,
+      // G4f P1-01: the v1.1 marker is sealed with the plaintext so the reload
+      // path can dedupe this replacement without the in-memory receive result.
+      retryOfClientMessageId: opened.retryOfClientMessageId,
       createdAt: opened.createdAt,
     },
   });

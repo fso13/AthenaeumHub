@@ -164,6 +164,48 @@ describe('E7-F4 two-party dialogue', () => {
     expect(dumpText(await dumpStorage(b.storage))).not.toContain('hello Боб');
   });
 
+  it('seals and restores the v1.1 R-15 marker in the incoming local copy', async () => {
+    const { a, b } = await pair();
+    const bundle = await claimBundleFromWorld(b);
+    const originalClientMessageId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const sent = await sendE2eeMessage(contextOf(a), {
+      chatId: CHAT,
+      body: {
+        type: 'TEXT_JSON',
+        text: 'replacement text',
+        retryOfClientMessageId: originalClientMessageId,
+      },
+      retryOfClientMessageId: originalClientMessageId,
+      recipients: [recipientPlan(bundle)],
+    });
+    const received = await receiveFrom(b, a, sent.envelopes[0]!, {
+      clientMessageId: sent.clientMessageId,
+      serverMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    });
+    expect(received.retryOfClientMessageId).toBe(originalClientMessageId);
+
+    // The reload path only reads IndexedDB; the marker must be in the sealed
+    // copy, not only in the in-memory receive result.
+    const lookup = await lookupIncomingLocalCopy(
+      b.storage,
+      b.kStorage,
+      CHAT,
+      a.deviceId,
+      sent.clientMessageId,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    );
+    expect(lookup.available).toBe(true);
+    if (lookup.available) {
+      expect(lookup.copy.text).toBe('replacement text');
+      expect(lookup.copy.retryOfClientMessageId).toBe(originalClientMessageId);
+    }
+    // The sender's outgoing copy carries the same marker (self-describing).
+    const outgoing = await lookupLocalCopy(a.storage, a.kStorage, CHAT, sent.clientMessageId);
+    expect(outgoing.available && outgoing.copy.retryOfClientMessageId).toBe(
+      originalClientMessageId,
+    );
+  });
+
   it('restores a received message from its sealed incoming copy after a reload', async () => {
     const { a, b } = await pair();
     const bundle = await claimBundleFromWorld(b);

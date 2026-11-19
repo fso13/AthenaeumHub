@@ -105,6 +105,13 @@ export interface LocalCopyPayloadV1 {
   readonly replyToId: string | null;
   readonly createdAt: number;
   readonly serverMessageId: string | null;
+  /**
+   * v1.1 R-15 marker: the peer's original `client_message_id` when this copy is
+   * a re-encrypted replacement. Sealed inside `K_storage`; the server never
+   * sees it. Persisted so a reload can dedupe the replacement without the
+   * in-memory receive outcome.
+   */
+  readonly retryOfClientMessageId: string | null;
 }
 
 export interface StoredLocalMessageCopy {
@@ -120,6 +127,12 @@ export interface StoredLocalMessageCopy {
   readonly status: LocalCopyStatus;
   readonly createdAt: number;
   readonly updatedAt: number;
+  /**
+   * Plaintext mirror of the sealed v1.1 R-15 marker, cross-checked on read.
+   * Optional because copies written before this field existed are still valid
+   * history and must remain readable (their payload defaults to `null`).
+   */
+  readonly retryOfClientMessageId?: string | null;
   readonly content: EncryptedRecord;
 }
 
@@ -138,6 +151,8 @@ export interface LocalMessageCopy {
   readonly ciphertexts: readonly string[];
   readonly replyToId: string | null;
   readonly serverMessageId: string | null;
+  /** v1.1 R-15 marker; `null` for normal messages and legacy copies. */
+  readonly retryOfClientMessageId: string | null;
 }
 
 /** "Недоступно на этом устройстве": copy is gone, but the send fact remains. */

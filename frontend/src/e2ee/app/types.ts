@@ -183,6 +183,12 @@ export interface E2eeLocalCopyView {
   readonly status?: 'pending' | 'sent' | 'received' | 'failed' | 'superseded';
   /** Server row this copy belongs to (P2-04 reload/replay binding). */
   readonly serverMessageId?: string | null;
+  /**
+   * v1.1 R-15 marker restored from the sealed copy. A non-null value means this
+   * row is a replacement of the message with that `client_message_id`, so the
+   * reload path can dedupe it without a live receive outcome.
+   */
+  readonly retryOfClientMessageId?: string | null;
 }
 
 /** Why the chat cannot send at all (rendered by the UI, no raw codes). */

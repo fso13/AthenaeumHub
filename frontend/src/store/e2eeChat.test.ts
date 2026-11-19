@@ -992,3 +992,196 @@ describe('G4e #30 durable retry after reload', () => {
     expect(store.getSnapshot().slices[CHAT]?.e2ee[original.id]?.text).toBe('оригинал');
   });
 });
+
+describe('G4f P1-01 durable receiver dedupe', () => {
+  function incomingKey(clientMessageId: string): string {
+    return `${CHAT}:${PEER_DEVICE}:${clientMessageId}`;
+  }
+
+  function makeIncoming(): ReturnType<typeof insertMockMessage> & {
+    client_message_id: string;
+  } {
+    const message = insertMockMessage(mockDb, CHAT, 'x');
+    message.text = null;
+    message.client_message_id = newUuid();
+    message.crypto = makeEnvelope(CHAT, PEER_DEVICE, BASE_SNAPSHOT.selfDeviceId as string);
+    return message as ReturnType<typeof insertMockMessage> & { client_message_id: string };
+  }
+
+  it('reload B: one visible copy from the durable marker, no unread, no replacement notification', async () => {
+    // Session 1: the original was decrypted and its sealed copy exists.
+    const notificationIdsBefore = new Set(mockDb.notifications.map((item) => item.id));
+    const original = makeIncoming();
+    original.created_at = new Date(Date.now() - 60_000).toISOString();
+    const originalCopy = {
+      text: 'оригинал',
+      replyToId: null,
+      retryOfClientMessageId: null,
+      serverMessageId: original.id,
+    };
+
+    const bridge = createFakeE2eeBridge({
+      deviceId: () => getDeviceId() ?? '33333333-3333-4333-8333-333333333333',
+      snapshot: BASE_SNAPSHOT,
+    });
+    bridge.incomingLocalCopies.set(incomingKey(original.client_message_id), originalCopy);
+    bridge.receiveQueue.push({ kind: 'none' });
+
+    mockDb.chats[CHAT]!.summary.security_mode = 'E2EE';
+    const first = createTestStore(createTestConfig(), { enabled: true, bridge });
+    await first.bootstrap();
+    await waitFor(() => first.getSnapshot().slices[CHAT]?.status === 'ready');
+    await waitFor(
+      () => first.getSnapshot().slices[CHAT]?.e2ee[original.id]?.status === 'decrypted',
+    );
+    first.reset();
+
+    // Session 2 (reload): the server also has the re-encrypted replacement.
+    const replacement = makeIncoming();
+    const retryOf = original.client_message_id;
+    bridge.incomingLocalCopies.set(incomingKey(replacement.client_message_id), {
+      text: 'оригинал',
+      replyToId: null,
+      retryOfClientMessageId: retryOf,
+      serverMessageId: replacement.id,
+    });
+    bridge.receiveQueue.push({ kind: 'none' }); // original
+    bridge.receiveQueue.push({ kind: 'none' }); // replacement
+
+    // Server truth after R-15: only the replacement is unread.
+    mockDb.chats[CHAT]!.summary.unread_count = 1;
+    const newNotifications = mockDb.notifications.filter(
+      (item) => item.chat_id === CHAT && !notificationIdsBefore.has(item.id),
+    );
+    const replacementNotification = newNotifications[newNotifications.length - 1];
+    // Normalize the backend clock relation: the replacement notification is
+    // created immediately after its message, never before it.
+    for (const notification of newNotifications) {
+      notification.created_at = new Date(Date.parse(replacement.created_at) - 5_000).toISOString();
+    }
+    if (replacementNotification) {
+      replacementNotification.created_at = replacement.created_at;
+    }
+
+    const second = createTestStore(createTestConfig(), { enabled: true, bridge });
+    await second.bootstrap();
+    await waitFor(() => second.getSnapshot().slices[CHAT]?.status === 'ready');
+    await waitFor(() => second.getSnapshot().slices[CHAT]?.e2ee[replacement.id] !== undefined);
+    await waitFor(
+      () => second.getSnapshot().slices[CHAT]?.e2ee[original.id]?.status === 'decrypted',
+    );
+
+    const slice = second.getSnapshot().slices[CHAT]!;
+    expect(slice.e2ee[original.id]?.status).toBe('decrypted');
+    expect(slice.e2ee[original.id]?.text).toBe('оригинал');
+    expect(slice.e2ee[replacement.id]?.status).toBe('superseded');
+    // Exactly one visible copy of the logical message.
+    expect(
+      [original.id, replacement.id].filter((id) => slice.e2ee[id]?.status === 'decrypted'),
+    ).toHaveLength(1);
+
+    // The hidden replacement does not add unread; the safe tail read reaches
+    // the server, otherwise a later /sync would resurrect the phantom badge.
+    await waitFor(() => second.getSnapshot().slices[CHAT]?.unread === 0);
+    await waitFor(() => mockDb.readReceipts[CHAT] === replacement.seq);
+    expect(second.getSnapshot().chats.find((chat) => chat.id === CHAT)?.unread_count).toBe(0);
+
+    // The replacement notification is marked read and hidden; the original
+    // notification is left alone.
+    if (replacementNotification) {
+      await waitFor(() =>
+        mockDb.notifications
+          .filter((item) => item.id === replacementNotification.id)
+          .every((item) => item.read),
+      );
+      await waitFor(
+        () =>
+          !second
+            .getSnapshot()
+            .notifications.items.some((item) => item.id === replacementNotification.id),
+      );
+    }
+    second.reset();
+  });
+
+  it('reload B: a replacement replaces the failed original row instead of duplicating it', async () => {
+    const original = makeIncoming();
+    const replacement = makeIncoming();
+    const retryOf = original.client_message_id;
+
+    const { store, bridge } = await bootstrapped({}, {}, (fake) => {
+      // The original was never decrypted: no sealed copy exists. The
+      // replacement was received and therefore carries the durable marker.
+      fake.incomingLocalCopies.set(incomingKey(replacement.client_message_id), {
+        text: 'замена',
+        replyToId: null,
+        retryOfClientMessageId: retryOf,
+        serverMessageId: replacement.id,
+      });
+      fake.receiveQueue.push({
+        kind: 'error',
+        code: 'NO_SESSION',
+        reset: {
+          failedSessionId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+          failedChainDh: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI',
+          failedN: 0,
+          reason: 'NO_SESSION',
+          retryOfClientMessageId: original.client_message_id,
+        },
+        reason: 'NO_SESSION',
+      });
+      fake.receiveQueue.push({ kind: 'none' });
+    });
+
+    await waitFor(() => store.getSnapshot().slices[CHAT]?.e2ee[replacement.id] !== undefined);
+    const slice = store.getSnapshot().slices[CHAT]!;
+    expect(slice.e2ee[original.id]?.status).toBe('superseded');
+    expect(slice.e2ee[replacement.id]?.status).toBe('decrypted');
+    expect(slice.e2ee[replacement.id]?.text).toBe('замена');
+    // The replacement already delivered the window; the failed original must
+    // not trigger a second SESSION_RESET.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bridge.resets).toHaveLength(0);
+  });
+
+  it('live store: a hidden replacement is not counted as a new unread', async () => {
+    const original = makeIncoming();
+    const replacement = makeIncoming();
+    const retryOf = original.client_message_id;
+
+    mockDb.chats[CHAT]!.summary.unread_count = 0;
+    const bridge = createFakeE2eeBridge({
+      deviceId: () => getDeviceId() ?? '33333333-3333-4333-8333-333333333333',
+      snapshot: BASE_SNAPSHOT,
+    });
+    bridge.incomingLocalCopies.set(incomingKey(original.client_message_id), {
+      text: 'оригинал',
+      replyToId: null,
+      retryOfClientMessageId: null,
+      serverMessageId: original.id,
+    });
+    // Original is read; only the live replacement arrives while the chat is
+    // not visible on screen.
+    bridge.receiveQueue.push({ kind: 'none' });
+    bridge.receiveQueue.push({
+      kind: 'message',
+      localMessageId: newUuid(),
+      sessionId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+      text: 'оригинал',
+      replyToId: null,
+      retryOfClientMessageId: retryOf,
+    });
+    mockDb.chats[CHAT]!.summary.security_mode = 'E2EE';
+    const store = createTestStore(createTestConfig(), { enabled: true, bridge });
+    await store.bootstrap();
+    await waitFor(() => store.getSnapshot().slices[CHAT]?.status === 'ready');
+    await waitFor(() => store.getSnapshot().e2ee.chats[CHAT]?.status === 'ready');
+    await waitFor(
+      () => store.getSnapshot().slices[CHAT]?.e2ee[replacement.id]?.status === 'superseded',
+    );
+    // The original copy keeps the single visible row; the hidden replacement
+    // contributes zero unread.
+    expect(store.getSnapshot().slices[CHAT]?.unread).toBe(0);
+    store.reset();
+  });
+});

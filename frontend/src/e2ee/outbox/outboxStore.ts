@@ -142,6 +142,12 @@ export interface LocalCopyDraft {
   readonly ciphertexts?: readonly string[];
   readonly replyToId?: string | null;
   readonly serverMessageId?: string | null;
+  /**
+   * v1.1 L3b: original `client_message_id` of an R-15 replacement TEXT. It is
+   * sealed into the copy so a reload can hide the replacement even though the
+   * server-side row (`seq`, `message.id`) is new. `null` for normal messages.
+   */
+  readonly retryOfClientMessageId?: string | null;
   readonly createdAt?: number;
 }
 
@@ -461,6 +467,10 @@ export async function prepareLocalCopy(
   const clientMessageId = requireUuidOrNull(draft.clientMessageId, 'client_message_id');
   const replyToId = requireUuidOrNull(draft.replyToId ?? null, 'reply_to_id');
   const serverMessageId = requireUuidOrNull(draft.serverMessageId ?? null, 'server_message_id');
+  const retryOfClientMessageId = requireUuidOrNull(
+    draft.retryOfClientMessageId ?? null,
+    'retry_of_client_message_id',
+  );
   const createdAt = requireTimestamp(draft.createdAt ?? Date.now(), 'createdAt');
   if (draft.direction !== 'outgoing' && draft.direction !== 'incoming') {
     throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'unsupported local copy direction');
@@ -499,6 +509,7 @@ export async function prepareLocalCopy(
     replyToId,
     createdAt,
     serverMessageId,
+    retryOfClientMessageId,
   };
   const encrypted = await encryptJson(
     kStorage,
@@ -519,6 +530,7 @@ export async function prepareLocalCopy(
     status: draft.direction === 'outgoing' ? 'pending' : 'received',
     createdAt,
     updatedAt: createdAt,
+    retryOfClientMessageId,
     content: encrypted,
   };
 }
@@ -672,6 +684,10 @@ export async function prepareOutgoingMessage(
     text: draft.text,
     ciphertexts,
     replyToId: draft.replyToId ?? null,
+    // G4f P1-01: mirror the outbox marker into the sealed sender copy as well;
+    // it makes the local copy self-describing after a reload without reading
+    // the outbox row.
+    retryOfClientMessageId: draft.retryOfClientMessageId ?? null,
     createdAt: draft.createdAt,
   });
   const taken = new Set<string>([session.record.sessionId]);
@@ -1785,6 +1801,7 @@ async function decryptLocalCopy(
   requireUuidOrNull(stored.clientMessageId, 'client_message_id');
   requireTimestamp(stored.createdAt, 'createdAt');
   requireTimestamp(stored.updatedAt, 'updatedAt');
+  requireUuidOrNull(stored.retryOfClientMessageId ?? null, 'retry_of_client_message_id');
   if (stored.direction !== 'outgoing' && stored.direction !== 'incoming') {
     throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'unknown local copy direction');
   }
@@ -1817,7 +1834,11 @@ async function decryptLocalCopy(
     payload.senderDeviceId !== stored.senderDeviceId ||
     payload.localMessageId !== stored.localMessageId ||
     payload.clientMessageId !== stored.clientMessageId ||
-    payload.direction !== stored.direction
+    payload.direction !== stored.direction ||
+    // Same pattern as the outbox row: the plaintext mirror must disagree with
+    // the sealed payload only for legacy records that never had the field.
+    (stored.retryOfClientMessageId !== undefined &&
+      payload.retryOfClientMessageId !== (stored.retryOfClientMessageId ?? null))
   ) {
     throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'local copy metadata was tampered with');
   }
@@ -1836,6 +1857,7 @@ async function decryptLocalCopy(
     ciphertexts: payload.ciphertexts,
     replyToId: payload.replyToId,
     serverMessageId: payload.serverMessageId,
+    retryOfClientMessageId: payload.retryOfClientMessageId,
   };
 }
 
@@ -1863,7 +1885,10 @@ function parseLocalCopyPayload(bytes: Uint8Array): LocalCopyPayloadV1 {
     !Array.isArray(candidate.ciphertexts) ||
     (candidate.replyToId !== null && typeof candidate.replyToId !== 'string') ||
     typeof candidate.createdAt !== 'number' ||
-    (candidate.serverMessageId !== null && typeof candidate.serverMessageId !== 'string')
+    (candidate.serverMessageId !== null && typeof candidate.serverMessageId !== 'string') ||
+    (candidate.retryOfClientMessageId !== undefined &&
+      candidate.retryOfClientMessageId !== null &&
+      typeof candidate.retryOfClientMessageId !== 'string')
   ) {
     throw new E2eeError('KEY_STORAGE_UNAVAILABLE', 'local copy payload is malformed');
   }
@@ -1874,6 +1899,7 @@ function parseLocalCopyPayload(bytes: Uint8Array): LocalCopyPayloadV1 {
   requireUuidOrNull(candidate.clientMessageId, 'client_message_id');
   requireUuidOrNull(candidate.replyToId ?? null, 'reply_to_id');
   requireUuidOrNull(candidate.serverMessageId ?? null, 'server_message_id');
+  requireUuidOrNull(candidate.retryOfClientMessageId ?? null, 'retry_of_client_message_id');
   return {
     v: 1,
     chatId: candidate.chatId,
@@ -1888,6 +1914,7 @@ function parseLocalCopyPayload(bytes: Uint8Array): LocalCopyPayloadV1 {
     replyToId: candidate.replyToId,
     createdAt: requireTimestamp(candidate.createdAt, 'createdAt'),
     serverMessageId: candidate.serverMessageId,
+    retryOfClientMessageId: candidate.retryOfClientMessageId ?? null,
   };
 }
 
