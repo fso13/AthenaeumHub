@@ -139,17 +139,23 @@ describe('voice recording', () => {
     expect(init?.media?.duration_ms).toBeGreaterThanOrEqual(1_000);
     expect(init?.media?.duration_ms).toBeLessThanOrEqual(600_000);
 
-    const badge = await screen.findByText('Голосовое сообщение', {}, { timeout: 10_000 });
-    const card = badge.closest('.attachment-card');
+    const play = await screen.findByRole(
+      'button',
+      { name: 'Воспроизвести голосовое' },
+      { timeout: 10_000 },
+    );
+    const card = play.closest('.attachment-card');
     expect(card).not.toBeNull();
     const audio = within(card as HTMLElement).getByLabelText(
       /Голосовое сообщение: voice-/,
     ) as HTMLAudioElement;
     expect(audio.tagName).toBe('AUDIO');
-    expect(audio.controls).toBe(true);
+    expect(audio.controls).toBe(false);
     expect(audio.autoplay).toBe(false);
-    // Stop-and-send already created the message; no second manual send needed.
-    expect(screen.getByText(/Голосовое сообщение/)).toBeInTheDocument();
+    // Compact skin: filename, size, scan status and download are not rendered.
+    expect(within(card as HTMLElement).queryByText(/voice-.*webm/)).toBeNull();
+    expect(within(card as HTMLElement).queryByText('Проверен')).toBeNull();
+    expect(within(card as HTMLElement).queryByRole('button', { name: /Скачать/ })).toBeNull();
     expect(harness.trackStop).toHaveBeenCalledTimes(1);
   });
 

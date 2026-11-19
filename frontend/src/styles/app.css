@@ -14504,3 +14504,86 @@ html[data-theme='dark'] .recent-thumb--video {
     animation: none;
   }
 }
+
+/* Compact voice take (reference skin 2): no filename/size/status/download. */
+.attachment-card--voice {
+  max-width: 360px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.voice-message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 7px 12px 7px 7px;
+  border-radius: 28px;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.voice-message__play {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  cursor: pointer;
+}
+.voice-message__play .icon {
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+}
+.voice-message__wave {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  height: 32px;
+}
+.voice-message__bar {
+  flex: 1 1 2px;
+  min-width: 2px;
+  max-width: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.voice-message__bar.is-played {
+  background: var(--accent);
+}
+.voice-message__time {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.voice-message__rate {
+  flex: none;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.voice-message__error {
+  font-size: 11px;
+  color: var(--danger);
+}
+.voice-message--failed {
+  background: var(--danger-soft);
+}
+.voice-message audio {
+  display: none;
+}

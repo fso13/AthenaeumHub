@@ -309,38 +309,40 @@ export function AttachmentCard({
         />
       ) : null}
 
-      {songVariant ? null : genericBody}
+      {songVariant || voiceVariant ? null : genericBody}
 
-      <div className="attachment-card__actions">
-        <button
-          type="button"
-          className="button button--small"
-          onClick={() => void handleDownload()}
-          disabled={busy || scanBlocked}
-          aria-busy={busy}
-          title={scanBlocked ? blockedReason : t('attachments.linkTtl')}
-        >
-          {busy ? (
-            <span className="spinner" aria-hidden="true" />
-          ) : attachment.scan_status === 'INFECTED' ? (
-            <AlertIcon aria-hidden="true" />
-          ) : (
-            <DownloadIcon aria-hidden="true" />
-          )}
-          {busy ? t('attachments.loading') : downloadLabel}
-        </button>
-        <span className="attachment-card__ttl">
-          {scanBlocked ? t('attachments.downloadBlocked') : t('attachments.linkTtl')}
-        </span>
-      </div>
+      {voiceVariant ? null : (
+        <div className="attachment-card__actions">
+          <button
+            type="button"
+            className="button button--small"
+            onClick={() => void handleDownload()}
+            disabled={busy || scanBlocked}
+            aria-busy={busy}
+            title={scanBlocked ? blockedReason : t('attachments.linkTtl')}
+          >
+            {busy ? (
+              <span className="spinner" aria-hidden="true" />
+            ) : attachment.scan_status === 'INFECTED' ? (
+              <AlertIcon aria-hidden="true" />
+            ) : (
+              <DownloadIcon aria-hidden="true" />
+            )}
+            {busy ? t('attachments.loading') : downloadLabel}
+          </button>
+          <span className="attachment-card__ttl">
+            {scanBlocked ? t('attachments.downloadBlocked') : t('attachments.linkTtl')}
+          </span>
+        </div>
+      )}
 
-      {mediaLoading && inlineMedia && isClean ? (
+      {!voiceVariant && mediaLoading && inlineMedia && isClean ? (
         <p className="attachment-card__note" role="status">
           {t('attachments.loading')}
         </p>
       ) : null}
 
-      {mediaBroken && inlineMedia && isClean ? (
+      {!voiceVariant && mediaBroken && inlineMedia && isClean ? (
         <div className="attachment-card__error" role="alert">
           <p>{describedMedia?.message ?? t('attachments.mediaError')}</p>
           <div className="attachment-card__error-actions">
