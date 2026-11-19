@@ -2,12 +2,15 @@ import type { ThreadSummary } from '../api/types';
 import { formatShortDate } from '../domain/messages';
 import { t } from '../i18n/ru';
 import { ThreadIcon } from './Icons';
+import { MentionText } from './MentionText';
 
 interface ThreadLinkProps {
   /** Server-computed summary of the root (managed only; never invented). */
   summary: ThreadSummary;
   /** Display name resolved locally from loaded senders; null is honest. */
   authorName?: string | null;
+  /** Active workspace member names for mention chips in the excerpt. */
+  mentionNames?: readonly string[];
   onOpen: () => void;
 }
 
@@ -27,7 +30,12 @@ export function threadReplyCountLabel(count: number): string {
  * count, the last reply excerpt (managed only) and its time. Replies with no
  * text (sticker/attachment) render an honest fallback instead of a fake quote.
  */
-export function ThreadLink({ summary, authorName = null, onOpen }: ThreadLinkProps) {
+export function ThreadLink({
+  summary,
+  authorName = null,
+  mentionNames = [],
+  onOpen,
+}: ThreadLinkProps) {
   const replyCount = summary.reply_count ?? 0;
   const countLabel = threadReplyCountLabel(replyCount);
   const excerpt = summary.last_reply_excerpt?.trim() ?? '';
@@ -46,7 +54,7 @@ export function ThreadLink({ summary, authorName = null, onOpen }: ThreadLinkPro
       <span className="thread-link__count">{countLabel}</span>
       <span className="thread-link__preview">
         {author ? <span className="thread-link__author">{author}: </span> : null}
-        {preview}
+        <MentionText text={preview} mentions={mentionNames} />
       </span>
       {when ? (
         <time className="thread-link__time" dateTime={summary.last_reply_at ?? undefined}>

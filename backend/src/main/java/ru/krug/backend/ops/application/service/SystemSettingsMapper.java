@@ -15,8 +15,8 @@ public final class SystemSettingsMapper {
                 settings.smtp().port(), settings.smtp().username(), settings.smtp().from(),
                 settings.smtp().starttls(), settings.smtpConfigured());
         return new SystemSettingsView(settings.setupCompletedAt(), smtp,
-                settings.maxChatsPerUser(), settings.maxChatsPerWorkspace(),
-                settings.maxWorkspaceMembers(), settings.registrationOpen(),
-                settings.updatedAt(), settings.updatedBy());
+                settings.allowedFileExtensions().values(), settings.maxChatsPerUser(),
+                settings.maxChatsPerWorkspace(), settings.maxWorkspaceMembers(),
+                settings.registrationOpen(), settings.updatedAt(), settings.updatedBy());
     }
 }

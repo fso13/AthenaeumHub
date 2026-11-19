@@ -1,5 +1,5 @@
 export const ru = {
-  'app.name': 'pickle.',
+  'app.name': 'сова.',
   'app.tagline': 'защищённый мессенджер',
   'app.skipToChat': 'Перейти к чату',
 
@@ -438,8 +438,8 @@ export const ru = {
   'song.play': 'Воспроизвести песню',
   'song.localArtwork': 'Локальная обложка',
 
-  'auth.login.title': 'Вход в Pickle',
-  'auth.login.lead': 'Введите email и пароль — браузер обращается только к защищённому BFF Pickle.',
+  'auth.login.title': 'Вход в Сову',
+  'auth.login.lead': 'Введите email и пароль — браузер обращается только к защищённому BFF Совы.',
   'auth.login.emailLabel': 'Email',
   'auth.login.emailPlaceholder': 'name@example.com',
   'auth.login.emailHint': 'Логин — это email, указанный при регистрации.',
@@ -457,7 +457,7 @@ export const ru = {
   'auth.login.registrationHint':
     'Нет аккаунта? Зарегистрируйтесь — код подтверждения придёт на email.',
   'auth.login.loggedOut': 'Вы вышли из аккаунта.',
-  'auth.register.title': 'Регистрация в Pickle',
+  'auth.register.title': 'Регистрация в Сове',
   'auth.register.lead': 'Создайте аккаунт — мы отправим 6-значный код на email.',
   'auth.register.nameLabel': 'Имя',
   'auth.register.nameRequired': 'Введите имя.',
@@ -647,7 +647,7 @@ export const ru = {
   'chat.create.limitError': 'Не удалось загрузить лимиты.',
 
   // E8/R-03: first-run setup
-  'setup.title': 'Первичная настройка Pickle',
+  'setup.title': 'Первичная настройка Совы',
   'setup.lead':
     'Настройте SMTP и параметры установки. Пароль SMTP отправляется только на сервер и никогда не возвращается.',
   'setup.step.smtp': 'Почта',
@@ -676,7 +676,7 @@ export const ru = {
 
   // E8/R-04: platform admin
   'admin.title': 'Администрирование',
-  'admin.lead': 'Пользователи, чаты, хранилище и параметры установки Pickle.',
+  'admin.lead': 'Пользователи, чаты, хранилище и параметры установки Совы.',
   'admin.open': 'Администрирование',
   'admin.backToChats': 'К чатам',
   'admin.overviewSection': 'Обзор установки',
@@ -948,11 +948,16 @@ export const ru = {
   'admin.form.smtpPasswordStored':
     'Пароль сохранён. Чтобы заменить его, введите новый; чтобы оставить — пустое поле.',
   'admin.form.smtpFrom': 'Адрес отправителя',
-  'admin.form.smtpFromPlaceholder': 'pickle@example.com',
+  'admin.form.smtpFromPlaceholder': 'sova@example.com',
   'admin.form.starttls': 'Использовать STARTTLS',
   'admin.form.maxChatsPerUser': 'Лимит чатов на пользователя',
   'admin.form.maxChatsPerWorkspace': 'Лимит чатов на пространство',
   'admin.form.maxWorkspaceMembers': 'Лимит участников пространства',
+  'admin.form.allowedExtensions': 'Разрешённые расширения файлов',
+  'admin.form.allowedExtensionsHint':
+    'Через запятую или пробел, без точек: pdf, png, m4a. До 100; опасные расширения запрещены. Применяется к новым загрузкам.',
+  'admin.form.extensionsInvalid':
+    'Проверьте расширения: 1–100 уникальных значений [a-z0-9], без опасных типов.',
   'admin.form.registrationOpen': 'Регистрация открыта',
   'admin.form.registrationHint':
     'Закрытая регистрация возвращает 403 REGISTRATION_CLOSED до обращения к Keycloak.',
@@ -1556,7 +1561,7 @@ export const ru = {
   'settings.feedAvatars': 'Аватары в ленте',
   'settings.feedAvatarsHint': 'Скрывать аватары у своих сообщений',
   'settings.accent': 'Акцент',
-  'settings.accentHint': 'Фирменный зелёный Pickle',
+  'settings.accentHint': 'Фирменный бирюзовый Совы',
   'settings.unavailableShort': 'Недоступно',
   'settings.noPreferences': 'Правила по умолчанию: все уведомления в приложении.',
   'settings.preferenceRow': '{type} · {channel}',
@@ -1734,6 +1739,23 @@ export const ru = {
   'chatSettings.openMembersTab': 'Открыть участников пространства',
   'chatSettings.readOnlyMembers': 'Управление участниками доступно владельцу и администратору.',
   'chatSettings.dangerOnlyClose': 'Закрыть',
+
+  /* Safe rich text (managed only) and fenced code blocks. */
+  'rich.codePlain': 'Код',
+  'rich.codeCopy': 'Копировать',
+  'rich.codeCopyLabel': 'Скопировать код',
+  'rich.codeCopied': 'Скопировано',
+  'rich.codeCopyError': 'Не удалось скопировать',
+  'rich.codeRegion': 'Блок кода: {lang}',
+
+  /* @mentions in managed chats. */
+  'mentions.listLabel': 'Упоминания',
+  'mentions.all': 'Все',
+  'mentions.allHint': 'Уведомить всех',
+  'mentions.allAria': 'Упоминание всех участников',
+  'mentions.userAria': 'Упоминание: {name}',
+  'mentions.empty': 'Никого не нашли',
+  'mentions.loading': 'Загружаем участников…',
 } as const;
 
 export type MessageKey = keyof typeof ru;

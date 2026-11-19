@@ -49,7 +49,7 @@ class StickerMessageIT extends IntegrationTestBase {
                 .isEqualTo(StickerTestSupport.KRUG_01.toString());
         assertThat(message.get("sticker").get("pack_id").asText())
                 .isEqualTo(StickerTestSupport.KRUG_PACK_ID.toString());
-        assertThat(message.get("sticker").get("alt").asText()).isEqualTo("Круг — стикер 1");
+        assertThat(message.get("sticker").get("alt").asText()).isEqualTo("Сова — стикер 1");
         assertThat(message.get("sticker").get("url").asText()).isEqualTo("/stickers/krug/01.png");
         assertThat(message.get("sticker").get("favorite").asBoolean()).isTrue();
         assertThat(message.get("seq").asLong()).isEqualTo(1);

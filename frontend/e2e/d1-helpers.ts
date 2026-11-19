@@ -30,7 +30,7 @@ type D1Window = Window & {
  */
 export async function openDashboard(page: Page): Promise<void> {
   await page.goto('/');
-  const loginHeading = page.getByRole('heading', { name: 'Вход в Pickle' });
+  const loginHeading = page.getByRole('heading', { name: 'Вход в Сову' });
   const chatHeading = page.getByRole('heading', { name: GROUP_CHAT_NAME });
   await expect(loginHeading.or(chatHeading)).toBeVisible();
 

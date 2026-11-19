@@ -527,6 +527,7 @@ function adminSettingsView(db: MockDb): AdminSettings {
     max_chats_per_workspace: admin.maxChatsPerWorkspace,
     max_workspace_members: admin.maxWorkspaceMembers,
     registration_open: admin.registrationOpen,
+    allowed_file_extensions: admin.allowedFileExtensions,
     updated_at: admin.updatedAt,
     updated_by: admin.updatedBy,
   };
@@ -1103,6 +1104,21 @@ export function createHandlers(db: MockDb) {
           });
         }
         next.registrationOpen = body.registration_open;
+      }
+      if (body.allowed_file_extensions !== undefined && body.allowed_file_extensions !== null) {
+        if (
+          !Array.isArray(body.allowed_file_extensions) ||
+          body.allowed_file_extensions.length === 0 ||
+          body.allowed_file_extensions.length > 100 ||
+          body.allowed_file_extensions.some(
+            (value) => typeof value !== 'string' || !/^[a-z0-9]{1,10}$/.test(value),
+          )
+        ) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'allowed_file_extensions is invalid', {
+            details: { field: 'allowed_file_extensions' },
+          });
+        }
+        next.allowedFileExtensions = [...new Set(body.allowed_file_extensions)];
       }
       if (body.smtp_password !== undefined && body.smtp_password !== null) {
         if (typeof body.smtp_password !== 'string' || body.smtp_password.length > 512) {

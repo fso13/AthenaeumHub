@@ -102,7 +102,8 @@ public class InitUploadHandler {
         if (command.size() > maxFileBytes) {
             throw new FileTooLargeException(limits.tariff().name(), maxFileBytes, command.size());
         }
-        FileTypePolicy.Verdict verdict = FileTypePolicy.check(command.filename(), command.mime());
+        FileTypePolicy.Verdict verdict = FileTypePolicy.check(command.filename(), command.mime(),
+                settings.allowedFileExtensions());
         if (verdict == FileTypePolicy.Verdict.DANGEROUS) {
             throw DomainException.unprocessable(ErrorCode.DANGEROUS_TYPE_BLOCKED,
                     "Dangerous file type is blocked",
@@ -111,7 +112,8 @@ public class InitUploadHandler {
         }
         if (verdict == FileTypePolicy.Verdict.UNSUPPORTED) {
             throw new ru.krug.backend.file.domain.exception.UnsupportedFileTypeException(
-                    command.mime(), FileTypePolicy.allowedExamples());
+                    command.mime(), FileTypePolicy.extensionOf(command.filename()),
+                    FileTypePolicy.allowedExamples());
         }
         // D1-BE2: MANAGED only. The non-MANAGED branch above already threw before this
         // point, so an E2EE upload never parses or stores client media metadata.

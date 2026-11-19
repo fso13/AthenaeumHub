@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
+import ru.krug.backend.shared.domain.model.AllowedFileExtensions;
+
 /**
  * Installation-wide runtime settings (R-03/R-04). Exactly one row exists; the defaults are
  * the v1.1 business parameters. The aggregate is pure domain code and never exposes the
@@ -12,6 +14,7 @@ import java.util.UUID;
 public record SystemSettings(
         Instant setupCompletedAt,
         SmtpSettings smtp,
+        AllowedFileExtensions allowedFileExtensions,
         int maxChatsPerUser,
         int maxChatsPerWorkspace,
         int maxWorkspaceMembers,
@@ -25,15 +28,17 @@ public record SystemSettings(
 
     public SystemSettings {
         smtp = Objects.requireNonNull(smtp, "smtp");
+        allowedFileExtensions = allowedFileExtensions == null
+                ? AllowedFileExtensions.defaults() : allowedFileExtensions;
         requireLimit(maxChatsPerUser, "maxChatsPerUser");
         requireLimit(maxChatsPerWorkspace, "maxChatsPerWorkspace");
         requireLimit(maxWorkspaceMembers, "maxWorkspaceMembers");
     }
 
     public static SystemSettings defaults(Instant now) {
-        return new SystemSettings(null, SmtpSettings.empty(), DEFAULT_MAX_CHATS_PER_USER,
-                DEFAULT_MAX_CHATS_PER_WORKSPACE, DEFAULT_MAX_WORKSPACE_MEMBERS, true,
-                now, null);
+        return new SystemSettings(null, SmtpSettings.empty(), AllowedFileExtensions.defaults(),
+                DEFAULT_MAX_CHATS_PER_USER, DEFAULT_MAX_CHATS_PER_WORKSPACE,
+                DEFAULT_MAX_WORKSPACE_MEMBERS, true, now, null);
     }
 
     public boolean setupCompleted() {
@@ -53,13 +58,14 @@ public record SystemSettings(
             throw new IllegalStateException("Setup is already completed");
         }
         return new SystemSettings(Objects.requireNonNull(completedAt, "completedAt"), smtp,
-                maxChatsPerUser, maxChatsPerWorkspace, maxWorkspaceMembers, registrationOpen,
-                completedAt, actor);
+                allowedFileExtensions, maxChatsPerUser, maxChatsPerWorkspace,
+                maxWorkspaceMembers, registrationOpen, completedAt, actor);
     }
 
     public SystemSettings updated(Instant now, UUID actor) {
-        return new SystemSettings(setupCompletedAt, smtp, maxChatsPerUser, maxChatsPerWorkspace,
-                maxWorkspaceMembers, registrationOpen, now, actor);
+        return new SystemSettings(setupCompletedAt, smtp, allowedFileExtensions,
+                maxChatsPerUser, maxChatsPerWorkspace, maxWorkspaceMembers, registrationOpen,
+                now, actor);
     }
 
     private static void requireLimit(int value, String name) {

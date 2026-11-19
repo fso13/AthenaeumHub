@@ -7,7 +7,7 @@
 | **Статус** | **READY / запланирован** (см. `docs/TASKS.md` §12) |
 | **Приоритет** | P1 (XL, после текущего G4; managed-only) |
 | **Дизайн** | [`design/dashboard/`](../design/dashboard/), версия **1.0.0**, заморожен 18.11.2026 |
-| **Release-снапшот** | [`design/dashboard/releases/pickle-message-dashboard-v1.0.0.zip`](../design/dashboard/releases/pickle-message-dashboard-v1.0.0.zip) |
+| **Release-снапшот** | [`design/dashboard/releases/sova-message-dashboard-v1.0.0.zip`](../design/dashboard/releases/sova-message-dashboard-v1.0.0.zip) |
 | **Контракт** | [`contracts/openapi.yaml`](../contracts/openapi.yaml) |
 | **Зависимости** | I-01 (contract sync), E4 (upload/attachments), E6 (notifications), E7 (E2EE flag/keys), Keycloak |
 | **Компоненты** | `frontend/`, `backend/`, `contracts/`, QA |

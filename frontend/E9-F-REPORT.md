@@ -134,7 +134,7 @@ default). Курсор — непрозрачный `next_cursor`, клиент 
 - **токены**: `--space-1..8`, `--radius-xs|sm|base|lg|xl|pill`, `--shadow-sm|md|lg`,
   `--text-xs..2xl`, `--leading*`, `--tap-size: 44px`; цветовые токены и dark-тема
   (`prefers-color-scheme: dark`) сохранены/дополнены;
-- **визуальный язык Pickle**: огуречный зелёный + графит/cream, крупные радиусы
+- **визуальный язык Совы**: бирюзовый + графит/cream, крупные радиусы
   (`--radius-lg/xl`), спокойные тени, sticky admin-header с blur, «пилюльные»
   вкладки, активный чат с тонкой accent-полосой, primary-кнопки с мягкой тенью;
 - **shell/sidebar/composer/auth**: composer c `--radius-lg`, focus-ring и blur;
@@ -211,7 +211,7 @@ default). Курсор — непрозрачный `next_cursor`, клиент 
 | Guard platform admin, 403 screen                                                                         | ✅ + directory 403                   |
 | Типизированный API-клиент, без изобретённых полей, без контента                                          | ✅                                   |
 | Токены color/space/radius/shadow/type, light/dark, без random hex в затронутых компонентах               | ✅ (admin-слой полностью на токенах) |
-| Pickle-язык: green/graphite/cream, крупные радиусы, спокойные тени; shell/sidebar/composer/auth/admin    | ✅                                   |
+| Сова-язык: green/graphite/cream, крупные радиусы, спокойные тени; shell/sidebar/composer/auth/admin      | ✅                                   |
 | 390/768/1440, sidebar/panel, touch ≥44, без horizontal scroll                                            | ✅ e2e 390/768 + desktop             |
 | WCAG AA: contrast, focus-visible, keyboard, aria, dialogs, reduced motion, states                        | ✅ axe light/dark                    |
 | Тесты: admin filters/pagination/loading/error, non-admin, axe, mobile/RTL                                | ✅ 14 unit + 10 e2e                  |

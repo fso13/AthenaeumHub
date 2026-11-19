@@ -1,6 +1,6 @@
-# «Круг» — доска задач: первый вертикальный срез
+# «Сова» — доска задач: первый вертикальный срез
 
-> **Фаза:** Pickle base + E8–E12 + F7B приняты · G4 final review (E2EE flag off) · D1 Dashboard v1.0 queued (P1)  
+> **Фаза:** Сова base + E8–E12 + F7B приняты · G4 final review (E2EE flag off) · D1 Dashboard v1.0 queued (P1)  
 > **Контракт:** [`contracts/openapi.yaml`](<../contracts/openapi.yaml>)  
 > **Анализ:** [`docs/SYSTEM-ANALYSIS.md`](<SYSTEM-ANALYSIS.md>) §5–§7, §10–§12, §15–§16  
 > **Промты:** [`docs/PROMPTS-FRONTEND-BACKEND.md`](<PROMPTS-FRONTEND-BACKEND.md>) §2, §3, §6

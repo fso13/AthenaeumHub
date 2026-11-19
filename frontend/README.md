@@ -1,4 +1,4 @@
-# «Круг» — frontend F-01 + F-04 (Auth BFF) + E3-F + E4-F + E5-F + E6-F + E9-F + E10-F + E11-F + E12-F
+# «Сова» — frontend F-01 + F-04 (Auth BFF) + E3-F + E4-F + E5-F + E6-F + E9-F + E10-F + E11-F + E12-F
 
 Managed-чат по контракту `contracts/openapi.yaml`: история с пагинацией, optimistic send, retry с идемпотентностью, read receipts, reconnect через `GET /sync`. Срез **F-04** добавляет собственные формы входа/регистрации/подтверждения email (Auth BFF: `/auth/login`, `/auth/register`, `/auth/verify-email`, `/auth/resend-email-code`, `/auth/refresh`, `/auth/logout`), `/me`, регистрацию устройства, onboarding первого workspace и auth guard. Браузер не ходит в Keycloak и не использует OIDC-редирект. Срез **E3-F** добавляет WebSocket-клиент: `POST /realtime/ticket`, `hello`/`subscribe`/`ack`/`ping`/`typing`, live `message.created`/`message.receipt`, replay по `last_seq`, `resume.gap` → REST, typing/presence TTL, backoff 1–30 с + jitter и индикатор online/reconnecting/offline. Срез **E4-F** добавляет managed-файлы: preflight и лимиты, picker/drag&drop, chunked upload 8 МиБ с прогрессом и resume, `attachment_ids` в сообщении, карточки вложений с presigned URL TTL 5 минут и scan status. Срез **E5-F** добавляет встроенные стикеры managed-чата: picker с наборами, поиском по alt, избранным и локальными недавними, отправку `type=STICKER` с optimistic UI, рендер `<img>` без пузыря и PNG-ассеты 2×8. Срез **E6-F** добавляет in-app уведомления: колокольчик с unread badge, панель со списком и cursor-пагинацией, optimistic read one/all с rollback, настройки per-chat/type/channel/mode и E2EE-безопасный рендер (`body=null` → generic title + «контент скрыт»). Срез **E12-F** добавляет управление участниками пространства (R-09): список с поиском/refresh, добавление существующего пользователя по email с ролью, смена роли и удаление с подтверждением; OWNER/ADMIN-контролы, read-only для остальных, серверные 403/404/409 без потери строки. Срез **D1-FE5** добавляет модалки настроек чата (`PATCH /chats/{chatId}`: name/description, роли, E2EE-политика, без оптимистичных обновлений) и профиля (`/me`, `GET /devices`, тема, уведомления, подтверждённый logout, честно выключенные 2FA/сессии). Dev-режим F-01 (`POST /dev/session`) сохранён как fallback.
 
@@ -129,10 +129,10 @@ npm run check        # всё перечисленное + build
 | `VITE_REALTIME_ENABLED`   | `true`                                                      | Выключить WebSocket-клиент (REST/sync остаются рабочими)                                            |
 | `VITE_WEBRTC_ICE_SERVERS` | —                                                           | ICE-серверы для звонков через запятую (`stun:`, `stuns:`, `turn:`, `turns:`); пусто — без STUN/TURN |
 | `VITE_MEDIA_ORIGINS`      | `http://localhost:9002`                                     | Origin(ы) presigned URL/MinIO через запятую: `img-src`/`media-src`/`connect-src`                    |
-| `VITE_DEVICE_NAME`        | `Круг — браузер`                                            | Имя устройства для `POST /devices`                                                                  |
+| `VITE_DEVICE_NAME`        | `Сова — браузер`                                            | Имя устройства для `POST /devices`                                                                  |
 | `VITE_APP_VERSION`        | `0.1.0`                                                     | `app_version` для `POST /devices`                                                                   |
 
-Порт 8080 в этом окружении занят другим проектом (`competency-service`); «Круг» использует frontend `5173`, backend `8081`. Keycloak в браузере не используется.
+Порт 8080 в этом окружении занят другим проектом (`competency-service`); «Сова» использует frontend `5173`, backend `8081`. Keycloak в браузере не используется.
 
 В production build Vite добавляет meta-CSP (`default-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`); `connect-src` включает origin API, `img-src`/`media-src`/`connect-src` — origin(ы) `VITE_MEDIA_ORIGINS` (по умолчанию MinIO `http://localhost:9002`) и `blob:`. В dev CSP не вставляется, чтобы не ломать HMR Vite. SVG из пользовательских файлов не рендерится (только скачивание).
 
@@ -813,7 +813,7 @@ KAT: `sessionKAT.test.ts` воспроизводит B1/B2, C2/C3, E1 (m1/r1/m2/
 dark`), `--space-1..8`, `--radius-xs|sm|base|lg|xl|pill`, `--shadow-sm|md|lg`,
   `--text-xs..2xl`, `--leading*`, `--tap-size: 44px`. Новые admin-компоненты используют
   только токены (без случайных hex).
-- **Визуальный язык Pickle:** огуречный зелёный + графит/cream, крупные радиусы
+- **Визуальный язык Совы:** бирюзовый + графит/cream, крупные радиусы
   (`--radius-lg/xl`), спокойные тени, слитный sticky-header админки с blur, «пилюльные»
   вкладки. Shell/sidebar/composer/auth получили: composer-поле с `--radius-lg` и focus-ring,
   кнопки/иконки/чат-элементы с touch-target ≥44 px, крупные радиусы auth-карточки.

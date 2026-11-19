@@ -5,10 +5,10 @@
 | **Версия** | 1.0.0 |
 | **Статус** | **FROZEN** (зафиксировано) |
 | **Дата фиксации** | 2026-11-18 |
-| **Продукт** | Pickle / «Круг» — мессенджер для команд и близких кругов |
+| **Продукт** | «Сова» — мессенджер для команд и близких кругов |
 | **Референс** | [Dribbble Shot 17943583 «Message Dashboard»](https://dribbble.com/shots/17943583-Message-Dashboard) |
 | **Источник истины** | этот каталог `design/dashboard/` |
-| **Release-архив** | [`releases/pickle-message-dashboard-v1.0.0.zip`](releases/pickle-message-dashboard-v1.0.0.zip) |
+| **Release-архив** | [`releases/sova-message-dashboard-v1.0.0.zip`](releases/sova-message-dashboard-v1.0.0.zip) |
 | **Контрольные суммы** | [`MANIFEST.sha256`](MANIFEST.sha256), [`releases/SHA256SUMS`](releases/SHA256SUMS) |
 | **Тикет на внедрение** | [D1 — Message Dashboard v1.0](../../docs/TASKS-DASHBOARD-V1.md) |
 | **Спецификация** | [`DESIGN.md`](DESIGN.md) |
@@ -29,7 +29,7 @@
 - **страницы**: Обзор, Файлы, Плагины, Защита, Настройки;
 - **окна**: Профиль, Настройки чата (основное/участники/права/опасная зона);
 - light/dark, адаптив 390/768/1440, мобильный drawer и sheet;
-- простой логотип-пузырь чата вместо огурца (огурец остался стикером).
+- логотип-иконка «Сова» вместо огурца (огурец остался стикером).
 
 ## Как открыть
 

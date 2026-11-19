@@ -25,6 +25,6 @@ if git diff --cached --quiet; then
   echo "Wiki is up to date."
   exit 0
 fi
-git commit -m "docs(wiki): sync Pickle documentation"
+git commit -m "docs(wiki): sync Sova documentation"
 git push origin HEAD
 echo "Wiki published: https://github.com/${REPO_SLUG}/wiki"

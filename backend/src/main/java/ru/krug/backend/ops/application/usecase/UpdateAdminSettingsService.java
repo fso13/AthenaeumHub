@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,12 +16,14 @@ import ru.krug.backend.auth.application.usecase.PlatformAdminGuard;
 import ru.krug.backend.ops.application.model.SystemSettingsUpdateCommand;
 import ru.krug.backend.ops.application.model.SystemSettingsView;
 import ru.krug.backend.ops.application.port.SmtpPasswordCipherPort;
+import ru.krug.backend.ops.application.port.SystemSettingsPort;
 import ru.krug.backend.ops.application.service.SystemSettingsMapper;
 import ru.krug.backend.ops.domain.model.SmtpSettings;
 import ru.krug.backend.ops.domain.model.SystemSettings;
 import ru.krug.backend.ops.domain.repository.SystemSettingsRepository;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.domain.model.AllowedFileExtensions;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
 
@@ -53,6 +56,8 @@ public class UpdateAdminSettingsService {
     }
 
     @Transactional
+    @CacheEvict(cacheNames = SystemSettingsPort.ALLOWED_FILE_EXTENSIONS_CACHE,
+            allEntries = true)
     public SystemSettingsView update(Principal principal, SystemSettingsUpdateCommand command) {
         adminGuard.require(principal);
         SystemSettings current = repository.loadForUpdate();
@@ -113,10 +118,21 @@ public class UpdateAdminSettingsService {
                 : requireLimit(command.maxWorkspaceMembers(), "max_workspace_members");
         boolean registrationOpen = command.registrationOpen() == null
                 ? current.registrationOpen() : command.registrationOpen();
+        AllowedFileExtensions allowedFileExtensions = current.allowedFileExtensions();
+        if (command.allowedFileExtensions() != null) {
+            try {
+                allowedFileExtensions = AllowedFileExtensions
+                        .of(command.allowedFileExtensions());
+            } catch (IllegalArgumentException ex) {
+                // The message contains the index/reason but never the whole request body.
+                throw DomainException.badRequest(ex.getMessage(),
+                        Map.of("field", "allowed_file_extensions"));
+            }
+        }
 
-        return new SystemSettings(current.setupCompletedAt(), updatedSmtp, maxChatsPerUser,
-                maxChatsPerWorkspace, maxWorkspaceMembers, registrationOpen, now,
-                principal.userId());
+        return new SystemSettings(current.setupCompletedAt(), updatedSmtp,
+                allowedFileExtensions, maxChatsPerUser, maxChatsPerWorkspace,
+                maxWorkspaceMembers, registrationOpen, now, principal.userId());
     }
 
     private void appendUpdatedAudit(Principal principal, SystemSettingsUpdateCommand command,
@@ -150,6 +166,10 @@ public class UpdateAdminSettingsService {
         }
         if (command.smtpStarttls() != null) {
             fields.add("smtp_starttls");
+        }
+        if (command.allowedFileExtensions() != null) {
+            // Field name only: the allowlist values are not copied into audit metadata.
+            fields.add("allowed_file_extensions");
         }
         if (command.maxChatsPerUser() != null) {
             fields.add("max_chats_per_user");

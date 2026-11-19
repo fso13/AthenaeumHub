@@ -1,4 +1,4 @@
-# Pickle — коробочный запуск
+# Сова — коробочный запуск
 
 Один `docker compose` поднимает:
 
@@ -26,7 +26,7 @@ docker compose --env-file .env ps
 
 Открыть: **http://localhost:8088**
 
-Вход в приложение — **свои формы Pickle**, без редиректа в Keycloak.  
+Вход в приложение — **свои формы Совы**, без редиректа в Keycloak.  
 Демо-пользователь: `test@krug.local` / `Test1234!` (логин — email)  
 Письма подтверждения: **http://localhost:8025** (Mailpit).  
 Админ Keycloak (только ops): `http://localhost:8180/admin/`, `admin` / `KC_ADMIN_PASSWORD`.

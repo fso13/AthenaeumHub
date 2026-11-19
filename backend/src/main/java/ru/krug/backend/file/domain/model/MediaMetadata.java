@@ -60,8 +60,8 @@ public record MediaMetadata(
 
     /** Audio kinds must stay inside this allowlist; arbitrary {@code audio/*} is not enough. */
     public static final List<String> AUDIO_ALLOWED = List.of(
-            "audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "audio/wav",
-            "audio/x-wav", "audio/flac", "audio/x-flac", "audio/opus");
+            "audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/aac",
+            "audio/wav", "audio/x-wav", "audio/flac", "audio/x-flac", "audio/opus");
 
     public MediaMetadata {
         if (kind == null) {

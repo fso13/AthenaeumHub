@@ -2,7 +2,7 @@
   "name": "krug-frontend",
   "private": true,
   "version": "0.1.0",
-  "description": "«Круг» — managed chat + Keycloak OIDC (F-04)",
+  "description": "«Сова» — managed chat + Keycloak OIDC (F-04)",
   "type": "module",
   "engines": {
     "node": ">=20.19"

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
 import ru.krug.backend.ops.domain.model.SmtpSettings;
 import ru.krug.backend.ops.domain.model.SystemSettings;
 import ru.krug.backend.ops.domain.repository.SystemSettingsRepository;
+import ru.krug.backend.shared.domain.model.AllowedFileExtensions;
 
 /**
  * Native singleton persistence. Keeping the mapping explicit makes it impossible to leak
@@ -23,6 +24,7 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
     private static final String COLUMNS = """
             setup_completed_at, smtp_host, smtp_port, smtp_username,
             smtp_password_ciphertext, smtp_from, smtp_starttls,
+            array_to_string(allowed_file_extensions, ',') AS allowed_file_extensions,
             max_chats_per_user, max_chats_per_workspace, max_workspace_members,
             registration_open, updated_at, updated_by
             """;
@@ -64,12 +66,13 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
                                smtp_password_ciphertext = ?5,
                                smtp_from = ?6,
                                smtp_starttls = ?7,
-                               max_chats_per_user = ?8,
-                               max_chats_per_workspace = ?9,
-                               max_workspace_members = ?10,
-                               registration_open = ?11,
-                               updated_at = ?12,
-                               updated_by = ?13
+                               allowed_file_extensions = string_to_array(?8, ','),
+                               max_chats_per_user = ?9,
+                               max_chats_per_workspace = ?10,
+                               max_workspace_members = ?11,
+                               registration_open = ?12,
+                               updated_at = ?13,
+                               updated_by = ?14
                          WHERE id = 1
                         """)
                 .setParameter(1, settings.setupCompletedAt() == null ? null
@@ -80,12 +83,13 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
                 .setParameter(5, settings.smtp().passwordCiphertext())
                 .setParameter(6, blankToNull(settings.smtp().from()))
                 .setParameter(7, settings.smtp().starttls())
-                .setParameter(8, settings.maxChatsPerUser())
-                .setParameter(9, settings.maxChatsPerWorkspace())
-                .setParameter(10, settings.maxWorkspaceMembers())
-                .setParameter(11, settings.registrationOpen())
-                .setParameter(12, Timestamp.from(settings.updatedAt()))
-                .setParameter(13, settings.updatedBy())
+                .setParameter(8, String.join(",", settings.allowedFileExtensions().values()))
+                .setParameter(9, settings.maxChatsPerUser())
+                .setParameter(10, settings.maxChatsPerWorkspace())
+                .setParameter(11, settings.maxWorkspaceMembers())
+                .setParameter(12, settings.registrationOpen())
+                .setParameter(13, Timestamp.from(settings.updatedAt()))
+                .setParameter(14, settings.updatedBy())
                 .executeUpdate();
     }
 
@@ -101,12 +105,21 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
         return new SystemSettings(
                 instant(row[0]),
                 smtp,
-                ((Number) row[7]).intValue(),
+                allowedFileExtensions((String) row[7]),
                 ((Number) row[8]).intValue(),
                 ((Number) row[9]).intValue(),
-                Boolean.TRUE.equals(row[10]),
-                instant(row[11]),
-                (UUID) row[12]);
+                ((Number) row[10]).intValue(),
+                Boolean.TRUE.equals(row[11]),
+                instant(row[12]),
+                (UUID) row[13]);
+    }
+
+    private static AllowedFileExtensions allowedFileExtensions(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return AllowedFileExtensions.defaults();
+        }
+        List<String> values = List.of(csv.split(",", -1));
+        return AllowedFileExtensions.of(values);
     }
 
     private static Instant instant(Object value) {

@@ -9,7 +9,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  */
 
 const API = 'http://localhost:8081/api/v1';
-const KRUG_FIRST_ALT = 'Круг — стикер 1';
+const SOVA_FIRST_ALT = 'Сова — стикер 1';
 
 interface Session {
   access_token: string;
@@ -53,7 +53,7 @@ async function clearFavorites(request: APIRequestContext, session: Session): Pro
 async function openPicker(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Стикеры' }).click();
   await expect(page.getByRole('dialog', { name: 'Стикеры' })).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Круг' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Сова' })).toBeVisible();
 }
 
 test('E5 real: picker → favorite → send STICKER → history after reload → assets', async ({
@@ -81,19 +81,19 @@ test('E5 real: picker → favorite → send STICKER → history after reload →
   }
 
   await openPicker(page);
-  await page.getByRole('tab', { name: 'Круг' }).click();
+  await page.getByRole('tab', { name: 'Сова' }).click();
   const favorite = page.getByRole('button', {
-    name: `Добавить в избранное: ${KRUG_FIRST_ALT}`,
+    name: `Добавить в избранное: ${SOVA_FIRST_ALT}`,
   });
   await expect(favorite).toBeVisible();
   await favorite.click();
   await expect(
-    page.getByRole('button', { name: `Убрать из избранного: ${KRUG_FIRST_ALT}` }),
+    page.getByRole('button', { name: `Убрать из избранного: ${SOVA_FIRST_ALT}` }),
   ).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('tab', { name: 'Избранное' }).click();
   const sendButton = page.getByRole('button', {
-    name: `Отправить стикер: ${KRUG_FIRST_ALT}`,
+    name: `Отправить стикер: ${SOVA_FIRST_ALT}`,
   });
   await expect(sendButton).toBeVisible();
 
@@ -141,25 +141,25 @@ test('E5 real: picker → favorite → send STICKER → history after reload →
   expect(sent.type).toBe('STICKER');
   expect(sent.text).toBeNull();
   expect(sent.sticker_id).toBe(body.sticker_id);
-  expect(sent.sticker.alt).toBe(KRUG_FIRST_ALT);
+  expect(sent.sticker.alt).toBe(SOVA_FIRST_ALT);
   expect(sent.sticker.url).toBe('/stickers/krug/01.png');
 
-  const rendered = page.getByRole('img', { name: KRUG_FIRST_ALT }).last();
+  const rendered = page.getByRole('img', { name: SOVA_FIRST_ALT }).last();
   await expect(rendered).toBeVisible({ timeout: 10_000 });
   expect(await rendered.evaluate((element) => Boolean(element.closest('.bubble')))).toBe(false);
 
   await page.reload();
   await expect(page.getByLabel('Текст сообщения')).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole('img', { name: KRUG_FIRST_ALT }).first()).toBeVisible({
+  await expect(page.getByRole('img', { name: SOVA_FIRST_ALT }).first()).toBeVisible({
     timeout: 20_000,
   });
 
   // Unfavorite through the UI (also exercises DELETE against the real backend).
   await openPicker(page);
-  await page.getByRole('tab', { name: 'Круг' }).click();
-  await page.getByRole('button', { name: `Убрать из избранного: ${KRUG_FIRST_ALT}` }).click();
+  await page.getByRole('tab', { name: 'Сова' }).click();
+  await page.getByRole('button', { name: `Убрать из избранного: ${SOVA_FIRST_ALT}` }).click();
   await expect(
-    page.getByRole('button', { name: `Добавить в избранное: ${KRUG_FIRST_ALT}` }),
+    page.getByRole('button', { name: `Добавить в избранное: ${SOVA_FIRST_ALT}` }),
   ).toHaveAttribute('aria-pressed', 'false');
 });
 
@@ -197,24 +197,24 @@ test('E5 real: disabled pack 409 hides the pack but keeps old stickers', async (
   await page.goto('/');
   await expect(page.getByLabel('Текст сообщения')).toBeVisible({ timeout: 20_000 });
   await openPicker(page);
-  await page.getByRole('tab', { name: 'Круг' }).click();
+  await page.getByRole('tab', { name: 'Сова' }).click();
 
   try {
     setPackStatus(krugPackId, 'DISABLED');
-    await page.getByRole('button', { name: `Отправить стикер: ${KRUG_FIRST_ALT}` }).click();
+    await page.getByRole('button', { name: `Отправить стикер: ${SOVA_FIRST_ALT}` }).click();
     await expect(page.getByText('Набор стикеров отключён', { exact: true })).toBeVisible();
     await expect(
       page.locator('article[data-sticker-outgoing="true"][data-outgoing-status="failed"]'),
     ).toHaveCount(1);
     // Previously sent stickers keep rendering from history even though the
     // pack is disabled; only new sends are rejected.
-    await expect(page.getByRole('img', { name: KRUG_FIRST_ALT }).first()).toBeVisible();
+    await expect(page.getByRole('img', { name: SOVA_FIRST_ALT }).first()).toBeVisible();
 
     await page.getByRole('button', { name: 'Стикеры' }).click();
     await expect(page.getByRole('dialog', { name: 'Стикеры' })).toBeVisible();
-    await expect(page.getByRole('tab', { name: 'Круг' })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Сова' })).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Коты' })).toBeVisible();
-    await expect(page.getByText(/Набор «Круг» отключён/)).toBeVisible();
+    await expect(page.getByText(/Набор «Сова» отключён/)).toBeVisible();
   } finally {
     setPackStatus(krugPackId, 'ACTIVE');
   }

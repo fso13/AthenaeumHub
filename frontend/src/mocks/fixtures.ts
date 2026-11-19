@@ -162,14 +162,14 @@ export function stickerId(index: number): string {
 
 const STICKER_ALTS = {
   krug: [
-    'Круг: привет',
-    'Круг: спасибо',
-    'Круг: готово',
-    'Круг: вопрос',
-    'Круг: идея',
-    'Круг: ура',
-    'Круг: обнимаю',
-    'Круг: пока',
+    'Сова: привет',
+    'Сова: спасибо',
+    'Сова: готово',
+    'Сова: вопрос',
+    'Сова: идея',
+    'Сова: ура',
+    'Сова: обнимаю',
+    'Сова: пока',
   ],
   cats: [
     'Кот: привет',
@@ -189,7 +189,7 @@ export function buildStickerPacks(): StickerPack[] {
       const stickerOffset = packIndex * 8;
       return {
         id: STICKER_PACK_IDS[key],
-        name: key === 'krug' ? 'Круг' : 'Коты',
+        name: key === 'krug' ? 'Сова' : 'Коты',
         cover_url: `/stickers/${key}/cover.png`,
         stickers: STICKER_ALTS[key].map((alt, index) => ({
           id: stickerId(stickerOffset + index + 1),
@@ -422,7 +422,7 @@ export function buildNotifications(): Notification[] {
       type: 'SYSTEM',
       chat_id: null,
       chat_name: null,
-      title: 'Добро пожаловать в Pickle',
+      title: 'Добро пожаловать в Сову',
       body: null,
       created_at: iso(15, 18, 0),
       read: true,

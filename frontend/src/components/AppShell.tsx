@@ -18,7 +18,7 @@ import { Sidebar } from './Sidebar';
 import { SpaceRail } from './SpaceRail';
 import { ChatSettingsDialog } from './ChatSettingsDialog';
 import { ProfileDialog } from './ProfileDialog';
-import { ChatIcon, CloseIcon, MenuIcon } from './Icons';
+import { CloseIcon, MenuIcon } from './Icons';
 
 interface AppShellProps {
   config: AppConfig;
@@ -182,7 +182,7 @@ export function AppShell({
       <div className="app__content">
         <div className="app__mobilebar">
           <span className="app__mobilebar-brand">
-            <ChatIcon aria-hidden="true" />
+            <img src="/icons/sova-icon-32.png" alt="" width={20} height={20} />
             {t('app.name')}
           </span>
           <span className="app__mobilebar-space">{workspaceName}</span>

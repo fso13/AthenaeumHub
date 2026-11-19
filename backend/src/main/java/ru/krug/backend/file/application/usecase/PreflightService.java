@@ -1,6 +1,7 @@
 package ru.krug.backend.file.application.usecase;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -13,6 +14,7 @@ import ru.krug.backend.file.application.model.FileCandidate;
 import ru.krug.backend.file.application.model.PreflightFileView;
 import ru.krug.backend.file.application.model.PreflightView;
 import ru.krug.backend.file.application.model.QuotaView;
+import ru.krug.backend.file.application.port.FileSettingsPort;
 import ru.krug.backend.file.application.port.WorkspaceQuotaPort;
 import ru.krug.backend.file.domain.exception.TooManyFilesException;
 import ru.krug.backend.file.domain.model.FileSize;
@@ -30,10 +32,13 @@ public class PreflightService {
 
     private final FileAccessGuard accessGuard;
     private final WorkspaceQuotaPort quota;
+    private final FileSettingsPort settings;
 
-    public PreflightService(FileAccessGuard accessGuard, WorkspaceQuotaPort quota) {
+    public PreflightService(FileAccessGuard accessGuard, WorkspaceQuotaPort quota,
+                            FileSettingsPort settings) {
         this.accessGuard = accessGuard;
         this.quota = quota;
+        this.settings = settings;
     }
 
     @Transactional
@@ -76,16 +81,22 @@ public class PreflightService {
             return PreflightFileView.denied(name, "VALIDATION_FAILED",
                     Map.of("field", "size", "reason", "positive"));
         }
-        FileTypePolicy.Verdict verdict = FileTypePolicy.check(file.name(), file.mime());
+        FileTypePolicy.Verdict verdict = FileTypePolicy.check(file.name(), file.mime(),
+                settings.allowedFileExtensions());
         if (verdict == FileTypePolicy.Verdict.DANGEROUS) {
             return PreflightFileView.denied(name, "DANGEROUS_TYPE_BLOCKED",
                     Map.of("mime", file.mime() == null ? "" : file.mime(), "policy",
                             "managed-allowlist"));
         }
         if (verdict == FileTypePolicy.Verdict.UNSUPPORTED) {
-            return PreflightFileView.denied(name, "UNSUPPORTED_TYPE",
-                    Map.of("mime", file.mime() == null ? "" : file.mime(), "allowed",
-                            FileTypePolicy.allowedExamples()));
+            String extension = FileTypePolicy.extensionOf(file.name());
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("mime", file.mime() == null ? "" : file.mime());
+            if (!extension.isEmpty()) {
+                details.put("extension", extension);
+            }
+            details.put("allowed", FileTypePolicy.allowedExamples());
+            return PreflightFileView.denied(name, "UNSUPPORTED_TYPE", details);
         }
         if (file.size() > maxFileBytes) {
             return PreflightFileView.denied(name, "FILE_TOO_LARGE",

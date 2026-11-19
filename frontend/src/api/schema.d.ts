@@ -1045,7 +1045,7 @@ export interface components {
             /** @description Сохранённый переключатель регистрации установки */
             registration_open: boolean;
         };
-        /** @description Настройки установки. SMTP-пароль никогда не возвращается; `smtp_configured` отражает, задан ли хост и отправитель. `updated_by` — platform_admin, сделавший последнее изменение. */
+        /** @description Настройки установки. SMTP-пароль никогда не возвращается; `smtp_configured` отражает, задан ли хост и отправитель. `updated_by` — platform_admin, сделавший последнее изменение. `allowed_file_extensions` — runtime-allowlist расширений (нижний регистр, без точек); изменения применяются к следующей загрузке без перезапуска. */
         AdminSettings: {
             setup_completed: boolean;
             /** Format: date-time */
@@ -1060,6 +1060,8 @@ export interface components {
             max_chats_per_workspace: number;
             max_workspace_members: number;
             registration_open: boolean;
+            /** @description Разрешённые расширения файлов в нижнем регистре, без ведущей точки. Управляется platform_admin; применяется без перезапуска. */
+            allowed_file_extensions?: string[];
             /** Format: date-time */
             updated_at: string;
             /** Format: uuid */
@@ -1073,6 +1075,8 @@ export interface components {
             smtp_password?: string | null;
             smtp_from?: string | null;
             smtp_starttls?: boolean | null;
+            /** @description Полная замена allowlist. `null` (или отсутствие поля) — не менять; пустой массив отклоняется `400 VALIDATION_FAILED`. Значения нормализуются в нижний регистр; дубликаты, точки, опасные расширения и записи вне `[a-z0-9]{1,10}` отклоняются. */
+            allowed_file_extensions?: string[] | null;
             max_chats_per_user?: number | null;
             max_chats_per_workspace?: number | null;
             max_workspace_members?: number | null;

@@ -110,7 +110,7 @@ export function AdminScreen({ onBackToChats, onOpenSetup, onLogout }: AdminScree
 
       <div className="admin-page">
         <section className="admin-hero" aria-labelledby="admin-title">
-          <p className="admin-hero__eyebrow">pickle · managed</p>
+          <p className="admin-hero__eyebrow">сова · managed</p>
           <h1 className="admin-hero__title" id="admin-title">
             {t('admin.title')}
           </h1>

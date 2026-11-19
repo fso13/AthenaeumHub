@@ -17,6 +17,7 @@ interface FormState {
   maxChatsPerWorkspace: string;
   maxWorkspaceMembers: string;
   registrationOpen: boolean;
+  allowedFileExtensions: string;
   testEmail: string;
 }
 
@@ -49,6 +50,7 @@ function initialForm(settings: AdminSettings, defaultTestEmail: string): FormSta
     maxChatsPerWorkspace: String(settings.max_chats_per_workspace),
     maxWorkspaceMembers: String(settings.max_workspace_members),
     registrationOpen: settings.registration_open,
+    allowedFileExtensions: (settings.allowed_file_extensions ?? []).join(', '),
     testEmail: defaultTestEmail,
   };
 }
@@ -58,6 +60,52 @@ function parseLimit(value: string): number | null {
   const parsed = Number(value.trim());
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_LIMIT) return null;
   return parsed;
+}
+
+const EXTENSION_RE = /^[a-z0-9]{1,10}$/;
+const DANGEROUS_EXTENSIONS = new Set([
+  'exe',
+  'bat',
+  'cmd',
+  'com',
+  'scr',
+  'pif',
+  'msi',
+  'ps1',
+  'sh',
+  'bash',
+  'vbs',
+  'vbe',
+  'js',
+  'jse',
+  'wsf',
+  'wsh',
+  'dll',
+  'sys',
+  'apk',
+  'jar',
+  'app',
+  'deb',
+  'rpm',
+  'hta',
+  'cpl',
+  'lnk',
+  'html',
+  'htm',
+  'svg',
+]);
+
+function parseExtensions(value: string): string[] | null {
+  const entries = value
+    .split(/[,\s]+/)
+    .map((item) => item.trim().toLowerCase().replace(/^\./, ''))
+    .filter((item) => item.length > 0);
+  if (entries.length === 0 || entries.length > 100) return null;
+  if (new Set(entries).size !== entries.length) return null;
+  if (entries.some((entry) => !EXTENSION_RE.test(entry) || DANGEROUS_EXTENSIONS.has(entry))) {
+    return null;
+  }
+  return entries;
 }
 
 function parsePort(value: string): number | null | undefined {
@@ -114,6 +162,7 @@ export function AdminSettingsForm({
   const [testing, setTesting] = useState(false);
 
   const ids = {
+    extensions: useId(),
     host: useId(),
     port: useId(),
     username: useId(),
@@ -165,12 +214,18 @@ export function AdminSettingsForm({
       setFormError(t('admin.form.validation'));
       return null;
     }
+    const allowedFileExtensions = parseExtensions(form.allowedFileExtensions);
+    if (allowedFileExtensions === null) {
+      setFormError(t('admin.form.extensionsInvalid'));
+      return null;
+    }
     return {
       ...patch,
       max_chats_per_user: maxChatsPerUser,
       max_chats_per_workspace: maxChatsPerWorkspace,
       max_workspace_members: maxWorkspaceMembers,
       registration_open: form.registrationOpen,
+      allowed_file_extensions: allowedFileExtensions,
     };
   };
 
@@ -448,6 +503,23 @@ export function AdminSettingsForm({
         <p className="admin-form__hint">{t('admin.form.limitsHint')}</p>
         <p className="admin-form__hint">{t('admin.form.maxMembersHint')}</p>
         <p className="admin-form__hint">{t('admin.form.registrationHint')}</p>
+
+        <div className="field">
+          <label className="field__label" htmlFor={ids.extensions}>
+            {t('admin.form.allowedExtensions')}
+          </label>
+          <textarea
+            id={ids.extensions}
+            className="field__input admin-form__extensions"
+            rows={4}
+            value={form.allowedFileExtensions}
+            onChange={(event) => update('allowedFileExtensions', event.target.value)}
+            aria-describedby={`${ids.extensions}-hint`}
+          />
+          <p className="admin-form__hint" id={`${ids.extensions}-hint`}>
+            {t('admin.form.allowedExtensionsHint')}
+          </p>
+        </div>
       </fieldset>
 
       {saved && mode === 'admin' ? (

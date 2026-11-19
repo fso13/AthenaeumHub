@@ -139,6 +139,31 @@ class MediaMetadataIT extends FileUploadTestSupport {
     }
 
     @Test
+    void m4aIsAcceptedWithBothMimeSpellingsAndRoundtripsAsAudio() throws Exception {
+        SessionResponse session = devSession();
+        UUID chatId = session.chat().id();
+        Map<String, Object> m4aMedia = with(media("AUDIO", "ID3"),
+                Map.of("duration_ms", 18_000, "title", "Interview"));
+
+        UUID attachmentId = uploadWithMedia(session, chatId, "interview-team.m4a",
+                randomBytes(1024), "audio/mp4", m4aMedia);
+        MvcResult send = sendWithAttachments(session, chatId, null, List.of(attachmentId));
+        assertThat(send.getResponse().getStatus())
+                .as(send.getResponse().getContentAsString()).isEqualTo(201);
+        JsonNode mediaNode = json(send).get("attachments").get(0).get("media");
+        CONTRACT.assertValid("Message", json(send));
+        assertThat(mediaNode.get("kind").asText()).isEqualTo("AUDIO");
+        assertThat(mediaNode.get("title").asText()).isEqualTo("Interview");
+        assertThat(mediaNode.get("duration_ms").asLong()).isEqualTo(18_000);
+
+        // Some browsers report audio/x-m4a; it is a first-class M4A MIME as well.
+        MvcResult xM4a = init(session, chatId, "voice-note.m4a", randomBytes(128),
+                "audio/x-m4a");
+        assertThat(xM4a.getResponse().getStatus())
+                .as(xM4a.getResponse().getContentAsString()).isEqualTo(201);
+    }
+
+    @Test
     void audioKindOutsideTheMimeAllowlistIs415() throws Exception {
         SessionResponse session = devSession();
         UUID chatId = session.chat().id();

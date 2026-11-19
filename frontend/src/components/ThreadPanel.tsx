@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { describeError } from '../domain/errors';
 import { formatShortDate, replyPreview, sortBySeq } from '../domain/messages';
 import { useCountdown } from '../hooks/useCountdown';
@@ -8,6 +8,7 @@ import { threadKey, type OutgoingMessage } from '../store/chatStore';
 import type { SendBlockedReason } from './Composer';
 import { ErrorDetails } from './ErrorDetails';
 import { ChevronUpIcon, CloseIcon, ThreadIcon } from './Icons';
+import { MentionText } from './MentionText';
 import { MessageRow, OutgoingRow } from './MessageRow';
 import { StatePanel } from './StatePanel';
 import { ThreadComposer } from './ThreadComposer';
@@ -109,6 +110,15 @@ export function ThreadPanel() {
   const viewerId = state.user?.id ?? state.session?.user.id ?? null;
   const rateLimitSeconds = useCountdown(state.rateLimitUntil);
   const threadsAvailable = active ? store.threadsAvailable(active.chatId) : false;
+  const mentionNames = useMemo(
+    () => state.workspaceMembers.items.map((member) => member.display_name),
+    [state.workspaceMembers.items],
+  );
+  const mentionDirectoryLoading =
+    state.workspaceMembers.status === 'idle' || state.workspaceMembers.status === 'loading';
+  const ensureMentionDirectory = useCallback(() => {
+    void store.loadWorkspaceMembers({ query: '' });
+  }, [store]);
 
   const e2eeBlocked = Boolean(active) && !threadsAvailable;
   const sendBlockedReason: SendBlockedReason = !state.online
@@ -284,8 +294,10 @@ export function ThreadPanel() {
             }
             replyTo={reply.reply_to_id ? (replyById.get(reply.reply_to_id) ?? null) : null}
             replyText={null}
+            e2eeChat={!threadsAvailable}
             threadsAvailable={false}
             allowReply={false}
+            mentionNames={mentionNames}
             onJumpTo={jumpTo}
           />
         ))}
@@ -301,6 +313,8 @@ export function ThreadPanel() {
               void store.retryThreadReply(active.chatId, active.rootId, clientMessageId)
             }
             onRestore={handleRestore}
+            mentionNames={mentionNames}
+            richText={threadsAvailable}
           />
         ))}
       </>
@@ -341,7 +355,17 @@ export function ThreadPanel() {
         <span className="thread-panel__root-author">
           {root?.sender_display_name?.trim() || t('chat.unknownAuthor')}
         </span>
-        <p className="thread-panel__root-text">{root ? rootText : t('thread.rootMissing')}</p>
+        <p className="thread-panel__root-text">
+          {root ? (
+            threadsAvailable && !root.deleted_at ? (
+              <MentionText text={rootText} mentions={mentionNames} />
+            ) : (
+              rootText
+            )
+          ) : (
+            t('thread.rootMissing')
+          )}
+        </p>
         {root ? (
           <time className="thread-panel__root-time" dateTime={root.created_at}>
             {formatShortDate(root.created_at)}
@@ -368,6 +392,10 @@ export function ThreadPanel() {
         sendBlockedReason={sendBlockedReason}
         rateLimitSeconds={rateLimitSeconds}
         textareaRef={textareaRef}
+        mentionMembers={state.workspaceMembers.items}
+        mentionsEnabled={threadsAvailable}
+        mentionDirectoryLoading={mentionDirectoryLoading}
+        onMentionDirectoryNeeded={ensureMentionDirectory}
       />
     </aside>
   );

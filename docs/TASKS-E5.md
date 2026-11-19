@@ -33,7 +33,7 @@
 2. **DB/schema (V14)**
    - `sticker_packs` (id, name, cover_url, status, builtin), `stickers` (id, pack_id, alt, url, format, width, height, size_bytes, position, status), `sticker_favorites` (user_id, sticker_id).
    - Seed 2 built-in packs × 8 stickers (demo PNG placeholders):
-- pack `krug` / «Круг»: `/stickers/krug/01.png` … `/stickers/krug/08.png`, cover `/stickers/krug/cover.png`;
+- pack `krug` / «Сова»: `/stickers/krug/01.png` … `/stickers/krug/08.png`, cover `/stickers/krug/cover.png`;
 - pack `cats` / «Коты»: `/stickers/cats/01.png` … `/stickers/cats/08.png`, cover `/stickers/cats/cover.png`.
 
    - RLS не нужна для built-in (глобальные), favorites — по user_id; доступ к packs — через членство в чате (проверка `chat_id`).

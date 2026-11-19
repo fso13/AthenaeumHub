@@ -41,13 +41,13 @@ public class SmtpMailAdapter implements MailPort, TestEmailPort {
     public void sendEmailCode(EmailCodeMessage message) {
         SimpleMailMessage mail = new SimpleMailMessage();
         mail.setTo(message.email());
-        mail.setSubject("Pickle — подтверждение email");
+        mail.setSubject("Сова — подтверждение email");
         mail.setText("""
                 Здравствуйте!
 
                 Ваш код подтверждения: %s
 
-                Код действует %d мин. Если вы не регистрировались в Pickle, проигнорируйте письмо.
+                Код действует %d мин. Если вы не регистрировались в Сове, проигнорируйте письмо.
                 """.formatted(message.code(), message.expiresInMinutes()));
         send(mail, MailDeliveryException::new);
     }
@@ -56,9 +56,9 @@ public class SmtpMailAdapter implements MailPort, TestEmailPort {
     public void sendTestEmail(String to) {
         SimpleMailMessage mail = new SimpleMailMessage();
         mail.setTo(to);
-        mail.setSubject("Pickle — тестовое письмо");
+        mail.setSubject("Сова — тестовое письмо");
         mail.setText("""
-                Это тестовое письмо из административной панели Pickle.
+                Это тестовое письмо из административной панели Совы.
 
                 Если вы его получили, SMTP настроен корректно.
                 """);

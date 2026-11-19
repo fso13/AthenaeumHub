@@ -37,7 +37,7 @@ class StickerPackIT extends IntegrationTestBase {
         CONTRACT.assertValid("StickerPackList", body);
 
         assertThat(body.get("items").size()).isEqualTo(2);
-        JsonNode krug = pack(body, "Круг");
+        JsonNode krug = pack(body, "Сова");
         JsonNode cats = pack(body, "Коты");
         assertThat(krug.get("id").asText()).isEqualTo(StickerTestSupport.KRUG_PACK_ID.toString());
         assertThat(krug.get("cover_url").asText()).isEqualTo("/stickers/krug/cover.png");
@@ -49,7 +49,7 @@ class StickerPackIT extends IntegrationTestBase {
         JsonNode first = krug.get("stickers").get(0);
         assertThat(first.get("id").asText()).isEqualTo(StickerTestSupport.KRUG_01.toString());
         assertThat(first.get("pack_id").asText()).isEqualTo(StickerTestSupport.KRUG_PACK_ID.toString());
-        assertThat(first.get("alt").asText()).isEqualTo("Круг — стикер 1");
+        assertThat(first.get("alt").asText()).isEqualTo("Сова — стикер 1");
         assertThat(first.get("url").asText()).isEqualTo("/stickers/krug/01.png");
         assertThat(first.get("favorite").asBoolean()).isFalse();
         assertThat(krug.get("stickers").get(7).get("url").asText())
@@ -153,7 +153,7 @@ class StickerPackIT extends IntegrationTestBase {
             migrator().update("UPDATE sticker.sticker_packs SET status = 'DISABLED' WHERE id = ?",
                     StickerTestSupport.KRUG_PACK_ID);
             favorite(session, StickerTestSupport.KRUG_01).andExpect(status().isNotFound());
-            assertThat(pack(stickerPacks(session, session.chat().id()), "Круг")).isNull();
+            assertThat(pack(stickerPacks(session, session.chat().id()), "Сова")).isNull();
         } finally {
             migrator().update("UPDATE sticker.sticker_packs SET status = 'ACTIVE' WHERE id = ?",
                     StickerTestSupport.KRUG_PACK_ID);
@@ -174,7 +174,7 @@ class StickerPackIT extends IntegrationTestBase {
                     StickerTestSupport.KRUG_PACK_ID);
             JsonNode packs = stickerPacks(session, chatId);
             assertThat(packs.get("items").size()).isEqualTo(1);
-            assertThat(pack(packs, "Круг")).isNull();
+            assertThat(pack(packs, "Сова")).isNull();
 
             MvcResult history = mockMvc.perform(authed(
                             get("/api/v1/chats/{chatId}/messages", chatId), session))

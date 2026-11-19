@@ -42,7 +42,7 @@ describe('ops store (E8 setup/admin)', () => {
       {
         smtp_host: 'smtp.example.test',
         smtp_port: 587,
-        smtp_from: 'pickle@example.test',
+        smtp_from: 'sova@example.test',
         smtp_password: 'super-secret',
         max_chats_per_user: 7,
         max_chats_per_workspace: 70,
@@ -79,7 +79,7 @@ describe('ops store (E8 setup/admin)', () => {
     expect(store.getSnapshot().testEmailError?.code).toBe('SMTP_UNAVAILABLE');
 
     mockDb.admin.smtpHost = 'smtp.example.test';
-    mockDb.admin.smtpFrom = 'pickle@example.test';
+    mockDb.admin.smtpFrom = 'sova@example.test';
     const sent = await store.sendTestEmail('admin@example.test');
     expect(sent).toBe(true);
     expect(store.getSnapshot().testEmailStatus).toBe('sent');
@@ -110,7 +110,7 @@ describe('ops store (E8 setup/admin)', () => {
     await store.saveSettings(
       {
         smtp_host: 'smtp.example.test',
-        smtp_from: 'pickle@example.test',
+        smtp_from: 'sova@example.test',
         smtp_password: 'do-not-keep',
       },
       false,

@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════
-   Pickle — Message Dashboard · демо-логика
+   Сова — Message Dashboard · демо-логика
    Моки данных, рендер, переключение тем/пространств/чатов.
    ══════════════════════════════════════════════════════════════ */
 
@@ -217,7 +217,7 @@
             desc: "Плагины, роли и лимиты файлов",
             dur: "12:40",
             author: "egor",
-            source: "Круг · Видео"
+            source: "Сова · Видео"
           }
         },
         {
@@ -2451,7 +2451,7 @@
           <button class="switch" data-switch-inline aria-checked="false"></button>
         </div>
         <div class="setting-row">
-          <div class="text"><b>Акцент</b><small>Фирменный зелёный Pickle</small></div>
+          <div class="text"><b>Акцент</b><small>Фирменный бирюзовый Совы</small></div>
           <div class="swatches"><span class="swatch is-active" style="background:#65BD45"></span><span class="swatch" style="background:#D9A441"></span><span class="swatch" style="background:#E85D4A"></span><span class="swatch" style="background:#2F7A38"></span></div>
         </div>
       </div>`;
@@ -2459,7 +2459,7 @@
     if (tab === "notifications") {
       return `<div class="card">
         <h3>Уведомления</h3>
-        <p class="pane-sub">Выберите, когда Pickle может вас отвлекать.</p>
+        <p class="pane-sub">Выберите, когда Сова может вас отвлекать.</p>
         ${switchSetting("Все уведомления", "Сообщения, упоминания и звонки", true)}
         ${switchSetting("Только упоминания", "Отключить шум в каналах", false)}
         ${switchSetting("Личные сообщения", "Всегда показывать превью", true)}
@@ -2771,7 +2771,7 @@
     document.body.dataset.theme = state.theme;
     document.documentElement.dataset.theme = state.theme;
     try {
-      localStorage.setItem("pickle-theme", state.theme);
+      localStorage.setItem("sova-theme", state.theme);
     } catch (e) {
       /* file:// */
     }
@@ -2939,7 +2939,7 @@
 
   function init() {
     const params = new URLSearchParams(location.search);
-    const theme = params.get("theme") || localStorage.getItem("pickle-theme") || "light";
+    const theme = params.get("theme") || localStorage.getItem("sova-theme") || "light";
     state.theme = theme === "dark" ? "dark" : "light";
     document.body.dataset.theme = state.theme;
     document.documentElement.dataset.theme = state.theme;

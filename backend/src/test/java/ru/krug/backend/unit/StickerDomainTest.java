@@ -48,17 +48,17 @@ class StickerDomainTest {
     @Test
     void activePackRequiresEightStickersAndFiltersDisabledOnes() {
         List<Sticker> stickers = stickers(8);
-        StickerPack pack = StickerPack.reconstitute(packId, "krug", "Круг",
+        StickerPack pack = StickerPack.reconstitute(packId, "krug", "Сова",
                 "/stickers/krug/cover.png", PackStatus.ACTIVE, true, stickers);
         assertThat(pack.activeStickers()).hasSize(8);
         assertThat(pack.findSticker(stickers.get(0).id().value())).contains(stickers.get(0));
 
-        assertThatThrownBy(() -> StickerPack.reconstitute(packId, "krug", "Круг",
+        assertThatThrownBy(() -> StickerPack.reconstitute(packId, "krug", "Сова",
                 "/cover.png", PackStatus.ACTIVE, true, stickers(7)))
                 .isInstanceOf(IllegalArgumentException.class);
 
         // DISABLED packs keep history but may have fewer/zero stickers.
-        assertThatCode(() -> StickerPack.reconstitute(packId, "krug", "Круг",
+        assertThatCode(() -> StickerPack.reconstitute(packId, "krug", "Сова",
                 "/cover.png", PackStatus.DISABLED, true, List.of()))
                 .doesNotThrowAnyException();
 
@@ -66,7 +66,7 @@ class StickerDomainTest {
                 asset, 9, StickerStatus.DISABLED);
         List<Sticker> mixed = new ArrayList<>(stickers);
         mixed.add(disabled);
-        StickerPack withDisabled = StickerPack.reconstitute(packId, "krug", "Круг",
+        StickerPack withDisabled = StickerPack.reconstitute(packId, "krug", "Сова",
                 "/cover.png", PackStatus.ACTIVE, true, mixed);
         assertThat(withDisabled.activeStickers()).hasSize(8);
     }
@@ -77,14 +77,14 @@ class StickerDomainTest {
                 "foreign", asset, 1, StickerStatus.ACTIVE);
         List<Sticker> stickers = stickers(8);
         stickers.add(foreign);
-        assertThatThrownBy(() -> StickerPack.reconstitute(packId, "krug", "Круг",
+        assertThatThrownBy(() -> StickerPack.reconstitute(packId, "krug", "Сова",
                 "/cover.png", PackStatus.ACTIVE, true, stickers))
                 .isInstanceOf(IllegalArgumentException.class);
 
-        assertThatThrownBy(() -> StickerPack.reconstitute(packId, " ", "Круг",
+        assertThatThrownBy(() -> StickerPack.reconstitute(packId, " ", "Сова",
                 "/cover.png", PackStatus.DISABLED, true, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> StickerPack.reconstitute(packId, "krug", "Круг",
+        assertThatThrownBy(() -> StickerPack.reconstitute(packId, "krug", "Сова",
                 " ", PackStatus.DISABLED, true, List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }

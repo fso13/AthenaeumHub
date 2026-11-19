@@ -721,7 +721,7 @@ the sticker and pack ids are stable across resets, so clients/tests can cache th
 
 | slug | name | cover | stickers |
 |---|---|---|---|
-| `krug` | «Круг» | `/stickers/krug/cover.png` | `/stickers/krug/01.png` … `/stickers/krug/08.png` |
+| `krug` | «Сова» | `/stickers/krug/cover.png` | `/stickers/krug/01.png` … `/stickers/krug/08.png` |
 | `cats` | «Коты» | `/stickers/cats/cover.png` | `/stickers/cats/01.png` … `/stickers/cats/08.png` |
 
 Every row has `format=PNG`, `width=height=512`, `0 < size_bytes <= 524288`, `position`

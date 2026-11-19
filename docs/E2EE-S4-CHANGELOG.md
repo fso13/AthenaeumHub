@@ -1,6 +1,6 @@
 # E2EE-S4-CHANGELOG — targeted remediation по E2EE-REVIEW-03 (G2: GO WITH CONDITIONS)
 
-> **Роль:** автор E2EE-спеки «Круга». **Зона S4:** `docs/E2EE-SPEC.md`, `docs/E2EE-TEST-VECTORS.json`, `docs/E2EE-SPIKE-NOTES.md`, этот файл. `backend/**`, `frontend/**`, `contracts/**`, `docs/TASKS*.md`, ревью — **не изменялись**.
+> **Роль:** автор E2EE-спеки «Совы». **Зона S4:** `docs/E2EE-SPEC.md`, `docs/E2EE-TEST-VECTORS.json`, `docs/E2EE-SPIKE-NOTES.md`, этот файл. `backend/**`, `frontend/**`, `contracts/**`, `docs/TASKS*.md`, ревью — **не изменялись**.
 > **Вход:** [`docs/E2EE-REVIEW-03.md`](<E2EE-REVIEW-03.md>) — GO WITH CONDITIONS: P0 4/4 closed; P1-A/B/C/G partial; P1-I01 partial; 12 вопросов; P2-1…P2-22.
 > **Выход:** спека S4 (3 449 строк), vectors v4 (**45 векторов / 17 секций / 345 checks, 0 failures**), S4-генератор/верификатор и PG16-smoke в notes §11, `docs/E2EE-S4-CHANGELOG.md`.
 > **Wire format:** `envelope.v=1`, `header.v=1`, AD 163 B, преамбул `313+L+M` — **не менялись**. Изменились: wire-кодировка `B3/B4.expected.signature` (hex → b64u64) и inner payload `content_type=2` (добавлен `failed_chain_dh`; это inner JSON, не конверт).

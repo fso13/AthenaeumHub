@@ -8,7 +8,9 @@ import { AttachmentList } from './AttachmentCard';
 import { Avatar } from './Avatar';
 import { ErrorDetails } from './ErrorDetails';
 import { AlertIcon, ClockIcon, RetryIcon } from './Icons';
+import { MentionText } from './MentionText';
 import { MessageActions, ReactionBar } from './MessageActions';
+import { RichText } from './RichText';
 import { ThreadLink } from './ThreadLink';
 
 const UNKNOWN_AUTHOR = () => t('chat.unknownAuthor');
@@ -33,6 +35,8 @@ interface MessageRowProps {
   threadDisabledReason?: string | null;
   /** Resolved display name of `thread_summary.last_reply_author_id`. */
   threadAuthorName?: string | null;
+  /** Active workspace member names for @mention chips (managed only). */
+  mentionNames?: readonly string[];
   onOpenThread?: (message: ApiMessage) => void;
   /** D1-FE3: replies inside a thread do not offer quote-reply. */
   allowReply?: boolean;
@@ -94,6 +98,7 @@ export function MessageRow({
   threadsAvailable = false,
   threadDisabledReason = null,
   threadAuthorName = null,
+  mentionNames = [],
   onOpenThread,
   allowReply = true,
   onReply,
@@ -141,6 +146,7 @@ export function MessageRow({
       <ThreadLink
         summary={threadSummary}
         authorName={threadAuthorName}
+        mentionNames={mentionNames}
         onOpen={() => onOpenThread(message)}
       />
     ) : null;
@@ -154,11 +160,15 @@ export function MessageRow({
         aria-label={`${t('chat.replyTo')}: ${quoteAuthor}: ${quoteText}`}
       >
         <span className="quote__author">{quoteAuthor}</span>
-        <span className="quote__text">{quoteText}</span>
+        <span className="quote__text">
+          {e2eeChat ? quoteText : <MentionText text={quoteText} mentions={mentionNames} />}
+        </span>
       </button>
     ) : (
       <div className="quote quote--missing">
-        <span className="quote__text">{quoteText}</span>
+        <span className="quote__text">
+          {e2eeChat ? quoteText : <MentionText text={quoteText} mentions={mentionNames} />}
+        </span>
       </div>
     )
   ) : null;
@@ -236,7 +246,14 @@ export function MessageRow({
         {meta}
         {quote}
         {showText ? (
-          <p className={`msg-text${deleted ? ' msg-text--deleted' : ''}`}>{text}</p>
+          deleted ? (
+            <p className="msg-text msg-text--deleted">{text}</p>
+          ) : e2eeChat ? (
+            // E2EE is plain text: no Markdown, no mention chips, no links.
+            <p className="msg-text msg-text--plain">{text}</p>
+          ) : (
+            <RichText text={text} mentions={mentionNames} className="msg-text" />
+          )
         ) : null}
         {!deleted && !e2eeChat ? <AttachmentList attachments={message.attachments ?? []} /> : null}
         {threadLink}
@@ -264,6 +281,10 @@ interface OutgoingRowProps {
   retryDisabled: boolean;
   onRetry: (clientMessageId: string) => void;
   onRestore: (item: OutgoingMessage) => void;
+  /** Active workspace member names for @mention chips (managed only). */
+  mentionNames?: readonly string[];
+  /** E2EE optimistic rows stay plain text, like the confirmed E2EE row. */
+  richText?: boolean;
 }
 
 export function OutgoingRow({
@@ -272,6 +293,8 @@ export function OutgoingRow({
   retryDisabled,
   onRetry,
   onRestore,
+  mentionNames = [],
+  richText = false,
 }: OutgoingRowProps) {
   const failed = item.status === 'failed';
   const described = item.error ? describeError(item.error) : null;
@@ -359,7 +382,13 @@ export function OutgoingRow({
       <Avatar name={viewerName} seed={viewerName} size="lg" />
       <div className="msg-body">
         {head}
-        {item.text.trim().length > 0 ? <p className="msg-text">{item.text}</p> : null}
+        {item.text.trim().length > 0 ? (
+          richText ? (
+            <RichText text={item.text} mentions={mentionNames} className="msg-text" />
+          ) : (
+            <p className="msg-text msg-text--plain">{item.text}</p>
+          )
+        ) : null}
         <AttachmentList attachments={item.attachments} outgoing />
         {errorBlock}
       </div>

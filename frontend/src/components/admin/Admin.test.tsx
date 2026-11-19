@@ -7,7 +7,7 @@ import { navigate } from '../../router/router';
 import { mockDb, server } from '../../test/server';
 import { renderPasswordApp } from '../../test/renderApp';
 
-const SETUP_HEADING = 'Первичная настройка Pickle';
+const SETUP_HEADING = 'Первичная настройка Совы';
 const ADMIN_HEADING = 'Администрирование';
 const INCOMPLETE_HEADING = 'Установка не завершена';
 const FORBIDDEN_HEADING = 'Доступ запрещён';
@@ -34,7 +34,7 @@ describe('E8 setup wizard and admin UI', () => {
     await user.type(screen.getByLabelText('Порт'), '587');
     await user.type(screen.getByLabelText('Логин SMTP'), 'mailer');
     await user.type(screen.getByLabelText('Пароль SMTP'), 'smtp-secret-2026');
-    await user.type(screen.getByLabelText('Адрес отправителя'), 'pickle@example.test');
+    await user.type(screen.getByLabelText('Адрес отправителя'), 'sova@example.test');
     await user.clear(screen.getByLabelText('Лимит чатов на пользователя'));
     await user.type(screen.getByLabelText('Лимит чатов на пользователя'), '12');
 

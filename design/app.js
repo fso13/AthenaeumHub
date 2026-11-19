@@ -1,7 +1,7 @@
 'use strict';
 
 /* ═══════════════════════════════════════════════════════════════
-   Круг — интерактивный прототип (моки, без бэкенда)
+   Сова — интерактивный прототип (моки, без бэкенда)
    ═══════════════════════════════════════════════════════════════ */
 
 /* ─────────── Утилиты ─────────── */
@@ -149,7 +149,7 @@ const PLUGIN_BY_ID = Object.fromEntries(PLUGINS.map(p => [p.id, p]));
 
 const STICKER_PACKS = [
   {
-    id: 'krug', name: 'Круг',
+    id: 'krug', name: 'Сова',
     stickers: [
       { id: 'krug-heart', emoji: '🫶', label: 'Обнимаю' },
       { id: 'krug-rocket', emoji: '🚀', label: 'Погнали' },
@@ -776,7 +776,7 @@ function renderMessages(scroll = true) {
     const introText = dm
       ? 'Это начало вашей личной переписки. Сообщения, файлы и звонки защищены по умолчанию.'
       : 'Группа создана. Пригласите участников по ссылке и начните обсуждение.';
-    const link = `krug.im/s/${chat.id}-${1000 + (hashString(chat.id) % 8999)}`;
+    const link = `sova.im/s/${chat.id}-${1000 + (hashString(chat.id) % 8999)}`;
     html += `
       <div class="chat-intro">
         <span class="avatar avatar--xl ${introAv}">${esc(dm ? other.short : chat.avatarText)}</span>
@@ -881,7 +881,7 @@ function renderPeoplePanel(chat) {
       </div>`;
   }).join('');
 
-  const link = `krug.im/s/${chat.id}-${1000 + (hashString(chat.id) % 8999)}`;
+  const link = `sova.im/s/${chat.id}-${1000 + (hashString(chat.id) % 8999)}`;
   return `
     <div class="panel-profile">
       <span class="avatar avatar--lg ${chat.av}">${esc(chat.avatarText)}</span>
@@ -1158,7 +1158,7 @@ function renderChat(options = {}) {
   renderWorkspace();
   applyLayout();
   updateComposerState();
-  document.title = `${chat.name} · Круг`;
+  document.title = `${chat.name} · Сова`;
 }
 
 function selectChat(id) {

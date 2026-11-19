@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from 'react';
 import type { ApiMessage, StickerRef } from '../api/types';
 import { describeError } from '../domain/errors';
 import { chatDisplayName } from '../domain/chatLabel';
@@ -137,6 +145,17 @@ export function ChatScreen({
   const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
   const threadsAvailable = activeChatId ? store.threadsAvailable(activeChatId) : false;
   const threadDisabledReason = threadsAvailable ? null : t('thread.e2eeDisabled');
+  const mentionNames = useMemo(
+    () => state.workspaceMembers.items.map((member) => member.display_name),
+    [state.workspaceMembers.items],
+  );
+  const mentionDirectoryLoading =
+    state.workspaceMembers.status === 'idle' || state.workspaceMembers.status === 'loading';
+  const ensureMentionDirectory = useCallback(() => {
+    // Composer autocomplete needs the whole first directory page, not the
+    // search-filtered page the members dialog may have left behind.
+    void store.loadWorkspaceMembers({ query: '' });
+  }, [store]);
   // P2-33: the reply bar must never show the server's plaintext quote in an
   // E2EE context; only the decrypted local view (or "unavailable") is allowed.
   const replyE2eeText =
@@ -410,6 +429,7 @@ export function ChatScreen({
         e2eeChat={isE2eeChat}
         threadsAvailable={threadsAvailable}
         threadDisabledReason={threadDisabledReason}
+        mentionNames={mentionNames}
         onLoadMore={() => void store.loadMore(activeChatId)}
         onRetry={(clientMessageId) => void store.retry(activeChatId, clientMessageId)}
         onRestore={handleRestore}
@@ -633,6 +653,10 @@ export function ChatScreen({
                     />
                   ) : undefined
                 }
+                mentionMembers={state.workspaceMembers.items}
+                mentionsEnabled={!isE2eeChat}
+                mentionDirectoryLoading={mentionDirectoryLoading}
+                onMentionDirectoryNeeded={ensureMentionDirectory}
               />
             </div>
           ) : null}

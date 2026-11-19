@@ -193,7 +193,7 @@ sync), но остаётся P2-12.
 ### P2-01. F7B по-прежнему не воспроизводится на чистом стеке
 
 `frontend/e2e/e2ee.real.spec.ts:56-60` жёстко логинит
-`pickle-ui-1794919305193@krug.local`; `deploy/keycloak/realm-export.json` содержит только
+`sova-ui-1794919305193@krug.local`; `deploy/keycloak/realm-export.json` содержит только
 `test@krug.local` (grep: одна `username`). В текущей БД пользователь B есть только как
 leftover прошлых прогонов (SQL: 1 строка), поэтому независимый F7B 2/2 выполнен на
 **загрязнённом** стенде. На `down -v` + overlay F7B не стартует. Это остаётся условием
@@ -308,13 +308,13 @@ production-переход не проверяется.
 | asset | `/usr/share/nginx/html/assets/index-D7gHmGcS.js`, SHA-256 `bf82d7bfd439f1d5d2cfb8efd5ecf9e62e82e185ddd5c4b43f56b76c5c75f061` |
 | `index.html` | SHA-256 `9b26a99724f6590152e6ecd0acff6c22b76772fda675df16324f6d2f5b2076bd` |
 | flag in asset | `VITE_E2EE_ENABLED:"true"` |
-| local overlay build | with exact Docker args (`VITE_API_BASE_URL=/api/v1`, `VITE_AUTH_MODE=password`, `VITE_DEVICE_NAME="Pickle — браузер"`, `VITE_APP_VERSION=0.1.0`, `VITE_REALTIME_ENABLED=true`, `VITE_MEDIA_ORIGINS=http://localhost:9000`, `VITE_E2EE_ENABLED=true`) produced the **same** `index-D7gHmGcS.js` `bf82d7bf…` and `index.html` `9b26a997…` |
+| local overlay build | with exact Docker args (`VITE_API_BASE_URL=/api/v1`, `VITE_AUTH_MODE=password`, `VITE_DEVICE_NAME="Сова — браузер"`, `VITE_APP_VERSION=0.1.0`, `VITE_REALTIME_ENABLED=true`, `VITE_MEDIA_ORIGINS=http://localhost:9000`, `VITE_E2EE_ENABLED=true`) produced the **same** `index-D7gHmGcS.js` `bf82d7bf…` and `index.html` `9b26a997…` |
 | source mtimes | `find frontend/src … -newermt 2026-11-18T11:02:24Z` — **0 files**; source старше image |
 | F7B | independent run: **2 passed (27.5 s)**; Chromium JSON run 10.958 s, no `R15_CATCH_UP_RELOAD` annotation |
 | F7B scope | real keyed registration/prekeys, `GET /devices` `e2ee_capable`, DIRECT E2EE, A↔B send/decrypt, reload copies, `PUT` verification 201, R-15, DB/WS/logs no plaintext |
 | F7A | independent run: **12 passed** (chromium 4/4, firefox 4/4, webkit 4/4 expected-unsupported) with `MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_GPU_SANDBOX=1`; first firefox run without sandbox env crashed (`Target crashed`, environment artifact) |
 | full frontend | `npm run check` — **EXIT 0**, 72 files / **755 tests**, tsc clean, build 418 modules; lint 3 warnings (2 pre-existing `CreateChatDialog`, 1 new `chatBridgeSupport.test.ts`), 0 errors |
-| DB | 54 `E2EE F7B` workspaces (accumulation); 1 leftover `pickle-ui-…` user; 1 `test@krug.local`; `ck_envelopes_ciphertext_min.convalidated=t`; `relforcerowsecurity=t` for key_verifications/message_envelopes |
+| DB | 54 `E2EE F7B` workspaces (accumulation); 1 leftover `sova-ui-…` user; 1 `test@krug.local`; `ck_envelopes_ciphertext_min.convalidated=t`; `relforcerowsecurity=t` for key_verifications/message_envelopes |
 | base flags | `.env`/compose — `false`; overlay — `true`; running stack — `true` |
 
 F7B по-прежнему использует leftover-B и destructive SQL (P2-01/P2-02), поэтому это

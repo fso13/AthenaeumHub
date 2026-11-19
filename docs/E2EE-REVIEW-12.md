@@ -237,7 +237,7 @@ flag-on нужно мигрировать или явно переустанов
 
 | ID | Статус | Комментарий |
 |---|---|---|
-| P2-01 Чистый стек F7B | **OPEN** | Снова leftover `pickle-ui-1794919305193@krug.local`/`test@krug.local`; B не регистрируется через BFF/Mailpit. |
+| P2-01 Чистый стек F7B | **OPEN** | Снова leftover `sova-ui-1794919305193@krug.local`/`test@krug.local`; B не регистрируется через BFF/Mailpit. |
 | P2-02 Destructive SQL по умолчанию | **OPEN** | `e2ee.real.spec.ts:50` `DB_CHECK=true`; `:205-218` `UPDATE auth.devices … REVOKED` без `E2EE_REAL_ALLOW_DESTRUCTIVE=1`. |
 | P2-03 Накопление workspace/flag-on стек | **OPEN** | 61 → **68** `E2EE F7B` workspace и 313 → **327** devices после F8B + моих прогонов; контейнеры backend/frontend flag-on; `krug-frontend:latest` — overlay-образ. |
 | P2-04 Legacy incoming copies без `serverMessageId` | **OPEN** | `outboxStore.ts:1248-1253`; не менялось. |
@@ -262,7 +262,7 @@ flag-on нужно мигрировать или явно переустанов
 | container | `krug-frontend` запущен `2026-11-18T11:28:03Z`, healthy; backend `KRUG_E2EE_ENABLED=true` (overlay) |
 | SPA asset | `assets/index-vvj_eLFp.js`, SHA-256 `7957b3707591f22ef41146134a5456d15545e95c23e2473b9630dd3c7b54dc61`; `browser-BrcbMjYG.js` `c5d778e4…`; `realtime-DUkkXm74.js` `97984e68…`; `index.html` `ee79c98e…` |
 | E2EE flag in asset | asset содержит E2EE-код (`E2EE_UNSUPPORTED_BROWSER`); сборка с `VITE_E2EE_ENABLED=true` воспроизвела **все 4** хеша |
-| reproducibility | `npx vite build` с точными overlay-args (`VITE_API_BASE_URL=/api/v1`, `VITE_USE_MOCKS=false`, `VITE_AUTH_MODE=password`, `VITE_DEV_SESSION=false`, `VITE_DEVICE_NAME="Pickle — браузер"`, `VITE_APP_VERSION=0.1.0`, `VITE_REALTIME_ENABLED=true`, `VITE_MEDIA_ORIGINS=http://localhost:9000`, `VITE_E2EE_ENABLED=true`) в отдельный outDir дал те же `index-vvj_eLFp.js`, `browser-BrcbMjYG.js`, `realtime-DUkkXm74.js`, `index.html` — образ соответствует текущему дереву |
+| reproducibility | `npx vite build` с точными overlay-args (`VITE_API_BASE_URL=/api/v1`, `VITE_USE_MOCKS=false`, `VITE_AUTH_MODE=password`, `VITE_DEV_SESSION=false`, `VITE_DEVICE_NAME="Сова — браузер"`, `VITE_APP_VERSION=0.1.0`, `VITE_REALTIME_ENABLED=true`, `VITE_MEDIA_ORIGINS=http://localhost:9000`, `VITE_E2EE_ENABLED=true`) в отдельный outDir дал те же `index-vvj_eLFp.js`, `browser-BrcbMjYG.js`, `realtime-DUkkXm74.js`, `index.html` — образ соответствует текущему дереву |
 | source mtimes | F8B-файлы `outboxStore.ts`/`types.ts`/`resetRetry.ts`/`e2ee.real.spec.ts` — 14:26:45, `resetRetry.test.ts` — 14:27:01, всё **старше** image 14:27:59; SPA-source новее образа нет (только `docs/TASKS.md` 14:28:27 и отчёты) |
 | base flags | `deploy/.env:44` — `KRUG_E2EE_ENABLED=false`; base `docker-compose.yml:275,304` — `${KRUG_E2EE_ENABLED:-false}`; `Dockerfile:19` default `false`; `true` только в `docker-compose.e2ee-test.yml:11,15` |
 | F7B | независимый прогон: **2 passed (15.6 s)**, Chromium 5.8 s, Firefox 8.4 s; запуск с `PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers`; Firefox в песочнице ревьюера требует `CFFIXED_USER_HOME` и `MOZ_DISABLE_CONTENT_SANDBOX=1` (иначе profile/sandbox error) — это окружение ревьюера, не изменение продукта |

@@ -81,6 +81,7 @@ export interface MockAdminState {
   maxChatsPerUser: number;
   maxChatsPerWorkspace: number;
   maxWorkspaceMembers: number;
+  allowedFileExtensions: string[];
   registrationOpen: boolean;
   updatedAt: string;
   updatedBy: string | null;
@@ -546,6 +547,23 @@ export function createMockAdminState(): MockAdminState {
     maxChatsPerUser: 100,
     maxChatsPerWorkspace: 1000,
     maxWorkspaceMembers: 100,
+    allowedFileExtensions: [
+      'pdf',
+      'png',
+      'jpg',
+      'jpeg',
+      'webp',
+      'gif',
+      'mp3',
+      'm4a',
+      'wav',
+      'mp4',
+      'webm',
+      'txt',
+      'csv',
+      'json',
+      'zip',
+    ],
     registrationOpen: true,
     updatedAt: now,
     updatedBy: null,

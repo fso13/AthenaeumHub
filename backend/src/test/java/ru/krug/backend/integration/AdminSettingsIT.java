@@ -24,12 +24,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MvcResult;
 
 import ru.krug.backend.ops.api.dto.SessionResponse;
+import ru.krug.backend.ops.application.port.SystemSettingsPort;
 import ru.krug.backend.support.IntegrationTestBase;
 import ru.krug.backend.support.MockMailSender;
 import ru.krug.backend.support.OpenApiContract;
@@ -48,6 +51,9 @@ class AdminSettingsIT extends IntegrationTestBase {
 
     @Autowired
     private MockMailSender mail;
+
+    @Autowired
+    private CacheManager cacheManager;
 
     @BeforeEach
     void reset() {
@@ -76,7 +82,7 @@ class AdminSettingsIT extends IntegrationTestBase {
         Map<String, Object> completeSetup = new LinkedHashMap<>();
         completeSetup.put("smtp_host", "smtp.example.test");
         completeSetup.put("smtp_port", 587);
-        completeSetup.put("smtp_username", "pickle");
+        completeSetup.put("smtp_username", "sova");
         completeSetup.put("smtp_password", password);
         completeSetup.put("smtp_from", "no-reply@example.test");
         completeSetup.put("smtp_starttls", true);
@@ -183,7 +189,7 @@ class AdminSettingsIT extends IntegrationTestBase {
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "smtp_host", "smtp.example.test",
                                 "smtp_port", 587,
-                                "smtp_username", "pickle",
+                                "smtp_username", "sova",
                                 "smtp_password", password,
                                 "smtp_from", "no-reply@example.test",
                                 "smtp_starttls", true))))
@@ -373,9 +379,16 @@ class AdminSettingsIT extends IntegrationTestBase {
                        max_chats_per_workspace = 1000,
                        max_workspace_members = 100,
                        registration_open = true,
+                       allowed_file_extensions = DEFAULT,
                        updated_by = NULL,
                        updated_at = now()
                  WHERE id = 1
                 """);
+        // test fixtures bypass the PATCH endpoint, so evict the runtime allowlist cache too.
+        Cache cache = cacheManager.getCache(
+                SystemSettingsPort.ALLOWED_FILE_EXTENSIONS_CACHE);
+        if (cache != null) {
+            cache.clear();
+        }
     }
 }

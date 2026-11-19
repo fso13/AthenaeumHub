@@ -1,6 +1,6 @@
 # E2EE-REVIEW-02 — G1 targeted re-review редакции S2
 
-> **Роль:** независимый security/crypto-ревьюер «Круга». Спеку, векторы и S2-changelog писал не я; код не менял.
+> **Роль:** независимый security/crypto-ревьюер «Совы». Спеку, векторы и S2-changelog писал не я; код не менял.
 > **Объект:** [`docs/E2EE-SPEC.md`](<E2EE-SPEC.md>) (S2, 2788 строк), [`docs/E2EE-TEST-VECTORS.json`](<E2EE-TEST-VECTORS.json>) (`vector_set_version=2`, 34 вектора, 13 секций), [`docs/E2EE-S2-CHANGELOG.md`](<E2EE-S2-CHANGELOG.md>), [`docs/E2EE-SPIKE-NOTES.md`](<E2EE-SPIKE-NOTES.md>) §9, [`docs/TASKS-E7.md`](<TASKS-E7.md>), [`docs/E2EE-REVIEW-01.md`](<E2EE-REVIEW-01.md>).
 > **Что проверено:** заявления S2 о закрытии 4 P0 и 12 P1; DDL §6.5 против фактических миграций `backend/src/main/resources/db/migration/V1–V15`; API/контрактные схемы; 14 ответов на вопросы review-01; независимая перепроверка **всех 13 секций** векторов (368 собственных проверок, 0 failures), tamper-набор, детерминизм генератора, JSON-структура.
 > **Границы:** это design/conformance re-review, **не** implementation-review. Браузерные WebCrypto-особенности, IndexedDB/crash-recovery, реальный Java Ed25519, поведение прокси по 413 и G4 остаются вне доказанной зоны. Production-код, БД и Keycloak не запускались; wire format не изменялся. Изменён только этот файл.

@@ -60,14 +60,14 @@ test('setup wizard: mandatory /setup → SMTP test → complete → /admin', asy
   await login(page);
 
   await expect(page).toHaveURL(/\/setup$/);
-  await expect(page.getByRole('heading', { name: 'Первичная настройка Pickle' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Первичная настройка Совы' })).toBeVisible();
   await expectNoA11yViolations(page);
 
   await page.getByLabel('SMTP-хост').fill('smtp.example.test');
   await page.getByLabel('Порт').fill('587');
   await page.getByLabel('Логин SMTP').fill('mailer');
   await page.getByLabel('Пароль SMTP').fill('smtp-e2e-secret');
-  await page.getByLabel('Адрес отправителя').fill('pickle@example.test');
+  await page.getByLabel('Адрес отправителя').fill('sova@example.test');
   await page.getByLabel('Лимит чатов на пользователя').fill('12');
 
   await page.getByRole('button', { name: 'Сохранить SMTP и отправить тест' }).click();
@@ -100,7 +100,7 @@ test('non-admin sees "setup incomplete" instead of /setup', async ({ page }) => 
 
   await expect(page.getByRole('heading', { name: 'Установка не завершена' })).toBeVisible();
   await expect(page).not.toHaveURL(/\/setup$/);
-  await expect(page.getByRole('heading', { name: 'Первичная настройка Pickle' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Первичная настройка Совы' })).toHaveCount(0);
   await expectNoA11yViolations(page);
 });
 

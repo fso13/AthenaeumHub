@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════
-   Pickle — Message Dashboard
+   Сова — Message Dashboard
    Дизайн-макет: рейл пространств · навигация · чат · панель «О чате»
    ══════════════════════════════════════════════════════════════ */
 
@@ -17,11 +17,11 @@
   --text-2: #5d626c;
   --text-3: #979da7;
 
-  --accent: #2f7a38;
+  --accent: #176a72;
   --accent-strong: #245f2b;
-  --accent-fill: #65bd45;
-  --accent-soft: #eef7e7;
-  --accent-ring: rgba(101, 189, 69, 0.2);
+  --accent-fill: #1f8a93;
+  --accent-soft: #e9f4f5;
+  --accent-ring: rgba(31, 138, 147, 0.2);
 
   --online: #2fb85c;
   --danger: #d94a3d;
@@ -62,11 +62,11 @@ body[data-theme="dark"] {
   --text-2: #a2a7b1;
   --text-3: #787e89;
 
-  --accent: #a6ec6a;
+  --accent: #7fdde0;
   --accent-strong: #c8f7a1;
-  --accent-fill: #65bd45;
-  --accent-soft: rgba(101, 189, 69, 0.14);
-  --accent-ring: rgba(101, 189, 69, 0.24);
+  --accent-fill: #1f8a93;
+  --accent-soft: rgba(31, 138, 147, 0.14);
+  --accent-ring: rgba(31, 138, 147, 0.24);
 
   --online: #4ade80;
   --danger: #f07a6b;
@@ -197,7 +197,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   border-radius: 3px 0 0 3px;
   background: var(--accent-fill);
 }
-.sp-studio { background: linear-gradient(150deg, #2f7a38, #4e9f4a 55%, #7ccb59); }
+.sp-studio { background: linear-gradient(150deg, #176a72, #4e9f4a 55%, #7ccb59); }
 .sp-family { background: linear-gradient(150deg, #8a5a3c, #c98a5e 60%, #e7b183); }
 .rail-space .sp-dot {
   position: absolute;
@@ -529,7 +529,7 @@ body[data-theme="dark"] .i-sun { display: none; }
 .av.p9 { background: linear-gradient(145deg, #e2a07c, #b06a4a); }
 .av.p10 { background: linear-gradient(145deg, #8fbf6e, #4e8544); }
 .av-me { background: linear-gradient(145deg, #3d7a4d, #1e4029); }
-.av-atlas { background: linear-gradient(145deg, #2f7a38, #63bb46); }
+.av-atlas { background: linear-gradient(145deg, #176a72, #63bb46); }
 .av-family { background: linear-gradient(145deg, #b9714b, #8a4f35); }
 .av-art { background: linear-gradient(145deg, #d9a441, #a3712a); }
 
@@ -873,10 +873,10 @@ body[data-theme="dark"] .i-sun { display: none; }
   flex-shrink: 0;
 }
 .file-tile[data-kind="fig"] { background: #fdeee9; color: #c2543b; }
-.file-tile[data-kind="yaml"] { background: #e9f4e3; color: #3f7a36; }
+.file-tile[data-kind="yaml"] { background: #e6f2f3; color: #2f7a7f; }
 .file-tile[data-kind="png"] { background: #eaf0fb; color: #4a63a8; }
 body[data-theme="dark"] .file-tile[data-kind="fig"] { background: rgba(232, 93, 74, 0.15); color: #f0a294; }
-body[data-theme="dark"] .file-tile[data-kind="yaml"] { background: rgba(101, 189, 69, 0.14); color: #a6e08a; }
+body[data-theme="dark"] .file-tile[data-kind="yaml"] { background: rgba(31, 138, 147, 0.14); color: #8fdde1; }
 body[data-theme="dark"] .file-tile[data-kind="png"] { background: rgba(110, 140, 220, 0.15); color: #a9bdf0; }
 .file-body { flex: 1; min-width: 0; }
 .file-body b { display: block; font-size: 12.8px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -930,7 +930,7 @@ body[data-theme="dark"] .file-tile[data-kind="png"] { background: rgba(110, 140,
   border: 0;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.92);
-  color: #1b2e24;
+  color: #152729;
   display: grid;
   place-items: center;
   opacity: 0;
@@ -1114,10 +1114,10 @@ body[data-theme="dark"] .file-tile[data-kind="png"] { background: rgba(110, 140,
   color: #fff;
   display: grid;
   place-items: center;
-  box-shadow: 0 3px 10px rgba(101, 189, 69, 0.24);
+  box-shadow: 0 3px 10px rgba(31, 138, 147, 0.24);
   transition: transform 0.12s ease, background 0.14s ease, box-shadow 0.14s ease;
 }
-.send-btn:hover { background: var(--accent-strong); box-shadow: 0 6px 16px rgba(47, 122, 56, 0.3); }
+.send-btn:hover { background: var(--accent-strong); box-shadow: 0 6px 16px rgba(23, 106, 114, 0.3); }
 .send-btn:active { transform: scale(0.95); }
 .send-btn .i { width: 19px; height: 19px; stroke-width: 1.7; }
 
@@ -1518,7 +1518,7 @@ body[data-theme="dark"] .role--mod { background: rgba(110, 140, 220, 0.14); colo
   animation: toast-in 0.18s ease;
 }
 .toast[hidden] { display: none; }
-.toast .i { width: 15px; height: 15px; color: #a6ec6a; }
+.toast .i { width: 15px; height: 15px; color: #7fdde0; }
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
@@ -2046,11 +2046,11 @@ body[data-theme="dark"] .role--mod { background: rgba(110, 140, 220, 0.14); colo
 }
 .file-icon[data-kind="video"] { background: #e9f0fb; color: #4a63a8; }
 .file-icon[data-kind="audio"] { background: #f3e9fb; color: #8a55b0; }
-.file-icon[data-kind="image"] { background: #e9f4e3; color: #3f7a36; }
+.file-icon[data-kind="image"] { background: #e6f2f3; color: #2f7a7f; }
 .file-icon[data-kind="doc"] { background: #f6efe0; color: #93702c; }
 body[data-theme="dark"] .file-icon[data-kind="video"] { background: rgba(110, 140, 220, 0.16); color: #a9bdf0; }
 body[data-theme="dark"] .file-icon[data-kind="audio"] { background: rgba(180, 142, 214, 0.16); color: #c8a9e6; }
-body[data-theme="dark"] .file-icon[data-kind="image"] { background: rgba(101, 189, 69, 0.14); color: #a6e08a; }
+body[data-theme="dark"] .file-icon[data-kind="image"] { background: rgba(31, 138, 147, 0.14); color: #8fdde1; }
 body[data-theme="dark"] .file-icon[data-kind="doc"] { background: rgba(217, 164, 65, 0.14); color: #e0c07c; }
 .file-name { min-width: 0; }
 .file-name b { display: block; font-size: 12.4px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -2534,7 +2534,7 @@ body[data-theme="dark"] .file-icon[data-kind="doc"] { background: rgba(217, 164,
   border: 0;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.94);
-  color: #1b2e24;
+  color: #152729;
   display: grid;
   place-items: center;
   opacity: 0;
@@ -2798,7 +2798,7 @@ body[data-theme="dark"] .file-icon[data-kind="doc"] { background: rgba(217, 164,
 }
 .thread-composer textarea::placeholder { color: var(--text-3); }
 .thread-composer textarea:focus { border-color: var(--accent-ring); box-shadow: 0 0 0 3px var(--accent-ring); background: var(--surface); }
-.thread-composer .send-btn { width: 38px; height: 38px; box-shadow: 0 3px 10px rgba(101, 189, 69, 0.24); }
+.thread-composer .send-btn { width: 38px; height: 38px; box-shadow: 0 3px 10px rgba(31, 138, 147, 0.24); }
 
 .thread-link {
   display: inline-flex;
@@ -2858,7 +2858,7 @@ body[data-theme="dark"] .file-icon[data-kind="doc"] { background: rgba(217, 164,
   border: 0;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.92);
-  color: #1b2e24;
+  color: #152729;
   display: grid;
   place-items: center;
   opacity: 0;

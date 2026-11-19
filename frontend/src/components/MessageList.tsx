@@ -22,6 +22,8 @@ interface MessageListProps {
   /** D1-FE3: managed chats only; E2EE renders a disabled thread action. */
   threadsAvailable?: boolean;
   threadDisabledReason?: string | null;
+  /** Active workspace member names for @mention chips (managed only). */
+  mentionNames?: readonly string[];
   onLoadMore: () => void;
   onRetry: (clientMessageId: string) => void;
   onRestore: (item: OutgoingMessage) => void;
@@ -39,6 +41,7 @@ export function MessageList({
   e2eeChat = false,
   threadsAvailable = false,
   threadDisabledReason = null,
+  mentionNames = [],
   onLoadMore,
   onRetry,
   onRestore,
@@ -220,6 +223,7 @@ export function MessageList({
                   ? (nameBySender.get(item.message.thread_summary.last_reply_author_id) ?? null)
                   : null
               }
+              mentionNames={mentionNames}
               replyTo={
                 item.message.reply_to_id ? (replyById.get(item.message.reply_to_id) ?? null) : null
               }
@@ -243,6 +247,8 @@ export function MessageList({
             retryDisabled={retryDisabled}
             onRetry={onRetry}
             onRestore={onRestore}
+            mentionNames={mentionNames}
+            richText={!e2eeChat}
           />
         ))}
       </div>

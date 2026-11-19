@@ -297,7 +297,7 @@ services:
         VITE_USE_MOCKS: "false"
         VITE_AUTH_MODE: password
         VITE_DEV_SESSION: "false"
-        VITE_DEVICE_NAME: "Pickle — браузер"
+        VITE_DEVICE_NAME: "Сова — браузер"
         VITE_APP_VERSION: ${KRUG_APP_VERSION:-0.1.0}
         VITE_REALTIME_ENABLED: "true"
         VITE_MEDIA_ORIGINS: ${S3_PUBLIC_ENDPOINT:-http://localhost:9000}

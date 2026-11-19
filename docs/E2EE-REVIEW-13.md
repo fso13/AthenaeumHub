@@ -248,7 +248,7 @@ drop» после reload остаётся частичным. Это P2 для �
 
 | ID | Статус | Комментарий |
 |---|---|---|
-| P2-01 Чистый стек F7B | **OPEN** | Снова leftover `pickle-ui-1794919305193@krug.local`/`test@krug.local`; B не регистрируется через BFF/Mailpit; fixture user должен существовать (`e2ee.real.spec.ts:205-207`). |
+| P2-01 Чистый стек F7B | **OPEN** | Снова leftover `sova-ui-1794919305193@krug.local`/`test@krug.local`; B не регистрируется через BFF/Mailpit; fixture user должен существовать (`e2ee.real.spec.ts:205-207`). |
 | P2-02 Destructive SQL по умолчанию | **OPEN** | `DB_CHECK=true`; `UPDATE auth.devices … REVOKED` (`:205-218`) без `E2EE_REAL_ALLOW_DESTRUCTIVE=1`. |
 | P2-03 Накопление workspace/flag-on стек | **OPEN** | 68 → **72** `E2EE F7B` workspace и 327 → **335** devices; мой прогон +2/+4, остальное — F8C. `krug-frontend:latest` — overlay flag-on. |
 | P2-04 Legacy incoming copies без `serverMessageId` | **OPEN** | `outboxStore.ts` incoming-lookup не менялся. |

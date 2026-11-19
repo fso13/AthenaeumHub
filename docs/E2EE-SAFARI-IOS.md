@@ -21,7 +21,7 @@ E2EE is **not certified** in WebKit. This is enforced in the product, not only d
 
 ## Manual check (Safari/iOS)
 
-1. Open Pickle over HTTPS with `VITE_E2EE_ENABLED=true`.
+1. Open Сова over HTTPS with `VITE_E2EE_ENABLED=true`.
 2. E2EE settings/banner must say the browser is unsupported.
 3. No E2EE compose/device registration; no plaintext fallback.
 4. Managed chats still send/receive.

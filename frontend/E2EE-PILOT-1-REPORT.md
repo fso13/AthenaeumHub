@@ -17,7 +17,7 @@
 - оба fixture-пользователя создаются на чистом стенде через **реальный BFF**:
   `POST /auth/register` → TOTP из Mailpit API → `POST /auth/verify-email`;
   на повторном прогоне verified-аккаунты переиспользуются. Pre-seeded
-  `test@krug.local` / leftover `pickle-ui-…` больше не нужны;
+  `test@krug.local` / leftover `sova-ui-…` больше не нужны;
 - destructive SQL **выключен по умолчанию**. `E2EE_REAL_RESET=1` (alias
   `E2EE_REAL_ALLOW_DESTRUCTIVE=1`) включает pre-login device reset, удаление
   stale `E2EE F7B …` workspace старше часа и удаление workspace текущего прогона;

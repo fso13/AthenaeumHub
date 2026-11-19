@@ -1,9 +1,13 @@
 import type { RefObject } from 'react';
+import type { MentionMemberLike } from '../domain/mentions';
+import { useMentionAutocomplete } from '../hooks/useMentionAutocomplete';
 import { t } from '../i18n/ru';
 import type { SendBlockedReason } from './Composer';
 import { SendIcon } from './Icons';
+import { MentionPopover } from './MentionPopover';
 
 const MAX_LENGTH = 8000;
+const NO_MENTION_MEMBERS: readonly MentionMemberLike[] = [];
 
 interface ThreadComposerProps {
   value: string;
@@ -15,6 +19,10 @@ interface ThreadComposerProps {
   sendBlockedReason: SendBlockedReason;
   rateLimitSeconds: number;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
+  mentionMembers?: readonly MentionMemberLike[];
+  mentionsEnabled?: boolean;
+  mentionDirectoryLoading?: boolean;
+  onMentionDirectoryNeeded?: () => void;
 }
 
 /**
@@ -31,8 +39,20 @@ export function ThreadComposer({
   sendBlockedReason,
   rateLimitSeconds,
   textareaRef,
+  mentionMembers = NO_MENTION_MEMBERS,
+  mentionsEnabled = false,
+  mentionDirectoryLoading = false,
+  onMentionDirectoryNeeded,
 }: ThreadComposerProps) {
   const length = value.length;
+  const mentions = useMentionAutocomplete({
+    value,
+    onChange,
+    textareaRef,
+    members: mentionMembers,
+    enabled: mentionsEnabled,
+    onDirectoryNeeded: onMentionDirectoryNeeded,
+  });
   const canSend =
     !disabled && sendBlockedReason === null && value.trim().length > 0 && length <= MAX_LENGTH;
 
@@ -73,10 +93,19 @@ export function ThreadComposer({
             maxLength={MAX_LENGTH}
             placeholder={t('thread.composerPlaceholder')}
             aria-describedby="thread-composer-note"
+            aria-autocomplete={mentionsEnabled ? 'list' : undefined}
+            aria-expanded={mentionsEnabled ? mentions.open : undefined}
+            aria-controls={mentions.open ? mentions.listboxId : undefined}
+            aria-activedescendant={mentions.activeOptionId ?? undefined}
+            aria-haspopup={mentionsEnabled ? 'listbox' : undefined}
+            role={mentionsEnabled ? 'combobox' : undefined}
             readOnly={disabled}
             value={value}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={mentions.handleChange}
+            onClick={mentions.syncCaret}
+            onBlur={mentions.close}
             onKeyDown={(event) => {
+              if (mentions.handleKeyDown(event)) return;
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
@@ -93,6 +122,16 @@ export function ThreadComposer({
             <SendIcon aria-hidden="true" />
           </button>
         </div>
+        {mentions.open ? (
+          <MentionPopover
+            listboxId={mentions.listboxId}
+            candidates={mentions.candidates}
+            activeIndex={mentions.activeIndex}
+            loading={mentionDirectoryLoading}
+            onSelect={mentions.select}
+            onActive={mentions.setActive}
+          />
+        ) : null}
         <p className="composer__hint" id="thread-composer-hint">
           {t('thread.composerHint')}
         </p>

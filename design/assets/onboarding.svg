@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" width="720" height="520" role="img" aria-label="Макет экрана онбординга приложения Круг с крупной кнопкой «Начать»">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" width="720" height="520" role="img" aria-label="Макет экрана онбординга приложения Сова с крупной кнопкой «Начать»">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#EDE6D8"/>
@@ -44,7 +44,7 @@
     <circle cx="15" cy="15" r="2.7" fill="#EAF6F0"/>
     <circle cx="24.5" cy="15" r="1.8" fill="#EAF6F0"/>
   </g>
-  <text x="260" y="114" font-family="Inter, -apple-system, Segoe UI, sans-serif" font-size="14" font-weight="650" fill="#F1FAF6" letter-spacing="-.3">круг<tspan fill="#8FE3C7">.</tspan></text>
+  <text x="260" y="114" font-family="Inter, -apple-system, Segoe UI, sans-serif" font-size="14" font-weight="650" fill="#F1FAF6" letter-spacing="-.3">сова<tspan fill="#8FE3C7">.</tspan></text>
 
   <!-- иллюстрация: люди в круге -->
   <g transform="translate(360 188)">

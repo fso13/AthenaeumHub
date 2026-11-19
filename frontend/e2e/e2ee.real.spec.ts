@@ -25,7 +25,7 @@
  *   - both fixture users are provisioned through the **real** BFF:
  *     `POST /auth/register` → TOTP from the Mailpit API → `POST /auth/verify-email`;
  *     an already verified user is reused. No pre-seeded `test@krug.local` /
- *     leftover `pickle-ui-…` account is required;
+ *     leftover `sova-ui-…` account is required;
  *   - override identities with `E2EE_REAL_USER_A_EMAIL`/`_PASSWORD`/`_NAME` and
  *     the matching `..._B_...` variables; `E2EE_REAL_MAILPIT_URL` points at the
  *     Mailpit API (default `http://localhost:8025`);

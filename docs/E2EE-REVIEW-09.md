@@ -249,9 +249,9 @@ determinism-probe; CI-матрица с зафиксированной поли�
 
 ### P2-01. F7B не воспроизводится на чистом стеке: второй пользователь не засеян
 
-* **Файл:** `frontend/e2e/e2ee.real.spec.ts:55-60` — `USER_B = pickle-ui-1794919305193@krug.local`
+* **Файл:** `frontend/e2e/e2ee.real.spec.ts:55-60` — `USER_B = sova-ui-1794919305193@krug.local`
   захардкожен; `:621` логинится без регистрации. `deploy/keycloak/realm-export.json` содержит
-  только `test@krug.local`; `pickle-ui-…` в реалме нет, в текущей `auth.users` он есть только
+  только `test@krug.local`; `sova-ui-…` в реалме нет, в текущей `auth.users` он есть только
   как leftover прошлых прогонов (проверено SQL). На чистом `down -v` + overlay пользователю B
   логиниться нечем (ни в реалме, ни в seed), поэтому F7B не стартует; это подтверждается
   отсутствием пользователя в артефактах, а не прогоном на чистом стеке (его в этом ревью нет).
@@ -566,7 +566,7 @@ stickers/security/session-writers ok, `tsc` clean, build 415 modules.
 9. **Production checklist/flag discipline.** `deploy/E2EE-ENABLE-CHECKLIST.md`: base
    `.env`/compose `false`; overlay не используется; SPA собран с `VITE_E2EE_ENABLED=true`
    только после backend-флага; `docker inspect`/asset проверены; demo/test users
-   (`test@krug.local`, `pickle-*`, F7B-креды) удалены; dev-session отключён; rate limits
+   (`test@krug.local`, `sova-*`, F7B-креды) удалены; dev-session отключён; rate limits
    (claim/send/reset) включены; retention envelopes/quarantine определён; kill-switch
    (flag off → REST/WS/replay 409, `server_last_seq` не теряет seq) проверен; rollback —
    вернуть base-compose + restore V19 backup, данные не откатывать.

@@ -1,4 +1,4 @@
-# Pickle — статус проекта
+# Сова — статус проекта
 
 > Актуальный статус ведётся в GitHub Issues: [ROADMAP #58](https://github.com/fso13/AthenaeumHub/issues/58).
 > Wiki: https://github.com/fso13/AthenaeumHub/wiki · исходники страниц: [`wiki/`](wiki/).
@@ -17,7 +17,7 @@
 ## Тесты и контракт
 
 - Backend: **498 tests**, ArchUnit 10/10.
-- Frontend: **915 tests**, KAT 27/27, Chromium/Firefox F7B 2/2.
+- Frontend: **962 tests**, KAT 27/27, Chromium/Firefox F7B 2/2.
 - Contract: **48 paths / 56 operations / 88 schemas**.
 
 ## CI и релиз

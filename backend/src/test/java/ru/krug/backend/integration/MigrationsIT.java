@@ -8,6 +8,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.context.ActiveProfiles;
 
+import ru.krug.backend.shared.domain.model.AllowedFileExtensions;
 import ru.krug.backend.support.IntegrationTestBase;
 
 @ActiveProfiles("test")
@@ -167,6 +168,48 @@ class MigrationsIT extends IntegrationTestBase {
                  WHERE schemaname = 'message' AND tablename LIKE 'messages\\_2%'
                    AND indexdef LIKE '%(chat_id, thread_root_id, seq)%'
                 """, Integer.class)).isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
+    void addsValidatedAllowedFileExtensionsSettingWithM4aDefault() {
+        assertThat(jdbc.queryForObject("""
+                SELECT udt_name FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'system_settings'
+                   AND column_name = 'allowed_file_extensions'
+                """, String.class)).isEqualTo("_text");
+        assertThat(jdbc.queryForObject("""
+                SELECT is_nullable FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'system_settings'
+                   AND column_name = 'allowed_file_extensions'
+                """, String.class)).isEqualTo("NO");
+
+        String columnDefault = jdbc.queryForObject("""
+                SELECT column_default FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'system_settings'
+                   AND column_name = 'allowed_file_extensions'
+                """, String.class);
+        assertThat(columnDefault).isNotNull();
+        for (String extension : AllowedFileExtensions.defaults().values()) {
+            assertThat(columnDefault).as("V32 default contains " + extension)
+                    .contains(extension);
+        }
+        assertThat(columnDefault).contains("m4a");
+
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_constraint
+                 WHERE conname = 'ck_system_settings_allowed_file_extensions'
+                """, Integer.class)).isEqualTo(1);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT ops.allowed_file_extensions_valid(ARRAY['jpg','m4a'])",
+                Boolean.class)).isTrue();
+        for (String invalid : List.of("ARRAY['exe']", "ARRAY['bat']", "ARRAY['html']",
+                "ARRAY['JPG']", "ARRAY['.jpg']", "ARRAY['j png']",
+                "ARRAY['jpg','jpg']", "ARRAY[]::text[]")) {
+            assertThat(jdbc.queryForObject(
+                    "SELECT ops.allowed_file_extensions_valid(" + invalid + ")",
+                    Boolean.class)).as(invalid).isFalse();
+        }
     }
 
     @Test

@@ -218,7 +218,7 @@ reload останется навсегда. Base-флаг false и production-к
 
 | ID | Статус | Комментарий |
 |---|---|---|
-| P2-01 Чистый стек F7B | **OPEN** | Прогон снова использовал leftover `pickle-ui-1794919305193@krug.local`; `deploy/keycloak/realm-export.json` содержит только `testuser`. |
+| P2-01 Чистый стек F7B | **OPEN** | Прогон снова использовал leftover `sova-ui-1794919305193@krug.local`; `deploy/keycloak/realm-export.json` содержит только `testuser`. |
 | P2-02 Destructive SQL по умолчанию | **OPEN** | `e2ee.real.spec.ts:50` `DB_CHECK=true`; `:205-218` `UPDATE auth.devices … REVOKED` без `E2EE_REAL_ALLOW_DESTRUCTIVE=1`. |
 | P2-03 Накопление workspace/flag-on стек | **OPEN** | 57 → **61** `E2EE F7B` workspace после моих прогонов; контейнеры backend/frontend всё ещё flag-on; `krug-frontend:latest` — overlay-образ. |
 | P2-04 Legacy incoming copies без `serverMessageId` | **OPEN** | `outboxStore.ts:1248-1253`; не менялось. |
@@ -244,7 +244,7 @@ reload останется навсегда. Base-флаг false и production-к
 | SPA asset | `assets/index-BeQEVtf6.js`, SHA-256 `311c0f41c0acf1d32db4318575b9c47d8abc38558c9458f223ae155a77767fbd` |
 | `index.html` | SHA-256 `4b3fb44feba5a1dd27cee98d14d8e1ced08a0b1f8be340af26420f74a888b7f8`, ссылается на `index-BeQEVtf6.js` |
 | прочие chunks | `browser-DGROf2up.js` `c295f3c0…`, `realtime-utE0HUoz.js` `923c3131…` |
-| reproducibility | локальный `vite build` с точными build args (`VITE_API_BASE_URL=/api/v1`, `VITE_AUTH_MODE=password`, `VITE_DEVICE_NAME="Pickle — браузер"`, `VITE_APP_VERSION=0.1.0`, `VITE_REALTIME_ENABLED=true`, `VITE_MEDIA_ORIGINS=http://localhost:9000`, `VITE_E2EE_ENABLED=true`, `VITE_USE_MOCKS=false`, `VITE_DEV_SESSION=false`) дал **те же** 4 хеша — образ соответствует текущему дереву |
+| reproducibility | локальный `vite build` с точными build args (`VITE_API_BASE_URL=/api/v1`, `VITE_AUTH_MODE=password`, `VITE_DEVICE_NAME="Сова — браузер"`, `VITE_APP_VERSION=0.1.0`, `VITE_REALTIME_ENABLED=true`, `VITE_MEDIA_ORIGINS=http://localhost:9000`, `VITE_E2EE_ENABLED=true`, `VITE_USE_MOCKS=false`, `VITE_DEV_SESSION=false`) дал **те же** 4 хеша — образ соответствует текущему дереву |
 | source mtimes | после сборки изменены только `frontend/E7-F8A-REPORT.md` и `docs/TASKS.md` (14:16); ни одного SPA-файла (`src/**`, `e2e/**`) новее образа нет |
 | flag in asset | `VITE_E2EE_ENABLED:"true"` |
 | backend flag | `KRUG_E2EE_ENABLED=true` (только overlay) |

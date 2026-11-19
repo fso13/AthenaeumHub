@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChatSummary, WorkspaceMemberRole } from '../api/types';
 import { chatDisplayName } from '../domain/chatLabel';
-import { safeHttpUrl } from '../files/format';
+import { isSafePreviewImage, safeHttpUrl } from '../files/format';
 import { t, type MessageKey } from '../i18n/ru';
-import { useChatState, useChatStore } from '../store/ChatProvider';
+import { useChatState, useChatStore, useFilesStore } from '../store/ChatProvider';
 import type { ChatSlice } from '../store/chatStore';
 import { Avatar } from './Avatar';
 import {
@@ -60,6 +60,8 @@ interface MediaItem {
   url: string | null;
   kind: 'image' | 'video' | 'audio' | 'file';
   ext: string;
+  mimeType: string | null;
+  scanStatus: string;
 }
 
 const COVER_BY_MODE = {
@@ -95,6 +97,8 @@ function mediaItems(slice: ChatSlice | null): { items: MediaItem[]; total: numbe
                 ? 'audio'
                 : 'file',
         ext: extensionOf(attachment.filename),
+        mimeType: attachment.mime_type ?? null,
+        scanStatus: attachment.scan_status ?? 'PENDING',
       });
     }
   }
@@ -106,6 +110,46 @@ function mediaFallback(kind: MediaItem['kind']) {
   if (kind === 'video') return <PlayIcon aria-hidden="true" />;
   if (kind === 'image') return <ImageIcon aria-hidden="true" />;
   return <FileIcon aria-hidden="true" />;
+}
+
+/**
+ * The details grid must show real image previews, not just an extension badge.
+ * Presigned URLs are requested lazily only for CLEAN raster images; audio,
+ * video and plain files keep the safe icon fallback (no extra API calls).
+ */
+function MediaPreview({ item }: { item: MediaItem }) {
+  const files = useFilesStore();
+  const [url, setUrl] = useState<string | null>(item.url);
+  useEffect(() => {
+    setUrl(item.url);
+    if (!isSafePreviewImage(item.mimeType) || item.scanStatus !== 'CLEAN') return;
+    let active = true;
+    void files
+      .getDownloadUrl(item.id)
+      .then((download) => {
+        if (active) setUrl(download.url);
+      })
+      .catch(() => {
+        // Keep the icon fallback; the attachment card has its own retry path.
+      });
+    return () => {
+      active = false;
+    };
+  }, [files, item.id, item.kind, item.scanStatus, item.url]);
+
+  if (url && isSafePreviewImage(item.mimeType)) {
+    return (
+      <img
+        src={url}
+        alt={item.name}
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+        onError={() => setUrl(null)}
+      />
+    );
+  }
+  return <span className="media-tile__fallback">{mediaFallback(item.kind)}</span>;
 }
 
 /**
@@ -459,17 +503,7 @@ export function ChatDetails({
                   <div className="media-grid">
                     {media.slice(0, 4).map((item, index) => (
                       <div className={`media-tile media-tile--${item.kind}`} key={item.id}>
-                        {item.url ? (
-                          <img
-                            src={item.url}
-                            alt={item.name}
-                            loading="lazy"
-                            decoding="async"
-                            draggable={false}
-                          />
-                        ) : (
-                          <span className="media-tile__fallback">{mediaFallback(item.kind)}</span>
-                        )}
+                        <MediaPreview item={item} />
                         <span className="media-tile__label">{item.ext}</span>
                         {index === 3 && mediaTotal > 4 ? (
                           <span className="media-tile__more">+{mediaTotal - 4}</span>

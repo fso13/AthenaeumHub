@@ -1,6 +1,6 @@
 # E7-B3F2 — закрытие P1-03 / P2-06 / P2-07 после E2EE-REVIEW-07
 
-> **Сессия:** backend security-разработчик «Круга». **Вход:** `docs/E2EE-REVIEW-07.md`
+> **Сессия:** backend security-разработчик «Совы». **Вход:** `docs/E2EE-REVIEW-07.md`
 > (G4b: GO WITH CONDITIONS для чистой БД, NO-GO для in-place upgrade из-за P1-03),
 > `backend/E7-B3F-REPORT.md`, `docs/E2EE-SPEC.md` §4.1/§4.5/§4.7,
 > `contracts/openapi.yaml`, V18, `MessageEnvelopeRepositoryAdapter`, `EnvelopeCodec`,

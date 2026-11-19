@@ -1,6 +1,6 @@
 # E2EE-S3-CHANGELOG — remediation по E2EE-REVIEW-02 (G1: GO WITH CONDITIONS)
 
-> **Роль:** автор E2EE-спеки «Круга». **Зона S3:** `docs/E2EE-SPEC.md`, `docs/E2EE-TEST-VECTORS.json`, `docs/E2EE-SPIKE-NOTES.md`, этот файл. `backend/**`, `frontend/**`, `contracts/**`, `docs/TASKS*.md`, ревью — **не изменялись**.
+> **Роль:** автор E2EE-спеки «Совы». **Зона S3:** `docs/E2EE-SPEC.md`, `docs/E2EE-TEST-VECTORS.json`, `docs/E2EE-SPIKE-NOTES.md`, этот файл. `backend/**`, `frontend/**`, `contracts/**`, `docs/TASKS*.md`, ревью — **не изменялись**.
 > **Вход:** [`docs/E2EE-REVIEW-02.md`](<E2EE-REVIEW-02.md>) — 415 строк, 2 P0 + 6 P1 partially, I-01, P2-1…P2-19.
 > **Выход:** спека S3 (3124 строки), vectors v3 (**43 вектора / 17 секций / 273 checks, 0 failures**), S3-генератор и верификатор в notes §10, PG16-smoke для §6.5.
 > **Wire format:** `envelope.v=1`, `header.v=1`, AD 163 B, преамбул `313+L+M` — **не менялись**. `VH` остаётся v2; кодировка binding в I1/I2 исправлена (hex → b64u64), это не wire-изменение.

@@ -54,7 +54,7 @@ origin; в spec/config зафиксирован `localhost`.
 Два реальных пользователя из задачи:
 
 - `test@krug.local` / `Test1234!` (OWNER);
-- `pickle-ui-1794919305193@krug.local` / `CorrectHorseBattery42!` (MEMBER).
+- `sova-ui-1794919305193@krug.local` / `CorrectHorseBattery42!` (MEMBER).
 
 Что делает fixture:
 

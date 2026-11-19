@@ -1,6 +1,6 @@
 # E7-B3F3 — P2-09/P2-10/P2-11/P2-12 после E2EE-REVIEW-08
 
-> **Сессия:** backend security-разработчик «Круга». **Вход:** `docs/E2EE-REVIEW-08.md`
+> **Сессия:** backend security-разработчик «Совы». **Вход:** `docs/E2EE-REVIEW-08.md`
 > (G4c: GO WITH CONDITIONS; P1-03/P2-06/P2-07 закрыты; открыты P2-09/10/11/12 и
 > постоянные real-HTTP regressions), `backend/E7-B3F2-REPORT.md`, V18/V19,
 > `E2eeLegacyEnvelopeIT`, `E2eeMigrationIT`, `docs/E2EE-SPEC.md` §4.1/§5.4/§6.5,

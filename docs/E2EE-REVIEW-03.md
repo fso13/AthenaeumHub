@@ -2,7 +2,7 @@
 
 > **Статус ревью:** DONE (G2 targeted re-review). Вердикт: GO WITH CONDITIONS; E7-B1 — после P1-A-1.
 
-> **Роль.** Независимый security/crypto-ревьюер «Круга». Спеку, векторы, notes и S3-changelog писал не я; production-код, контракты, миграции и `docs/TASKS*.md` не изменялись. Изменён только этот файл.
+> **Роль.** Независимый security/crypto-ревьюер «Совы». Спеку, векторы, notes и S3-changelog писал не я; production-код, контракты, миграции и `docs/TASKS*.md` не изменялись. Изменён только этот файл.
 > **Объект.** [`docs/E2EE-SPEC.md`](<E2EE-SPEC.md>) (S3, 3124 строки), [`docs/E2EE-TEST-VECTORS.json`](<E2EE-TEST-VECTORS.json>) (v3, 43 вектора / 17 секций / 273 checks), [`docs/E2EE-SPIKE-NOTES.md`](<E2EE-SPIKE-NOTES.md>) §10, [`docs/E2EE-S3-CHANGELOG.md`](<E2EE-S3-CHANGELOG.md>), [`docs/E2EE-REVIEW-02.md`](<E2EE-REVIEW-02.md>), [`docs/TASKS-E7.md`](<TASKS-E7.md>).
 > **Что проверено.** Заявления S3 о закрытии P0-2b, P0-3, P1-A…H, P1-5/6; DDL §6.5 против фактических V1–V15; grants/RLS/partitions/CHECK под `krug_app` на PostgreSQL 16; 16 нормативных секций + meta (собственный верификатор, 242 проверки, 0 failures; H-sender-key — informative, отдельно не проверялся); независимая расшифровка I1/I2/I3; tamper-набор; детерминизм генератора; handoff I-01 §6.3.1.
 > **Границы.** Это design/conformance re-review, а не implementation-review. Реальный backend/frontend, браузерный WebCrypto, IndexedDB/crash-recovery, конкурентная гонка claim, Flyway/Testcontainers и G3/G4 не запускались. PG16 smoke — одноразовый Docker, не production-данные.

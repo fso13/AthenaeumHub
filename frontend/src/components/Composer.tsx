@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { ApiMessage } from '../api/types';
+import type { MentionMemberLike } from '../domain/mentions';
 import { replyPreview } from '../domain/messages';
+import { useMentionAutocomplete } from '../hooks/useMentionAutocomplete';
 import { t } from '../i18n/ru';
 import {
   CloseIcon,
@@ -12,6 +14,8 @@ import {
   ShieldIcon,
   StickerIcon,
 } from './Icons';
+import { MentionPopover } from './MentionPopover';
+import { MentionText } from './MentionText';
 
 export type SendBlockedReason = 'offline' | 'rate_limit' | 'e2ee_blocked' | null;
 
@@ -48,12 +52,18 @@ interface ComposerProps {
   onStartVoice: () => void;
   /** Inline RecordingBar; rendered only while a take is active. */
   voiceBar?: ReactNode;
+  /** Managed-only @mention directory and lazy loader. */
+  mentionMembers?: readonly MentionMemberLike[];
+  mentionsEnabled?: boolean;
+  mentionDirectoryLoading?: boolean;
+  onMentionDirectoryNeeded?: () => void;
 }
 
 const MAX_LENGTH = 8000;
 const COUNTER_VISIBLE_FROM = 1;
 const COUNTER_WARN_FROM = 7600;
 const EMOJI = ['🙂', '😄', '😍', '👍', '🙏', '🔥', '🎉', '❤️', '😢', '👀', '✅', '🚀'];
+const NO_MENTION_MEMBERS: readonly MentionMemberLike[] = [];
 
 export function Composer({
   value,
@@ -81,11 +91,27 @@ export function Composer({
   voiceActive,
   onStartVoice,
   voiceBar,
+  mentionMembers = NO_MENTION_MEMBERS,
+  mentionsEnabled = false,
+  mentionDirectoryLoading = false,
+  onMentionDirectoryNeeded,
 }: ComposerProps) {
   const length = value.length;
   const [emojiOpen, setEmojiOpen] = useState(false);
   const emojiRef = useRef<HTMLDivElement>(null);
   const emojiButtonRef = useRef<HTMLButtonElement>(null);
+  const mentionNames = useMemo(
+    () => mentionMembers.map((member) => member.display_name),
+    [mentionMembers],
+  );
+  const mentions = useMentionAutocomplete({
+    value,
+    onChange,
+    textareaRef,
+    members: mentionMembers,
+    enabled: mentionsEnabled,
+    onDirectoryNeeded: onMentionDirectoryNeeded,
+  });
   const canSend =
     !disabled &&
     sendBlockedReason === null &&
@@ -121,6 +147,12 @@ export function Composer({
       document.removeEventListener('mousedown', handlePointer);
     };
   }, [emojiOpen]);
+
+  // The mention listbox and the emoji tray occupy the same anchor; only one
+  // picker is useful at a time.
+  useEffect(() => {
+    if (mentions.open) setEmojiOpen(false);
+  }, [mentions.open]);
 
   const submit = () => {
     if (!canSend) return;
@@ -160,10 +192,12 @@ export function Composer({
               {t('chat.replyTo')}: {replyTo.sender_display_name?.trim() || t('chat.unknownAuthor')}
             </span>
             <span className="reply-bar__text">
-              {e2eeChat
-                ? (replyText ??
-                  (replyTo.deleted_at ? t('chat.deletedMessage') : t('chat.replyUnavailable')))
-                : replyPreview(replyTo.text)}
+              {e2eeChat ? (
+                (replyText ??
+                (replyTo.deleted_at ? t('chat.deletedMessage') : t('chat.replyUnavailable')))
+              ) : (
+                <MentionText text={replyPreview(replyTo.text)} mentions={mentionNames} />
+              )}
             </span>
           </div>
           <button
@@ -221,16 +255,35 @@ export function Composer({
                 : t('composer.placeholder')
             }
             aria-describedby="composer-hint composer-note"
+            aria-autocomplete={mentionsEnabled ? 'list' : undefined}
+            aria-expanded={mentionsEnabled ? mentions.open : undefined}
+            aria-controls={mentions.open ? mentions.listboxId : undefined}
+            aria-activedescendant={mentions.activeOptionId ?? undefined}
+            aria-haspopup={mentionsEnabled ? 'listbox' : undefined}
+            role={mentionsEnabled ? 'combobox' : undefined}
             readOnly={disabled}
             value={value}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={mentions.handleChange}
+            onClick={mentions.syncCaret}
+            onBlur={mentions.close}
             onKeyDown={(event) => {
+              if (mentions.handleKeyDown(event)) return;
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
               }
             }}
           />
+          {mentions.open ? (
+            <MentionPopover
+              listboxId={mentions.listboxId}
+              candidates={mentions.candidates}
+              activeIndex={mentions.activeIndex}
+              loading={mentionDirectoryLoading}
+              onSelect={mentions.select}
+              onActive={mentions.setActive}
+            />
+          ) : null}
           <button
             type="button"
             ref={emojiButtonRef}

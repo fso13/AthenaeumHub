@@ -1,4 +1,4 @@
-# Keycloak (dev) for «Круг»
+# Keycloak (dev) for «Сова»
 
 Realm export for the `keycloak` backend profile. It is imported automatically by
 `docker compose up -d` from `backend/docker-compose.yml`.
