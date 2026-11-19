@@ -1,0 +1,256 @@
+# E2EE gated live suite — manual dispatch or the `e2ee-live` PR label.
+#
+# This workflow is the *only* place that turns the E2EE flag on, and it does so
+# exclusively through the disposable test overlay
+# (`deploy/docker-compose.e2ee-test.yml`). It never runs on push and it is not
+# part of the default CI path:
+#
+#   F7A  browser matrix (Chromium/Firefox blocking, WebKit expected-fail policy)
+#        needs only the Vite dev server — no backend, no flag, no data.
+#   F7B  real two-device flow against the flag-on overlay stack. Requires a
+#        disposable host: it registers fixture users and may run destructive SQL,
+#        but only when `allow_destructive` is explicitly true.
+#
+# Safety rails:
+#   * base flags are asserted `false` before anything is built;
+#   * `E2EE_REAL_RESET` is `0` unless `allow_destructive=true`;
+#   * volumes are removed only with `reset_volumes=true`;
+#   * secrets are generated inside the job from `.env.example` and never uploaded;
+#   * logs are scanned for plaintext markers and are not uploaded.
+#
+# Equivalent local commands are printed by the `plan` job.
+
+name: E2EE gated (live)
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Which E2EE suite to run'
+        type: choice
+        options:
+          - browser-matrix
+          - real-two-device
+          - both
+        default: browser-matrix
+      allow_destructive:
+        description: 'Allow opt-in destructive SQL (device reset / workspace cleanup). Disposable stand only.'
+        type: boolean
+        default: false
+      reset_volumes:
+        description: 'Remove Docker volumes after the run (down -v, deletes all data)'
+        type: boolean
+        default: false
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2ee-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  plan:
+    name: Plan and safety checks
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          github.event.label.name == 'e2ee-live' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assert E2EE base flags are off
+        run: bash scripts/check-e2ee-base-flags.sh
+
+      - name: Print plan and equivalent local commands
+        env:
+          EVENT: ${{ github.event_name }}
+          SUITE: ${{ inputs.suite }}
+          ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive }}
+          RESET_VOLUMES: ${{ inputs.reset_volumes }}
+        run: |
+          echo "event: ${EVENT}"
+          echo "suite: ${SUITE:-browser-matrix (label trigger)}"
+          echo "allow_destructive: ${ALLOW_DESTRUCTIVE:-false}"
+          echo "reset_volumes: ${RESET_VOLUMES:-false}"
+          cat <<'EOF'
+          ------------------------------------------------------------------
+          F7A (no backend, no flag):
+            cd frontend
+            npm ci
+            npx playwright install --with-deps chromium firefox webkit
+            npm run test:e2e:e2ee -- --project=chromium --project=firefox
+            npm run test:e2e:e2ee -- --project=webkit   # expected-fail policy
+
+          F7B (disposable flag-on overlay):
+            cd deploy
+            cp .env.example .env   # replace change-me values
+            docker compose --env-file .env \
+              -f docker-compose.yml -f docker-compose.e2ee-test.yml up -d --build
+            curl -fsS http://localhost:8088/healthz
+            cd ../frontend
+            E2EE_REAL=1 E2EE_REAL_DB_CHECK=1 E2EE_REAL_RESET=0 \
+              npm run test:e2e:e2ee:real
+            cd ../deploy
+            docker compose --env-file .env \
+              -f docker-compose.yml -f docker-compose.e2ee-test.yml down
+          ------------------------------------------------------------------
+          The base stack stays KRUG_E2EE_ENABLED=false; the overlay is the only
+          place the flag is forced on, and it is never deployed to production.
+          ------------------------------------------------------------------
+          EOF
+
+  browser-matrix:
+    name: F7A browser matrix
+    needs: plan
+    if: >-
+      ${{ (github.event_name == 'workflow_dispatch' &&
+           (inputs.suite == 'browser-matrix' || inputs.suite == 'both')) ||
+          (github.event_name == 'pull_request' &&
+           github.event.label.name == 'e2ee-live' &&
+           github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: F7A Chromium + Firefox (blocking)
+        working-directory: frontend
+        run: npm run test:e2e:e2ee -- --project=chromium --project=firefox
+
+      - name: F7A WebKit (expected-fail policy)
+        id: webkit
+        continue-on-error: true
+        working-directory: frontend
+        run: npm run test:e2e:e2ee -- --project=webkit
+
+      - name: WebKit policy note
+        if: steps.webkit.outcome == 'failure'
+        run: |
+          echo "::warning::WebKit failed. ADR-26 keeps WebKit expected-fail; Chromium/Firefox are the blocking pilot browsers."
+          echo "WebKit is NOT a gate for the pilot; investigate before claiming Safari support."
+
+  real-two-device:
+    name: F7B real two-device (overlay)
+    needs: plan
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          (inputs.suite == 'real-two-device' || inputs.suite == 'both') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Prepare disposable env (generated in-job, never committed)
+        working-directory: deploy
+        run: |
+          cp .env.example .env
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import secrets
+
+          path = pathlib.Path(".env")
+          text = path.read_text(encoding="utf-8")
+          text = re.sub(r"change-me[^\s]*", lambda _m: secrets.token_urlsafe(32), text)
+          path.write_text(text, encoding="utf-8")
+          print("generated deploy/.env with random secrets")
+          PY
+
+      - name: Build and start flag-on overlay
+        working-directory: deploy
+        run: |
+          docker compose --env-file .env \
+            -f docker-compose.yml -f docker-compose.e2ee-test.yml \
+            up -d --build
+
+      - name: Wait for the stack to become healthy
+        working-directory: deploy
+        run: |
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://localhost:8088/healthz >/dev/null 2>&1 \
+              && [[ "$(docker inspect --format '{{.State.Health.Status}}' krug-backend 2>/dev/null)" == "healthy" ]]; then
+              echo "stack healthy after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::stack did not become healthy in time"
+          docker compose --env-file .env \
+            -f docker-compose.yml -f docker-compose.e2ee-test.yml ps || true
+          docker compose --env-file .env \
+            -f docker-compose.yml -f docker-compose.e2ee-test.yml logs --tail=200 backend frontend || true
+          exit 1
+
+      - name: F7B two-device E2EE
+        working-directory: frontend
+        env:
+          E2EE_REAL: '1'
+          E2EE_REAL_DB_CHECK: '1'
+          E2EE_REAL_RESET: ${{ inputs.allow_destructive && '1' || '0' }}
+        run: npm run test:e2e:e2ee:real
+
+      - name: Log capture — no plaintext/ciphertext markers
+        working-directory: deploy
+        run: |
+          set -o pipefail
+          docker compose --env-file .env \
+            -f docker-compose.yml -f docker-compose.e2ee-test.yml \
+            logs --no-color backend frontend > /tmp/e2ee-stack.log
+          if grep -Eq 'markerA|markerB|markerLost|markerR15|f7b_' /tmp/e2ee-stack.log; then
+            echo "::error::E2EE test marker found in backend/frontend logs"
+            exit 1
+          fi
+          echo "ok: no E2EE test markers in backend/frontend logs"
+
+      - name: Stop stack (volumes preserved unless explicitly requested)
+        if: always()
+        working-directory: deploy
+        run: |
+          if [[ "${{ inputs.reset_volumes }}" == "true" ]]; then
+            echo "down -v requested: all stack data will be deleted"
+            docker compose --env-file .env \
+              -f docker-compose.yml -f docker-compose.e2ee-test.yml down -v
+          else
+            docker compose --env-file .env \
+              -f docker-compose.yml -f docker-compose.e2ee-test.yml down
+          fi

@@ -34,7 +34,16 @@ docker compose --env-file .env up -d --build
 # → http://localhost:8088
 ```
 
-Подробности, домен/TLS, ClamAV, сброс данных и ограничения — в [`deploy/README.md`](deploy/README.md). E2EE по умолчанию выключен (`KRUG_E2EE_ENABLED=false`).
+Подробности, домен/TLS, ClamAV, сброс данных и ограничения — в [`deploy/README.md`](deploy/README.md). E2EE по умолчанию выключен (`KRUG_E2EE_ENABLED=false`); порядок включения — в [`docs/E2EE-ENABLE-CHECKLIST.md`](docs/E2EE-ENABLE-CHECKLIST.md).
+
+---
+
+## ✅ CI, E2EE gate и релиз
+
+- **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): JDK 21 + Maven `mvn test` (498 backend-тестов, Testcontainers на ubuntu-runner), Node 22 + `npm run check` (867 frontend-тестов, lint/format/contract/security/build), отдельный contract job и guardrails (YAML, shellcheck, E2EE-флаги, отсутствие секретов). Без deploy и без секретов.
+- **E2EE live** ([`.github/workflows/e2ee-gated.yml`](.github/workflows/e2ee-gated.yml)): запускается только вручную (`workflow_dispatch`) или по label `e2ee-live`; F7A-матрица и F7B на disposable overlay. По умолчанию **не** запускается; destructive SQL — только при явном `allow_destructive`.
+- **Включение E2EE**: [`docs/E2EE-ENABLE-CHECKLIST.md`](docs/E2EE-ENABLE-CHECKLIST.md) — условия #29–#37, backup/V19/V20, наблюдаемые метрики, rollout/rollback и kill switch. Флаг остаётся `false` до отдельного GO.
+- **Release rebuild**: [`scripts/release-check.sh`](scripts/release-check.sh) — `npm run check`, backend-тесты, contract, image digest и SHA-256 ассетов; без `docker push` и без git tag. Evidence: [`docs/E2EE-CI-REPORT.md`](docs/E2EE-CI-REPORT.md).
 
 ---
 
