@@ -11,7 +11,7 @@
  * by F4. Nothing is logged.
  */
 import { decodeBase64Url, encodeBase64Url } from '../encoding/base64url';
-import { isUuid } from '../encoding/bytes';
+import { areBytesEqual, isUuid } from '../encoding/bytes';
 import type {
   WireChatKeysResponse,
   WireCryptoEnvelope,
@@ -492,7 +492,17 @@ export function createE2eeBridge(options: E2eeBridgeOptions): E2eeBridge {
       }
       const sessions = (
         await listSessionsByPeer(context.storage, context.kStorage, chatId, info.deviceId)
-      ).filter((session) => !resettingSessions.has(session.sessionId));
+      ).filter(
+        (session) =>
+          !resettingSessions.has(session.sessionId) &&
+          // After an explicit key-change acceptance the old session is still on
+          // disk (history is not deleted), but it was bound to the previous
+          // identity keys and can never carry traffic for the accepted ones
+          // (`assertSessionMatchesIdentity`). Exclude it here so the send
+          // establishes a fresh prekey session instead of failing forever.
+          areBytesEqual(session.peerIkSig, info.identitySigningKey) &&
+          areBytesEqual(session.peerIkDh, info.identityDhKey),
+      );
       if (reuseSessionIds.length > 0) {
         // E7-F5G P2-30: reuse the exact fresh session from the first retry; if
         // it is gone, create a fresh prekey session instead of an old one.

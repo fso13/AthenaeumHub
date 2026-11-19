@@ -56,17 +56,25 @@ import {
   API,
   DB_CHECK,
   DESTRUCTIVE,
+  KEYCHANGE,
+  KEYCHANGE_ENABLED,
   RESET,
   USER_A,
   USER_B,
   WORKSPACE_PREFIX,
   backendLogs,
   cleanupStaleWorkspaces,
+  countActiveVerifications,
+  countAvailableOneTimePrekeys,
   countOf,
   deleteWorkspace,
   ensureFixtureUsers,
   requireUuid,
   resetFixtureDevices,
+  restoreDeviceIdentity,
+  rotateDeviceIdentity,
+  snapshotDeviceIdentity,
+  type DeviceKeySnapshot,
 } from './e2ee-real-fixture';
 
 const ENABLED = process.env.E2EE_REAL === '1';
@@ -548,6 +556,32 @@ async function countE2eeSessions(page: Page): Promise<number> {
   });
 }
 
+/**
+ * Session ids only (keys starting with `session:`). Records are sealed, so this
+ * deliberately does not try to read peer keys: a stable id set is enough to
+ * prove a blocked key change neither deletes nor overwrites the old session.
+ */
+async function readE2eeSessionIds(page: Page): Promise<string[]> {
+  return page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('krug-e2ee');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const transaction = database.transaction('sessions', 'readonly');
+      const request = transaction.objectStore('sessions').getAllKeys();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    database.close();
+    return keys
+      .map((key) => String(key))
+      .filter((key) => key.startsWith('session:'))
+      .sort();
+  });
+}
+
 test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
   test.skip(
     !ENABLED,
@@ -1011,6 +1045,368 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
         } catch (error) {
           // A cleanup failure must not mask the scenario result; surface it in
           // the Playwright report and let the next reset run retry.
+          test.info().annotations.push({
+            type: 'E2EE_REAL_CLEANUP_FAILED',
+            description: error instanceof Error ? error.message : 'workspace cleanup failed',
+          });
+        }
+      }
+    }
+  });
+
+  test('negative key change/TOFU: same device_id, new identity keys, send blocked until accept + re-verify', async ({
+    browser,
+  }: {
+    browser: Browser;
+  }) => {
+    test.skip(
+      !KEYCHANGE,
+      'Negative key-change/TOFU needs E2EE_REAL_KEYCHANGE=1 (test-only SQL mutation on a disposable stack)',
+    );
+    test.skip(
+      !KEYCHANGE_ENABLED,
+      'E2EE_REAL_KEYCHANGE=1 also needs E2EE_REAL_RESET=1 (destructive opt-in) and E2EE_REAL_DB_CHECK!=0',
+    );
+    test.setTimeout(300_000);
+
+    const pageErrors: Error[] = [];
+    const wsFrames: string[] = [];
+    const contextA = await browser.newContext();
+    const contextB = await browser.newContext();
+    const contextC = await browser.newContext();
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+    const pageC = await contextC.newPage();
+    for (const page of [pageA, pageB]) {
+      page.on('websocket', (socket) => {
+        socket.on('framereceived', (frame) => {
+          // Memory only: never printed, never attached to the report.
+          if (wsFrames.length < 2_000) wsFrames.push(String(frame.payload));
+        });
+      });
+    }
+    pageA.on('pageerror', (error) => pageErrors.push(error));
+
+    const logStart = Date.now();
+    const workspaceName = `${WORKSPACE_PREFIX} KEYCHANGE ${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const markerA = `f7b_kc_a_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const markerB = `f7b_kc_b_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const markerBlocked = `f7b_kc_blocked_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const markerAfter = `f7b_kc_after_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    let workspaceId: string | null = null;
+    let chatId: string | null = null;
+    let userA: BrowserUser | null = null;
+    let userB: BrowserUser | null = null;
+    let snapshot: DeviceKeySnapshot | null = null;
+    let keyGenerationAfter = 0;
+    let safetyBefore = '';
+    let sessionsBefore: string[] = [];
+    let sentAfter: { id: string; clientMessageId: string } | null = null;
+
+    try {
+      await test.step('fixture: BFF users, keyed devices, E2EE workspace + member', async () => {
+        const fixtureStates = await ensureFixtureUsers([USER_A, USER_B]);
+        test.info().annotations.push({
+          type: 'E2EE_FIXTURE_USERS',
+          description:
+            `registered/reused via BFF+Mailpit: ` +
+            `A=${fixtureStates[0]?.source ?? 'missing'}, B=${fixtureStates[1]?.source ?? 'missing'}`,
+        });
+        // The key-change mutation is destructive test-only SQL; the key-change
+        // gate already requires this opt-in. Start from exactly one active
+        // device per fixture user so the temporary source device is predictable.
+        const revoked = resetFixtureDevices([USER_A.email, USER_B.email]);
+        const cleaned = cleanupStaleWorkspaces();
+        test.info().annotations.push({
+          type: 'E2EE_KEYCHANGE_RESET',
+          description:
+            `on: revoked ${revoked} active fixture device(s), deleted ${cleaned} ` +
+            `stale ${WORKSPACE_PREFIX} row(s) (disposable stack only)`,
+        });
+
+        const [authA, authB] = await Promise.all([
+          loginViaUi(pageA, USER_A.email, USER_A.password),
+          loginViaUi(pageB, USER_B.email, USER_B.password),
+        ]);
+        userA = authA;
+        userB = authB;
+        await expectKeyedDevice(authA);
+        await expectKeyedDevice(authB);
+        await pruneOtherDevices(authA);
+        await pruneOtherDevices(authB);
+
+        workspaceId = await createFixtureWorkspace(authA, workspaceName);
+        await addWorkspaceMember(authA, workspaceId, USER_B.email);
+        await openWorkspace(pageA, workspaceId, workspaceName);
+        await openWorkspace(pageB, workspaceId, workspaceName);
+      });
+
+      await test.step('DIRECT E2EE chat, both directions, pre-change safety attestation', async () => {
+        if (userA === null || userB === null) throw new Error('fixture users are missing');
+        const chat = await createDirectChat(pageA, USER_B.name);
+        chatId = chat.id;
+        await expectComposerReady(pageA);
+        await expectRealtimeOnline(pageA);
+
+        await pageB.reload();
+        await expect(pageB.locator('.brand__workspace')).toHaveText(workspaceName, {
+          timeout: 60_000,
+        });
+        await expect(pageB.getByText(/Чатов: [1-9]\d* из \d+/)).toBeVisible({ timeout: 60_000 });
+        await expectComposerReady(pageB);
+        await expectRealtimeOnline(pageB);
+
+        await sendE2eeText(pageA, markerA);
+        await expectMessageVisible(pageA, markerA);
+        await expectMessageVisible(pageB, markerA);
+        await sendE2eeText(pageB, markerB);
+        await expectMessageVisible(pageB, markerB);
+        await expectMessageVisible(pageA, markerB);
+
+        // A attests B before the rotation: a server-side `verified` row exists
+        // and must be revoked (not inherited) when key_generation changes.
+        const attested = await verifyPeerFromSafetyDialog(pageA);
+        expect(attested.status).toBe(201);
+        expect(attested.verified).toBe(true);
+        await expectSafetyStatus(pageA, 'Сверено');
+        safetyBefore = await openSafetyNumber(pageA);
+        sessionsBefore = await readE2eeSessionIds(pageA);
+        expect(sessionsBefore.length).toBeGreaterThan(0);
+        expect(countActiveVerifications(userA.deviceId, userB.deviceId)).toBe(1);
+      });
+
+      await test.step('test-only identity rotation on the same device_id', async () => {
+        if (userA === null || userB === null) throw new Error('fixture users are missing');
+        // Source device: a real keyed registration by B in a temporary
+        // context. Its identity keys/binding signature and SPK are produced by
+        // the production client, so the peer's binding/SPK verification sees
+        // legitimate material; only the device_id reassignment is test SQL.
+        const source = await loginViaUi(pageC, USER_B.email, USER_B.password);
+        await expectKeyedDevice(source);
+        snapshot = snapshotDeviceIdentity(userB.deviceId);
+        const rotated = rotateDeviceIdentity(userB.deviceId, source.deviceId);
+        expect(rotated.keyGeneration).toBe(snapshot.keyGeneration + 1);
+        expect(rotated.source.fingerprint).not.toBe(snapshot.fingerprint);
+        keyGenerationAfter = rotated.keyGeneration;
+        test.info().annotations.push({
+          type: 'E2EE_KEYCHANGE_MUTATION',
+          description:
+            `test-only SQL on disposable stack: device ${userB.deviceId.slice(0, 8)}… ` +
+            `kept its id, adopted source device ${source.deviceId.slice(0, 8)}… identity keys/SPK, ` +
+            `key_generation ${snapshot.keyGeneration}->${keyGenerationAfter}; ` +
+            `old keys/SPK are restored in finally`,
+        });
+        // The rotation must reset server-side verification for the target.
+        expect(countActiveVerifications(userA.deviceId, userB.deviceId)).toBe(0);
+        expect(countAvailableOneTimePrekeys(userB.deviceId)).toBeGreaterThan(0);
+      });
+
+      await test.step('peer sees KEY_CHANGE_DETECTED, sending stays blocked, old messages remain', async () => {
+        if (userA === null || userB === null) throw new Error('fixture users are missing');
+        await pageA.reload();
+        await expect(pageA.locator('.brand__workspace')).toHaveText(workspaceName, {
+          timeout: 60_000,
+        });
+        const warning = pageA.getByText('Ключ безопасности изменился');
+        await expect(warning).toBeVisible({ timeout: 60_000 });
+        await expect(pageA.getByRole('button', { name: 'Принять новый ключ' })).toBeVisible();
+        if (process.env.E2EE_REAL_DEBUG === '1') {
+          console.warn(
+            'KEYCHANGE_DEBUG',
+            JSON.stringify({
+              bubbles: await pageA.locator('.bubble').count(),
+              rows: await pageA.locator('.msg-row').count(),
+              countA: await pageA.getByText(markerA, { exact: true }).count(),
+              countB: await pageA.getByText(markerB, { exact: true }).count(),
+              textLengths: await pageA
+                .locator('.bubble-text')
+                .evaluateAll((nodes) => nodes.map((node) => node.textContent?.length ?? 0)),
+              decryptErrors: await pageA.getByText('Не удалось расшифровать сообщение').count(),
+              unavailable: await pageA.getByText('Недоступно на этом устройстве').count(),
+              empty: await pageA.getByText('Пока нет сообщений').count(),
+              banners: (await pageA.locator('.banner').allInnerTexts()).join(' | ').slice(0, 300),
+            }),
+          );
+        }
+
+        // Already decrypted history is not deleted by the warning.
+        await expectMessageVisible(pageA, markerA);
+        await expectMessageVisible(pageA, markerB);
+
+        // Per-device safety number changes because the pinned fingerprint
+        // changed; re-verification is required.
+        const safetyAfter = await openSafetyNumber(pageA);
+        expect(safetyAfter).not.toBe(safetyBefore);
+        await expectSafetyStatus(pageA, 'Нужна повторная сверка');
+
+        // Sending is blocked in the UI and no message request leaves the page.
+        const sendButton = pageA.getByRole('button', { name: 'Отправить сообщение' });
+        await expect(sendButton).toBeDisabled();
+        await expect(pageA.locator('#composer-note')).toContainText(
+          'Отправка в этом чате заблокирована.',
+        );
+        expect(await readE2eeSessionIds(pageA)).toEqual(sessionsBefore);
+
+        const opkBeforeBlockedSend = countAvailableOneTimePrekeys(userB.deviceId);
+        let postsDuringBlock = 0;
+        const onPost = (response: Response): void => {
+          if (
+            response.request().method() === 'POST' &&
+            /\/chats\/[^/]+\/messages$/.test(new URL(response.url()).pathname)
+          ) {
+            postsDuringBlock += 1;
+          }
+        };
+        pageA.on('response', onPost);
+        try {
+          await pageA.getByLabel('Текст сообщения').fill(markerBlocked);
+          await pageA.getByLabel('Текст сообщения').press('Enter');
+          await pageA.waitForTimeout(1_500);
+        } finally {
+          pageA.off('response', onPost);
+        }
+        expect(postsDuringBlock).toBe(0);
+        // Scope to rendered bubbles: the draft stays in the composer, but it
+        // must never become a message row.
+        expect(
+          await pageA.locator('.bubble-text').getByText(markerBlocked, { exact: true }).count(),
+        ).toBe(0);
+        // A blocked send must not claim/consume the peer's one-time prekey.
+        expect(countAvailableOneTimePrekeys(userB.deviceId)).toBe(opkBeforeBlockedSend);
+        // The old session is neither deleted nor overwritten while blocked.
+        expect(await readE2eeSessionIds(pageA)).toEqual(sessionsBefore);
+      });
+
+      await test.step('explicit accept + re-verify with the new key generation', async () => {
+        if (userA === null || userB === null) throw new Error('fixture users are missing');
+        await pageA.getByRole('button', { name: 'Принять новый ключ' }).click();
+        await expect(pageA.getByText('Ключ безопасности изменился')).toBeHidden({
+          timeout: 60_000,
+        });
+        // Acceptance resets local verification; only the real ceremony attests.
+        await expectSafetyStatus(pageA, 'Не сверено');
+        const attested = await verifyPeerFromSafetyDialog(pageA);
+        expect(attested.status).toBe(201);
+        expect(attested.verified).toBe(true);
+        expect(attested.body.device_id).toBe(userB.deviceId);
+        expect(attested.body.expected_key_generation).toBe(keyGenerationAfter);
+        expect(attested.body.vh_version).toBe(2);
+        await expectSafetyStatus(pageA, 'Сверено');
+        expect(countActiveVerifications(userA.deviceId, userB.deviceId)).toBe(1);
+      });
+
+      await test.step('after accept a fresh prekey session carries the new send', async () => {
+        if (userA === null || userB === null) throw new Error('fixture users are missing');
+        const opkBeforeSend = countAvailableOneTimePrekeys(userB.deviceId);
+        sentAfter = await sendE2eeText(pageA, markerAfter);
+        await expectMessageVisible(pageA, markerAfter);
+
+        // The pre-change session stays on disk, but it is not reused: a new
+        // session id exists and the new envelope has a prekey block.
+        const sessionsAfter = await readE2eeSessionIds(pageA);
+        expect(sessionsAfter).toContain(sessionsBefore[0]);
+        expect(sessionsAfter.length).toBeGreaterThan(sessionsBefore.length);
+        expect(countAvailableOneTimePrekeys(userB.deviceId)).toBe(opkBeforeSend - 1);
+        const sentId = requireUuid(sentAfter.id, 'post-accept message id');
+        expect(
+          countOf(
+            `SELECT count(*) FROM message.message_envelopes
+              WHERE message_id='${sentId}' AND prekey IS NOT NULL;`,
+          ),
+        ).toBe(1);
+      });
+
+      await test.step('no plaintext in WS frames / backend logs; DB envelopes-only', async () => {
+        for (const frame of wsFrames) {
+          expect(
+            frame.includes(markerA) ||
+              frame.includes(markerB) ||
+              frame.includes(markerBlocked) ||
+              frame.includes(markerAfter),
+          ).toBe(false);
+        }
+        if (DB_CHECK) {
+          const logs = backendLogs(logStart);
+          expect(
+            logs.includes(markerA) ||
+              logs.includes(markerB) ||
+              logs.includes(markerBlocked) ||
+              logs.includes(markerAfter),
+          ).toBe(false);
+        }
+
+        if (!DB_CHECK) {
+          test.info().annotations.push({
+            type: 'E2EE_REAL_DB_CHECK',
+            description: 'disabled: server DB/log assertions were not run',
+          });
+          return;
+        }
+        if (chatId === null || userA === null || userB === null || sentAfter === null) {
+          throw new Error('chat/user/message ids are missing before the DB check');
+        }
+        const chat = requireUuid(chatId, 'chat id');
+        const verifier = requireUuid(userA.deviceId, 'verifier device id');
+        const target = requireUuid(userB.deviceId, 'target device id');
+        const sentId = requireUuid(sentAfter.id, 'post-accept message id');
+
+        const nonE2ee = countOf(
+          `SELECT count(*) FROM message.messages
+            WHERE chat_id='${chat}'
+              AND (crypto_scheme <> 'E2EE_PAIRWISE' OR type <> 'TEXT'
+                   OR body_ciphertext IS NOT NULL OR content_meta <> '{}'::jsonb);`,
+        );
+        expect(nonE2ee).toBe(0);
+        const withoutEnvelope = countOf(
+          `SELECT count(*) FROM message.messages m
+            WHERE m.chat_id='${chat}'
+              AND NOT EXISTS (SELECT 1 FROM message.message_envelopes e WHERE e.message_id=m.id);`,
+        );
+        expect(withoutEnvelope).toBe(0);
+        const plaintext = countOf(
+          `SELECT count(*) FROM message.messages m
+            WHERE m.chat_id='${chat}'
+              AND (strpos(row_to_json(m)::text, '${markerA}') > 0
+                   OR strpos(row_to_json(m)::text, '${markerB}') > 0
+                   OR strpos(row_to_json(m)::text, '${markerBlocked}') > 0
+                   OR strpos(row_to_json(m)::text, '${markerAfter}') > 0);`,
+        );
+        expect(plaintext).toBe(0);
+        const plaintextEnvelopes = countOf(
+          `SELECT count(*) FROM message.message_envelopes e
+            WHERE e.message_id='${sentId}'
+              AND (strpos(row_to_json(e)::text, '${markerAfter}') > 0
+                   OR strpos(row_to_json(e)::text, '${markerBlocked}') > 0);`,
+        );
+        expect(plaintextEnvelopes).toBe(0);
+        expect(
+          countOf(
+            `SELECT count(*) FROM auth.devices
+              WHERE id='${target}' AND key_generation=${keyGenerationAfter};`,
+          ),
+        ).toBe(1);
+        expect(countActiveVerifications(verifier, target)).toBe(1);
+      });
+
+      expect(pageErrors).toEqual([]);
+    } finally {
+      await contextC.close();
+      await contextA.close();
+      await contextB.close();
+      if (snapshot !== null) {
+        try {
+          restoreDeviceIdentity(snapshot);
+        } catch (error) {
+          test.info().annotations.push({
+            type: 'E2EE_KEYCHANGE_RESTORE_FAILED',
+            description: error instanceof Error ? error.message : 'device identity restore failed',
+          });
+        }
+      }
+      if (DESTRUCTIVE && workspaceId !== null) {
+        try {
+          deleteWorkspace(workspaceId);
+        } catch (error) {
           test.info().annotations.push({
             type: 'E2EE_REAL_CLEANUP_FAILED',
             description: error instanceof Error ? error.message : 'workspace cleanup failed',

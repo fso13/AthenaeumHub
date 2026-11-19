@@ -290,6 +290,53 @@ describe('E2EE chat bridge', () => {
     expect(after.envelopes).toHaveLength(1);
   });
 
+  it('does not reuse a pre-change session after the accepted new key', async () => {
+    const { alice, bob } = await makeWorlds();
+    const bobReplacement = await createTestWorld({
+      userId: bob.userId,
+      deviceId: bob.deviceId,
+      now: DEFAULT_NOW,
+      opkCount: 100,
+    });
+    let bobCurrent: TestWorld = bob;
+    const aliceSide = await makeSide(alice, () => bobCurrent, await opkQueue(bobReplacement));
+    const bobSide = await makeSide(bob, () => alice, await opkQueue(alice));
+
+    // Bob sends first, so Alice already has a responder session bound to Bob's
+    // old identity keys before the key change is detected.
+    const fromBob = await bobSide.bridge.sendText({ chatId: CHAT, text: 'old key' });
+    await aliceSide.bridge.receive(
+      CHAT,
+      incomingOf(fromBob, '00000000-0000-4000-8000-000000000401', bob.userId),
+    );
+    const sessionsBefore = await listSessionIds(alice.storage);
+    expect(sessionsBefore).toHaveLength(1);
+    expect(aliceSide.transport.claims).toHaveLength(0);
+
+    bobCurrent = bobReplacement;
+    const changed = await aliceSide.bridge.loadChat({ chatId: CHAT, serverMode: 'E2EE' });
+    expect(changed.keyChanges).toHaveLength(1);
+
+    // Blocked while unaccepted, and the old session is neither deleted nor
+    // overwritten by the failed attempt.
+    await expect(
+      aliceSide.bridge.sendText({ chatId: CHAT, text: 'blocked' }),
+    ).rejects.toMatchObject({ code: 'KEY_CHANGE_DETECTED' });
+    expect(await listSessionIds(alice.storage)).toEqual(sessionsBefore);
+    expect(aliceSide.transport.claims).toHaveLength(0);
+
+    await aliceSide.bridge.acceptKeyChange(bob.userId, bob.deviceId);
+    const after = await aliceSide.bridge.sendText({ chatId: CHAT, text: 'after accept' });
+    expect(after.envelopes).toHaveLength(1);
+    // The accepted keys require a fresh prekey session; the old session stays
+    // on disk (history is not deleted), but it must never carry new traffic.
+    expect(after.envelopes[0]!.prekey).not.toBeNull();
+    const sessionsAfter = await listSessionIds(alice.storage);
+    expect(sessionsAfter).toContain(sessionsBefore[0]);
+    expect(sessionsAfter).toHaveLength(2);
+    expect(aliceSide.transport.claims).toHaveLength(1);
+  });
+
   it('attests the safety number and reads verified back from DeviceKeyInfo', async () => {
     const { alice, bob } = await makeWorlds();
     const aliceSide = await makeSide(alice, () => bob, await opkQueue(bob));

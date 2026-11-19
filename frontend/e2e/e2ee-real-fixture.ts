@@ -41,6 +41,14 @@ export const DB_CHECK = env.E2EE_REAL_DB_CHECK !== '0';
 /** Explicit destructive-SQL opt-in. Default: read-only DB checks only. */
 export const RESET = env.E2EE_REAL_RESET === '1' || env.E2EE_REAL_ALLOW_DESTRUCTIVE === '1';
 export const DESTRUCTIVE = RESET && DB_CHECK;
+/**
+ * Negative key-change/TOFU scenario (#31). It *reassigns* freshly registered
+ * identity keys to the same `device_id`, which the product deliberately has no
+ * API for, so it is test-only SQL and additionally requires the destructive
+ * opt-in (`E2EE_REAL_RESET=1`) plus DB access.
+ */
+export const KEYCHANGE = env.E2EE_REAL_KEYCHANGE === '1';
+export const KEYCHANGE_ENABLED = KEYCHANGE && DESTRUCTIVE;
 export const PG_CONTAINER = env.E2EE_REAL_PG_CONTAINER ?? 'krug-postgres';
 export const BACKEND_CONTAINER = env.E2EE_REAL_BACKEND_CONTAINER ?? 'krug-backend';
 export const WORKSPACE_PREFIX = env.E2EE_REAL_WORKSPACE_PREFIX ?? 'E2EE F7B';
@@ -505,6 +513,208 @@ export function deleteWorkspace(workspaceId: string): number {
      DELETE FROM workspace.workspaces WHERE id='${id}';`,
   );
   return countCommand(output, 'DELETE');
+}
+
+/**
+ * Test-only device identity state. Hex strings are bytea encodings, never
+ * secrets: these are public identity keys. Private keys stay in the browser.
+ */
+export interface DeviceKeySnapshot {
+  readonly deviceId: string;
+  readonly keyGeneration: number;
+  /** Ed25519 public key, 32 bytes, hex. */
+  readonly identitySigningKey: string;
+  /** X25519 public key, 32 bytes, hex. */
+  readonly identityDhKey: string;
+  /** Binding self-signature, 64 bytes, hex. */
+  readonly identityBindingSignature: string;
+  /** SHA-256 fingerprint, 32 bytes, hex. */
+  readonly fingerprint: string;
+  /** `auth.device_prekeys` rows as JSON text (public keys/signatures only). */
+  readonly prekeysJson: string;
+}
+
+function requireHex(value: string, bytes: number, label: string): string {
+  if (!new RegExp(`^[0-9a-f]{${bytes * 2}}$`).test(value)) {
+    throw new Error(`E2EE fixture: ${label} is not a ${bytes}-byte hex value`);
+  }
+  return value;
+}
+
+function sqlText(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+/** Reads one device row; read-only and safe on any stack with DB_CHECK. */
+export function readDeviceIdentity(deviceId: string): Omit<DeviceKeySnapshot, 'prekeysJson'> {
+  const id = requireUuid(deviceId, 'device id');
+  const row = scalar(
+    `SELECT key_generation::text || E'\\t'
+            || encode(identity_signing_key, 'hex') || E'\\t'
+            || encode(identity_dh_key, 'hex') || E'\\t'
+            || encode(identity_binding_signature, 'hex') || E'\\t'
+            || encode(fingerprint, 'hex')
+       FROM auth.devices
+      WHERE id='${id}' AND identity_signing_key IS NOT NULL;`,
+  );
+  const [generation, signing, dh, binding, fingerprint] = row.split('\t');
+  const keyGeneration = Number(generation);
+  if (!Number.isInteger(keyGeneration) || keyGeneration < 1) {
+    throw new Error(`E2EE fixture: device ${id} has no readable key_generation`);
+  }
+  return {
+    deviceId: id,
+    keyGeneration,
+    identitySigningKey: requireHex(signing ?? '', 32, 'identity_signing_key'),
+    identityDhKey: requireHex(dh ?? '', 32, 'identity_dh_key'),
+    identityBindingSignature: requireHex(binding ?? '', 64, 'identity_binding_signature'),
+    fingerprint: requireHex(fingerprint ?? '', 32, 'fingerprint'),
+  };
+}
+
+/** Full snapshot (identity + prekeys) used to restore the disposable fixture. */
+export function snapshotDeviceIdentity(deviceId: string): DeviceKeySnapshot {
+  if (!DESTRUCTIVE) {
+    throw new Error(
+      'E2EE fixture: key-change snapshot needs E2EE_REAL_RESET=1 (destructive opt-in)',
+    );
+  }
+  const identity = readDeviceIdentity(deviceId);
+  const id = requireUuid(deviceId, 'device id');
+  const prekeysJson = scalar(
+    `SELECT coalesce(json_agg(json_build_object(
+              'key_id', key_id,
+              'kind', kind,
+              'public_key', encode(public_key, 'hex'),
+              'signature', CASE WHEN signature IS NULL THEN NULL ELSE encode(signature, 'hex') END,
+              'signature_alg', signature_alg,
+              'created_at', created_at::text,
+              'expires_at', expires_at::text,
+              'retired_at', retired_at::text,
+              'consumed_at', consumed_at::text
+            ) ORDER BY key_id), '[]'::json)::text
+       FROM auth.device_prekeys WHERE device_id='${id}';`,
+  );
+  if (prekeysJson === '') {
+    throw new Error(`E2EE fixture: could not read prekeys for device ${id}`);
+  }
+  return { ...identity, prekeysJson };
+}
+
+/**
+ * Destructive test-only identity rotation:
+ *  1. copy the *legitimately registered* signed/one-time prekeys of `sourceId`
+ *     to `targetId` (the source device is a real browser registration, so the
+ *     SPK signature is valid for its fresh identity keys);
+ *  2. revoke active verifications targeting `targetId` (key_generation++);
+ *  3. delete the source device and point `targetId` at the source identity
+ *     keys with `key_generation = old + 1`.
+ *
+ * The product has no in-place identity-rotation API by design, so this bypasses
+ * the server's normal epoch/audit/`chat.keys.changed` path. It is only allowed
+ * on a disposable stack with `E2EE_REAL_RESET=1` and must be restored with
+ * `restoreDeviceIdentity`. The peer's already decrypted local copies stay
+ * untouched; its TOFU pin is what detects the change.
+ */
+export function rotateDeviceIdentity(
+  targetId: string,
+  sourceId: string,
+): {
+  readonly previous: DeviceKeySnapshot;
+  readonly source: Omit<DeviceKeySnapshot, 'prekeysJson'>;
+  readonly keyGeneration: number;
+} {
+  if (!DESTRUCTIVE) {
+    throw new Error(
+      'E2EE fixture: key-change mutation needs E2EE_REAL_RESET=1 (destructive opt-in)',
+    );
+  }
+  const target = requireUuid(targetId, 'target device id');
+  const source = requireUuid(sourceId, 'source device id');
+  if (target === source) throw new Error('E2EE fixture: rotation source equals target');
+  const previous = snapshotDeviceIdentity(target);
+  const sourceIdentity = readDeviceIdentity(source);
+  const keyGeneration = previous.keyGeneration + 1;
+  psql(
+    `BEGIN;
+     DELETE FROM auth.device_prekeys WHERE device_id='${target}';
+     INSERT INTO auth.device_prekeys
+       (device_id, key_id, kind, public_key, signature, signature_alg,
+        created_at, expires_at, retired_at, consumed_at)
+     SELECT '${target}', key_id, kind, public_key, signature, signature_alg,
+            created_at, expires_at, retired_at, consumed_at
+       FROM auth.device_prekeys WHERE device_id='${source}';
+     UPDATE auth.key_verifications
+        SET revoked_at=now()
+      WHERE target_device_id='${target}' AND revoked_at IS NULL;
+     DELETE FROM auth.devices WHERE id='${source}';
+     UPDATE auth.devices
+        SET identity_signing_key=decode('${sourceIdentity.identitySigningKey}', 'hex'),
+            identity_dh_key=decode('${sourceIdentity.identityDhKey}', 'hex'),
+            identity_binding_signature=decode('${sourceIdentity.identityBindingSignature}', 'hex'),
+            fingerprint=decode('${sourceIdentity.fingerprint}', 'hex'),
+            key_generation=${keyGeneration}
+      WHERE id='${target}';
+     COMMIT;`,
+  );
+  return { previous, source: sourceIdentity, keyGeneration };
+}
+
+/**
+ * Restores the exact identity keys and prekey rows captured by
+ * `snapshotDeviceIdentity`. Verifications targeting the fixture device are
+ * removed (the post-test generation/attestation is meaningless); the fixture
+ * chat/workspace is deleted by the caller's workspace cleanup.
+ */
+export function restoreDeviceIdentity(snapshot: DeviceKeySnapshot): void {
+  if (!DESTRUCTIVE) return;
+  const id = requireUuid(snapshot.deviceId, 'restore device id');
+  const prekeys = sqlText(snapshot.prekeysJson);
+  psql(
+    `BEGIN;
+     DELETE FROM auth.device_prekeys WHERE device_id='${id}';
+     UPDATE auth.devices
+        SET identity_signing_key=decode('${snapshot.identitySigningKey}', 'hex'),
+            identity_dh_key=decode('${snapshot.identityDhKey}', 'hex'),
+            identity_binding_signature=decode('${snapshot.identityBindingSignature}', 'hex'),
+            fingerprint=decode('${snapshot.fingerprint}', 'hex'),
+            key_generation=${snapshot.keyGeneration}
+      WHERE id='${id}';
+     INSERT INTO auth.device_prekeys
+       (device_id, key_id, kind, public_key, signature, signature_alg,
+        created_at, expires_at, retired_at, consumed_at)
+     SELECT '${id}', key_id, kind, decode(public_key, 'hex'),
+            CASE WHEN signature IS NULL THEN NULL ELSE decode(signature, 'hex') END,
+            signature_alg, created_at::timestamptz, expires_at::timestamptz,
+            retired_at::timestamptz, consumed_at::timestamptz
+       FROM jsonb_to_recordset('${prekeys}'::jsonb) AS x(
+              key_id text, kind text, public_key text, signature text,
+              signature_alg text, created_at text, expires_at text,
+              retired_at text, consumed_at text);
+     DELETE FROM auth.key_verifications WHERE target_device_id='${id}';
+     COMMIT;`,
+  );
+}
+
+/** Read-only count of claimable one-time prekeys; used to prove "OPK not consumed". */
+export function countAvailableOneTimePrekeys(deviceId: string): number {
+  const id = requireUuid(deviceId, 'device id');
+  return countOf(
+    `SELECT count(*) FROM auth.device_prekeys
+      WHERE device_id='${id}' AND kind='ONE_TIME'
+        AND consumed_at IS NULL AND retired_at IS NULL AND expires_at > now();`,
+  );
+}
+
+/** Read-only count of live attestations for `(verifier, target)`. */
+export function countActiveVerifications(verifierDeviceId: string, targetDeviceId: string): number {
+  const verifier = requireUuid(verifierDeviceId, 'verifier device id');
+  const target = requireUuid(targetDeviceId, 'target device id');
+  return countOf(
+    `SELECT count(*) FROM auth.key_verifications
+      WHERE verifier_device_id='${verifier}' AND target_device_id='${target}'
+        AND revoked_at IS NULL;`,
+  );
 }
 
 export function backendLogs(sinceMs: number): string {

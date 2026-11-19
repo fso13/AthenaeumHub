@@ -414,6 +414,51 @@ describe('E2EE mode and key-change gating', () => {
     await waitFor(() => mockDb.sendAttempts.length === 1);
   });
 
+  it('keeps already decrypted history visible while a key change blocks new rows', async () => {
+    const incoming = insertMockMessage(mockDb, CHAT, 'старое');
+    incoming.text = null;
+    const clientMessageId = newUuid();
+    incoming.client_message_id = clientMessageId;
+    incoming.crypto = makeEnvelope(CHAT, PEER_DEVICE, BASE_SNAPSHOT.selfDeviceId as string);
+
+    const { store } = await bootstrapped(
+      {
+        keyChanges: [
+          {
+            userId: PEER_USER,
+            deviceId: PEER_DEVICE,
+            pinnedFingerprint: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+            observedFingerprint: 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+            detectedAt: 1,
+          },
+        ],
+      },
+      {},
+      (fake) => {
+        // The row was decrypted before the key change; its sealed incoming copy
+        // is authoritative local history (§7.5 "старые сообщения остаются").
+        fake.incomingLocalCopies.set(`${CHAT}:${PEER_DEVICE}:${clientMessageId}`, {
+          text: 'старое сообщение',
+          replyToId: null,
+          status: 'received',
+        });
+        // A new row under the changed key cannot be decrypted until accept.
+        fake.receiveQueue.push({
+          kind: 'error',
+          code: 'KEY_CHANGE_DETECTED',
+          reset: null,
+          reason: null,
+        });
+      },
+    );
+
+    await waitFor(
+      () => store.getSnapshot().slices[CHAT]?.e2ee[incoming.id]?.status === 'decrypted',
+    );
+    expect(store.getSnapshot().slices[CHAT]?.e2ee[incoming.id]?.text).toBe('старое сообщение');
+    expect(store.e2eeBlockReason(CHAT)).toBe('key_change');
+  });
+
   it('re-decrypts messages that failed while the key-change warning was active', async () => {
     const incoming = insertMockMessage(mockDb, CHAT, 'подмена');
     incoming.text = null;

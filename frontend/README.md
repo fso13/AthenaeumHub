@@ -465,6 +465,40 @@ folder»): `TMPDIR=$PWD/.pw-tmp CFFIXED_USER_HOME=$PWD/.pw-home
 MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_GPU_SANDBOX=1`. Это артефакт среды, не
 требование проекта. Результаты и риски — `frontend/E7-F7B-REPORT.md`.
 
+### Negative key change/TOFU (#31)
+
+`e2ee.real.spec.ts` содержит второй, отдельно gated сценарий: тот же
+`device_id`, но новые identity-ключи. Продукт намеренно **не** имеет API
+in-place ротации identity, поэтому ключевой материал берётся из **реальной
+keyed-регистрации** второго контекста B (валидная binding-подпись и SPK), а
+затем test-only SQL переносит его на старый `device_id` с `key_generation+1` и
+отзывает `key_verifications` target-устройства. Условия запуска — одновременно
+`E2EE_REAL=1` (npm script), `E2EE_REAL_RESET=1` (destructive opt-in) и
+`E2EE_REAL_DB_CHECK!=0`:
+
+```bash
+E2EE_REAL_KEYCHANGE=1 E2EE_REAL_RESET=1 \
+E2EE_REAL_USER_A_EMAIL=e2ee-kc-a-$(date +%s)@krug.local \
+E2EE_REAL_USER_B_EMAIL=e2ee-kc-b-$(date +%s)@krug.local \
+PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers npm run test:e2e:e2ee:real -- -g "negative key change"
+```
+
+Проверяется: A видит `KEY_CHANGE_DETECTED` («Ключ безопасности изменился»),
+safety number меняется, отправка заблокирована (0 POST), OPK не расходуется,
+старая ratchet-сессия не удаляется/не перезаписывается, уже расшифрованная
+история остаётся видимой, `verified` сброшен. После «Принять новый ключ» —
+повторная сверка (`PUT /chats/{id}/keys/verification`, `expected_key_generation`
+= новая), затем отправка идёт в **новой** prekey-сессии (OPK −1), а старые
+сообщения не переиспользуют старую сессию для нового ключа.
+
+**Риск/границы.** SQL-мутация обходит штатный epoch/audit/`chat.keys.changed`
+путь и допустима только на **одноразовом** стеке; в `finally` восстанавливаются
+старые identity-ключи и prekey-строки, удаляются verifications target-устройства
+и workspace. Старый таб B после мутации не используется: его локальные приватные
+ключи больше не соответствуют серверу (это и есть проверяемая ситуация). Без
+`E2EE_REAL_KEYCHANGE=1` сценарий skip, поэтому F7B остаётся 2/2. Детали и
+evidence — `frontend/E2EE-PILOT-3-REPORT.md`.
+
 ### Real-режим dev (F-01) и I-01
 
 Для проверки против B-01 на `localhost:8081` (профиль `dev`):

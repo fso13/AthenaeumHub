@@ -418,14 +418,18 @@ const MAX_CATCH_UP_PAGES = 10;
  * E7-F8 P1-01: an already received message can no longer be opened after its
  * session is gone (R-15 completion, §5.7 loser deletion, TTL/GC). These codes
  * must try the sealed incoming local copy before rendering an error or sending
- * another SESSION_RESET. `KEY_CHANGE_DETECTED` is deliberately NOT here: a real
- * key change stays blocking until the user accepts it.
+ * another SESSION_RESET. `KEY_CHANGE_DETECTED` is included so history that was
+ * already decrypted before a TOFU key change stays visible (§7.5 «старые
+ * сообщения остаются»); a *new* row under the changed key has no sealed copy
+ * and still renders as a blocking error until the user accepts it. The send
+ * guard and §7.5 acceptance ceremony are not weakened by restoring old copies.
  */
 const E2EE_COPY_RESTORE_CODES: ReadonlySet<string> = new Set([
   'NO_SESSION',
   'KEY_HANDSHAKE_INVALID',
   'SPK_DELETED',
   'DECRYPT_FAILED',
+  'KEY_CHANGE_DETECTED',
 ]);
 /** Contract default for GET /notifications; the panel loads one page at a time. */
 const NOTIFICATIONS_PAGE_SIZE = 30;
