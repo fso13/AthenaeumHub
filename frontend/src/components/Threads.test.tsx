@@ -64,7 +64,7 @@ describe('D1-FE3 thread UI', () => {
     expect(mainRowCount(container)).toBe(before);
     // The reply is not rendered as a channel message (only as link preview).
     const main = container.querySelector('.messages') as HTMLElement;
-    const bubbleTexts = [...main.querySelectorAll('.bubble-text')].map((node) => node.textContent);
+    const bubbleTexts = [...main.querySelectorAll('.msg-text')].map((node) => node.textContent);
     expect(bubbleTexts).not.toContain('Первый ответ в треде');
     expect(mockDb.sendBodies.at(-1)?.thread_root_id).toBe(rootId);
   });
@@ -102,7 +102,7 @@ describe('D1-FE3 thread UI', () => {
     expect(await within(rootRow).findByText('1 ответ')).toBeInTheDocument();
     const mainBeforeOpen = container.querySelector('.messages') as HTMLElement;
     expect(
-      [...mainBeforeOpen.querySelectorAll('.bubble-text')].map((node) => node.textContent),
+      [...mainBeforeOpen.querySelectorAll('.msg-text')].map((node) => node.textContent),
     ).not.toContain('Первый live-ответ');
     expect(mainRowCount(container)).toBe(before);
 

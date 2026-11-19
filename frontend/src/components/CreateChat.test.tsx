@@ -109,8 +109,10 @@ describe('E8/R-01 + E10-F chat creation', () => {
     expect(within(dialog).queryByText(MOCK_DISPLAY_NAME)).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('radio', { name: new RegExp(MOCK_DISPLAY_NAME) })).toBeNull();
 
-    expect(mockDb.memberDirectoryRequests).toHaveLength(1);
-    expect(mockDb.memberDirectoryRequests[0]).toMatchObject({
+    // The details panel may already have loaded the directory for its count;
+    // the picker always issues its own request. Assert the latest one.
+    expect(mockDb.memberDirectoryRequests.length).toBeGreaterThanOrEqual(1);
+    expect(mockDb.memberDirectoryRequests.at(-1)).toMatchObject({
       workspaceId: IDS.workspace,
       query: null,
       limit: 50,
@@ -332,14 +334,18 @@ describe('E8/R-01 + E10-F chat creation', () => {
     expect(await within(dialog).findByRole('radio', { name: /Анна Петрова/ })).toBeInTheDocument();
   });
 
-  it('disables creation at the user limit and shows used/limit in the sidebar', async () => {
+  it('disables creation at the user limit and shows used/limit in Settings', async () => {
     mockDb.admin.maxChatsPerUser = 2;
 
-    renderApp();
+    const { user } = renderApp();
     await screen.findByRole('heading', { name: 'Команда «Восход»' });
 
-    expect(await screen.findByText('Чатов: 2 из 2')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: CREATE_BUTTON })).toBeDisabled());
+
+    await user.click(screen.getByRole('button', { name: 'Настройки' }));
+    await screen.findByRole('heading', { name: 'Настройки' });
+    await user.click(screen.getByRole('button', { name: 'Пространство' }));
+    expect(await screen.findByText('Чатов: 2 из 2')).toBeInTheDocument();
   });
 
   it('updates the dialog limit counter and disables submit after a limit refresh', async () => {

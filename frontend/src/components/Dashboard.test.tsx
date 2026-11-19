@@ -209,7 +209,7 @@ describe('D1-FE1 shell, pages and routing', () => {
     await user.click(screen.getByRole('button', { name: 'Обзор' }));
     expect(await screen.findByRole('heading', { name: 'Обзор' })).toBeInTheDocument();
     expect(window.location.search).toBe('?view=overview');
-    expect(screen.getByText(/Здравствуйте/)).toBeInTheDocument();
+    expect(screen.getByText(/Добрый день/)).toBeInTheDocument();
     expect(store.getSnapshot().activeChatId).toBe(activeBefore);
 
     await user.click(screen.getByRole('button', { name: 'К чатам' }));
@@ -299,6 +299,7 @@ describe('D1-FE1 shell, pages and routing', () => {
     await user.click(screen.getByRole('button', { name: 'Настройки' }));
     await screen.findByRole('heading', { name: 'Настройки' });
 
+    await user.click(screen.getByRole('button', { name: 'Внешний вид' }));
     await user.click(screen.getByRole('button', { name: 'Тёмная' }));
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(screen.getByRole('button', { name: 'Тёмная' })).toHaveAttribute('aria-pressed', 'true');
@@ -306,6 +307,7 @@ describe('D1-FE1 shell, pages and routing', () => {
     await user.click(screen.getByRole('button', { name: 'Светлая' }));
     expect(document.documentElement.dataset.theme).toBe('light');
 
+    await user.click(screen.getByRole('button', { name: 'Уведомления' }));
     await user.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
     const dialog = await screen.findByRole('dialog', { name: 'Настройки уведомлений' });
     expect(dialog).toBeInTheDocument();

@@ -51,6 +51,29 @@ function messagePreview(message: ApiMessage | null): string {
   return t('chat.deletedMessage');
 }
 
+interface MessageMetaProps {
+  author: string;
+  mine: boolean;
+  message: ApiMessage;
+  readByOthers: boolean;
+  e2eeChat: boolean;
+}
+
+/** Flat author/time header shared by every message kind. */
+function MessageMeta({ author, mine, message, readByOthers, e2eeChat }: MessageMetaProps) {
+  return (
+    <div className="msg-head">
+      <span className="msg-author">{author}</span>
+      {mine && !e2eeChat ? <span className="msg-you">{t('sidebar.user')}</span> : null}
+      <time className="msg-time" dateTime={message.created_at}>
+        {formatTime(message.created_at)}
+      </time>
+      {message.edited_at ? <span className="msg-edited">{t('chat.edited')}</span> : null}
+      {mine && readByOthers ? <span className="receipt-state">{t('message.read')}</span> : null}
+    </div>
+  );
+}
+
 export function MessageRow({
   message,
   mine,
@@ -116,13 +139,12 @@ export function MessageRow({
     !deleted && allowReply && onReply ? (
       <button
         type="button"
-        className="message-action"
+        className="msg-tool"
         onClick={() => onReply(message)}
         aria-label={`${t('chat.reply')}: ${author}`}
         title={t('chat.reply')}
       >
         <ReplyIcon aria-hidden="true" />
-        <span>{t('chat.reply')}</span>
       </button>
     ) : null;
   // With replies the always-visible `ThreadLink` is the single entry point;
@@ -132,7 +154,7 @@ export function MessageRow({
     canThread && threadsAvailable && onOpenThread && threadReplyCount === 0 ? (
       <button
         type="button"
-        className="message-action"
+        className="msg-tool"
         onClick={() => onOpenThread(message)}
         aria-label={
           threadReplyCount > 0
@@ -142,18 +164,16 @@ export function MessageRow({
         title={threadReplyCount > 0 ? t('thread.open') : t('thread.start')}
       >
         <ThreadIcon aria-hidden="true" />
-        <span>{threadReplyCount > 0 ? t('thread.open') : t('thread.start')}</span>
       </button>
     ) : canThread && !threadsAvailable && threadDisabledReason ? (
       <button
         type="button"
-        className="message-action"
+        className="msg-tool"
         disabled
         aria-label={threadDisabledReason}
         title={threadDisabledReason}
       >
         <ThreadIcon aria-hidden="true" />
-        <span>{t('thread.disabled')}</span>
       </button>
     ) : null;
   const hasActions = Boolean(replyAction || threadAction);
@@ -176,20 +196,37 @@ export function MessageRow({
     )
   ) : null;
 
+  const tools = hasActions ? (
+    <div className="msg-tools">
+      {replyAction}
+      {threadAction}
+    </div>
+  ) : null;
+
+  const meta = (
+    <MessageMeta
+      author={author}
+      mine={mine}
+      message={message}
+      readByOthers={readByOthers}
+      e2eeChat={e2eeChat}
+    />
+  );
+
   if (isStickerMessage(message) && !e2ee && !e2eeChat) {
     const sticker = stickerOf(message);
     const alt = sticker?.alt?.trim() || t('stickers.imageAlt');
     return (
       <article
-        className={`msg-row msg-row--sticker${mine ? ' msg-row--mine' : ''}`}
+        className={`msg msg-row msg-row--sticker${mine ? ' msg-row--mine' : ''}`}
         id={`message-${message.id}`}
         tabIndex={-1}
       >
-        {!mine ? <Avatar name={author} seed={message.sender_id} /> : null}
-        <div className="msg-stack msg-stack--sticker">
-          {!mine ? <span className="msg-author">{author}</span> : null}
+        <Avatar name={author} seed={message.sender_id} size="lg" />
+        <div className="msg-body">
+          {meta}
+          {quote}
           <div className={`sticker-message${deleted ? ' sticker-message--deleted' : ''}`}>
-            {quote}
             {deleted ? (
               <span className="sticker-message__deleted">{t('chat.deletedMessage')}</span>
             ) : sticker?.url ? (
@@ -208,21 +245,9 @@ export function MessageRow({
                 {t('stickers.unavailable')}
               </span>
             )}
-            <div className="sticker-message__foot">
-              {message.edited_at ? <span>{t('chat.edited')}</span> : null}
-              {mine && readByOthers ? (
-                <span className="receipt-state">{t('message.read')}</span>
-              ) : null}
-              <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
-            </div>
           </div>
           {threadLink}
-          {hasActions ? (
-            <div className="message-actions">
-              {replyAction}
-              {threadAction}
-            </div>
-          ) : null}
+          {tools}
         </div>
       </article>
     );
@@ -230,36 +255,20 @@ export function MessageRow({
 
   return (
     <article
-      className={`msg-row${mine ? ' msg-row--mine' : ''}`}
+      className={`msg msg-row${mine ? ' msg-row--mine' : ''}`}
       id={`message-${message.id}`}
       tabIndex={-1}
     >
-      {!mine ? <Avatar name={author} seed={message.sender_id} /> : null}
-      <div className="msg-stack">
-        {!mine ? <span className="msg-author">{author}</span> : null}
-        <div className="bubble">
-          {quote}
-          {showText ? (
-            <div className={`bubble-text${deleted ? ' bubble-text--deleted' : ''}`}>{text}</div>
-          ) : null}
-          {!deleted && !e2eeChat ? (
-            <AttachmentList attachments={message.attachments ?? []} />
-          ) : null}
-          <div className="bubble-foot">
-            {message.edited_at ? <span>{t('chat.edited')}</span> : null}
-            {mine && readByOthers ? (
-              <span className="receipt-state">{t('message.read')}</span>
-            ) : null}
-            <time dateTime={message.created_at}>{formatTime(message.created_at)}</time>
-          </div>
-        </div>
-        {threadLink}
-        {hasActions ? (
-          <div className="message-actions">
-            {replyAction}
-            {threadAction}
-          </div>
+      <Avatar name={author} seed={message.sender_id} size="lg" />
+      <div className="msg-body">
+        {meta}
+        {quote}
+        {showText ? (
+          <p className={`msg-text${deleted ? ' msg-text--deleted' : ''}`}>{text}</p>
         ) : null}
+        {!deleted && !e2eeChat ? <AttachmentList attachments={message.attachments ?? []} /> : null}
+        {threadLink}
+        {tools}
       </div>
     </article>
   );
@@ -267,15 +276,23 @@ export function MessageRow({
 
 interface OutgoingRowProps {
   item: OutgoingMessage;
+  viewerName: string;
   retryDisabled: boolean;
   onRetry: (clientMessageId: string) => void;
   onRestore: (item: OutgoingMessage) => void;
 }
 
-export function OutgoingRow({ item, retryDisabled, onRetry, onRestore }: OutgoingRowProps) {
+export function OutgoingRow({
+  item,
+  viewerName,
+  retryDisabled,
+  onRetry,
+  onRestore,
+}: OutgoingRowProps) {
   const failed = item.status === 'failed';
   const described = item.error ? describeError(item.error) : null;
   const sticker = item.kind === 'STICKER' ? item.sticker : null;
+  const createdAt = new Date(item.createdAt).toISOString();
 
   const status = (
     <span className="outgoing-status" role="status" aria-live="polite">
@@ -283,11 +300,7 @@ export function OutgoingRow({ item, retryDisabled, onRetry, onRestore }: Outgoin
       {failed ? t('message.failed') : t('message.pending')}
     </span>
   );
-  const time = (
-    <time dateTime={new Date(item.createdAt).toISOString()}>
-      {formatTime(new Date(item.createdAt).toISOString())}
-    </time>
-  );
+  const time = <time className="msg-time">{formatTime(createdAt)}</time>;
   const errorBlock =
     failed && item.error && described ? (
       <div className="outgoing-error" role="alert">
@@ -319,15 +332,26 @@ export function OutgoingRow({ item, retryDisabled, onRetry, onRestore }: Outgoin
       </div>
     ) : null;
 
+  const head = (
+    <div className="msg-head">
+      <span className="msg-author">{viewerName}</span>
+      <span className="msg-you">{t('sidebar.user')}</span>
+      {time}
+      {status}
+    </div>
+  );
+
   if (sticker) {
     const alt = sticker.alt?.trim() || t('stickers.imageAlt');
     return (
       <article
-        className="msg-row msg-row--mine msg-row--sticker"
+        className="msg msg-row msg-row--mine msg-row--sticker"
         data-outgoing-status={item.status}
         data-sticker-outgoing="true"
       >
-        <div className="msg-stack msg-stack--sticker">
+        <Avatar name={viewerName} seed={viewerName} size="lg" />
+        <div className="msg-body">
+          {head}
           <div className="sticker-message sticker-message--outgoing">
             <img
               className="sticker-message__image"
@@ -339,10 +363,6 @@ export function OutgoingRow({ item, retryDisabled, onRetry, onRestore }: Outgoin
               decoding="async"
               draggable={false}
             />
-            <div className="sticker-message__foot">
-              {status}
-              {time}
-            </div>
           </div>
           {errorBlock}
         </div>
@@ -351,17 +371,12 @@ export function OutgoingRow({ item, retryDisabled, onRetry, onRestore }: Outgoin
   }
 
   return (
-    <article className="msg-row msg-row--mine" data-outgoing-status={item.status}>
-      <div className="msg-stack">
-        <div className="bubble bubble--outgoing">
-          {item.text.trim().length > 0 ? <div className="bubble-text">{item.text}</div> : null}
-          <AttachmentList attachments={item.attachments} outgoing />
-          <div className="bubble-foot">
-            {status}
-            {time}
-          </div>
-        </div>
-
+    <article className="msg msg-row msg-row--mine" data-outgoing-status={item.status}>
+      <Avatar name={viewerName} seed={viewerName} size="lg" />
+      <div className="msg-body">
+        {head}
+        {item.text.trim().length > 0 ? <p className="msg-text">{item.text}</p> : null}
+        <AttachmentList attachments={item.attachments} outgoing />
         {errorBlock}
       </div>
     </article>

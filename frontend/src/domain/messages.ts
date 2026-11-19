@@ -154,12 +154,15 @@ export function initials(displayName: string | null | undefined): string {
 }
 
 export function avatarHue(seed: string | null | undefined): number {
+  // FNV-1a: unlike the previous `hash*31` the avalanche step spreads
+  // repeated UUID-shaped fixture ids across the whole palette.
   const value = seed ?? '';
-  let hash = 0;
+  let hash = 0x811c9dc5;
   for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) % 360;
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
   }
-  return hash;
+  return (hash >>> 0) % 360;
 }
 
 export function replyPreview(text: string | null | undefined, maxLength = 140): string {

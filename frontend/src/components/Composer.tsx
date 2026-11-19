@@ -1,13 +1,24 @@
-import { useEffect, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { ApiMessage } from '../api/types';
 import { replyPreview } from '../domain/messages';
 import { t } from '../i18n/ru';
-import { CloseIcon, MicIcon, PaperclipIcon, SendIcon, StickerIcon } from './Icons';
+import {
+  CloseIcon,
+  EmojiIcon,
+  LockIcon,
+  MicIcon,
+  PlusIcon,
+  SendIcon,
+  ShieldIcon,
+  StickerIcon,
+} from './Icons';
 
 export type SendBlockedReason = 'offline' | 'rate_limit' | 'e2ee_blocked' | null;
 
 interface ComposerProps {
   value: string;
+  /** D1 UX fidelity 2: placeholder addresses the active chat by name. */
+  chatName?: string;
   onChange: (value: string) => void;
   onSend: () => void;
   disabled: boolean;
@@ -42,9 +53,11 @@ interface ComposerProps {
 const MAX_LENGTH = 8000;
 const COUNTER_VISIBLE_FROM = 1;
 const COUNTER_WARN_FROM = 7600;
+const EMOJI = ['🙂', '😄', '😍', '👍', '🙏', '🔥', '🎉', '❤️', '😢', '👀', '✅', '🚀'];
 
 export function Composer({
   value,
+  chatName,
   onChange,
   onSend,
   disabled,
@@ -70,6 +83,9 @@ export function Composer({
   voiceBar,
 }: ComposerProps) {
   const length = value.length;
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const emojiRef = useRef<HTMLDivElement>(null);
+  const emojiButtonRef = useRef<HTMLButtonElement>(null);
   const canSend =
     !disabled &&
     sendBlockedReason === null &&
@@ -85,9 +101,36 @@ export function Composer({
     }
   }, [value, textareaRef]);
 
+  useEffect(() => {
+    if (!emojiOpen) return;
+    const handle = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setEmojiOpen(false);
+        emojiButtonRef.current?.focus();
+      }
+    };
+    const handlePointer = (event: MouseEvent) => {
+      if (emojiRef.current && !emojiRef.current.contains(event.target as Node)) {
+        setEmojiOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handle);
+    document.addEventListener('mousedown', handlePointer);
+    return () => {
+      document.removeEventListener('keydown', handle);
+      document.removeEventListener('mousedown', handlePointer);
+    };
+  }, [emojiOpen]);
+
   const submit = () => {
     if (!canSend) return;
     onSend();
+    textareaRef.current?.focus();
+  };
+
+  const insertEmoji = (emoji: string) => {
+    onChange(`${value}${emoji}`);
+    setEmojiOpen(false);
     textareaRef.current?.focus();
   };
 
@@ -100,6 +143,7 @@ export function Composer({
         : sendBlockedReason === 'e2ee_blocked'
           ? t('composer.e2eeBlocked')
           : null;
+  const contextNote = e2eeChat ? t('chat.e2eeNote') : t('chat.managedNote');
 
   return (
     <form
@@ -136,53 +180,46 @@ export function Composer({
 
       {voiceBar}
 
-      <div className="composer__field">
+      <div className="composer__row">
         <label className="visually-hidden" htmlFor="composer-input">
           {t('composer.label')}
         </label>
-        <div className="composer__input-row">
-          <button
-            type="button"
-            className="icon-button composer__attach"
-            onClick={onAttach}
-            disabled={attachDisabled || disabled}
-            aria-label={t('files.attach')}
-            title={attachHint}
-          >
-            <PaperclipIcon aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            ref={voiceButtonRef}
-            className={`icon-button composer__voice${voiceActive ? ' composer__voice--active' : ''}`}
-            onClick={onStartVoice}
-            disabled={voiceDisabled || disabled}
-            aria-label={t('voice.record')}
-            aria-pressed={voiceActive}
-            title={voiceHint}
-          >
-            <MicIcon aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            ref={stickerButtonRef}
-            className={`icon-button composer__sticker${stickersOpen ? ' composer__sticker--active' : ''}`}
-            onClick={onToggleStickers}
-            disabled={disabled}
-            aria-label={t('stickers.open')}
-            aria-expanded={stickersOpen}
-            aria-controls={stickersOpen ? 'sticker-picker' : undefined}
-            title={t('stickers.open')}
-          >
-            <StickerIcon aria-hidden="true" />
-          </button>
+        <button
+          type="button"
+          className="round-btn composer__attach"
+          onClick={onAttach}
+          disabled={attachDisabled || disabled}
+          aria-label={t('files.attach')}
+          title={attachHint}
+        >
+          <PlusIcon aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          ref={stickerButtonRef}
+          className={`round-btn composer__sticker${stickersOpen ? ' is-on' : ''}`}
+          onClick={onToggleStickers}
+          disabled={disabled}
+          aria-label={t('stickers.open')}
+          aria-expanded={stickersOpen}
+          aria-controls={stickersOpen ? 'sticker-picker' : undefined}
+          title={t('stickers.open')}
+        >
+          <StickerIcon aria-hidden="true" />
+        </button>
+
+        <div className="field composer__field">
           <textarea
             id="composer-input"
             ref={textareaRef}
             className="composer__textarea"
             rows={1}
             maxLength={MAX_LENGTH}
-            placeholder={t('composer.placeholder')}
+            placeholder={
+              chatName
+                ? t('composer.placeholderInChat', { chat: chatName })
+                : t('composer.placeholder')
+            }
             aria-describedby="composer-hint composer-note"
             readOnly={disabled}
             value={value}
@@ -194,37 +231,92 @@ export function Composer({
               }
             }}
           />
+          <button
+            type="button"
+            ref={emojiButtonRef}
+            className={`field-emoji composer__emoji${emojiOpen ? ' is-on' : ''}`}
+            onClick={() => setEmojiOpen((open) => !open)}
+            aria-label={t('composer.emoji')}
+            aria-expanded={emojiOpen}
+            title={t('composer.emojiTitle')}
+          >
+            <EmojiIcon aria-hidden="true" />
+          </button>
+          {emojiOpen ? (
+            <div
+              className="emoji-pop"
+              role="dialog"
+              aria-label={t('composer.emoji')}
+              ref={emojiRef}
+            >
+              <div className="emoji-pop__grid">
+                {EMOJI.map((emoji) => (
+                  <button
+                    type="button"
+                    key={emoji}
+                    className="emoji-pop__item"
+                    aria-label={emoji}
+                    onClick={() => insertEmoji(emoji)}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
-        <div className="composer__bar">
+        <button
+          type="button"
+          ref={voiceButtonRef}
+          className={`round-btn composer__voice${voiceActive ? ' composer__voice--active' : ''}`}
+          onClick={onStartVoice}
+          disabled={voiceDisabled || disabled}
+          aria-label={t('voice.record')}
+          aria-pressed={voiceActive}
+          title={voiceHint}
+        >
+          <MicIcon aria-hidden="true" />
+        </button>
+        <button
+          type="submit"
+          className="send-btn"
+          aria-label={t('composer.send')}
+          title={t('composer.send')}
+          disabled={!canSend}
+        >
+          <SendIcon aria-hidden="true" />
+        </button>
+      </div>
+
+      <div className="composer__bar">
+        <p
+          className={`composer__note${e2eeChat ? ' composer__note--e2ee' : ''}`}
+          id="composer-note"
+          role="status"
+          aria-live="polite"
+        >
+          {statusNote ?? (
+            <>
+              {e2eeChat ? <LockIcon aria-hidden="true" /> : <ShieldIcon aria-hidden="true" />}
+              {contextNote}
+            </>
+          )}
+        </p>
+        <div className="composer__right">
           <p className="composer__hint" id="composer-hint">
             {t('composer.hint')}
           </p>
-          <div className="composer__right">
-            {length >= COUNTER_VISIBLE_FROM ? (
-              <span
-                className={`composer__counter${length >= COUNTER_WARN_FROM ? ' composer__counter--warn' : ''}`}
-                aria-label={t('composer.counterLabel', { count: length })}
-              >
-                {t('composer.counter', { count: length })}
-              </span>
-            ) : null}
-            <button
-              type="submit"
-              className="send-button"
-              aria-label={t('composer.send')}
-              title={t('composer.send')}
-              disabled={!canSend}
+          {length >= COUNTER_VISIBLE_FROM ? (
+            <span
+              className={`composer__counter${length >= COUNTER_WARN_FROM ? ' composer__counter--warn' : ''}`}
+              aria-label={t('composer.counterLabel', { count: length })}
             >
-              <SendIcon aria-hidden="true" />
-            </button>
-          </div>
+              {t('composer.counter', { count: length })}
+            </span>
+          ) : null}
         </div>
       </div>
-
-      <p className="composer__note" id="composer-note" role="status" aria-live="polite">
-        {statusNote}
-      </p>
     </form>
   );
 }

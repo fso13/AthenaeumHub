@@ -41,8 +41,8 @@ describe('managed chat screen', () => {
     const htmlMessage = within(log).getByText(/Проверка экранирования/);
     expect(htmlMessage).toBeInTheDocument();
     expect(htmlMessage.querySelector('b')).toBeNull();
-    expect(container.querySelector('.bubble script')).toBeNull();
-    expect(container.querySelector('.bubble b')).toBeNull();
+    expect(container.querySelector('.msg-text script')).toBeNull();
+    expect(container.querySelector('.msg-text b')).toBeNull();
   });
 
   it('shows the optimistic message immediately and replaces it with the server one', async () => {
@@ -133,7 +133,7 @@ describe('managed chat screen', () => {
 
     await user.click(screen.getByRole('button', { name: 'Вернуть текст' }));
     expect(screen.getByLabelText('Текст сообщения')).toHaveValue(text);
-    expect(screen.queryByText(text, { selector: '.bubble-text' })).not.toBeInTheDocument();
+    expect(screen.queryByText(text, { selector: '.msg-text' })).not.toBeInTheDocument();
 
     mockDb.forceSendError = null;
   });
@@ -154,7 +154,7 @@ describe('managed chat screen', () => {
     await screen.findByText('Слишком длинное сообщение');
     await user.click(screen.getByRole('button', { name: 'Вернуть текст' }));
     expect(screen.getByLabelText('Текст сообщения')).toHaveValue(text);
-    expect(screen.queryByText(text, { selector: '.bubble-text' })).not.toBeInTheDocument();
+    expect(screen.queryByText(text, { selector: '.msg-text' })).not.toBeInTheDocument();
 
     mockDb.forceSendError = null;
   });

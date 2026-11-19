@@ -293,6 +293,9 @@ export function ThreadPanel() {
           <OutgoingRow
             key={item.clientMessageId}
             item={item}
+            viewerName={
+              state.user?.display_name ?? state.session?.user.display_name ?? t('sidebar.user')
+            }
             retryDisabled={sendBlockedReason !== null}
             onRetry={(clientMessageId) =>
               void store.retryThreadReply(active.chatId, active.rootId, clientMessageId)

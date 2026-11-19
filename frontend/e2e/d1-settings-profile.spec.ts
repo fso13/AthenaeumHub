@@ -27,7 +27,9 @@ test.describe('D1 chat settings', () => {
     await expect(dialog.getByRole('textbox', { name: 'Название' })).toHaveValue(GROUP_CHAT_NAME);
     await expect(dialog.getByRole('textbox', { name: 'Описание' })).toHaveValue('');
 
-    // Danger zone exists but is honestly disabled until the backend API lands.
+    // Danger zone lives on its own tab and is honestly disabled until the
+    // backend API lands.
+    await dialog.getByRole('tab', { name: 'Опасная зона' }).click();
     await expect(dialog.getByRole('button', { name: 'Архивировать чат' })).toBeDisabled();
     await expect(dialog.getByRole('button', { name: 'Покинуть чат' })).toBeDisabled();
     await expect(dialog.getByRole('button', { name: 'Удалить чат' })).toBeDisabled();
@@ -37,6 +39,7 @@ test.describe('D1 chat settings', () => {
 
     await expectNoA11yViolations(page);
 
+    await dialog.getByRole('tab', { name: 'Основное' }).click();
     await dialog.getByRole('textbox', { name: 'Название' }).fill('  Продуктовая   команда  ');
     await dialog.getByRole('textbox', { name: 'Описание' }).fill('  Описание команды  ');
     await dialog.getByRole('button', { name: 'Сохранить' }).click();

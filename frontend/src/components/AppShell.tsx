@@ -110,7 +110,7 @@ export function AppShell({
   const page = view === 'chat' ? null : view;
 
   return (
-    <div className={`app${navOpen ? ' app--nav-open' : ''}`}>
+    <div className={`app${navOpen ? ' app--nav-open' : ''}${page === null ? '' : ' app--page'}`}>
       <a className="skip-link" href="#chat-main">
         {t('app.skipToChat')}
       </a>
@@ -137,6 +137,8 @@ export function AppShell({
           state={currentState}
           useMocks={config.useMocks}
           view={view}
+          theme={theme}
+          onThemeChange={setTheme}
           onNavigate={go}
           onSelect={openChat}
           onLogout={onLogout}
@@ -166,7 +168,11 @@ export function AppShell({
           <span className="app__mobilebar-space">{workspaceName}</span>
         </div>
         {page === null ? (
-          <ChatScreen onOpenChatSettings={() => setChatSettingsOpen(true)} />
+          <ChatScreen
+            onOpenChatSettings={() => setChatSettingsOpen(true)}
+            onOpenMembers={() => onOpenMembers?.()}
+            onNavigate={go}
+          />
         ) : page === 'overview' ? (
           <OverviewPage
             onBack={() => go('chat')}
@@ -185,11 +191,12 @@ export function AppShell({
             onOpenMembers={() => onOpenMembers?.()}
             onOpenProfile={() => setProfileOpen(true)}
             onLogout={onLogout}
+            onNavigate={go}
           />
         ) : page === 'plugins' ? (
-          <PluginsPage onBack={() => go('chat')} onOpenChat={() => go('chat')} />
+          <PluginsPage onBack={() => go('chat')} />
         ) : (
-          <SecurityPage onBack={() => go('chat')} onOpenChat={() => go('chat')} />
+          <SecurityPage onBack={() => go('chat')} />
         )}
       </div>
 

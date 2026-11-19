@@ -276,7 +276,7 @@ describe('D1-FE5 chat settings', () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openSettings(user);
 
-    expect(mockDb.memberDirectoryRequests).toHaveLength(0);
+    const before = mockDb.memberDirectoryRequests.length;
     await user.click(
       within(dialog).getByRole('button', { name: 'Открыть участников пространства' }),
     );
@@ -284,8 +284,8 @@ describe('D1-FE5 chat settings', () => {
     const members = await screen.findByRole('dialog', { name: 'Участники пространства' });
     await within(members).findByText('Анна Петрова');
     expect(screen.queryByRole('dialog', { name: 'Настройки чата' })).toBeNull();
-    expect(mockDb.memberDirectoryRequests).toHaveLength(1);
-    expect(mockDb.memberDirectoryRequests[0]).toMatchObject({
+    expect(mockDb.memberDirectoryRequests.length).toBeGreaterThan(before);
+    expect(mockDb.memberDirectoryRequests.at(-1)).toMatchObject({
       workspaceId: IDS.workspace,
       query: null,
     });
@@ -295,6 +295,7 @@ describe('D1-FE5 chat settings', () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openSettings(user);
 
+    await user.click(within(dialog).getByRole('tab', { name: 'Опасная зона' }));
     expect(within(dialog).getByRole('button', { name: 'Архивировать чат' })).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: 'Покинуть чат' })).toBeDisabled();
     expect(within(dialog).getByRole('button', { name: 'Удалить чат' })).toBeDisabled();

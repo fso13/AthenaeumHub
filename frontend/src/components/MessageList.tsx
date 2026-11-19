@@ -10,6 +10,10 @@ import { MessageRow, OutgoingRow } from './MessageRow';
 interface MessageListProps {
   slice: ChatSlice;
   viewerId: string | null;
+  /** Local display name for the optimistic (outgoing) rows. */
+  viewerName: string;
+  /** D1 UX: in-chat filter over the loaded, decrypted history. */
+  searchQuery?: string;
   /** Max `message.receipt.last_read_seq` across other participants. */
   readByOthersSeq: number;
   retryDisabled: boolean;
@@ -28,6 +32,8 @@ interface MessageListProps {
 export function MessageList({
   slice,
   viewerId,
+  viewerName,
+  searchQuery = '',
   readByOthersSeq,
   retryDisabled,
   e2eeChat = false,
@@ -55,7 +61,16 @@ export function MessageList({
       }),
     [slice.messages, slice.e2ee],
   );
-  const items = useMemo(() => groupMessagesByDay(ordered, new Date()), [ordered]);
+  const normalizedQuery = searchQuery.trim().toLocaleLowerCase('ru');
+  const visible = useMemo(() => {
+    if (normalizedQuery.length === 0) return ordered;
+    return ordered.filter((message) => {
+      const decrypted = slice.e2ee[message.id]?.text ?? '';
+      const text = `${decrypted} ${message.text ?? ''}`.toLocaleLowerCase('ru');
+      return text.includes(normalizedQuery);
+    });
+  }, [ordered, normalizedQuery, slice.e2ee]);
+  const items = useMemo(() => groupMessagesByDay(visible, new Date()), [visible]);
   const replyById = useMemo(
     () => new Map(ordered.map((message) => [message.id, message])),
     [ordered],
@@ -171,6 +186,11 @@ export function MessageList({
       ) : null}
 
       <div className="messages__inner">
+        {visible.length === 0 && normalizedQuery.length > 0 ? (
+          <p className="messages__empty" role="status">
+            {t('chat.searchEmpty')}
+          </p>
+        ) : null}
         {items.map((item) =>
           item.kind === 'day' ? (
             <div
@@ -219,6 +239,7 @@ export function MessageList({
           <OutgoingRow
             key={item.clientMessageId}
             item={item}
+            viewerName={viewerName}
             retryDisabled={retryDisabled}
             onRetry={onRetry}
             onRestore={onRestore}

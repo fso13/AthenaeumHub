@@ -89,6 +89,73 @@ export function PlusIcon(props: IconProps) {
   );
 }
 
+/** D1 UX: header search and the in-chat filter bar. */
+export function SearchIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.4-3.4" />
+    </IconBase>
+  );
+}
+
+/** D1 UX: header call action (honestly disabled until the calls API lands). */
+export function PhoneIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M6.5 3.5h3l1.5 4-2 1.5a12 12 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2.2 2A17 17 0 0 1 4.5 5.7a2 2 0 0 1 2-2.2Z" />
+    </IconBase>
+  );
+}
+
+/** D1 UX: header video-call action (honestly disabled until the calls API lands). */
+export function VideoIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="2.5" y="6" width="13" height="12" rx="2.5" />
+      <path d="m15.5 10.5 6-3v9l-6-3" />
+    </IconBase>
+  );
+}
+
+/** D1 UX: details-panel toggle in the chat header. */
+export function InfoIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v6" />
+      <path d="M12 7.5h.01" />
+    </IconBase>
+  );
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </IconBase>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m9 6 6 6-6 6" />
+    </IconBase>
+  );
+}
+
+export function EmojiIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" />
+      <path d="M9 9.5h.01" />
+      <path d="M15 9.5h.01" />
+    </IconBase>
+  );
+}
+
 export function ChevronUpIcon(props: IconProps) {
   return (
     <IconBase {...props}>
@@ -380,6 +447,135 @@ export function TrashIcon(props: IconProps) {
       <path d="m5 6 1 15h12l1-15" />
       <path d="M10 11v6" />
       <path d="M14 11v6" />
+    </IconBase>
+  );
+}
+
+/* D1 UX fidelity 2: section-page and details icons from design/dashboard. */
+
+export function HashIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M9.4 3.8 7.9 20.2M16.2 3.8l-1.5 16.4M3.8 8.4h16.4M3.2 15.6h16.4" />
+    </IconBase>
+  );
+}
+
+export function UserPlusIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="9.4" cy="8.4" r="3.5" />
+      <path d="M3.4 20.2c.4-3.4 2.8-5.3 6-5.3 1.2 0 2.3.3 3.2.8" />
+      <path d="M18.4 13.6v6M15.4 16.6h6" />
+    </IconBase>
+  );
+}
+
+export function ImageIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="3.4" y="4.4" width="17.2" height="15.2" rx="3" />
+      <circle cx="9" cy="10" r="1.6" />
+      <path d="m5 17.4 4.6-4.6 4.6 4.6 2.6-2.6 3.7 3.7" />
+    </IconBase>
+  );
+}
+
+export function EyeIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M2.6 12S6.1 5.6 12 5.6 21.4 12 21.4 12 17.9 18.4 12 18.4 2.6 12 2.6 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </IconBase>
+  );
+}
+
+export function MonitorIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="3" y="4.4" width="18" height="12.4" rx="2.6" />
+      <path d="M9 20h6M12 16.8V20" />
+    </IconBase>
+  );
+}
+
+export function SmartphoneIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="7" y="2.6" width="10" height="18.8" rx="2.6" />
+      <path d="M11 18.4h2" />
+    </IconBase>
+  );
+}
+
+export function KeyIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="8" cy="12" r="4.2" />
+      <path d="M12.2 12h8.6M18.2 12v3.1M15.7 12v2.1" />
+    </IconBase>
+  );
+}
+
+export function LinkIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M10 14a4.5 4.5 0 0 0 6.4 0l2.6-2.6a4.5 4.5 0 0 0-6.4-6.4L11 6.6" />
+      <path d="M14 10a4.5 4.5 0 0 0-6.4 0L5 12.6a4.5 4.5 0 0 0 6.4 6.4l1.6-1.6" />
+    </IconBase>
+  );
+}
+
+export function FlagIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M6 20.4V4.2c4.2-2 6 2.2 11 0v9.4c-5 2.2-6.8-2-11 0" />
+    </IconBase>
+  );
+}
+
+export function CopyIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="8.4" y="8.4" width="11.4" height="11.4" rx="3" />
+      <path d="M15.6 8.4V6.2a2 2 0 0 0-2-2H6.2a2 2 0 0 0-2 2v7.4a2 2 0 0 0 2 2h2.2" />
+    </IconBase>
+  );
+}
+
+export function PollIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M5.2 19.4V9.6M12 19.4V4.8M18.8 19.4v-6.8" />
+      <path d="M2.6 19.4h18.8" />
+    </IconBase>
+  );
+}
+
+export function TaskIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="3.8" y="3.8" width="16.4" height="16.4" rx="4.4" />
+      <path d="m8.3 12 2.4 2.4 5.1-5.2" />
+    </IconBase>
+  );
+}
+
+export function TranslateIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M3.6 5.6h8.2M7.7 3.6v2c0 4-2 7.1-5 8.6" />
+      <path d="M4.8 10.6c1.3 2.6 3.3 4.1 6.1 4.6" />
+      <path d="m11.8 20.4 4.1-10.2 4.1 10.2M13.4 16.9h5.1" />
+    </IconBase>
+  );
+}
+
+export function SparklesIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" />
+      <path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z" />
     </IconBase>
   );
 }

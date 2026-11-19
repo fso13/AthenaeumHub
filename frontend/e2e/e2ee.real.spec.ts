@@ -350,10 +350,12 @@ async function openWorkspace(
     }
   }, workspaceId);
   await page.reload();
-  await expect(page.locator('.brand__workspace')).toHaveText(workspaceName, {
+  await expect(page.locator('.ws-btn__name')).toHaveText(workspaceName, {
     timeout: 60_000,
   });
-  await expect(page.getByText(/Чатов: \d+ из \d+/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.chat-list__items .chat-item').first()).toBeVisible({
+    timeout: 60_000,
+  });
 }
 
 function escapeRegExp(value: string): string {
@@ -711,10 +713,12 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
         // started. Reload is the documented "open on a second device" path: it
         // refreshes the chat list and loads the E2EE device keys.
         await pageB.reload();
-        await expect(pageB.locator('.brand__workspace')).toHaveText(workspaceName, {
+        await expect(pageB.locator('.ws-btn__name')).toHaveText(workspaceName, {
           timeout: 60_000,
         });
-        await expect(pageB.getByText(/Чатов: [1-9]\d* из \d+/)).toBeVisible({ timeout: 60_000 });
+        await expect(pageB.locator('.chat-list__items .chat-item').first()).toBeVisible({
+          timeout: 60_000,
+        });
         await expectComposerReady(pageB);
         await expectRealtimeOnline(pageB);
       });
@@ -754,7 +758,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
         // Persistence: the attestation is server-side and scoped to A's
         // verifier device, so it survives a full reload of A.
         await pageA.reload();
-        await expect(pageA.locator('.brand__workspace')).toHaveText(workspaceName, {
+        await expect(pageA.locator('.ws-btn__name')).toHaveText(workspaceName, {
           timeout: 60_000,
         });
         await expectComposerReady(pageA);
@@ -764,7 +768,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
 
       await test.step('reload restores both messages from local sealed copies', async () => {
         await pageA.reload();
-        await expect(pageA.locator('.brand__workspace')).toHaveText(workspaceName, {
+        await expect(pageA.locator('.ws-btn__name')).toHaveText(workspaceName, {
           timeout: 60_000,
         });
         await expectComposerReady(pageA);
@@ -773,7 +777,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
         await expectMessageVisible(pageA, markerB);
 
         await pageB.reload();
-        await expect(pageB.locator('.brand__workspace')).toHaveText(workspaceName, {
+        await expect(pageB.locator('.ws-btn__name')).toHaveText(workspaceName, {
           timeout: 60_000,
         });
         await expectComposerReady(pageB);
@@ -820,7 +824,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
           await pageB.waitForTimeout(500);
           await clearE2eeSessions(pageB);
           await pageB.reload();
-          await expect(pageB.locator('.brand__workspace')).toHaveText(workspaceName, {
+          await expect(pageB.locator('.ws-btn__name')).toHaveText(workspaceName, {
             timeout: 60_000,
           });
           await expectComposerReady(pageB);
@@ -866,7 +870,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
             // control without relying on a reload; a reload remains the last
             // resort if the live frame and sync both raced the reset.
             await pageA.reload();
-            await expect(pageA.locator('.brand__workspace')).toHaveText(workspaceName, {
+            await expect(pageA.locator('.ws-btn__name')).toHaveText(workspaceName, {
               timeout: 60_000,
             });
             await expectComposerReady(pageA);
@@ -886,7 +890,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
           // the re-encrypted original must be `superseded`, so A renders one
           // copy, not the original next to its replacement.
           await pageA.reload();
-          await expect(pageA.locator('.brand__workspace')).toHaveText(workspaceName, {
+          await expect(pageA.locator('.ws-btn__name')).toHaveText(workspaceName, {
             timeout: 60_000,
           });
           await expectComposerReady(pageA);
@@ -911,7 +915,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
           // exactly one copy of each logical message and no failed-original row
           // next to its replacement.
           await pageB.reload();
-          await expect(pageB.locator('.brand__workspace')).toHaveText(workspaceName, {
+          await expect(pageB.locator('.ws-btn__name')).toHaveText(workspaceName, {
             timeout: 60_000,
           });
           await expectComposerReady(pageB);
@@ -1170,10 +1174,12 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
         await expectRealtimeOnline(pageA);
 
         await pageB.reload();
-        await expect(pageB.locator('.brand__workspace')).toHaveText(workspaceName, {
+        await expect(pageB.locator('.ws-btn__name')).toHaveText(workspaceName, {
           timeout: 60_000,
         });
-        await expect(pageB.getByText(/Чатов: [1-9]\d* из \d+/)).toBeVisible({ timeout: 60_000 });
+        await expect(pageB.locator('.chat-list__items .chat-item').first()).toBeVisible({
+          timeout: 60_000,
+        });
         await expectComposerReady(pageB);
         await expectRealtimeOnline(pageB);
 
@@ -1225,7 +1231,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
       await test.step('peer sees KEY_CHANGE_DETECTED, sending stays blocked, old messages remain', async () => {
         if (userA === null || userB === null) throw new Error('fixture users are missing');
         await pageA.reload();
-        await expect(pageA.locator('.brand__workspace')).toHaveText(workspaceName, {
+        await expect(pageA.locator('.ws-btn__name')).toHaveText(workspaceName, {
           timeout: 60_000,
         });
         const warning = pageA.getByText('Ключ безопасности изменился');
@@ -1240,7 +1246,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
               countA: await pageA.getByText(markerA, { exact: true }).count(),
               countB: await pageA.getByText(markerB, { exact: true }).count(),
               textLengths: await pageA
-                .locator('.bubble-text')
+                .locator('.msg-text')
                 .evaluateAll((nodes) => nodes.map((node) => node.textContent?.length ?? 0)),
               decryptErrors: await pageA.getByText('Не удалось расшифровать сообщение').count(),
               unavailable: await pageA.getByText('Недоступно на этом устройстве').count(),
@@ -1290,7 +1296,7 @@ test.describe('E7-F7B real two-device E2EE (Chromium/Firefox)', () => {
         // Scope to rendered bubbles: the draft stays in the composer, but it
         // must never become a message row.
         expect(
-          await pageA.locator('.bubble-text').getByText(markerBlocked, { exact: true }).count(),
+          await pageA.locator('.msg-text').getByText(markerBlocked, { exact: true }).count(),
         ).toBe(0);
         // A blocked send must not claim/consume the peer's one-time prekey.
         expect(countAvailableOneTimePrekeys(userB.deviceId)).toBe(opkBeforeBlockedSend);

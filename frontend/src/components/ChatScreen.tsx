@@ -19,12 +19,13 @@ import { MAX_MESSAGE_ATTACHMENTS, effectiveMaxFileBytes, isStorageFull } from '.
 import { formatBytes } from '../files/format';
 import { MAX_VOICE_DURATION_MS, planUploadMediaBatch } from '../files/media';
 import { RateLimitBanner, OfflineBanner, RealtimeBanner, SyncErrorBanner } from './Banners';
+import { ChatDetails } from './ChatDetails';
 import { ChatHeader } from './ChatHeader';
 import { Composer } from './Composer';
 import { E2eeBanner } from './E2eeBanner';
 import { RecordingBar } from './RecordingBar';
 import { SafetyNumberDialog } from './SafetyNumberDialog';
-import { ChatIcon, LockIcon, PaperclipIcon } from './Icons';
+import { ChatIcon, CloseIcon, LockIcon, PaperclipIcon, SearchIcon } from './Icons';
 import { MessageList } from './MessageList';
 import { StatePanel } from './StatePanel';
 import { StickerPicker } from './StickerPicker';
@@ -36,9 +37,17 @@ import { UploadTray } from './UploadTray';
 interface ChatScreenProps {
   /** D1-FE5: opens the chat settings dialog from the header. */
   onOpenChatSettings?: () => void;
+  /** E12: opens the existing workspace members directory. */
+  onOpenMembers?: () => void;
+  /** D1 UX: section pages reachable from the details panel. */
+  onNavigate?: (view: 'plugins' | 'security') => void;
 }
 
-export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
+export function ChatScreen({
+  onOpenChatSettings,
+  onOpenMembers,
+  onNavigate,
+}: ChatScreenProps = {}) {
   const store = useChatStore();
   const state = useChatState();
   const [draft, setDraft] = useState('');
@@ -52,6 +61,17 @@ export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
   const dragDepth = useRef(0);
   const [dragActive, setDragActive] = useState(false);
   const [safetyOpen, setSafetyOpen] = useState(false);
+  // D1 UX: the details column is open by default (design width 304) and the
+  // header/info control toggles it. Search is an inline filter over history.
+  const [detailsOpen, setDetailsOpen] = useState(() => {
+    // Desktop keeps the design's details column open; overlay breakpoints
+    // (≤1180) start closed so the conversation keeps the full width.
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
+    return !window.matchMedia('(max-width: 1180px)').matches;
+  });
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const filesStore = useFilesStore();
   const filesState = useFilesState();
@@ -65,6 +85,7 @@ export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
   const rateLimitSeconds = useCountdown(state.rateLimitUntil);
   const typingEntries = activeChatId ? (state.typing[activeChatId] ?? []) : [];
   const viewerId = state.user?.id ?? state.session?.user.id ?? null;
+  const threadOpen = state.activeThread !== null;
   const readByOthersSeq = Math.max(
     0,
     ...Object.entries(slice?.receipts ?? {})
@@ -77,8 +98,29 @@ export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
     setReplyTo(null);
     setStickerPickerOpen(false);
     setSafetyOpen(false);
+    setSearchOpen(false);
+    setSearchQuery('');
     lastTypingSentAt.current = 0;
   }, [activeChatId]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    searchInputRef.current?.focus();
+  }, [searchOpen]);
+
+  // D1 UX: Esc closes the details overlay on narrow viewports; the thread
+  // panel owns its own Escape handling, so skip when a thread is open.
+  useEffect(() => {
+    if (!detailsOpen || threadOpen) return;
+    const handle = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('dialog')) return;
+      setDetailsOpen(false);
+    };
+    document.addEventListener('keydown', handle);
+    return () => document.removeEventListener('keydown', handle);
+  }, [detailsOpen, threadOpen]);
 
   useEffect(() => {
     if (!stickerPickerOpen || !activeChatId) return;
@@ -96,11 +138,20 @@ export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
   const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
   const threadsAvailable = activeChatId ? store.threadsAvailable(activeChatId) : false;
   const threadDisabledReason = threadsAvailable ? null : t('thread.e2eeDisabled');
-  const threadOpen = state.activeThread !== null;
   // P2-33: the reply bar must never show the server's plaintext quote in an
   // E2EE context; only the decrypted local view (or "unavailable") is allowed.
   const replyE2eeText =
     isE2eeChat && replyTo !== null ? (slice?.e2ee[replyTo.id]?.text ?? null) : null;
+
+  const searchMatches = (() => {
+    const query = searchQuery.trim().toLocaleLowerCase('ru');
+    if (!slice || query.length === 0) return 0;
+    return slice.messages.filter((message) => {
+      if (message.thread_root_id) return false;
+      const decrypted = slice.e2ee[message.id]?.text ?? '';
+      return `${decrypted} ${message.text ?? ''}`.toLocaleLowerCase('ru').includes(query);
+    }).length;
+  })();
 
   const sessionError = state.sessionError ? describeError(state.sessionError) : null;
   const sliceError = slice?.error ? describeError(slice.error) : null;
@@ -351,6 +402,10 @@ export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
         key={activeChatId}
         slice={slice}
         viewerId={viewerId}
+        viewerName={
+          state.user?.display_name ?? state.session?.user.display_name ?? t('sidebar.user')
+        }
+        searchQuery={searchQuery}
         readByOthersSeq={readByOthersSeq}
         retryDisabled={sendBlockedReason !== null}
         e2eeChat={isE2eeChat}
@@ -366,179 +421,255 @@ export function ChatScreen({ onOpenChatSettings }: ChatScreenProps = {}) {
   }
 
   return (
-    <main
-      className={`chat${threadOpen ? ' chat--thread-open' : ''}`}
-      id="chat-main"
-      tabIndex={-1}
-      aria-label={chatDisplayName(
-        chatSummary,
-        state.workspaceMembers.items,
-        state.session?.chat.name ?? null,
-      )}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
-      <div className="chat__main">
-        <ChatHeader
-          state={state}
-          chat={chatSummary}
-          onRefresh={() => void store.sync()}
-          onOpenSafety={() => setSafetyOpen(true)}
-          onOpenSettings={onOpenChatSettings}
-        />
-
-        {activeChatId ? (
-          <E2eeBanner
+    <>
+      <main
+        className={`chat${threadOpen ? ' chat--thread-open' : ''}`}
+        id="chat-main"
+        tabIndex={-1}
+        aria-label={chatDisplayName(
+          chatSummary,
+          state.workspaceMembers.items,
+          state.session?.chat.name ?? null,
+        )}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <div className="chat__main">
+          <ChatHeader
             state={state}
-            chatId={activeChatId}
-            onAcceptKeyChange={(userId, deviceId) => {
-              void store.acceptKeyChange(activeChatId, userId, deviceId);
+            chat={chatSummary}
+            onRefresh={() => void store.sync()}
+            onOpenSafety={() => setSafetyOpen(true)}
+            onOpenSettings={onOpenChatSettings}
+            searchOpen={searchOpen}
+            onToggleSearch={() => {
+              setSearchQuery((query) => (searchOpen ? '' : query));
+              setSearchOpen((open) => !open);
             }}
-            onConfirmManaged={() => {
-              void store.confirmManagedMode(activeChatId);
-            }}
-            onRefresh={() => {
-              void store.refreshE2eeChat(activeChatId);
-            }}
-            onRetryReset={() => {
-              void store.retryPendingReset(activeChatId);
-            }}
+            detailsOpen={detailsOpen}
+            onToggleDetails={() => setDetailsOpen((open) => !open)}
           />
-        ) : null}
 
-        {!state.online ? <OfflineBanner /> : null}
-        {rateLimitSeconds > 0 ? <RateLimitBanner seconds={rateLimitSeconds} /> : null}
-        {state.syncStatus === 'error' ? (
-          <SyncErrorBanner onRetry={() => void store.sync()} />
-        ) : null}
-        <RealtimeBanner
-          issue={state.realtimeIssue}
-          status={state.realtimeStatus}
-          onReconnect={() => store.reconnectRealtime()}
-        />
+          {searchOpen ? (
+            <div className="chat-search" role="search">
+              <SearchIcon aria-hidden="true" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={searchQuery}
+                aria-label={t('chat.search')}
+                placeholder={t('chat.searchPlaceholder')}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+              {searchQuery.trim().length > 0 ? (
+                <span className="search-count" aria-live="polite">
+                  {t('chat.searchCount', { count: searchMatches })}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="icon-button icon-button--small"
+                aria-label={t('chat.searchClose')}
+                title={t('chat.searchClose')}
+                onClick={() => {
+                  setSearchOpen(false);
+                  setSearchQuery('');
+                }}
+              >
+                <CloseIcon aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
 
-        <div className="chat__body">{body}</div>
-
-        {activeChatId ? (
-          <SafetyNumberDialog
-            open={safetyOpen}
-            chatId={activeChatId}
-            onClose={() => setSafetyOpen(false)}
-          />
-        ) : null}
-
-        <TypingIndicator entries={typingEntries} />
-
-        {dragActive && canAttach ? (
-          <div className="drop-overlay" role="status" aria-live="polite">
-            <PaperclipIcon aria-hidden="true" />
-            <strong>{t('files.dropTitle')}</strong>
-            <span>{t('files.dropHint')}</span>
-          </div>
-        ) : null}
-
-        {ready ? (
-          <div className="composer-stack">
-            <input
-              id="file-input"
-              ref={fileInputRef}
-              className="visually-hidden"
-              type="file"
-              multiple
-              tabIndex={-1}
-              aria-label={t('files.attach')}
-              onChange={(event) => {
-                handleFileInput(event.target.files);
-                event.target.value = '';
+          {activeChatId ? (
+            <E2eeBanner
+              state={state}
+              chatId={activeChatId}
+              onAcceptKeyChange={(userId, deviceId) => {
+                void store.acceptKeyChange(activeChatId, userId, deviceId);
+              }}
+              onConfirmManaged={() => {
+                void store.confirmManagedMode(activeChatId);
+              }}
+              onRefresh={() => {
+                void store.refreshE2eeChat(activeChatId);
+              }}
+              onRetryReset={() => {
+                void store.retryPendingReset(activeChatId);
               }}
             />
-            <LimitsBar
-              limits={filesState.limits}
-              status={filesState.limitsStatus}
-              error={filesState.limitsError}
-              role={role}
-              onRetry={() => void filesStore.refreshLimits()}
+          ) : null}
+
+          {!state.online ? <OfflineBanner /> : null}
+          {rateLimitSeconds > 0 ? <RateLimitBanner seconds={rateLimitSeconds} /> : null}
+          {state.syncStatus === 'error' ? (
+            <SyncErrorBanner onRetry={() => void store.sync()} />
+          ) : null}
+          <RealtimeBanner
+            issue={state.realtimeIssue}
+            status={state.realtimeStatus}
+            onReconnect={() => store.reconnectRealtime()}
+          />
+
+          <div className="chat__body">{body}</div>
+
+          {activeChatId ? (
+            <SafetyNumberDialog
+              open={safetyOpen}
+              chatId={activeChatId}
+              onClose={() => setSafetyOpen(false)}
             />
-            <UploadTray
-              tasks={uploadTasks}
-              onPause={(localId) => filesStore.pauseTask(localId)}
-              onResume={(localId) => void filesStore.resumeTask(localId)}
-              onCancel={(localId) => void filesStore.cancelTask(localId)}
-              onRetry={(localId) => void filesStore.retryTask(localId)}
-              onRemove={(localId) => void filesStore.removeTask(localId)}
-            />
-            {stickerPickerOpen ? (
-              <StickerPicker
-                state={stickersState}
-                onSend={handleSendSticker}
-                onFavorite={handleFavoriteSticker}
-                onRetry={() => {
-                  if (activeChatId) void stickersStore.load(activeChatId, true);
+          ) : null}
+
+          <TypingIndicator entries={typingEntries} />
+
+          {dragActive && canAttach ? (
+            <div className="drop-overlay" role="status" aria-live="polite">
+              <PaperclipIcon aria-hidden="true" />
+              <strong>{t('files.dropTitle')}</strong>
+              <span>{t('files.dropHint')}</span>
+            </div>
+          ) : null}
+
+          {ready ? (
+            <div className="composer-stack">
+              <input
+                id="file-input"
+                ref={fileInputRef}
+                className="visually-hidden"
+                type="file"
+                multiple
+                tabIndex={-1}
+                aria-label={t('files.attach')}
+                onChange={(event) => {
+                  handleFileInput(event.target.files);
+                  event.target.value = '';
                 }}
-                onClose={() => setStickerPickerOpen(false)}
+              />
+              <LimitsBar
+                limits={filesState.limits}
+                status={filesState.limitsStatus}
+                error={filesState.limitsError}
+                role={role}
+                onRetry={() => void filesStore.refreshLimits()}
+              />
+              <UploadTray
+                tasks={uploadTasks}
+                onPause={(localId) => filesStore.pauseTask(localId)}
+                onResume={(localId) => void filesStore.resumeTask(localId)}
+                onCancel={(localId) => void filesStore.cancelTask(localId)}
+                onRetry={(localId) => void filesStore.retryTask(localId)}
+                onRemove={(localId) => void filesStore.removeTask(localId)}
+              />
+              {stickerPickerOpen ? (
+                <StickerPicker
+                  state={stickersState}
+                  onSend={handleSendSticker}
+                  onFavorite={handleFavoriteSticker}
+                  onRetry={() => {
+                    if (activeChatId) void stickersStore.load(activeChatId, true);
+                  }}
+                  onClose={() => setStickerPickerOpen(false)}
+                  sendBlockedReason={sendBlockedReason}
+                  rateLimitSeconds={rateLimitSeconds}
+                  triggerRef={stickerButtonRef}
+                />
+              ) : null}
+              <Composer
+                value={draft}
+                chatName={
+                  chatSummary
+                    ? chatDisplayName(
+                        chatSummary,
+                        state.workspaceMembers.items,
+                        state.session?.chat.name ?? null,
+                      )
+                        .replace(/[«»]/g, '')
+                        .trim()
+                    : undefined
+                }
+                onChange={handleDraftChange}
+                onSend={handleSend}
+                disabled={false}
                 sendBlockedReason={sendBlockedReason}
                 rateLimitSeconds={rateLimitSeconds}
-                triggerRef={stickerButtonRef}
-              />
-            ) : null}
-            <Composer
-              value={draft}
-              onChange={handleDraftChange}
-              onSend={handleSend}
-              disabled={false}
-              sendBlockedReason={sendBlockedReason}
-              rateLimitSeconds={rateLimitSeconds}
-              replyTo={replyTo}
-              e2eeChat={isE2eeChat}
-              replyText={replyE2eeText}
-              onCancelReply={() => setReplyTo(null)}
-              textareaRef={textareaRef}
-              attachmentCount={readyAttachments.length}
-              attachDisabled={!canAttach}
-              attachHint={attachHint}
-              onAttach={() => fileInputRef.current?.click()}
-              stickersOpen={stickerPickerOpen}
-              onToggleStickers={handleToggleStickers}
-              stickerButtonRef={stickerButtonRef}
-              voiceButtonRef={voiceButtonRef}
-              voiceDisabled={!canAttach || !voiceSupport.supported}
-              voiceHint={voiceHint}
-              voiceActive={voiceActive}
-              onStartVoice={() => {
-                if (voice.status === 'idle' || voice.status === 'error') {
-                  void voice.start('send');
+                replyTo={replyTo}
+                e2eeChat={isE2eeChat}
+                replyText={replyE2eeText}
+                onCancelReply={() => setReplyTo(null)}
+                textareaRef={textareaRef}
+                attachmentCount={readyAttachments.length}
+                attachDisabled={!canAttach}
+                attachHint={attachHint}
+                onAttach={() => fileInputRef.current?.click()}
+                stickersOpen={stickerPickerOpen}
+                onToggleStickers={handleToggleStickers}
+                stickerButtonRef={stickerButtonRef}
+                voiceButtonRef={voiceButtonRef}
+                voiceDisabled={!canAttach || !voiceSupport.supported}
+                voiceHint={voiceHint}
+                voiceActive={voiceActive}
+                onStartVoice={() => {
+                  if (voice.status === 'idle' || voice.status === 'error') {
+                    void voice.start('send');
+                  }
+                }}
+                voiceBar={
+                  voice.status !== 'idle' ? (
+                    <RecordingBar
+                      status={voice.status}
+                      elapsedMs={voice.elapsedMs}
+                      errorKey={voice.errorKey}
+                      maxDurationMs={MAX_VOICE_DURATION_MS}
+                      disabled={!canAttach}
+                      onCancel={() => {
+                        voice.cancel();
+                        focusVoiceButton();
+                      }}
+                      onSend={voice.stop}
+                      onRetry={() => void voice.start('send')}
+                      onDismiss={() => {
+                        voice.dismissError();
+                        focusVoiceButton();
+                      }}
+                    />
+                  ) : undefined
                 }
-              }}
-              voiceBar={
-                voice.status !== 'idle' ? (
-                  <RecordingBar
-                    status={voice.status}
-                    elapsedMs={voice.elapsedMs}
-                    errorKey={voice.errorKey}
-                    maxDurationMs={MAX_VOICE_DURATION_MS}
-                    disabled={!canAttach}
-                    onCancel={() => {
-                      voice.cancel();
-                      focusVoiceButton();
-                    }}
-                    onSend={voice.stop}
-                    onRetry={() => void voice.start('send')}
-                    onDismiss={() => {
-                      voice.dismissError();
-                      focusVoiceButton();
-                    }}
-                  />
-                ) : undefined
-              }
-            />
-          </div>
-        ) : null}
-      </div>
+              />
+            </div>
+          ) : null}
+        </div>
 
-      <ThreadPanel />
-    </main>
+        <ThreadPanel />
+      </main>
+      {detailsOpen && !threadOpen ? (
+        <button
+          type="button"
+          className="details-backdrop"
+          aria-label={t('chat.detailsClose')}
+          onClick={() => setDetailsOpen(false)}
+        />
+      ) : null}
+      {!threadOpen ? (
+        <ChatDetails
+          open={detailsOpen}
+          chat={chatSummary}
+          slice={slice}
+          onClose={() => setDetailsOpen(false)}
+          onOpenSettings={() => onOpenChatSettings?.()}
+          onOpenSafety={() => setSafetyOpen(true)}
+          onOpenMembers={onOpenMembers}
+          onNavigate={(view) => onNavigate?.(view)}
+          searchValue={searchQuery}
+          onSearch={(value) => {
+            setSearchQuery(value);
+            setSearchOpen(true);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -552,12 +683,12 @@ function ChatSkeleton() {
     >
       <div className="messages__inner">
         {[0, 1, 2, 3, 4, 5].map((index) => (
-          <div
-            className={`skeleton-row${index % 2 === 0 ? ' skeleton-row--mine' : ''}`}
-            key={index}
-            aria-hidden="true"
-          >
-            <span className={`skeleton skeleton--bubble skeleton--bubble-${(index % 3) + 1}`} />
+          <div className="skeleton-row" key={index} aria-hidden="true">
+            <span className="skeleton skeleton--avatar" />
+            <span className="skeleton-row__body">
+              <span className="skeleton skeleton--line-sm" />
+              <span className={`skeleton skeleton--text skeleton--text-${(index % 3) + 1}`} />
+            </span>
           </div>
         ))}
       </div>

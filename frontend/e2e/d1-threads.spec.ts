@@ -54,7 +54,7 @@ test.describe('D1 threads', () => {
 
     // The reply stays out of the main feed: it is visible only inside the
     // panel and as the root preview.
-    const mainBubbles = page.locator('.messages .bubble-text');
+    const mainBubbles = page.locator('.messages .msg-text');
     await expect(mainBubbles.filter({ hasText: 'Первый ответ из e2e' })).toHaveCount(0);
 
     await expectNoA11yViolations(page);

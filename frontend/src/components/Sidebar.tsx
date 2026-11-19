@@ -1,18 +1,23 @@
+import { useState } from 'react';
 import type { AppState } from '../store/chatStore';
 import type { AppView, PageView } from '../router/views';
+import type { Theme } from '../theme/themePreference';
 import { chatDisplayName } from '../domain/chatLabel';
-import { formatShortDate } from '../domain/messages';
+import { formatUnreadBadge } from '../domain/unread';
 import { t, type MessageKey } from '../i18n/ru';
 import { Avatar } from './Avatar';
 import {
+  ChevronDownIcon,
   FolderIcon,
   LogoutIcon,
+  MoonIcon,
   OverviewIcon,
   PeopleIcon,
   PlugIcon,
   PlusIcon,
   SettingsIcon,
   ShieldIcon,
+  SunIcon,
 } from './Icons';
 import { NotificationBell } from './NotificationBell';
 
@@ -28,6 +33,8 @@ interface SidebarProps {
   state: AppState;
   useMocks: boolean;
   view: AppView;
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
   onNavigate: (view: AppView) => void;
   onSelect: (chatId: string) => void;
   onLogout?: () => void;
@@ -41,14 +48,14 @@ interface SidebarProps {
 
 export function Sidebar({
   state,
-  useMocks,
   view,
+  theme,
+  onThemeChange,
   onNavigate,
   onSelect,
   onLogout,
   onSelectWorkspace,
   onCreateChat,
-  onOpenAdmin,
   onOpenMembers,
   onOpenProfile,
 }: SidebarProps) {
@@ -61,134 +68,145 @@ export function Sidebar({
   // R-01/E10-F: GROUP needs OWNER/ADMIN, but DIRECT is available to every
   // active member, so the dialog (not the entry point) enforces the type.
   const canCreateChat = !chatLimitReached;
-  const isAdmin = state.me?.user.is_platform_admin === true;
   const channels = state.chats.filter((chat) => chat.type === 'GROUP');
   const directs = state.chats.filter((chat) => chat.type === 'DIRECT');
+  const [collapsed, setCollapsed] = useState<{ channels: boolean; directs: boolean }>({
+    channels: false,
+    directs: false,
+  });
 
   const renderChatItem = (chat: AppState['chats'][number]) => {
     const active = chat.id === state.activeChatId;
-    const unread = chat.unread_count;
+    const unread = Math.max(0, chat.unread_count);
+    const badge = formatUnreadBadge(unread);
     const label = chatDisplayName(chat, state.workspaceMembers.items);
+    const typeLabel = chat.type === 'GROUP' ? t('chat.group') : t('chat.direct');
     return (
       <li key={chat.id}>
         <button
           type="button"
           className={`chat-item${active ? ' chat-item--active' : ''}`}
           aria-current={active ? 'page' : undefined}
+          aria-label={`${label}, ${typeLabel}`}
+          title={`${label} · ${typeLabel}`}
           onClick={() => onSelect(chat.id)}
         >
-          <Avatar name={label} seed={chat.id} size="md" />
-          <span className="chat-item__body">
-            <span className="chat-item__row">
-              <span className="chat-item__name">{label}</span>
-              {chat.last_message_at ? (
-                <time className="chat-item__time" dateTime={chat.last_message_at}>
-                  {formatShortDate(chat.last_message_at)}
-                </time>
-              ) : null}
+          <Avatar name={label} seed={chat.id} size="sm" />
+          <span className="chat-item__name">{label}</span>
+          {badge ? (
+            <span
+              className="unread-badge"
+              aria-hidden="true"
+              title={t('sidebar.unread', { count: unread })}
+            >
+              {badge}
             </span>
-            <span className="chat-item__row">
-              <span className="chat-item__preview">
-                {chat.type === 'GROUP' ? t('chat.group') : t('chat.direct')}
-              </span>
-              {unread > 0 ? (
-                <span className="unread-badge" aria-label={t('sidebar.unread', { count: unread })}>
-                  {unread > 99 ? '99+' : unread}
-                </span>
-              ) : null}
-            </span>
-          </span>
+          ) : null}
         </button>
       </li>
     );
   };
 
+  const sectionAdd = (kind: 'channels' | 'directs') => {
+    if (!onCreateChat) return null;
+    const label = kind === 'channels' ? t('sidebar.addChannel') : t('sidebar.addDirect');
+    return (
+      <button
+        type="button"
+        className="section-add"
+        onClick={onCreateChat}
+        disabled={!canCreateChat}
+        aria-label={label}
+        title={label}
+      >
+        <PlusIcon aria-hidden="true" />
+      </button>
+    );
+  };
+
+  const renderSection = (kind: 'channels' | 'directs', title: string, chats: AppState['chats']) => {
+    if (chats.length === 0) return null;
+    const isCollapsed = collapsed[kind];
+    return (
+      <section className="section" aria-label={title}>
+        <div className="section-head">
+          <button
+            type="button"
+            className="section-toggle"
+            aria-expanded={!isCollapsed}
+            onClick={() => setCollapsed((current) => ({ ...current, [kind]: !current[kind] }))}
+          >
+            <ChevronDownIcon className="chev" aria-hidden="true" />
+            <span>{title}</span>
+          </button>
+          {sectionAdd(kind)}
+        </div>
+        {isCollapsed ? null : <ul className="chat-list__items">{chats.map(renderChatItem)}</ul>}
+      </section>
+    );
+  };
+
   return (
     <aside className="sidebar" aria-label={t('sidebar.label')}>
-      <div className="sidebar__head">
-        <div className="sidebar__headline">
-          <div className="brand">
-            <span className="brand__name">{t('app.name')}</span>
-            <span className={`mode-chip mode-chip--${useMocks ? 'mock' : 'real'}`}>
-              {t(useMocks ? 'sidebar.modeMock' : 'sidebar.modeReal')}
-            </span>
-          </div>
-          {state.sessionStatus === 'ready' ? <NotificationBell /> : null}
+      <div className="ws-head">
+        <div className="ws-btn">
+          <span className="ws-btn__name">
+            {workspaceName ?? (loading ? t('common.loading') : t('app.tagline'))}
+          </span>
+          {state.workspaces.length > 1 && onSelectWorkspace ? (
+            <>
+              <ChevronDownIcon className="chev" aria-hidden="true" />
+              <select
+                className="workspace-switch__select"
+                aria-label={t('workspace.switch')}
+                title={t('workspace.switchHint')}
+                value={state.activeWorkspaceId ?? ''}
+                onChange={(event) => onSelectWorkspace(event.target.value)}
+              >
+                {state.workspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>
+                    {workspace.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
         </div>
-        <p className="brand__workspace">
-          {workspaceName ?? (loading ? t('common.loading') : t('app.tagline'))}
-        </p>
-        {state.workspaces.length > 1 && onSelectWorkspace ? (
-          <label className="workspace-switch" title={t('workspace.switchHint')}>
-            <span className="visually-hidden">{t('workspace.switch')}</span>
-            <select
-              className="workspace-switch__select"
-              value={state.activeWorkspaceId ?? ''}
-              onChange={(event) => onSelectWorkspace(event.target.value)}
-            >
-              {state.workspaces.map((workspace) => (
-                <option key={workspace.id} value={workspace.id}>
-                  {workspace.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        {onOpenMembers && state.sessionStatus === 'ready' ? (
-          <div className="sidebar__workspace-actions">
-            <button
-              type="button"
-              className="button button--secondary sidebar__members"
-              onClick={onOpenMembers}
-              aria-label={t('members.open')}
-              title={t('members.open')}
-            >
-              <PeopleIcon aria-hidden="true" />
-              <span>{t('members.open')}</span>
-            </button>
-          </div>
-        ) : null}
-
+        {state.sessionStatus === 'ready' ? <NotificationBell /> : null}
         {onCreateChat ? (
-          <div className="sidebar__create">
-            <button
-              type="button"
-              className="button button--primary sidebar__create-button"
-              onClick={onCreateChat}
-              disabled={!canCreateChat}
-              title={
-                chatLimitReached ? t('chat.create.limitReachedGeneric') : t('chat.create.open')
-              }
-            >
-              <PlusIcon aria-hidden="true" />
-              {t('chat.create.open')}
-            </button>
-            {limits ? (
-              <span className="sidebar__limit">
-                {t('chat.create.limitUsage', {
-                  used: limits.chats_used,
-                  limit: limits.max_chats_per_user,
-                })}
-              </span>
-            ) : null}
-          </div>
+          <button
+            type="button"
+            className="icon-button ws-head__action"
+            onClick={onCreateChat}
+            disabled={!canCreateChat}
+            aria-label={t('chat.create.open')}
+            title={chatLimitReached ? t('chat.create.limitReachedGeneric') : t('chat.create.open')}
+          >
+            <PlusIcon aria-hidden="true" />
+          </button>
         ) : null}
       </div>
 
-      <nav className="sidebar__nav" aria-label={t('nav.label')}>
-        <ul className="sidebar__nav-items">
+      <nav className="nav" aria-label={t('nav.label')}>
+        <ul className="nav-items">
           {NAV_ITEMS.map(({ view: itemView, label, Icon }) => {
             const active = view === itemView;
+            const badge = null;
             return (
               <li key={itemView}>
                 <button
                   type="button"
-                  className={`sidebar__nav-item${active ? ' sidebar__nav-item--active' : ''}`}
+                  className={`nav-item${active ? ' is-on' : ''}`}
                   aria-current={active ? 'page' : undefined}
                   onClick={() => onNavigate(itemView)}
                 >
                   <Icon aria-hidden="true" />
                   <span>{t(label)}</span>
+                  {badge ? (
+                    <span className="nav-badge" aria-hidden="true">
+                      {badge}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             );
@@ -196,7 +214,7 @@ export function Sidebar({
         </ul>
       </nav>
 
-      <nav className="chat-list" aria-label={t('sidebar.chats')}>
+      <nav className="side-scroll" aria-label={t('sidebar.chats')}>
         {loading ? (
           <div className="chat-list__skeleton" aria-hidden="true">
             {[0, 1, 2].map((index) => (
@@ -210,81 +228,81 @@ export function Sidebar({
           <p className="chat-list__empty">{t('sidebar.noChats')}</p>
         ) : (
           <>
-            {channels.length > 0 ? (
-              <section className="chat-list__section" aria-label={t('sidebar.channels')}>
-                <h2 className="chat-list__section-title">{t('sidebar.channels')}</h2>
-                <ul className="chat-list__items">{channels.map(renderChatItem)}</ul>
-              </section>
-            ) : null}
-            {directs.length > 0 ? (
-              <section className="chat-list__section" aria-label={t('sidebar.directs')}>
-                <h2 className="chat-list__section-title">{t('sidebar.directs')}</h2>
-                <ul className="chat-list__items">{directs.map(renderChatItem)}</ul>
-              </section>
-            ) : null}
+            {renderSection('channels', t('sidebar.channels'), channels)}
+            {renderSection('directs', t('sidebar.directs'), directs)}
           </>
         )}
       </nav>
 
-      <div className="sidebar__foot">
+      <div className="me">
         {user ? (
-          <div className="me">
+          <>
             {onOpenProfile ? (
               <button
                 type="button"
-                className="me__identity"
+                className="me-btn"
                 onClick={onOpenProfile}
                 aria-label={t('profile.open')}
                 title={t('profile.open')}
               >
-                <Avatar name={user.display_name} seed={user.id} />
-                <span className="me__text">
-                  <span className="me__name">{user.display_name}</span>
-                  <span
-                    className={`me__status${state.online ? '' : ' me__status--offline'}`}
-                    role="status"
-                  >
+                <Avatar name={user.display_name} seed={user.id} size="sm" />
+                <span className="me-text">
+                  <b>{user.display_name}</b>
+                  <span className={`me-status${state.online ? '' : ' is-offline'}`} role="status">
+                    <span className={`dot${state.online ? ' is-online' : ''}`} aria-hidden="true" />
                     {t(state.online ? 'sidebar.online' : 'sidebar.offline')}
                   </span>
                 </span>
               </button>
             ) : (
-              <div className="me__identity">
-                <Avatar name={user.display_name} seed={user.id} />
-                <div className="me__text">
-                  <span className="me__name">{user.display_name}</span>
-                  <span
-                    className={`me__status${state.online ? '' : ' me__status--offline'}`}
-                    role="status"
-                  >
+              <div className="me-btn">
+                <Avatar name={user.display_name} seed={user.id} size="sm" />
+                <div className="me-text">
+                  <b>{user.display_name}</b>
+                  <span className={`me-status${state.online ? '' : ' is-offline'}`}>
                     {t(state.online ? 'sidebar.online' : 'sidebar.offline')}
                   </span>
                 </div>
               </div>
             )}
-            {isAdmin && onOpenAdmin ? (
+            <div className="me-actions">
+              {onOpenMembers && state.sessionStatus === 'ready' ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={onOpenMembers}
+                  aria-label={t('members.open')}
+                  title={t('members.open')}
+                >
+                  <PeopleIcon aria-hidden="true" />
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="icon-button me__admin"
-                onClick={onOpenAdmin}
-                aria-label={t('admin.open')}
-                title={t('admin.open')}
+                className="icon-button"
+                onClick={() => onThemeChange(theme === 'dark' ? 'light' : 'dark')}
+                aria-label={theme === 'dark' ? t('theme.toggleLight') : t('theme.toggleDark')}
+                title={theme === 'dark' ? t('theme.toggleLight') : t('theme.toggleDark')}
               >
-                <SettingsIcon aria-hidden="true" />
+                {theme === 'dark' ? (
+                  <SunIcon aria-hidden="true" />
+                ) : (
+                  <MoonIcon aria-hidden="true" />
+                )}
               </button>
-            ) : null}
-            {onLogout ? (
-              <button
-                type="button"
-                className="icon-button me__logout"
-                onClick={onLogout}
-                aria-label={t('auth.logout')}
-                title={t('auth.logout')}
-              >
-                <LogoutIcon aria-hidden="true" />
-              </button>
-            ) : null}
-          </div>
+              {onLogout ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={onLogout}
+                  aria-label={t('auth.logout')}
+                  title={t('auth.logout')}
+                >
+                  <LogoutIcon aria-hidden="true" />
+                </button>
+              ) : null}
+            </div>
+          </>
         ) : null}
       </div>
     </aside>

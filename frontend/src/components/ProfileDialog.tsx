@@ -6,7 +6,8 @@ import { useChatState, useChatStore } from '../store/ChatProvider';
 import type { Theme } from '../theme/themePreference';
 import { formatDateTime } from './admin/format';
 import { AdminConfirmDialog } from './admin/AdminConfirmDialog';
-import { CloseIcon, LogoutIcon, MoonIcon, RefreshIcon, SunIcon } from './Icons';
+import { Avatar } from './Avatar';
+import { BellIcon, CloseIcon, LogoutIcon, MoonIcon, RefreshIcon, SunIcon } from './Icons';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
 import { roleLabel } from './pages/pageData';
 
@@ -28,17 +29,14 @@ export interface ProfileDialogProps {
 }
 
 /**
- * D1-FE5 profile modal.
+ * D1 UX fidelity 2 profile modal.
  *
- * - Identity (`display_name`, email, platform-admin flag) and workspaces come
- *   from the existing `/me` bootstrap; role/workspace are the active ones.
- * - Devices come from `GET /devices` (id/name/platform/status/dates only); no
- *   keys or fingerprints are rendered.
- * - 2FA and session management have no API in this slice, so they are honest
- *   disabled rows instead of invented toggles. Theme and notification
- *   preferences are the settings that already exist.
- * - Logout goes through an explicit confirmation; modal semantics mirror the
- *   members dialog (focus trap, Escape, focus return, mobile layout).
+ * - 540 px / r18 / 58 px header from `design/dashboard`, 2×2 mini-cards.
+ * - Identity and workspace come from `/me`; devices from `GET /devices`.
+ * - 2FA and session termination have no API and are honest disabled rows.
+ * - Theme and notification preferences are the settings that already exist;
+ *   they live in an extra compact section below the design's four cards.
+ * - Modal semantics: focus trap, Escape, focus return, nested dialogs.
  */
 export function ProfileDialog({
   open,
@@ -64,6 +62,8 @@ export function ProfileDialog({
   const role = workspace?.role ?? null;
   const isPlatformAdmin = state.me?.user.is_platform_admin === true;
   const currentDeviceId = state.device?.id ?? null;
+  const e2eeDevices = devices.items.filter((device) => device.e2ee_capable !== false).length;
+  const handle = email ? `@${email.split('@')[0]}` : t('profile.title');
 
   useEffect(() => {
     if (!open) return;
@@ -142,32 +142,28 @@ export function ProfileDialog({
 
   return (
     <div
-      className="profile-modal"
+      className="modal-layer"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget && !confirmLogout) onClose();
       }}
     >
       <div
         ref={dialogRef}
-        className="profile-dialog"
+        className="modal modal--sm profile-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={leadId}
         tabIndex={-1}
       >
-        <div className="profile-dialog__head">
-          <div>
-            <h2 className="profile-dialog__title" id={titleId}>
-              {t('profile.title')}
-            </h2>
-            <p className="profile-dialog__lead" id={leadId}>
-              {t('profile.lead')}
-            </p>
-          </div>
+        <div className="modal-head">
+          <h2 className="modal-title" id={titleId}>
+            {t('profile.title')}
+          </h2>
+          <span className="modal-sub">{handle}</span>
           <button
             type="button"
-            className="icon-button"
+            className="modal-x"
             onClick={onClose}
             aria-label={t('profile.close')}
             title={t('profile.close')}
@@ -176,187 +172,174 @@ export function ProfileDialog({
           </button>
         </div>
 
-        <section className="profile-section" aria-labelledby="profile-identity">
-          <h3 className="profile-section__title" id="profile-identity">
-            {t('profile.title')}
-          </h3>
-          <dl className="settings-list">
-            <div className="settings-list__row">
-              <dt>{t('profile.name')}</dt>
-              <dd>{user?.display_name ?? '—'}</dd>
-            </div>
-            <div className="settings-list__row">
-              <dt>{t('profile.email')}</dt>
-              <dd>{email ?? '—'}</dd>
-            </div>
-            <div className="settings-list__row">
-              <dt>{t('profile.workspace')}</dt>
-              <dd>{workspaceName}</dd>
-            </div>
-            <div className="settings-list__row">
-              <dt>{t('profile.role')}</dt>
-              <dd>{roleLabel(role)}</dd>
-            </div>
-            {isPlatformAdmin ? (
-              <div className="settings-list__row">
-                <dt>{t('profile.platformAdmin')}</dt>
-                <dd>
-                  <span className="mode-chip mode-chip--real">{t('common.yes')}</span>
-                </dd>
-              </div>
-            ) : null}
-          </dl>
-        </section>
-
-        <section className="profile-section" aria-labelledby="profile-devices">
-          <h3 className="profile-section__title" id="profile-devices">
-            {t('profile.devices')}
-          </h3>
-          <p className="profile-section__hint">{t('profile.devicesHint')}</p>
-
-          {devices.status === 'loading' && devices.items.length === 0 ? (
-            <p className="profile-state" role="status">
-              {t('profile.devicesLoading')}
-            </p>
-          ) : null}
-
-          {devices.status === 'error' ? (
-            <div className="profile-state profile-state--error" role="alert">
-              <p>
-                {devices.error ? describeError(devices.error).message : t('profile.devicesError')}
+        <div className="modal-body">
+          <div className="profile-hero">
+            <Avatar name={user?.display_name} seed={user?.id ?? 'me'} size="profile" />
+            <div>
+              <h3>{user?.display_name ?? '—'}</h3>
+              <p id={leadId}>
+                {state.online ? t('profile.connected') : t('profile.disconnected')} ·{' '}
+                <span>{roleLabel(role)}</span>
               </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn--sm"
+              disabled
+              title={t('profile.editUnavailable')}
+            >
+              {t('profile.edit')}
+            </button>
+          </div>
+
+          <div className="profile-cards">
+            <section className="mini-card" aria-labelledby="profile-about">
+              <h4 id="profile-about">{t('profile.about')}</h4>
+              <p className="mini-card__text">{t('profile.aboutEmpty')}</p>
+            </section>
+
+            <section className="mini-card" aria-labelledby="profile-contacts">
+              <h4 id="profile-contacts">{t('profile.contacts')}</h4>
+              <div className="mini-row">
+                <span>{t('profile.email')}</span>
+                <span>{email ?? '—'}</span>
+              </div>
+              <div className="mini-row">
+                <span>{t('profile.contactWorkspace')}</span>
+                <span>{workspaceName}</span>
+              </div>
+              <div className="mini-row">
+                <span>{t('profile.contactAdmin')}</span>
+                <span>{isPlatformAdmin ? t('common.yes') : '—'}</span>
+              </div>
+            </section>
+
+            <section className="mini-card" aria-labelledby="profile-devices">
+              <h4 id="profile-devices">{t('profile.devices')}</h4>
+              {devices.status === 'loading' && devices.items.length === 0 ? (
+                <p className="mini-card__text" role="status">
+                  {t('profile.devicesLoading')}
+                </p>
+              ) : null}
+              {devices.status === 'error' ? (
+                <div className="mini-card__error" role="alert">
+                  <p>
+                    {devices.error
+                      ? describeError(devices.error).message
+                      : t('profile.devicesError')}
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={() => void store.loadDevices(true)}
+                  >
+                    <RefreshIcon aria-hidden="true" />
+                    {t('common.retry')}
+                  </button>
+                </div>
+              ) : null}
+              {devices.status === 'ready' && devices.items.length === 0 ? (
+                <p className="mini-card__text">{t('profile.devicesEmpty')}</p>
+              ) : null}
+              {devices.items.map((device) => (
+                <div className="mini-device" key={device.id}>
+                  <div className="mini-row">
+                    <span>{device.name?.trim() || t('profile.deviceNoName')}</span>
+                    <span>
+                      {device.id === currentDeviceId
+                        ? t('profile.deviceCurrent')
+                        : deviceStatus(device)}
+                    </span>
+                  </div>
+                  <div className="mini-row mini-row--muted">
+                    <span>{device.platform}</span>
+                    <span>{device.last_seen_at ? formatDateTime(device.last_seen_at) : '—'}</span>
+                  </div>
+                  <span className="mini-card__mono">{device.id}</span>
+                </div>
+              ))}
+            </section>
+
+            <section className="mini-card" aria-labelledby="profile-security">
+              <h4 id="profile-security">{t('profile.security')}</h4>
+              <div className="mini-row">
+                <span>{t('profile.twoFactor')}</span>
+                <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
+              </div>
+              <p className="mini-card__note">{t('profile.twoFactorUnavailable')}</p>
+              <div className="mini-row">
+                <span>{t('profile.securityKeys')}</span>
+                <span>
+                  {devices.status === 'ready'
+                    ? t('profile.keysDevices', { count: e2eeDevices })
+                    : t('profile.keysEmpty')}
+                </span>
+              </div>
+              <div className="mini-row">
+                <span>{t('profile.sessions')}</span>
+                <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
+              </div>
+              <p className="mini-card__note">{t('profile.sessionsUnavailable')}</p>
+            </section>
+          </div>
+
+          <div className="profile-cards profile-cards--secondary">
+            <section className="mini-card" aria-labelledby="profile-appearance">
+              <h4 id="profile-appearance">{t('profile.appearanceSection')}</h4>
+              <div className="seg" role="group" aria-label={t('profile.theme')}>
+                <button
+                  type="button"
+                  className={theme === 'light' ? 'is-active' : ''}
+                  aria-pressed={theme === 'light'}
+                  onClick={() => onThemeChange('light')}
+                >
+                  <SunIcon aria-hidden="true" />
+                  {t('settings.themeLight')}
+                </button>
+                <button
+                  type="button"
+                  className={theme === 'dark' ? 'is-active' : ''}
+                  aria-pressed={theme === 'dark'}
+                  onClick={() => onThemeChange('dark')}
+                >
+                  <MoonIcon aria-hidden="true" />
+                  {t('settings.themeDark')}
+                </button>
+              </div>
+            </section>
+            <section className="mini-card" aria-labelledby="profile-notifications">
+              <h4 id="profile-notifications">{t('profile.notificationsSection')}</h4>
+              <p className="mini-card__note">{t('profile.notificationsHint')}</p>
               <button
                 type="button"
-                className="button button--secondary"
-                onClick={() => void store.loadDevices(true)}
+                className="btn btn--sm"
+                onClick={() => setNotificationsOpen(true)}
               >
-                <RefreshIcon aria-hidden="true" />
-                {t('common.retry')}
+                <BellIcon aria-hidden="true" />
+                {t('profile.openNotifications')}
               </button>
-            </div>
-          ) : null}
-
-          {devices.status === 'ready' && devices.items.length === 0 ? (
-            <p className="profile-state">{t('profile.devicesEmpty')}</p>
-          ) : null}
-
-          {devices.items.length > 0 ? (
-            <ul className="profile-devices">
-              {devices.items.map((device) => (
-                <li className="profile-device" key={device.id}>
-                  <div className="profile-device__head">
-                    <span className="profile-device__id">{device.id}</span>
-                    {device.id === currentDeviceId ? (
-                      <span className="mode-chip mode-chip--real">
-                        {t('profile.deviceCurrent')}
-                      </span>
-                    ) : null}
-                  </div>
-                  <dl className="settings-list settings-list--compact">
-                    <div className="settings-list__row">
-                      <dt>{t('profile.deviceName')}</dt>
-                      <dd>{device.name?.trim() || t('profile.deviceNoName')}</dd>
-                    </div>
-                    <div className="settings-list__row">
-                      <dt>{t('profile.devicePlatform')}</dt>
-                      <dd>{device.platform}</dd>
-                    </div>
-                    <div className="settings-list__row">
-                      <dt>{t('profile.deviceStatus')}</dt>
-                      <dd>{deviceStatus(device)}</dd>
-                    </div>
-                    <div className="settings-list__row">
-                      <dt>{t('profile.deviceCreated')}</dt>
-                      <dd>{formatDateTime(device.created_at)}</dd>
-                    </div>
-                    {device.last_seen_at ? (
-                      <div className="settings-list__row">
-                        <dt>{t('profile.deviceLastSeen')}</dt>
-                        <dd>{formatDateTime(device.last_seen_at)}</dd>
-                      </div>
-                    ) : null}
-                  </dl>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-
-        <section className="profile-section" aria-labelledby="profile-security">
-          <h3 className="profile-section__title" id="profile-security">
-            {t('profile.security')}
-          </h3>
-          <div className="profile-disabled-row" aria-disabled="true">
-            <span>{t('profile.twoFactor')}</span>
-            <span className="profile-disabled-row__note">{t('profile.twoFactorUnavailable')}</span>
-            <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
+            </section>
           </div>
-          <div className="profile-disabled-row" aria-disabled="true">
-            <span>{t('profile.sessions')}</span>
-            <span className="profile-disabled-row__note">{t('profile.sessionsUnavailable')}</span>
-            <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
-          </div>
-        </section>
+        </div>
 
-        <section className="profile-section" aria-labelledby="profile-appearance">
-          <h3 className="profile-section__title" id="profile-appearance">
-            {t('profile.appearance')}
-          </h3>
-          <p className="profile-section__hint">{t('profile.themeHint')}</p>
-          <div className="theme-switch" role="group" aria-label={t('profile.theme')}>
-            <button
-              type="button"
-              className={`theme-switch__option${theme === 'light' ? ' theme-switch__option--active' : ''}`}
-              aria-pressed={theme === 'light'}
-              onClick={() => onThemeChange('light')}
-            >
-              <SunIcon aria-hidden="true" />
-              {t('settings.themeLight')}
-            </button>
-            <button
-              type="button"
-              className={`theme-switch__option${theme === 'dark' ? ' theme-switch__option--active' : ''}`}
-              aria-pressed={theme === 'dark'}
-              onClick={() => onThemeChange('dark')}
-            >
-              <MoonIcon aria-hidden="true" />
-              {t('settings.themeDark')}
-            </button>
-          </div>
-        </section>
-
-        <section className="profile-section" aria-labelledby="profile-notifications">
-          <h3 className="profile-section__title" id="profile-notifications">
-            {t('profile.notifications')}
-          </h3>
-          <p className="profile-section__hint">{t('profile.notificationsHint')}</p>
-          <button
-            type="button"
-            className="button button--secondary"
-            onClick={() => setNotificationsOpen(true)}
-          >
-            {t('profile.openNotifications')}
-          </button>
-        </section>
-
-        <div className="profile-dialog__actions">
+        <div className="modal-foot">
           {onLogout ? (
             <button
               type="button"
-              className="button button--danger"
+              className="btn btn--danger"
               onClick={() => setConfirmLogout(true)}
             >
               <LogoutIcon aria-hidden="true" />
               {t('auth.logout')}
             </button>
           ) : (
-            <button type="button" className="button button--danger" disabled>
+            <button type="button" className="btn btn--danger" disabled>
               <LogoutIcon aria-hidden="true" />
               {t('auth.logout')}
             </button>
           )}
-          <button type="button" className="button button--secondary" onClick={onClose}>
-            {t('common.close')}
+          <button type="button" className="btn btn--accent" onClick={onClose}>
+            {t('profile.done')}
           </button>
         </div>
       </div>

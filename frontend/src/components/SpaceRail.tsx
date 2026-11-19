@@ -2,7 +2,7 @@ import type { RailSpace } from '../domain/unread';
 import { formatUnreadBadge, unreadLabel } from '../domain/unread';
 import { t } from '../i18n/ru';
 import { Avatar } from './Avatar';
-import { ChatIcon } from './Icons';
+import { ChatIcon, PlusIcon } from './Icons';
 
 interface SpaceRailProps {
   spaces: RailSpace[];
@@ -44,7 +44,7 @@ export function SpaceRail({ spaces, activeSpaceId, unreadBySpace, onSelect }: Sp
                 title={label}
                 onClick={() => onSelect(space.id)}
               >
-                <Avatar name={space.name} seed={space.id} size="md" />
+                <Avatar name={space.name} seed={space.id} size="lg" />
                 {badge ? (
                   <span className="unread-badge space-rail__badge" aria-hidden="true">
                     {badge}
@@ -55,6 +55,15 @@ export function SpaceRail({ spaces, activeSpaceId, unreadBySpace, onSelect }: Sp
           );
         })}
       </ul>
+      <button
+        type="button"
+        className="rail-add"
+        disabled
+        aria-label={t('rail.add')}
+        title={t('rail.addUnavailable')}
+      >
+        <PlusIcon aria-hidden="true" />
+      </button>
     </nav>
   );
 }
