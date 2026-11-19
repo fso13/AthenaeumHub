@@ -1060,6 +1060,29 @@ describe('G4e #30 durable retry/drain', () => {
     await sentStorage.close();
   });
 
+  it('reads legacy outbox rows without sendOrder/supersededAt and heals them', async () => {
+    const { storage, kStorage, session } = await setup();
+    const draft = await makeOutgoingDraft(session);
+    await commitOutgoingMessage(storage, await prepareOutgoingMessage(kStorage, draft), {
+      ifRevision: session.revision,
+    });
+    const key = outboxStorageKey(draft.clientMessageId);
+    const current = (await storage.get('outbox', key)) as StoredOutboxEntry;
+    const { sendOrder: _sendOrder, supersededAt: _supersededAt, ...legacy } = current;
+    await storage.put('outbox', key, legacy as StoredOutboxEntry);
+
+    // Legacy rows are readable; missing fields fall back deterministically.
+    const read = await readOutboxEntry(storage, kStorage, draft.clientMessageId);
+    expect(read?.sendOrder).toBe(0);
+    expect(read?.supersededAt).toBeNull();
+
+    // A later supersede persists the timestamp on the legacy row.
+    await markOutboxSuperseded(storage, draft.clientMessageId, { now: 77 });
+    const healed = await readOutboxEntry(storage, kStorage, draft.clientMessageId);
+    expect(healed).toMatchObject({ status: 'superseded', supersededAt: 77 });
+    await storage.close();
+  });
+
   it('heals a lost confirmSent → markSuperseded transition on reconcile', async () => {
     const { storage, kStorage, first, replacement } = await commitReplacement();
     const key = outboxStorageKey(first.clientMessageId);

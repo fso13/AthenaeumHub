@@ -45,10 +45,10 @@ enablement itself. Condition 1 is tracked outside that set.
 | 3 | Durable retry/drain (no duplicate / silent loss after reload) | [#30](https://github.com/fso13/AthenaeumHub/issues/30) | **OPEN** | REVIEW-13 P2-16/P2-21 |
 | 4 | Negative key-change/TOFU live + verified reset | [#31](https://github.com/fso13/AthenaeumHub/issues/31) | **CLOSED 2026-11-19** | closed issue #31 |
 | 5 | Receiver R-15 v1.1 | [#32](https://github.com/fso13/AthenaeumHub/issues/32) | **DONE** | optional marker in TEXT; store dedupe |
-| 6 | Safari/iOS + WebKit app-level UI | [#33](https://github.com/fso13/AthenaeumHub/issues/33) | **OPEN** | ADR-26; P2-08/P2-11 |
+| 6 | Safari/iOS + WebKit app-level UI | [#33](https://github.com/fso13/AthenaeumHub/issues/33) | **DONE** | runtime gate + `docs/E2EE-SAFARI-IOS.md` |
 | 7 | Vectors v1.1 (`272..33040`, version 5) | [#34](https://github.com/fso13/AthenaeumHub/issues/34) | **DONE** | `vector_set_version=5` |
 | 8 | Release CI/artifact, log-capture, full backend suite, this checklist, clean rebuild with digests | [#35](https://github.com/fso13/AthenaeumHub/issues/35) | **IN PROGRESS** — artifacts in tree; GitHub run + git tag pending | `.github/workflows/ci.yml`, `e2ee-gated.yml`, `scripts/release-check.sh`, `docs/E2EE-CI-REPORT.md` |
-| 9 | Legacy/local state migration (`sendOrder`, `supersededAt`, `serverMessageId`) | [#36](https://github.com/fso13/AthenaeumHub/issues/36) | **OPEN** | REVIEW-13 P2-04/P2-17 |
+| 9 | Legacy/local state migration (`sendOrder`, `supersededAt`, `serverMessageId`) | [#36](https://github.com/fso13/AthenaeumHub/issues/36) | **DONE** | read fallback + heal + `docs/E2EE-LEGACY-OUTBOX.md` |
 | 10 | Kill-switch/retention/rollout rehearsed | [#37](https://github.com/fso13/AthenaeumHub/issues/37) | **OPEN** | REVIEW-13 P2-09 |
 | — | Enable the flag | [#38](https://github.com/fso13/AthenaeumHub/issues/38) | **BLOCKED** by #29–#37 | this checklist |
 
