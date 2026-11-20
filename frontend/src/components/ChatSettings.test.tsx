@@ -168,6 +168,9 @@ describe('D1-FE5 chat settings', () => {
 
   it('renders MEMBER/GUEST controls read-only and never sends a PATCH', async () => {
     setWorkspaceRole('MEMBER');
+    const members = mockDb.chatMembers[IDS.groupChat] ?? [];
+    const viewer = members.find((member) => member.user_id === mockDb.me.user.id);
+    if (viewer) viewer.role = 'MEMBER';
     const { user } = renderPasswordApp();
     const { dialog } = await openSettings(user);
 
@@ -175,7 +178,7 @@ describe('D1-FE5 chat settings', () => {
     expect(within(dialog).getByRole('textbox', { name: 'Описание' })).toBeDisabled();
     expect(
       within(dialog).getByText(
-        'Менять название и описание могут владелец и администратор пространства. Вам доступен просмотр.',
+        'Менять название и описание могут владелец и администратор пространства или роль канала с правом «Изменение информации». Вам доступен просмотр.',
       ),
     ).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Сохранить' })).toBeNull();
@@ -187,8 +190,12 @@ describe('D1-FE5 chat settings', () => {
     const { dialog } = await openSettings(user);
 
     // The UI still believes OWNER (loaded at bootstrap); the server uses its
-    // own role and rejects the request.
+    // own role and rejects the request. The channel role is MEMBER too, so the
+    // delegated `change_info` path does not apply.
     setServerWorkspaceRole('MEMBER');
+    const members = mockDb.chatMembers[IDS.groupChat] ?? [];
+    const viewer = members.find((member) => member.user_id === mockDb.me.user.id);
+    if (viewer) viewer.role = 'MEMBER';
     await user.clear(within(dialog).getByRole('textbox', { name: 'Название' }));
     await user.type(within(dialog).getByRole('textbox', { name: 'Название' }), 'Нельзя');
     await user.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
@@ -272,39 +279,40 @@ describe('D1-FE5 chat settings', () => {
     expect(groupSummary().description).toBeUndefined();
   });
 
-  it('delegates members to the existing E12 dialog without duplicating its API', async () => {
+  it('renders the native channel member directory with role, status and joined date', async () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openSettings(user);
 
-    const before = mockDb.memberDirectoryRequests.length;
-    await user.click(
-      within(dialog).getByRole('button', { name: 'Открыть участников пространства' }),
-    );
+    await user.click(within(dialog).getByRole('tab', { name: 'Участники' }));
 
-    const members = await screen.findByRole('dialog', { name: 'Участники пространства' });
-    await within(members).findByText('Анна Петрова');
-    expect(screen.queryByRole('dialog', { name: 'Настройки чата' })).toBeNull();
-    expect(mockDb.memberDirectoryRequests.length).toBeGreaterThan(before);
-    expect(mockDb.memberDirectoryRequests.at(-1)).toMatchObject({
-      workspaceId: IDS.workspace,
-      query: null,
-    });
+    expect(await within(dialog).findByText('Анна Петрова')).toBeInTheDocument();
+    expect(within(dialog).getByText('Дмитрий Крылов')).toBeInTheDocument();
+    expect(within(dialog).getByText('Марк Соколов')).toBeInTheDocument();
+    expect(within(dialog).getByText('Лена Волкова')).toBeInTheDocument();
+    expect(within(dialog).getAllByText('Активен')).toHaveLength(4);
+    expect(within(dialog).getAllByText(/^В канале с /)).toHaveLength(4);
+    expect(
+      within(dialog).getByRole('combobox', { name: 'Роль участника Анна Петрова' }),
+    ).toHaveValue('ADMIN');
+    // The old workspace-directory delegation is gone: this is the chat list.
+    expect(screen.queryByRole('dialog', { name: 'Участники пространства' })).toBeNull();
   });
 
-  it('keeps archive/leave/delete explicitly disabled until the backend exists', async () => {
+  it('offers archive, leave and OWNER delete in the danger zone', async () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openSettings(user);
 
     await user.click(within(dialog).getByRole('tab', { name: 'Опасная зона' }));
-    expect(within(dialog).getByRole('button', { name: 'Архивировать чат' })).toBeDisabled();
-    expect(within(dialog).getByRole('button', { name: 'Покинуть чат' })).toBeDisabled();
-    expect(within(dialog).getByRole('button', { name: 'Удалить чат' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Архивировать чат' })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Покинуть чат' })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Удалить чат' })).toBeEnabled();
     expect(
       within(dialog).getByText(
-        'Недоступно: в этом срезе нет API архивации, выхода или удаления чата.',
+        'Архив действует только для вас. Удаление канала необратимо в интерфейсе; выход из канала остаётся отдельным действием.',
       ),
     ).toBeInTheDocument();
     expect(mockDb.adminDirectory.chatDeleteRequests).toHaveLength(0);
+    expect(mockDb.chatDeleteRequests).toHaveLength(0);
   });
 
   it('traps focus, closes on Escape and returns focus to the header trigger', async () => {

@@ -14,5 +14,9 @@ public record ChatSummaryResponse(
         boolean peerHasE2eeCapableDevices,
         Instant lastMessageAt,
         long unreadCount,
-        long lastSeq) {
+        long lastSeq,
+        UUID coverFileId,
+        boolean readOnly,
+        String joinPolicy,
+        boolean archived) {
 }

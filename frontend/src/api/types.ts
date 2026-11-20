@@ -74,8 +74,36 @@ export type TestEmailRequest = components['schemas']['TestEmailRequest'];
 export type TestEmailResponse = components['schemas']['TestEmailResponse'];
 export type Chat = components['schemas']['Chat'];
 export type ChatCreateRequest = components['schemas']['ChatCreateRequest'];
-/** D1-FE5: merged settings patch for `PATCH /chats/{chatId}` (name/description only). */
+/**
+ * D1-FE5 + P0-2 (#80): merged settings patch for `PATCH /chats/{chatId}`.
+ * `name`/`description` are D1-BE3 fields; `cover_file_id`, `read_only`,
+ * `visibility`, `join_policy` and `rights` are the additive channel settings.
+ */
 export type ChatUpdateRequest = components['schemas']['ChatUpdateRequest'];
+/** #80: `POST /chats/{chatId}/cover` — an existing image attachment id. */
+export type ChatCoverRequest = components['schemas']['ChatCoverRequest'];
+/** #80: effective rights of one channel role (always complete). */
+export type ChatRolePermissions = components['schemas']['ChatRolePermissions'];
+/** #80: effective 6×5 rights matrix (`owner` is fixed to all-true). */
+export type ChatPermissions = components['schemas']['ChatPermissions'];
+/** #80: partial per-role patch; `owner` is rejected by the server. */
+export type ChatRolePermissionsUpdate = components['schemas']['ChatRolePermissionsUpdate'];
+export type ChatPermissionsUpdate = components['schemas']['ChatPermissionsUpdate'];
+/** #80: pinned-message metadata only (never message content). */
+export type ChatPin = components['schemas']['ChatPin'];
+export type ChatPinList = components['schemas']['ChatPinList'];
+/** #80: GROUP join policy; `null` for DIRECT. */
+export type ChatJoinPolicy = NonNullable<ChatSummary['join_policy']>;
+/** #80: chat role rows are the same enum as the member directory. */
+export type ChatPermissionRole = 'OWNER' | 'ADMIN' | 'MODERATOR' | 'MEMBER' | 'GUEST';
+/** #80: the six configurable rights, in contract order. */
+export type ChatPermissionKey =
+  | 'post_messages'
+  | 'invite_members'
+  | 'create_polls'
+  | 'start_calls'
+  | 'pin_messages'
+  | 'change_info';
 
 /* ------------------------------------------------------------------------- */
 /* E11-F: admin actions (suspend/activate/soft-delete) and the audit view     */
@@ -124,6 +152,34 @@ export type AddWorkspaceMemberRequest = components['schemas']['AddWorkspaceMembe
 export type ChangeWorkspaceMemberRoleRequest =
   components['schemas']['ChangeWorkspaceMemberRoleRequest'];
 export type WorkspaceUsage = WorkspaceLimits['usage'];
+
+/* ------------------------------------------------------------------------- */
+/* #79: channel members, invite links and self-service user blocks           */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * ACTIVE channel participant. `display_name` comes from the profile; email,
+ * devices and keys are not part of the contract. `status` is kept because the
+ * contract exposes it even though the list returns ACTIVE rows only.
+ */
+export type ChatMember = components['schemas']['ChatMember'];
+export type ChatMemberRole = ChatMember['role'];
+export type ChatMemberStatus = ChatMember['status'];
+/** `GET /chats/{chatId}/members`: detailed rows plus the legacy flat ids. */
+export type ChatMembersResponse = components['schemas']['ChatMemberIds'];
+export type AddChatMemberRequest = components['schemas']['AddChatMemberRequest'];
+export type ChangeChatMemberRoleRequest = components['schemas']['ChangeChatMemberRoleRequest'];
+/** Metadata only: the raw token is never re-readable (`ChatInviteCreated`). */
+export type ChatInvite = components['schemas']['ChatInvite'];
+export type ChatInviteRole = ChatInvite['role'];
+export type ChatInviteStatus = ChatInvite['status'];
+export type ChatInviteCreated = components['schemas']['ChatInviteCreated'];
+export type ChatInviteCreateRequest = components['schemas']['ChatInviteCreateRequest'];
+export type ChatInviteList = components['schemas']['ChatInviteList'];
+export type InviteAcceptResult = components['schemas']['InviteAcceptResult'];
+/** Own block row: `user_id`/`blocked_at` only (no email/display name). */
+export type BlockedUser = components['schemas']['BlockedUser'];
+export type BlockedUserList = components['schemas']['BlockedUserList'];
 export type PreflightFile = components['schemas']['PreflightFile'];
 export type PreflightRequest = components['schemas']['PreflightRequest'];
 export type PreflightDecision = components['schemas']['PreflightDecision'];

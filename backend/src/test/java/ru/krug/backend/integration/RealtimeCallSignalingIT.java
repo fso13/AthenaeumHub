@@ -276,6 +276,46 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
     }
 
     @Test
+    void startCallsRightBlocksOnlyTheInitialOffer() throws Exception {
+        SessionResponse alice = devSession();
+        SessionResponse bob = devSession();
+        SessionResponse carol = devSession();
+        Group group = groupRoom(alice, bob, carol);
+        SessionResponse bobIn = group.member(0);
+        SessionResponse carolIn = group.member(1);
+
+        WebSocketClient bobWs = connectSession(bobIn);
+        WebSocketClient carolWs = connectSession(carolIn);
+        UUID callId = UUID.randomUUID();
+
+        // P0-2: the matrix denies start_calls to MEMBER (normally changed through PATCH).
+        setStartCalls(group.chatId(), "MEMBER", false);
+        bobWs.send(groupSignalFrame(group.chatId(), callId, "offer", true, "v=0\r\n", null,
+                carol.user().id()));
+        JsonNode denied = bobWs.awaitType("error", TIMEOUT);
+        assertThat(denied.get("code").asText()).isEqualTo("FORBIDDEN");
+        assertThat(denied.get("status").asInt()).isEqualTo(403);
+        assertThat(carolWs.awaitEventWithin("call.signal", Duration.ofMillis(400))).isNull();
+
+        // Restoring the right relays the same offer; the socket survived the rejection.
+        setStartCalls(group.chatId(), "MEMBER", true);
+        bobWs.send(groupSignalFrame(group.chatId(), callId, "offer", true, "v=0\r\n", null,
+                carol.user().id()));
+        JsonNode offer = carolWs.awaitEvent("call.signal", TIMEOUT);
+        assertThat(offer.get("payload").get("kind").asText()).isEqualTo("offer");
+
+        // Answer/ICE/hangup belong to an already authorized call and are not re-gated.
+        setStartCalls(group.chatId(), "MEMBER", false);
+        carolWs.send(groupSignalFrame(group.chatId(), callId, "answer", true, "v=0\r\n",
+                null, bob.user().id()));
+        JsonNode answer = bobWs.awaitEvent("call.signal", TIMEOUT);
+        assertThat(answer.get("payload").get("kind").asText()).isEqualTo("answer");
+
+        bobWs.close();
+        carolWs.close();
+    }
+
+    @Test
     void groupConferenceRelaysToAllNamedSessionsAndBusyIsOnlyASignal() throws Exception {
         SessionResponse alice = devSession();
         SessionResponse bob = devSession();
@@ -647,6 +687,14 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
             payload.set("candidate", candidate);
         }
         return objectMapper.writeValueAsString(frame);
+    }
+
+    private void setStartCalls(UUID chatId, String role, boolean allowed) {
+        migrator().update("""
+                UPDATE chat.chat_permissions
+                   SET allowed = ?
+                 WHERE chat_id = ? AND role = ? AND permission = 'start_calls'
+                """, allowed, chatId, role);
     }
 
     private String groupSignalFrame(UUID chatId, UUID callId, String kind, boolean video,

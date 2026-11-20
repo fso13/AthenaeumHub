@@ -1,5 +1,9 @@
 import type {
   ApiMessage,
+  ChatInvite,
+  ChatMember,
+  ChatPermissions,
+  ChatPin,
   ChatSummary,
   MeResponse,
   Notification,
@@ -23,6 +27,21 @@ export const IDS = {
   lena: '88888888-8888-4888-8888-888888888888',
   olga: '99999999-9999-4999-8999-999999999901',
   pavel: '99999999-9999-4999-8999-999999999902',
+  inviteActive: 'a0000000-0000-4000-8000-000000000001',
+  inviteExhausted: 'a0000000-0000-4000-8000-000000000002',
+  inviteExpired: 'a0000000-0000-4000-8000-000000000003',
+  inviteRevoked: 'a0000000-0000-4000-8000-000000000004',
+} as const;
+
+/**
+ * #79 mock invite tokens. The real token is returned once; the mock keeps the
+ * token only to resolve `POST /invites/{token}/accept` in tests.
+ */
+export const MOCK_INVITE_TOKENS = {
+  active: 'mock-invite-active-token-0001',
+  exhausted: 'mock-invite-exhausted-token-0002',
+  expired: 'mock-invite-expired-token-0003',
+  revoked: 'mock-invite-revoked-token-0004',
 } as const;
 
 export const MOCK_ACCESS_TOKEN = 'mock-access-token';
@@ -130,6 +149,176 @@ export function buildMemberUsers(): MockMemberUser[] {
     { user_id: IDS.olga, display_name: 'Ольга Смирнова', email: 'olga@krug.test' },
     { user_id: IDS.pavel, display_name: 'Павел Орлов', email: 'pavel@krug.test' },
   ];
+}
+
+/**
+ * #79 channel participants. The GROUP chat has all four workspace members with
+ * distinct roles; DIRECT has the two participants. `status: REMOVED` rows are
+ * kept in the mock so add-after-removal can be exercised, while the list
+ * endpoint returns ACTIVE rows only (matching the backend read model).
+ */
+export function buildChatMembers(): Record<string, ChatMember[]> {
+  return {
+    [IDS.groupChat]: [
+      {
+        user_id: IDS.anna,
+        display_name: 'Анна Петрова',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        joined_at: '2026-01-02T09:00:00.000Z',
+      },
+      {
+        user_id: IDS.user,
+        display_name: MOCK_DISPLAY_NAME,
+        role: 'OWNER',
+        status: 'ACTIVE',
+        joined_at: '2026-01-01T09:00:00.000Z',
+      },
+      {
+        user_id: IDS.lena,
+        display_name: 'Лена Волкова',
+        role: 'GUEST',
+        status: 'ACTIVE',
+        joined_at: '2026-01-04T09:00:00.000Z',
+      },
+      {
+        user_id: IDS.mark,
+        display_name: 'Марк Соколов',
+        role: 'MEMBER',
+        status: 'ACTIVE',
+        joined_at: '2026-01-03T09:00:00.000Z',
+      },
+    ],
+    [IDS.directChat]: [
+      {
+        user_id: IDS.anna,
+        display_name: 'Анна Петрова',
+        role: 'MEMBER',
+        status: 'ACTIVE',
+        joined_at: '2026-01-02T09:00:00.000Z',
+      },
+      {
+        user_id: IDS.user,
+        display_name: MOCK_DISPLAY_NAME,
+        role: 'MEMBER',
+        status: 'ACTIVE',
+        joined_at: '2026-01-01T09:00:00.000Z',
+      },
+    ],
+  };
+}
+
+/**
+ * #79 seeded invite links: one ACTIVE, one EXHAUSTED, one EXPIRED and one
+ * REVOKED. The status is normally computed by the server from `used_count`,
+ * `max_uses`, `expires_at` and `revoked_at`; the mock stores the result and
+ * updates it on create/revoke/accept.
+ */
+export function buildChatInvites(): Record<string, ChatInvite[]> {
+  return {
+    [IDS.groupChat]: [
+      {
+        id: IDS.inviteActive,
+        role: 'MEMBER',
+        status: 'ACTIVE',
+        used_count: 1,
+        max_uses: 5,
+        expires_at: '2027-01-01T00:00:00.000Z',
+        created_at: '2026-11-10T09:00:00.000Z',
+        created_by: IDS.user,
+      },
+      {
+        id: IDS.inviteExhausted,
+        role: 'GUEST',
+        status: 'EXHAUSTED',
+        used_count: 3,
+        max_uses: 3,
+        expires_at: '2027-01-01T00:00:00.000Z',
+        created_at: '2026-11-09T09:00:00.000Z',
+        created_by: IDS.user,
+      },
+      {
+        id: IDS.inviteExpired,
+        role: 'MEMBER',
+        status: 'EXPIRED',
+        used_count: 0,
+        max_uses: null,
+        expires_at: '2026-11-01T00:00:00.000Z',
+        created_at: '2026-10-25T09:00:00.000Z',
+        created_by: IDS.user,
+      },
+      {
+        id: IDS.inviteRevoked,
+        role: 'MODERATOR',
+        status: 'REVOKED',
+        used_count: 0,
+        max_uses: 10,
+        expires_at: '2027-01-01T00:00:00.000Z',
+        created_at: '2026-11-08T09:00:00.000Z',
+        created_by: IDS.user,
+      },
+    ],
+    [IDS.directChat]: [],
+  };
+}
+
+/**
+ * #80 mock rights matrix matching `ChatPermissionPolicy` defaults. OWNER is
+ * always all-true; the other roles are editable per chat.
+ */
+export function buildChatPermissions(): Record<string, ChatPermissions> {
+  const all = {
+    post_messages: true,
+    invite_members: true,
+    create_polls: true,
+    start_calls: true,
+    pin_messages: true,
+    change_info: true,
+  };
+  return {
+    [IDS.groupChat]: {
+      owner: { ...all },
+      admin: { ...all },
+      moderator: {
+        post_messages: true,
+        invite_members: true,
+        create_polls: true,
+        start_calls: true,
+        pin_messages: true,
+        change_info: false,
+      },
+      member: {
+        post_messages: true,
+        invite_members: false,
+        create_polls: true,
+        start_calls: true,
+        pin_messages: false,
+        change_info: false,
+      },
+      guest: {
+        post_messages: true,
+        invite_members: false,
+        create_polls: false,
+        start_calls: false,
+        pin_messages: false,
+        change_info: false,
+      },
+    },
+  };
+}
+
+/** #80 mock pins: metadata only (`chat_id`, `message_id`, `pinned_by`, `pinned_at`). */
+export function buildChatPins(): Record<string, ChatPin[]> {
+  return {
+    [IDS.groupChat]: [
+      {
+        chat_id: IDS.groupChat,
+        message_id: messageId(37),
+        pinned_by: IDS.anna,
+        pinned_at: iso(16, 9, 0),
+      },
+    ],
+  };
 }
 
 const TEXTS = [
@@ -365,6 +554,7 @@ export function buildChatSummaries(): ChatSummary[] {
       name: 'Анна Петрова',
       type: 'DIRECT',
       security_mode: 'MANAGED',
+      peer_id: IDS.anna,
       last_message_at: iso(16, 8, 49),
       unread_count: 0,
       last_seq: 3,

@@ -5,6 +5,7 @@ import { reauthenticate } from '../auth/reauth';
 import type { ApiClient } from './http';
 import { ApiError, isApiError } from './problem';
 import type {
+  AddChatMemberRequest,
   AddWorkspaceMemberRequest,
   AdminAuditPage,
   AdminChatPage,
@@ -16,9 +17,21 @@ import type {
   AdminUserPage,
   ApiMessage,
   AuthUser,
+  BlockedUserList,
+  ChangeChatMemberRoleRequest,
   ChangeWorkspaceMemberRoleRequest,
   Chat,
+  ChatCoverRequest,
   ChatCreateRequest,
+  ChatInviteCreateRequest,
+  ChatPermissions,
+  ChatPermissionsUpdate,
+  ChatPin,
+  ChatPinList,
+  ChatInviteCreated,
+  ChatInviteList,
+  ChatMember,
+  ChatMembersResponse,
   ChatUpdateRequest,
   ChatList,
   ChatPluginState,
@@ -38,6 +51,7 @@ import type {
   FileKindFilter,
   FilePage,
   FileScanStatusFilter,
+  InviteAcceptResult,
   MeResponse,
   MessageCreateBody,
   MessageDeleteScope,
@@ -197,7 +211,39 @@ export interface ChatApi {
   createChat(workspaceId: string, body: ChatCreateRequest, idempotencyKey: string): Promise<Chat>;
   /** D1-FE5: `PATCH /chats/{chatId}` (workspace OWNER/ADMIN; no optimistic lock). */
   updateChat(chatId: string, body: ChatUpdateRequest): Promise<Chat>;
-  listChats(workspaceId: string): Promise<ChatList>;
+  /**
+   * `GET /workspaces/{workspaceId}/chats`. `archived=true` returns only the
+   * caller's personal archive; absent/false is the main list (P0-2 #80).
+   */
+  listChats(workspaceId: string, archived?: boolean): Promise<ChatList>;
+  /**
+   * #80 `DELETE /chats/{chatId}`: soft delete by the ACTIVE chat OWNER.
+   * Named differently from the platform-admin `deleteChat(chatId)` above.
+   */
+  deleteOwnChat(chatId: string): Promise<void>;
+  /**
+   * #80 channel cover. There is no upload endpoint: `file_id` is an existing
+   * managed image attachment of the same chat. Validation is server-side
+   * (404 foreign/other-chat, 422 CHAT_COVER_INVALID, 409 ATTACHMENT_NOT_READY,
+   * 423 ATTACHMENT_QUARANTINED).
+   */
+  setChatCover(chatId: string, body: ChatCoverRequest): Promise<Chat>;
+  /** #80 idempotent `204`; the attachment itself is not deleted. */
+  deleteChatCover(chatId: string): Promise<void>;
+  /** #80 effective rights matrix; any ACTIVE GROUP participant may read it. */
+  getChatPermissions(chatId: string): Promise<ChatPermissions>;
+  /** #80 partial per-role patch; OWNER/ADMIN only, `owner` row rejected. */
+  updateChatPermissions(chatId: string, body: ChatPermissionsUpdate): Promise<ChatPermissions>;
+  /** #80 user-local archive (`204`, idempotent); DIRECT included. */
+  archiveChat(chatId: string): Promise<void>;
+  /** #80 user-local unarchive (`204`, idempotent). */
+  unarchiveChat(chatId: string): Promise<void>;
+  /** #80 pinned-message metadata; newest first, no content. */
+  listChatPins(chatId: string): Promise<ChatPinList>;
+  /** #80 pin (201 first, 200 repeat); `409 CHAT_PIN_LIMIT` at 50. */
+  pinChatMessage(chatId: string, messageId: string): Promise<ChatPin>;
+  /** #80 idempotent unpin (`204`). */
+  unpinChatMessage(chatId: string, messageId: string): Promise<void>;
   listMessages(chatId: string, query?: ListMessagesQuery): Promise<MessagePage>;
   sendMessage(
     chatId: string,
@@ -228,7 +274,32 @@ export interface ChatApi {
   listPlugins(): Promise<PluginList>;
   listChatPlugins(chatId: string): Promise<ChatPluginStateList>;
   /** #77: active chat member ids for the group-call picker. */
-  listChatMembers(chatId: string): Promise<{ user_ids: string[] }>;
+  listChatMembers(chatId: string): Promise<ChatMembersResponse>;
+  /**
+   * #79 channel membership. The server owns role ceilings, the last-OWNER
+   * guard, self actions and ACTIVE-workspace membership; the client only
+   * echoes contract fields and replaces rows with server responses.
+   */
+  addChatMember(chatId: string, body: AddChatMemberRequest): Promise<ChatMember>;
+  changeChatMemberRole(
+    chatId: string,
+    userId: string,
+    body: ChangeChatMemberRoleRequest,
+  ): Promise<ChatMember>;
+  removeChatMember(chatId: string, userId: string): Promise<void>;
+  /** Idempotent alias of self-removal (`204` on repeat). */
+  leaveChat(chatId: string): Promise<void>;
+  /** OWNER/ADMIN metadata list; the token is never returned again. */
+  listChatInvites(chatId: string): Promise<ChatInviteList>;
+  /** `token` in the response is the only readable copy; store it once. */
+  createChatInvite(chatId: string, body: ChatInviteCreateRequest): Promise<ChatInviteCreated>;
+  revokeChatInvite(chatId: string, inviteId: string): Promise<void>;
+  /** The accept URL has no workspace: the server resolves it from the token. */
+  acceptChatInvite(token: string): Promise<InviteAcceptResult>;
+  /** Self-service blocks (identity-scoped, no workspace dimension). */
+  blockUser(userId: string): Promise<void>;
+  unblockUser(userId: string): Promise<void>;
+  listBlockedUsers(): Promise<BlockedUserList>;
   updateChatPlugin(
     chatId: string,
     pluginId: string,
@@ -592,12 +663,93 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       });
     },
 
-    listChats(workspaceId) {
+    listChats(workspaceId, archived) {
       return withReauth(async () => {
+        // `archived=false` is the documented default, so only `true` is sent.
         const response = await client.get<ChatList>(
           `/workspaces/${encodeURIComponent(workspaceId)}/chats`,
+          { archived: archived === true ? true : undefined },
         );
         return response.data;
+      });
+    },
+
+    deleteOwnChat(chatId) {
+      return withReauth(async () => {
+        // Success is a bodyless `204`; a repeat is `404` by design.
+        await client.delete(`/chats/${encodeURIComponent(chatId)}`);
+      });
+    },
+
+    setChatCover(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.post<Chat>(
+          `/chats/${encodeURIComponent(chatId)}/cover`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    deleteChatCover(chatId) {
+      return withReauth(async () => {
+        // Idempotent `204`; the attachment stays in the file flow.
+        await client.delete(`/chats/${encodeURIComponent(chatId)}/cover`);
+      });
+    },
+
+    getChatPermissions(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<ChatPermissions>(
+          `/chats/${encodeURIComponent(chatId)}/permissions`,
+        );
+        return response.data;
+      });
+    },
+
+    updateChatPermissions(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<ChatPermissions>(
+          `/chats/${encodeURIComponent(chatId)}/permissions`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    archiveChat(chatId) {
+      return withReauth(async () => {
+        await client.post(`/chats/${encodeURIComponent(chatId)}/archive`);
+      });
+    },
+
+    unarchiveChat(chatId) {
+      return withReauth(async () => {
+        await client.post(`/chats/${encodeURIComponent(chatId)}/unarchive`);
+      });
+    },
+
+    listChatPins(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<ChatPinList>(`/chats/${encodeURIComponent(chatId)}/pins`);
+        return response.data;
+      });
+    },
+
+    pinChatMessage(chatId, messageId) {
+      return withReauth(async () => {
+        const response = await client.post<ChatPin>(`/chats/${encodeURIComponent(chatId)}/pins`, {
+          message_id: messageId,
+        });
+        return response.data;
+      });
+    },
+
+    unpinChatMessage(chatId, messageId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/chats/${encodeURIComponent(chatId)}/pins/${encodeURIComponent(messageId)}`,
+        );
       });
     },
 
@@ -711,9 +863,108 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
 
     listChatMembers(chatId) {
       return withReauth(async () => {
-        const response = await client.get<{ user_ids: string[] }>(
+        // #79: `members[]` carries display details and `user_ids` remains the
+        // compat projection used by the group-call picker.
+        const response = await client.get<ChatMembersResponse>(
           `/chats/${encodeURIComponent(chatId)}/members`,
         );
+        return response.data;
+      });
+    },
+
+    /*
+     * #79: channel membership. Add is idempotent (`200` repeat / `201` first
+     * write); PATCH is the only role-change path; DELETE/leave are soft and
+     * idempotent for self. No `Idempotency-Key` is invented: the contract does
+     * not require one for these operations.
+     */
+    addChatMember(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.post<ChatMember>(
+          `/chats/${encodeURIComponent(chatId)}/members`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    changeChatMemberRole(chatId, userId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<ChatMember>(
+          `/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    removeChatMember(chatId, userId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`,
+        );
+      });
+    },
+
+    leaveChat(chatId) {
+      return withReauth(async () => {
+        await client.post(`/chats/${encodeURIComponent(chatId)}/leave`);
+      });
+    },
+
+    listChatInvites(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<ChatInviteList>(
+          `/chats/${encodeURIComponent(chatId)}/invites`,
+        );
+        return response.data;
+      });
+    },
+
+    createChatInvite(chatId, body) {
+      return withReauth(async () => {
+        // The `token` field exists only in this response; it is never persisted
+        // server-side and cannot be read back from the list.
+        const response = await client.post<ChatInviteCreated>(
+          `/chats/${encodeURIComponent(chatId)}/invites`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    revokeChatInvite(chatId, inviteId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/chats/${encodeURIComponent(chatId)}/invites/${encodeURIComponent(inviteId)}`,
+        );
+      });
+    },
+
+    acceptChatInvite(token) {
+      return withReauth(async () => {
+        const response = await client.post<InviteAcceptResult>(
+          `/invites/${encodeURIComponent(token)}/accept`,
+        );
+        return response.data;
+      });
+    },
+
+    blockUser(userId) {
+      return withReauth(async () => {
+        await client.post(`/users/${encodeURIComponent(userId)}/block`);
+      });
+    },
+
+    unblockUser(userId) {
+      return withReauth(async () => {
+        await client.delete(`/users/${encodeURIComponent(userId)}/block`);
+      });
+    },
+
+    listBlockedUsers() {
+      return withReauth(async () => {
+        const response = await client.get<BlockedUserList>('/me/blocked');
         return response.data;
       });
     },

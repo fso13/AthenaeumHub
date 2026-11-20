@@ -15,5 +15,9 @@ public record ChatSummaryView(
         long lastSeq,
         UUID peerId,
         boolean peerHasE2eeCapableDevices,
-        java.time.Instant createdAt) {
+        java.time.Instant createdAt,
+        UUID coverFileId,
+        boolean readOnly,
+        String joinPolicy,
+        boolean archived) {
 }

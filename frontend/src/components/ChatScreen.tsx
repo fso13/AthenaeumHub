@@ -157,14 +157,26 @@ export function ChatScreen({
     void stickersStore.ensure(activeChatId);
   }, [activeChatId, stickerPickerOpen, stickersStore]);
 
+  // #80: the rights matrix and the viewer's channel role drive the pin action
+  // and the read-only send guard. Both are chat-scoped and loaded lazily.
+  const activeChatKind = chatSummary?.type ?? null;
+  useEffect(() => {
+    if (!activeChatId || activeChatKind !== 'GROUP') return;
+    void store.loadChatMembers(activeChatId);
+    void store.loadChatPermissions(activeChatId);
+  }, [activeChatId, activeChatKind, store]);
+
+  const readOnlyBlocked = activeChatId ? !store.canPostInChat(activeChatId) : false;
   const e2eeBlock = activeChatId ? store.e2eeBlockReason(activeChatId) : null;
   const sendBlockedReason = !state.online
     ? ('offline' as const)
     : rateLimitSeconds > 0
       ? ('rate_limit' as const)
-      : e2eeBlock !== null
-        ? ('e2ee_blocked' as const)
-        : null;
+      : readOnlyBlocked
+        ? ('read_only' as const)
+        : e2eeBlock !== null
+          ? ('e2ee_blocked' as const)
+          : null;
   const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
   const callsBlockedKey = store.callDisabledReason(activeChatId);
   const callsDisabledReason = callsBlockedKey ? t(callsBlockedKey as MessageKey) : null;
@@ -290,6 +302,8 @@ export function ChatScreen({
       if (!chatId) return;
       // A take recorded before switching to E2EE must never be uploaded there.
       if (store.isE2eeChat(chatId)) return;
+      // #80: a read-only channel denies send for non-manager roles.
+      if (!store.canPostInChat(chatId)) return;
       void (async () => {
         const tasks = await filesStore.addFiles([result.file], chatId, [{ media: result.media }]);
         const task = tasks[0];
@@ -699,7 +713,7 @@ export function ChatScreen({
                 onToggleStickers={handleToggleStickers}
                 stickerButtonRef={stickerButtonRef}
                 voiceButtonRef={voiceButtonRef}
-                voiceDisabled={!canAttach || !voiceSupport.supported}
+                voiceDisabled={!canAttach || !voiceSupport.supported || readOnlyBlocked}
                 voiceHint={voiceHint}
                 voiceActive={voiceActive}
                 onStartVoice={() => {

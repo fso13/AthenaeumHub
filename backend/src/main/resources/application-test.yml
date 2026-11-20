@@ -12,6 +12,10 @@ krug:
     # Generous defaults: dedicated RateLimitIT lowers them to assert 429.
     send-per-user: 10000
     send-per-chat: 10000
+    # #79: invite windows are exercised by the unit limiter test; the integration suite
+    # must not throttle repeated create/accept calls.
+    invite-accept-per-user: 10000
+    invite-create-per-chat: 10000
   outbox:
     relay:
       enabled: false

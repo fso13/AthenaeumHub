@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import ru.krug.backend.audit.application.model.AuditRecord;
 import ru.krug.backend.audit.application.port.AuditPort;
+import ru.krug.backend.chat.application.port.ChatPermissionPort;
+import ru.krug.backend.chat.domain.model.ChatPermission;
 import ru.krug.backend.plugin.application.model.PluginChatContext;
 import ru.krug.backend.plugin.application.model.PollView;
 import ru.krug.backend.plugin.domain.model.Poll;
@@ -33,13 +35,15 @@ public class PollService {
     private static final int LIST_LIMIT = 100;
 
     private final PluginActionGate gate;
+    private final ChatPermissionPort chatPermissions;
     private final PollRepository repository;
     private final AuditPort audit;
     private final ClockPort clock;
 
-    public PollService(PluginActionGate gate, PollRepository repository, AuditPort audit,
-                       ClockPort clock) {
+    public PollService(PluginActionGate gate, ChatPermissionPort chatPermissions,
+                       PollRepository repository, AuditPort audit, ClockPort clock) {
         this.gate = gate;
+        this.chatPermissions = chatPermissions;
         this.repository = repository;
         this.audit = audit;
         this.clock = clock;
@@ -58,6 +62,8 @@ public class PollService {
     public PollView create(Principal principal, UUID chatId, String question,
                            List<String> options) {
         PluginChatContext context = gate.requireEnabled(principal, chatId, PLUGIN_ID);
+        chatPermissions.requireAllowed(context.workspaceId(), chatId, principal.userId(),
+                ChatPermission.CREATE_POLLS);
         Poll poll = Poll.create(context.workspaceId(), chatId, principal.userId(), question,
                 options, clock.now(), UUID::randomUUID);
         repository.create(poll);

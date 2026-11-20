@@ -17,7 +17,7 @@ import {
 import { MentionPopover } from './MentionPopover';
 import { MentionText } from './MentionText';
 
-export type SendBlockedReason = 'offline' | 'rate_limit' | 'e2ee_blocked' | null;
+export type SendBlockedReason = 'offline' | 'rate_limit' | 'read_only' | 'e2ee_blocked' | null;
 
 interface ComposerProps {
   value: string;
@@ -172,9 +172,11 @@ export function Composer({
       ? t('composer.offline')
       : sendBlockedReason === 'rate_limit'
         ? t('composer.rateLimited', { seconds: rateLimitSeconds })
-        : sendBlockedReason === 'e2ee_blocked'
-          ? t('composer.e2eeBlocked')
-          : null;
+        : sendBlockedReason === 'read_only'
+          ? t('composer.readOnly')
+          : sendBlockedReason === 'e2ee_blocked'
+            ? t('composer.e2eeBlocked')
+            : null;
   const contextNote = e2eeChat ? t('chat.e2eeNote') : t('chat.managedNote');
 
   return (

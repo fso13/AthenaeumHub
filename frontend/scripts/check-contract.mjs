@@ -92,6 +92,30 @@ const operations = {
   'DELETE /me/sessions/{sessionId}': spec.paths?.['/me/sessions/{sessionId}']?.delete,
   'GET /files': spec.paths?.['/files']?.get,
   'GET /chats/{chatId}/members': spec.paths?.['/chats/{chatId}/members']?.get,
+  'POST /chats/{chatId}/members': spec.paths?.['/chats/{chatId}/members']?.post,
+  'PATCH /chats/{chatId}/members/{userId}': spec.paths?.['/chats/{chatId}/members/{userId}']?.patch,
+  'DELETE /chats/{chatId}/members/{userId}':
+    spec.paths?.['/chats/{chatId}/members/{userId}']?.delete,
+  'POST /chats/{chatId}/leave': spec.paths?.['/chats/{chatId}/leave']?.post,
+  'GET /chats/{chatId}/invites': spec.paths?.['/chats/{chatId}/invites']?.get,
+  'POST /chats/{chatId}/invites': spec.paths?.['/chats/{chatId}/invites']?.post,
+  'DELETE /chats/{chatId}/invites/{inviteId}':
+    spec.paths?.['/chats/{chatId}/invites/{inviteId}']?.delete,
+  'POST /invites/{token}/accept': spec.paths?.['/invites/{token}/accept']?.post,
+  'POST /users/{userId}/block': spec.paths?.['/users/{userId}/block']?.post,
+  'DELETE /users/{userId}/block': spec.paths?.['/users/{userId}/block']?.delete,
+  'GET /me/blocked': spec.paths?.['/me/blocked']?.get,
+  'POST /chats/{chatId}/cover': spec.paths?.['/chats/{chatId}/cover']?.post,
+  'DELETE /chats/{chatId}/cover': spec.paths?.['/chats/{chatId}/cover']?.delete,
+  'DELETE /chats/{chatId}': spec.paths?.['/chats/{chatId}']?.delete,
+  'GET /chats/{chatId}/permissions': spec.paths?.['/chats/{chatId}/permissions']?.get,
+  'PATCH /chats/{chatId}/permissions': spec.paths?.['/chats/{chatId}/permissions']?.patch,
+  'POST /chats/{chatId}/archive': spec.paths?.['/chats/{chatId}/archive']?.post,
+  'POST /chats/{chatId}/unarchive': spec.paths?.['/chats/{chatId}/unarchive']?.post,
+  'GET /chats/{chatId}/pins': spec.paths?.['/chats/{chatId}/pins']?.get,
+  'POST /chats/{chatId}/pins': spec.paths?.['/chats/{chatId}/pins']?.post,
+  'DELETE /chats/{chatId}/pins/{messageId}':
+    spec.paths?.['/chats/{chatId}/pins/{messageId}']?.delete,
   'PATCH /chats/{chatId}/messages/{messageId}':
     spec.paths?.['/chats/{chatId}/messages/{messageId}']?.patch,
   'DELETE /chats/{chatId}/messages/{messageId}':
@@ -665,18 +689,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 64,
-  'Contract must expose exactly 63 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions)',
+  Object.keys(spec.paths ?? {}).length === 77,
+  'Contract must expose exactly 77 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 76,
-  'Contract check must cover exactly 75 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions)',
+  Object.keys(operations).length === 97,
+  'Contract check must cover exactly 97 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings)',
 );
 check(
-  Object.keys(schemas).length === 116,
-  'Contract must expose exactly 115 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions)',
+  Object.keys(schemas).length === 134,
+  'Contract must expose exactly 134 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings)',
 );
 
 check(
@@ -818,11 +842,121 @@ check(
   'TaskUpdate must only require done',
 );
 
+// --- 7. Channel members / invites / blocks (#79) --------------------------
+check(
+  Array.isArray(schemas.ChatMemberIds?.required) &&
+    ['user_ids', 'members'].every((field) => schemas.ChatMemberIds.required.includes(field)),
+  'ChatMemberIds must keep user_ids and add members (additive)',
+);
+for (const field of ['user_id', 'display_name', 'role', 'status', 'joined_at']) {
+  check(
+    Array.isArray(schemas.ChatMember?.required) && schemas.ChatMember.required.includes(field),
+    `ChatMember.${field} must remain required`,
+  );
+}
+check(
+  Array.isArray(schemas.ChatInviteCreated?.allOf) &&
+    schemas.ChatInviteCreated.allOf.some((part) =>
+      Object.prototype.hasOwnProperty.call(part?.properties ?? {}, 'token'),
+    ),
+  'ChatInviteCreated must expose the one-time token',
+);
+check(
+  !Object.prototype.hasOwnProperty.call(schemas.ChatInvite?.properties ?? {}, 'token_hash') &&
+    !Object.prototype.hasOwnProperty.call(schemas.ChatInvite?.properties ?? {}, 'token'),
+  'ChatInvite must never expose the token or its hash',
+);
+check(
+  ['ACTIVE', 'EXPIRED', 'EXHAUSTED', 'REVOKED'].every((status) =>
+    schemas.ChatInvite?.properties?.status?.enum?.includes(status),
+  ),
+  'ChatInvite.status must expose ACTIVE/EXPIRED/EXHAUSTED/REVOKED',
+);
+check(
+  Boolean(spec.paths?.['/invites/{token}/accept']?.post?.responses?.['410']),
+  'POST /invites/{token}/accept must document 410 for expired/revoked/exhausted links',
+);
+for (const field of ['email', 'display_name']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.BlockedUser?.properties ?? {}, field),
+    `BlockedUser must not expose ${field}`,
+  );
+}
+for (const status of ['409', '422']) {
+  check(
+    Boolean(spec.paths?.['/chats/{chatId}/members/{userId}']?.patch?.responses?.[status]),
+    `PATCH /chats/{chatId}/members/{userId} must document ${status}`,
+  );
+}
+
 if (failures.length > 0) {
   console.error('\nContract check failed:\n');
   for (const failure of failures) console.error(`  - ${failure}`);
   process.exit(1);
 }
+
+// --- 7. P0-2 channel settings invariants --------------------------------
+// Pins are metadata-only by construction; no content/ciphertext field may appear.
+for (const field of ['text', 'body', 'content', 'ciphertext', 'envelope', 'attachments']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.ChatPin?.properties ?? {}, field),
+    `ChatPin must not expose ${field}`,
+  );
+}
+check(
+  ['chat_id', 'message_id', 'pinned_by', 'pinned_at'].every((field) =>
+    schemas.ChatPin?.required?.includes(field),
+  ),
+  'ChatPin must require only the metadata ids/time',
+);
+// OWNER rights are fixed: the owner row may only be present in order to be rejected.
+check(
+  Object.prototype.hasOwnProperty.call(schemas.ChatPermissionsUpdate?.properties ?? {}, 'owner') &&
+    String(schemas.ChatPermissionsUpdate.description).includes('owner_permissions_fixed'),
+  'ChatPermissionsUpdate.owner must be documented as a rejected row',
+);
+check(
+  [
+    'post_messages',
+    'invite_members',
+    'create_polls',
+    'start_calls',
+    'pin_messages',
+    'change_info',
+  ].every((field) =>
+    Object.prototype.hasOwnProperty.call(schemas.ChatRolePermissions?.properties ?? {}, field),
+  ),
+  'ChatRolePermissions must document the full P0-2 rights matrix',
+);
+// The cover references an existing attachment and there is no upload endpoint here.
+check(
+  schemas.ChatCoverRequest?.properties?.file_id?.format === 'uuid' &&
+    schemas.ChatCoverRequest?.required?.includes('file_id'),
+  'ChatCoverRequest.file_id must be a required uuid',
+);
+check(
+  ['cover_file_id', 'read_only', 'visibility', 'join_policy', 'rights'].every((field) =>
+    Object.prototype.hasOwnProperty.call(schemas.ChatUpdateRequest?.properties ?? {}, field),
+  ),
+  'ChatUpdateRequest must expose the P0-2 channel settings',
+);
+check(
+  Boolean(spec.paths?.['/chats/{chatId}/cover']?.post?.responses?.['423']),
+  'POST /chats/{chatId}/cover must document 423 quarantine',
+);
+check(
+  Boolean(spec.paths?.['/chats/{chatId}']?.delete?.responses?.['204']) &&
+    !spec.paths['/chats/{chatId}'].delete.responses['204'].content,
+  'DELETE /chats/{chatId} must document a bodyless 204',
+);
+check(
+  ['204'].every(
+    (status) =>
+      Boolean(spec.paths?.['/chats/{chatId}/archive']?.post?.responses?.[status]) &&
+      Boolean(spec.paths?.['/chats/{chatId}/unarchive']?.post?.responses?.[status]),
+  ),
+  'Archive/unarchive must document idempotent 204',
+);
 
 console.log(
   `Contract check passed: ${Object.keys(operations).length} operations, ` +

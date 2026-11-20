@@ -6,13 +6,20 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import ru.krug.backend.chat.application.model.ChatMemberListView;
+import ru.krug.backend.chat.application.model.ChatMemberView;
 import ru.krug.backend.chat.application.port.ChatAccessPort;
 import ru.krug.backend.chat.application.port.ChatWorkspacePort;
+import ru.krug.backend.chat.domain.model.ChatMemberRow;
 import ru.krug.backend.chat.domain.repository.ChatRepository;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.TenantContext;
 
-/** Active chat-member ids for the group-call participant picker; no profile data. */
+/**
+ * ACTIVE chat members for the member list and the group-call participant picker (#79).
+ * Display names come from the narrow {@code chat.member_directory} lookup; email, devices
+ * and keys are never read or returned. Only an ACTIVE participant of the chat may list it.
+ */
 @Service
 public class ChatMembersQueryService {
 
@@ -30,7 +37,7 @@ public class ChatMembersQueryService {
     }
 
     @Transactional(readOnly = true)
-    public List<UUID> list(Principal principal, UUID chatId) {
+    public ChatMemberListView list(Principal principal, UUID chatId) {
         UUID workspaceId = chatWorkspace.workspaceForChat(chatId, principal.userId(),
                 principal.requestId());
         // Bind the tenant GUC explicitly: the Keycloak principal has no workspace claim,
@@ -38,6 +45,11 @@ public class ChatMembersQueryService {
         tenantContext.activate(new Principal(principal.userId(), principal.deviceId(),
                 workspaceId, principal.requestId(), principal.sessionId()));
         chatAccess.requireActiveChat(workspaceId, chatId, principal.userId());
-        return chatRepository.findActiveMemberIds(workspaceId, chatId);
+
+        List<ChatMemberRow> rows = chatRepository.findMemberDirectory(chatId,
+                principal.userId());
+        List<ChatMemberView> members = rows.stream().map(ChatMemberView::from).toList();
+        return new ChatMemberListView(rows.stream().map(ChatMemberRow::userId).toList(),
+                members);
     }
 }

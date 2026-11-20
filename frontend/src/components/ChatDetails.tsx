@@ -29,6 +29,7 @@ import {
   MusicIcon,
   PeopleIcon,
   PhoneIcon,
+  PinIcon,
   PlayIcon,
   PlugIcon,
   PollIcon,
@@ -193,7 +194,7 @@ export function ChatDetails({
   const pluginsState = usePluginsState();
   const pluginActions = usePluginActionsState();
   const [expanded, setExpanded] = useState<
-    'privacy' | 'members' | 'plugins' | 'media' | 'polls' | 'tasks' | null
+    'privacy' | 'members' | 'plugins' | 'pins' | 'media' | 'polls' | 'tasks' | null
   >('media');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
@@ -266,6 +267,11 @@ export function ChatDetails({
   const pluginGate = usePluginGate(pluginChatId, isE2ee);
   const pollsEnabled = !isDirect && pluginGate.enabled('polls');
   const tasksEnabled = !isDirect && pluginGate.enabled('tasks');
+  const pinsCurrent = state.chatPins.chatId === pluginChatId;
+  const pins = pinsCurrent ? state.chatPins.items : [];
+  const pinsStatus = pinsCurrent ? state.chatPins.status : 'idle';
+  const pinsError = pinsCurrent ? state.chatPins.error : null;
+  const canPin = pluginChatId ? store.canPinMessages(pluginChatId) : false;
   const pluginActionsCurrent = pluginActions.chatId === pluginChatId;
   const pollCount =
     pluginActionsCurrent && pluginActions.pollsStatus === 'ready'
@@ -309,7 +315,16 @@ export function ChatDetails({
     setExpanded(pluginPanelRequest.panel);
   }, [open, pluginPanelRequest]);
 
-  const toggle = (panel: 'privacy' | 'members' | 'plugins' | 'media' | 'polls' | 'tasks') => {
+  useEffect(() => {
+    // #80: pin metadata is readable by any ACTIVE GROUP participant; DIRECT
+    // and E2EE have no pins, so the panel is not offered there.
+    if (!open || !pluginChatId || pluginChatIsDirect || isE2ee) return;
+    void store.loadChatPins(pluginChatId);
+  }, [isE2ee, open, pluginChatId, pluginChatIsDirect, store]);
+
+  const toggle = (
+    panel: 'privacy' | 'members' | 'plugins' | 'pins' | 'media' | 'polls' | 'tasks',
+  ) => {
     setExpanded((current) => (current === panel ? null : panel));
     // The directory is read lazily: opening the panel must not spend a
     // `GET /workspaces/{id}/members` call before the user asks for members.
@@ -611,6 +626,84 @@ export function ChatDetails({
               {expanded === 'tasks' ? (
                 <div className="panel-expand panel-expand--plugin">
                   {chat ? <TaskPanel chatId={chat.id} /> : null}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          {!isDirect && !isE2ee ? (
+            <>
+              <button
+                type="button"
+                className={`panel-row${expanded === 'pins' ? ' is-open' : ''}`}
+                aria-expanded={expanded === 'pins'}
+                onClick={() => toggle('pins')}
+              >
+                <PinIcon aria-hidden="true" />
+                <span>{t('details.pins')}</span>
+                <span className="count">
+                  {pinsCurrent && pinsStatus === 'ready' ? pins.length : '—'}
+                </span>
+                <ChevronDownIcon className="chev" aria-hidden="true" />
+              </button>
+              {expanded === 'pins' ? (
+                <div className="panel-expand">
+                  {pinsStatus === 'loading' ? (
+                    <p>{t('details.pinsLoading')}</p>
+                  ) : pinsError ? (
+                    <>
+                      <p>{t('details.pinsError')}</p>
+                      <button
+                        type="button"
+                        className="btn-sm"
+                        onClick={() => chat && void store.loadChatPins(chat.id, true)}
+                      >
+                        {t('details.pinsRetry')}
+                      </button>
+                    </>
+                  ) : pins.length === 0 ? (
+                    <p>{t('details.pinsEmpty')}</p>
+                  ) : (
+                    <ul className="pins-list">
+                      {pins.map((pin) => {
+                        const pinnedMessage =
+                          slice?.messages.find((item) => item.id === pin.message_id) ?? null;
+                        const preview = pinnedMessage?.deleted_at
+                          ? t('chat.deletedMessage')
+                          : pinnedMessage?.text?.trim() ||
+                            (pinnedMessage?.sticker
+                              ? t('details.pinsSticker')
+                              : t('details.pinsUnavailable'));
+                        return (
+                          <li className="pins-list__item" key={pin.message_id}>
+                            <PinIcon aria-hidden="true" />
+                            <div className="pins-list__body">
+                              <span className="pins-list__author">
+                                {pinnedMessage?.sender_display_name?.trim() ||
+                                  t('chat.unknownAuthor')}
+                              </span>
+                              <span className="pins-list__text" title={preview}>
+                                {preview}
+                              </span>
+                            </div>
+                            {canPin ? (
+                              <button
+                                type="button"
+                                className="pins-list__jump"
+                                disabled={state.chatPins.pendingMessageId !== null}
+                                onClick={() =>
+                                  chat && void store.unpinMessage(chat.id, pin.message_id)
+                                }
+                              >
+                                {t('details.unpin')}
+                              </button>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <p className="hint">{t('details.pinsHint')}</p>
                 </div>
               ) : null}
             </>

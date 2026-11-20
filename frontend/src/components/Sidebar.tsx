@@ -5,6 +5,7 @@ import type { Theme } from '../theme/themePreference';
 import { chatDisplayName } from '../domain/chatLabel';
 import { formatUnreadBadge } from '../domain/unread';
 import { t, type MessageKey } from '../i18n/ru';
+import { useChatStore } from '../store/ChatProvider';
 import { Avatar } from './Avatar';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import {
@@ -78,10 +79,14 @@ export function Sidebar({
   const canCreateChat = !chatLimitReached;
   const channels = state.chats.filter((chat) => chat.type === 'GROUP');
   const directs = state.chats.filter((chat) => chat.type === 'DIRECT');
+  const store = useChatStore();
   const [collapsed, setCollapsed] = useState<{ channels: boolean; directs: boolean }>({
     channels: false,
     directs: false,
   });
+  // #80: the personal archive is a separate list; it never mixes with `chats`.
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const archived = state.archivedChats;
 
   const renderChatItem = (chat: AppState['chats'][number]) => {
     const active = chat.id === state.activeChatId;
@@ -247,6 +252,71 @@ export function Sidebar({
             {renderSection('directs', t('sidebar.directs'), directs)}
           </>
         )}
+
+        <div className="archive-section">
+          <button
+            type="button"
+            className="archive-toggle"
+            aria-expanded={archivedOpen}
+            onClick={() => {
+              setArchivedOpen((open) => !open);
+              if (!archivedOpen) void store.loadArchivedChats();
+            }}
+          >
+            <span>{t('sidebar.archived')}</span>
+            <span className="count">
+              {archived.status === 'ready' ? archived.items.length : '—'}
+            </span>
+          </button>
+          {archivedOpen ? (
+            <div className="archive-list">
+              {archived.status === 'loading' ? (
+                <p className="chat-list__empty">{t('sidebar.archivedLoading')}</p>
+              ) : archived.status === 'error' ? (
+                <div>
+                  <p className="chat-list__empty">{t('sidebar.archivedError')}</p>
+                  <button
+                    type="button"
+                    className="archive-row__unarchive"
+                    onClick={() => void store.loadArchivedChats(true)}
+                  >
+                    {t('sidebar.archivedRetry')}
+                  </button>
+                </div>
+              ) : archived.items.length === 0 ? (
+                <p className="chat-list__empty">{t('sidebar.archivedEmpty')}</p>
+              ) : (
+                <ul className="chat-list__items">
+                  {archived.items.map((chat) => {
+                    const label = chatDisplayName(chat, state.workspaceMembers.items);
+                    const busy = archived.pendingChatId === chat.id;
+                    return (
+                      <li className="archive-row" key={chat.id}>
+                        <span className="archive-row__name" title={label}>
+                          {label}
+                        </span>
+                        <button
+                          type="button"
+                          className="archive-row__unarchive"
+                          disabled={archived.pendingChatId !== null}
+                          aria-busy={busy}
+                          onClick={() => void store.unarchiveChat(chat.id)}
+                        >
+                          {busy ? t('sidebar.unarchiving') : t('sidebar.unarchive')}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {archived.actionError ? (
+                <p className="chat-settings-error" role="alert">
+                  {t('sidebar.unarchiveError')}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </nav>
 
       <div className="me">

@@ -10,8 +10,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import ru.krug.backend.chat.application.model.ChatAccess;
 import ru.krug.backend.chat.application.port.ChatAccessPort;
+import ru.krug.backend.chat.application.port.ChatPermissionPort;
 import ru.krug.backend.chat.application.port.ChatWorkspacePort;
+import ru.krug.backend.chat.domain.model.ChatPermission;
 import ru.krug.backend.chat.domain.repository.ChatRepository;
+import ru.krug.backend.realtime.application.model.CallKind;
 import ru.krug.backend.realtime.application.model.RealtimeCallAccess;
 import ru.krug.backend.realtime.application.port.RealtimeCallAccessPort;
 import ru.krug.backend.shared.application.model.Principal;
@@ -30,13 +33,18 @@ import ru.krug.backend.shared.application.port.TenantContext;
 public class RealtimeCallAccessAdapter implements RealtimeCallAccessPort {
 
     private final ChatAccessPort chatAccess;
+    private final ChatPermissionPort chatPermissions;
     private final ChatWorkspacePort chatWorkspace;
     private final ChatRepository chatRepository;
     private final TenantContext tenantContext;
 
-    public RealtimeCallAccessAdapter(ChatAccessPort chatAccess, ChatWorkspacePort chatWorkspace,
-                                     ChatRepository chatRepository, TenantContext tenantContext) {
+    public RealtimeCallAccessAdapter(ChatAccessPort chatAccess,
+                                     ChatPermissionPort chatPermissions,
+                                     ChatWorkspacePort chatWorkspace,
+                                     ChatRepository chatRepository,
+                                     TenantContext tenantContext) {
         this.chatAccess = chatAccess;
+        this.chatPermissions = chatPermissions;
         this.chatWorkspace = chatWorkspace;
         this.chatRepository = chatRepository;
         this.tenantContext = tenantContext;
@@ -44,7 +52,7 @@ public class RealtimeCallAccessAdapter implements RealtimeCallAccessPort {
 
     @Override
     @Transactional(readOnly = true)
-    public RealtimeCallAccess check(UUID workspaceId, UUID chatId, UUID userId,
+    public RealtimeCallAccess check(UUID workspaceId, UUID chatId, UUID userId, CallKind kind,
                                     boolean conference, Set<UUID> requestedRecipients,
                                     String requestId) {
         UUID resolvedWorkspace = workspaceId;
@@ -64,6 +72,14 @@ public class RealtimeCallAccessAdapter implements RealtimeCallAccessPort {
             return RealtimeCallAccess.forbidden(workspace, null);
         }
         String chatType = access.get().chatType();
+        // P0-2: the initial OFFER needs the configurable start_calls right. The check runs
+        // here, inside the tenant-scoped read transaction, because the WS thread has no
+        // request context. Answer/ICE/hangup of an authorized call are not re-gated.
+        if (kind == CallKind.OFFER
+                && !chatPermissions.isAllowed(workspace, chatId, userId,
+                        ChatPermission.START_CALLS)) {
+            return RealtimeCallAccess.forbidden(workspace, chatType);
+        }
         List<UUID> activeMemberIds = chatRepository.findActiveMemberIds(workspace, chatId);
 
         if (RealtimeCallAccess.DIRECT.equals(chatType)) {

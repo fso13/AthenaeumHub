@@ -9,6 +9,7 @@ import { formatDateTime } from './admin/format';
 import { AdminConfirmDialog } from './admin/AdminConfirmDialog';
 import type { AdminActionErrorInfo } from './admin/actionErrors';
 import { Avatar } from './Avatar';
+import { BlockedUsersCard } from './BlockedUsersCard';
 import { BellIcon, CloseIcon, LogoutIcon, MoonIcon, RefreshIcon, SunIcon } from './Icons';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
 import { roleLabel } from './pages/pageData';
@@ -662,6 +663,8 @@ export function ProfileDialog({
                   <span>{t('profile.sessionsHint')}</span>
                 </div>
               </section>
+
+              <BlockedUsersCard />
             </div>
           )}
 

@@ -1,12 +1,32 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import type { ChatSummary } from '../api/types';
+import type {
+  ChatJoinPolicy,
+  ChatPermissionKey,
+  ChatPermissionRole,
+  ChatPermissions,
+  ChatPermissionsUpdate,
+  ChatRolePermissions,
+  ChatRolePermissionsUpdate,
+  ChatSummary,
+  ChatUpdateRequest,
+} from '../api/types';
 import type { ApiError } from '../api/problem';
 import { describeError } from '../domain/errors';
-import { t } from '../i18n/ru';
-import { useChatState, useChatStore } from '../store/ChatProvider';
-import { CloseIcon, CopyIcon, LinkIcon, LockIcon } from './Icons';
-import { Avatar } from './Avatar';
-import { roleLabel } from './pages/pageData';
+import { safeHttpUrl } from '../files/format';
+import { t, type MessageKey } from '../i18n/ru';
+import { useFilesStore, useChatState, useChatStore } from '../store/ChatProvider';
+import {
+  CHAT_PERMISSION_KEYS,
+  CHAT_PERMISSION_ROLES,
+  chatPermissionAllowed,
+  defaultChatPermissions,
+} from '../store/chatStore';
+import { AdminConfirmDialog } from './admin/AdminConfirmDialog';
+import type { AdminActionErrorInfo } from './admin/actionErrors';
+import { ChatInvitesPanel } from './chat-settings/ChatInvitesPanel';
+import { ChatMembersPanel } from './chat-settings/ChatMembersPanel';
+import { blockErrorText, chatMembershipErrorText } from './chat-settings/errors';
+import { CloseIcon, LockIcon } from './Icons';
 
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
@@ -81,6 +101,118 @@ function chatSettingsErrorText(error: ApiError): string {
   return t('chatSettings.error.generic');
 }
 
+function blockActionErrorInfo(error: ApiError): AdminActionErrorInfo {
+  return {
+    text: blockErrorText(error),
+    tone: 'error',
+    retryable: error.isNetwork || error.status >= 500,
+    closeOnError: false,
+  };
+}
+
+/** #80 cover errors: the server owns every attachment/role guard. */
+function coverErrorText(error: ApiError): string {
+  if (error.status === 403) return t('chatSettings.cover.error.forbidden');
+  if (error.status === 404) return t('chatSettings.cover.error.notFound');
+  if (error.status === 409) return t('chatSettings.cover.error.notReady');
+  if (error.status === 423) return t('chatSettings.cover.error.quarantined');
+  if (error.status === 422) {
+    if (error.code === 'CHAT_SETTINGS_E2EE_UNSUPPORTED') return t('chatSettings.error.e2ee');
+    if (error.code === 'CHAT_MEMBERSHIP_UNSUPPORTED') {
+      return t('chatSettings.directUnsupported');
+    }
+    return t('chatSettings.cover.error.invalid');
+  }
+  if (error.isNetwork || error.status >= 500) return describeError(error).message;
+  return t('chatSettings.error.generic');
+}
+
+/** #80 rights-matrix errors. */
+function rightsErrorText(error: ApiError): string {
+  if (error.status === 403) return t('chatSettings.rights.error.forbidden');
+  if (error.status === 404) return t('chatSettings.error.notFound');
+  if (error.status === 422) return t('chatSettings.rights.error.validation');
+  if (error.isNetwork || error.status >= 500) return describeError(error).message;
+  return t('chatSettings.error.generic');
+}
+
+/** #80 archive/delete errors. */
+function archiveErrorText(error: ApiError): string {
+  if (error.status === 403) return t('chatSettings.dangerError.forbidden');
+  if (error.status === 404) return t('chatSettings.error.notFound');
+  if (error.isNetwork || error.status >= 500) return describeError(error).message;
+  return t('chatSettings.error.generic');
+}
+
+const PERMISSION_LABEL: Record<ChatPermissionKey, MessageKey> = {
+  post_messages: 'chatSettings.rights.post_messages',
+  invite_members: 'chatSettings.rights.invite_members',
+  create_polls: 'chatSettings.rights.create_polls',
+  start_calls: 'chatSettings.rights.start_calls',
+  pin_messages: 'chatSettings.rights.pin_messages',
+  change_info: 'chatSettings.rights.change_info',
+};
+
+const PERMISSION_HINT: Record<ChatPermissionKey, MessageKey> = {
+  post_messages: 'chatSettings.rights.post_messagesHint',
+  invite_members: 'chatSettings.rights.invite_membersHint',
+  create_polls: 'chatSettings.rights.create_pollsHint',
+  start_calls: 'chatSettings.rights.start_callsHint',
+  pin_messages: 'chatSettings.rights.pin_messagesHint',
+  change_info: 'chatSettings.rights.change_infoHint',
+};
+
+const ROLE_LABEL: Record<ChatPermissionRole, MessageKey> = {
+  OWNER: 'chatMembers.role.OWNER',
+  ADMIN: 'chatMembers.role.ADMIN',
+  MODERATOR: 'chatMembers.role.MODERATOR',
+  MEMBER: 'chatMembers.role.MEMBER',
+  GUEST: 'chatMembers.role.GUEST',
+};
+
+const EDITABLE_MATRIX_ROLES: readonly ChatPermissionRole[] = CHAT_PERMISSION_ROLES.filter(
+  (role) => role !== 'OWNER',
+);
+
+const ROLE_KEY = {
+  ADMIN: 'admin',
+  MODERATOR: 'moderator',
+  MEMBER: 'member',
+  GUEST: 'guest',
+} as const;
+
+function roleRights(matrix: ChatPermissions, role: ChatPermissionRole): ChatRolePermissions {
+  if (role === 'OWNER') return matrix.owner ?? defaultChatPermissions().owner ?? {};
+  return matrix[ROLE_KEY[role as keyof typeof ROLE_KEY]] ?? {};
+}
+
+function hasRightsChanges(draft: ChatPermissions, base: ChatPermissions | null): boolean {
+  if (!base) return false;
+  return EDITABLE_MATRIX_ROLES.some((role) =>
+    CHAT_PERMISSION_KEYS.some(
+      (permission) => roleRights(draft, role)[permission] !== roleRights(base, role)[permission],
+    ),
+  );
+}
+
+/** Only the changed role rights are sent; an empty object is never PATCHed. */
+function rightsPatch(draft: ChatPermissions, base: ChatPermissions): ChatPermissionsUpdate {
+  const patch: ChatPermissionsUpdate = {};
+  for (const role of EDITABLE_MATRIX_ROLES) {
+    const next = roleRights(draft, role);
+    const previous = roleRights(base, role);
+    const changed: ChatRolePermissionsUpdate = {};
+    let count = 0;
+    for (const permission of CHAT_PERMISSION_KEYS) {
+      if (next[permission] === previous[permission]) continue;
+      changed[permission] = next[permission] === true;
+      count += 1;
+    }
+    if (count > 0) patch[ROLE_KEY[role as keyof typeof ROLE_KEY]] = changed;
+  }
+  return patch;
+}
+
 const COVER_BY_MODE = {
   managed: '/covers/cover-atlas.svg',
   e2ee: '/covers/cover-family.svg',
@@ -91,8 +223,6 @@ export interface ChatSettingsDialogProps {
   open: boolean;
   chat: ChatSummary | null;
   onClose: () => void;
-  /** Opens the existing E12 workspace members dialog; no member API is duplicated. */
-  onOpenMembers: () => void;
 }
 
 /**
@@ -100,21 +230,22 @@ export interface ChatSettingsDialogProps {
  *
  * - 820 px / r18 / 58 px header + 42 px tabs (`Основное`, `Участники`, `Права`,
  *   `Опасная зона`; DIRECT: `Приватность`).
- * - Only `PATCH /chats/{chatId}` (name/description) is wired. Members delegate
- *   to the existing E12 directory; rights, invite links, cover upload, privacy
- *   toggles and danger actions stay honestly disabled until their APIs land.
- * - No optimistic update: the header/list change only after `200 Chat`.
+ * - `PATCH /chats/{chatId}` (name/description), #79 channel members, invite
+ *   links, leave and DIRECT block are wired. Rights, cover upload, privacy
+ *   toggles, archive/delete stay honestly disabled until their APIs land.
+ * - No optimistic update: the header/list change only after a server response.
  * - Focus trap, Escape, focus return, labelled/described, 390 px friendly.
+ * - Nested confirm dialogs own Escape/focus; the parent trap pauses meanwhile.
  */
-export function ChatSettingsDialog({
-  open,
-  chat,
-  onClose,
-  onOpenMembers,
-}: ChatSettingsDialogProps) {
+export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogProps) {
   const store = useChatStore();
+  const filesStore = useFilesStore();
   const state = useChatState();
   const settings = state.chatSettings;
+  const permissions = state.chatPermissions;
+  const coverState = state.chatCover;
+  const archiveState = state.chatArchive;
+  const deletionState = state.chatDeletion;
   const dialogRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
@@ -128,25 +259,86 @@ export function ChatSettingsDialog({
   const e2eeNoteId = useId();
   const readOnlyId = useId();
   const dangerNoteId = useId();
+  const coverHintId = useId();
 
   const [activeTab, setActiveTab] = useState<TabId>('main');
   const [name, setName] = useState(chat?.name ?? '');
   const [description, setDescription] = useState(chat?.description ?? '');
+  const [readOnly, setReadOnly] = useState(chat?.read_only ?? false);
+  const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>(
+    chat?.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE',
+  );
+  const [joinPolicy, setJoinPolicy] = useState<ChatJoinPolicy>(chat?.join_policy ?? 'INVITE_ONLY');
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; description?: string }>({});
   const [notice, setNotice] = useState<string | null>(null);
+  const [nestedModalOpen, setNestedModalOpen] = useState(false);
+  const [blockOpen, setBlockOpen] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [rightsDraft, setRightsDraft] = useState<ChatPermissions | null>(null);
+  const [rightsNotice, setRightsNotice] = useState<string | null>(null);
+  const [dangerNotice, setDangerNotice] = useState<string | null>(null);
   const initializedFor = useRef<string | null>(null);
 
   const role = state.activeWorkspace?.role ?? null;
   const canManage = role === 'OWNER' || role === 'ADMIN';
   const isE2ee = (chat?.security_mode ?? 'MANAGED') === 'E2EE';
+  const isDirect = chat?.type === 'DIRECT';
   const saving = settings.status === 'saving' && settings.chatId === chat?.id;
   const serverError = settings.status === 'error' ? settings.error : null;
   const serverField =
     serverError?.details?.field === 'name' || serverError?.details?.field === 'description'
       ? serverError.details.field
       : null;
-  const members = state.workspaceMembers.items;
-  const membersState = state.workspaceMembers;
+  const viewerId = state.user?.id ?? state.me?.user.id ?? state.session?.user.id ?? null;
+  const chatMembers = chat && state.chatMembers.chatId === chat.id ? state.chatMembers : null;
+  const chatMemberCount = chatMembers?.status === 'ready' ? chatMembers.items.length : null;
+  const actorChatRole =
+    chatMembers?.items.find((member) => member.user_id === viewerId)?.role ?? null;
+  /** Structural settings (cover/read-only/visibility/rights) need chat OWNER/ADMIN. */
+  const canManageStructure =
+    isDirect === false && (actorChatRole === 'OWNER' || actorChatRole === 'ADMIN');
+  const structureDisabledReason = isDirect
+    ? t('chatSettings.directUnsupported')
+    : actorChatRole === null
+      ? t('chatSettings.structureLoading')
+      : t('chatSettings.structureForbidden');
+  /**
+   * P0-2 (#80): name/description accept workspace OWNER/ADMIN *or* a chat role
+   * with `change_info`. The matrix is loaded with the dialog, so a delegated
+   * MEMBER gets the form enabled once the server response arrives.
+   */
+  const canManageName =
+    canManage ||
+    (actorChatRole !== null &&
+      chatPermissionAllowed(
+        permissions.chatId === chat?.id ? permissions.matrix : null,
+        actorChatRole,
+        'change_info',
+      ));
+  const peerMember = chat?.peer_id
+    ? (chatMembers?.items.find((member) => member.user_id === chat.peer_id) ?? null)
+    : null;
+  const peerName = peerMember?.display_name ?? chat?.name?.trim() ?? t('chat.group');
+  const blockedUsers = state.blockedUsers;
+  const peerBlocked =
+    chat?.peer_id !== null &&
+    chat?.peer_id !== undefined &&
+    blockedUsers.items.some((item) => item.user_id === chat.peer_id);
+  const blockPending =
+    chat?.peer_id !== null &&
+    chat?.peer_id !== undefined &&
+    blockedUsers.pendingUserId === chat.peer_id;
+  const blockActionError =
+    chat?.peer_id !== null &&
+    chat?.peer_id !== undefined &&
+    blockedUsers.actionError?.userId === chat.peer_id
+      ? blockedUsers.actionError.error
+      : null;
+  const leavePending = chatMembers?.leaveStatus === 'leaving';
+  const leaveError = chatMembers?.leaveStatus === 'error' ? chatMembers.leaveError : null;
 
   // Reset only when the dialog opens or switches to another chat; a live
   // summary refresh must not overwrite the draft.
@@ -160,11 +352,68 @@ export function ChatSettingsDialog({
     initializedFor.current = key;
     setName(chat?.name ?? '');
     setDescription(chat?.description ?? '');
+    setReadOnly(chat?.read_only ?? false);
+    setVisibility(chat?.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE');
+    setJoinPolicy(chat?.join_policy ?? 'INVITE_ONLY');
     setFieldErrors({});
     setNotice(null);
+    setDangerNotice(null);
+    setNestedModalOpen(false);
+    setBlockOpen(false);
+    setLeaveOpen(false);
+    setDeleteOpen(false);
+    setCoverPickerOpen(false);
+    setCoverUrl(null);
+    setRightsDraft(null);
+    setRightsNotice(null);
     setActiveTab('main');
     store.clearChatSettings();
+    store.clearChatMembers();
+    store.clearChatInvites();
+    store.clearChatPermissions();
+    store.clearChatCover();
+    store.clearChatArchive();
   }, [open, chat, store]);
+
+  // #79: the participant directory supplies the viewer's channel role and the
+  // cover count; DIRECT also returns the peer row used by the block card.
+  useEffect(() => {
+    if (!open || !chat) return;
+    void store.loadChatMembers(chat.id);
+  }, [chat, open, store]);
+
+  // #80: the rights matrix is readable by every ACTIVE participant, but only
+  // chat OWNER/ADMIN may save it. Loaded on open so the tab has real values.
+  useEffect(() => {
+    if (!open || !chat || chat.type === 'DIRECT') return;
+    void store.loadChatPermissions(chat.id);
+  }, [chat, open, store]);
+
+  // #80: the current cover is an attachment id; a download URL is obtained
+  // lazily and a failure keeps the static design fallback.
+  useEffect(() => {
+    const coverFileId = chat?.cover_file_id ?? null;
+    setCoverUrl(null);
+    if (!open || !coverFileId) return;
+    let active = true;
+    void filesStore
+      .getDownloadUrl(coverFileId)
+      .then((download) => {
+        if (active) setCoverUrl(download.url);
+      })
+      .catch(() => {
+        // Static fallback below; the picker still works.
+      });
+    return () => {
+      active = false;
+    };
+  }, [chat?.cover_file_id, filesStore, open]);
+
+  // DIRECT danger actions need the own-block list to render block vs unblock.
+  useEffect(() => {
+    if (!open || activeTab !== 'danger' || chat?.type !== 'DIRECT') return;
+    void store.loadBlockedUsers();
+  }, [activeTab, chat?.type, open, store]);
 
   useEffect(() => {
     if (!open) return;
@@ -180,14 +429,13 @@ export function ChatSettingsDialog({
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!open || activeTab !== 'members') return;
-    if (membersState.status === 'idle') void store.loadWorkspaceMembers();
-  }, [activeTab, membersState.status, open, store]);
+  const nestedModal = nestedModalOpen || blockOpen || leaveOpen || deleteOpen;
 
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A nested confirm owns Escape and the focus trap while it is mounted.
+      if (nestedModal) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         if (!saving) onClose();
@@ -217,7 +465,7 @@ export function ChatSettingsDialog({
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, open, saving]);
+  }, [nestedModal, onClose, open, saving]);
 
   if (!open || !chat) return null;
 
@@ -225,9 +473,17 @@ export function ChatSettingsDialog({
   const normalizedDescription = normalizeDescription(description);
   const originalName = chat.name ?? '';
   const originalDescription = chat.description ?? '';
-  const nameChanged = canManage && normalizedName !== originalName;
-  const descriptionChanged = canManage && !isE2ee && normalizedDescription !== originalDescription;
-  const dirty = nameChanged || descriptionChanged;
+  const originalReadOnly = chat.read_only ?? false;
+  const originalVisibility = chat.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE';
+  const originalJoinPolicy = chat.join_policy ?? 'INVITE_ONLY';
+  const nameChanged = canManageName && normalizedName !== originalName;
+  const descriptionChanged =
+    canManageName && !isE2ee && normalizedDescription !== originalDescription;
+  const readOnlyChanged = canManageStructure && readOnly !== originalReadOnly;
+  const visibilityChanged = canManageStructure && visibility !== originalVisibility;
+  const joinPolicyChanged = canManageStructure && joinPolicy !== originalJoinPolicy;
+  const dirty =
+    nameChanged || descriptionChanged || readOnlyChanged || visibilityChanged || joinPolicyChanged;
 
   const handleFieldChange = () => {
     if (notice) setNotice(null);
@@ -236,15 +492,17 @@ export function ChatSettingsDialog({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canManage || saving) return;
+    if ((!canManageName && !canManageStructure) || saving) return;
     setNotice(null);
 
     const nextErrors: { name?: string; description?: string } = {};
-    const nextNameError = nameError(normalizedName);
-    if (nextNameError) nextErrors.name = nextNameError;
-    if (!isE2ee) {
-      const nextDescriptionError = descriptionError(normalizedDescription);
-      if (nextDescriptionError) nextErrors.description = nextDescriptionError;
+    if (canManageName) {
+      const nextNameError = nameError(normalizedName);
+      if (nextNameError) nextErrors.name = nextNameError;
+      if (!isE2ee) {
+        const nextDescriptionError = descriptionError(normalizedDescription);
+        if (nextDescriptionError) nextErrors.description = nextDescriptionError;
+      }
     }
     setFieldErrors(nextErrors);
     if (nextErrors.name || nextErrors.description) return;
@@ -254,9 +512,15 @@ export function ChatSettingsDialog({
       return;
     }
 
-    const patch: { name?: string; description?: string } = {};
+    const patch: ChatUpdateRequest = {};
     if (nameChanged) patch.name = normalizedName;
     if (descriptionChanged) patch.description = normalizedDescription;
+    if (readOnlyChanged) patch.read_only = readOnly;
+    if (visibilityChanged) patch.visibility = visibility;
+    if (joinPolicyChanged) {
+      // PUBLIC is always OPEN; the server also forces it.
+      patch.join_policy = visibility === 'PUBLIC' ? 'OPEN' : joinPolicy;
+    }
 
     const ok = await store.saveChatSettings(chat.id, patch);
     if (!ok) return;
@@ -266,11 +530,32 @@ export function ChatSettingsDialog({
     setNotice(t('chatSettings.saved'));
   };
 
-  const descriptionDisabled = !canManage || isE2ee;
+  const handleBlockConfirm = async () => {
+    if (!chat.peer_id) return;
+    const ok = await store.blockUser(chat.peer_id);
+    if (!ok) return;
+    setBlockOpen(false);
+    setDangerNotice(t('chatSettings.blockDone'));
+  };
+
+  const handleUnblock = async () => {
+    if (!chat.peer_id) return;
+    setDangerNotice(null);
+    const ok = await store.unblockUser(chat.peer_id);
+    if (ok) setDangerNotice(t('chatSettings.unblockDone'));
+  };
+
+  const handleLeaveConfirm = async () => {
+    const ok = await store.leaveChat(chat.id);
+    if (!ok) return;
+    setLeaveOpen(false);
+    onClose();
+  };
+
+  const descriptionDisabled = !canManageName || isE2ee;
   const descriptionValue = isE2ee ? '' : description;
   const nameServerInvalid = serverField === 'name';
   const descriptionServerInvalid = serverField === 'description';
-  const isDirect = chat.type === 'DIRECT';
   const tabs: ReadonlyArray<{ id: TabId; label: string }> = isDirect
     ? [
         { id: 'main', label: t('chatSettings.tab.main') },
@@ -290,62 +575,121 @@ export function ChatSettingsDialog({
       : COVER_BY_MODE.managed;
   const typeLabel = isDirect ? t('chatSettings.type.direct') : t('chatSettings.type.group');
   const modeLabel = isE2ee ? t('chatSettings.mode.e2ee') : t('chatSettings.mode.managed');
+  const currentCover = coverUrl ?? cover;
+  const coverBusy =
+    coverState.chatId === chat.id &&
+    (coverState.actionStatus === 'saving' || coverState.actionStatus === 'removing');
+  const coverActionError =
+    coverState.chatId === chat.id && coverState.actionStatus === 'error'
+      ? coverState.actionError
+      : null;
+  const coverImagesLoading = coverState.chatId === chat.id && coverState.imagesStatus === 'loading';
+  const coverImagesError =
+    coverState.chatId === chat.id && coverState.imagesStatus === 'error'
+      ? coverState.imagesError
+      : null;
+  const coverImages = coverState.chatId === chat.id ? coverState.images : [];
+  const coverDisabledReason = isE2ee
+    ? t('chatSettings.cover.error.e2ee')
+    : !canManageStructure
+      ? structureDisabledReason
+      : null;
+
+  const baseMatrix =
+    permissions.chatId === chat.id && permissions.status === 'ready' ? permissions.matrix : null;
+  const matrix = rightsDraft ?? baseMatrix ?? defaultChatPermissions();
+  const rightsDirty = baseMatrix !== null && hasRightsChanges(matrix, baseMatrix);
+  const canEditRights = canManageStructure && baseMatrix !== null;
+  const rightsLoading = permissions.chatId === chat.id && permissions.status === 'loading';
+  const rightsLoadError =
+    permissions.chatId === chat.id && permissions.status === 'error' ? permissions.error : null;
+  const rightsSaveError =
+    permissions.chatId === chat.id && permissions.saveStatus === 'error'
+      ? permissions.saveError
+      : null;
+  const rightsSaving = permissions.chatId === chat.id && permissions.saveStatus === 'saving';
+  const archiveBusy =
+    archiveState.chatId === chat.id &&
+    (archiveState.status === 'archiving' || archiveState.status === 'unarchiving');
+  const archiveError =
+    archiveState.chatId === chat.id && archiveState.status === 'error' ? archiveState.error : null;
+  const deleting = deletionState.chatId === chat.id && deletionState.status === 'deleting';
+  const deleteError =
+    deletionState.chatId === chat.id && deletionState.status === 'error'
+      ? deletionState.error
+      : null;
+  const canDelete = actorChatRole === 'OWNER';
+  const dangerBusy = archiveBusy || deleting || leavePending;
+
+  const handleSelectCover = async (fileId: string) => {
+    setDangerNotice(null);
+    const ok = await store.setChatCover(chat.id, fileId);
+    if (!ok) return;
+    setCoverPickerOpen(false);
+    setNotice(t('chatSettings.cover.saved'));
+  };
+
+  const handleRemoveCover = async () => {
+    setDangerNotice(null);
+    const ok = await store.removeChatCover(chat.id);
+    if (ok) setNotice(t('chatSettings.cover.removed'));
+  };
+
+  const handleToggleRight = (role: ChatPermissionRole, permission: ChatPermissionKey) => {
+    if (!canEditRights) return;
+    setRightsNotice(null);
+    setRightsDraft((current) => {
+      const draft = current ?? matrix;
+      const rights = roleRights(draft, role);
+      return {
+        ...draft,
+        [ROLE_KEY[role as keyof typeof ROLE_KEY]]: {
+          ...rights,
+          [permission]: !(rights[permission] === true),
+        },
+      };
+    });
+  };
+
+  const handleSaveRights = async () => {
+    if (!baseMatrix || rightsSaving) return;
+    setRightsNotice(null);
+    if (!rightsDirty) {
+      setRightsNotice(t('chatSettings.rights.noChanges'));
+      return;
+    }
+    const ok = await store.saveChatPermissions(chat.id, rightsPatch(matrix, baseMatrix));
+    if (!ok) return;
+    setRightsDraft(null);
+    setRightsNotice(t('chatSettings.rights.saved'));
+  };
+
+  const handleArchive = async () => {
+    setDangerNotice(null);
+    const ok = chat.archived
+      ? await store.unarchiveChat(chat.id)
+      : await store.archiveChat(chat.id);
+    if (!ok) return;
+    setDangerNotice(t(chat.archived ? 'chatSettings.unarchiveDone' : 'chatSettings.archiveDone'));
+    if (!chat.archived) onClose();
+  };
+
+  const handleDeleteConfirm = async () => {
+    const ok = await store.deleteOwnChat(chat.id);
+    if (!ok) return;
+    setDeleteOpen(false);
+    onClose();
+  };
 
   const membersPane = (
     <>
-      <div className="form-row">
-        <label htmlFor="chat-invite">{t('chatSettings.invite')}</label>
-        <div className="invite-row">
-          <input
-            id="chat-invite"
-            className="input"
-            readOnly
-            value={t('chatSettings.inviteShort')}
-          />
-          <button
-            type="button"
-            className="btn btn--sm"
-            disabled
-            title={t('chatSettings.inviteUnavailable')}
-          >
-            <CopyIcon aria-hidden="true" />
-            {t('common.copy')}
-          </button>
-        </div>
-      </div>
-      <div className="setting-row">
-        <div className="text">
-          <b>{t('chatSettings.privInvites')}</b>
-          <small>{t('chatSettings.privInvitesHint')}</small>
-        </div>
-        <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
-      </div>
-      {membersState.status === 'loading' && members.length === 0 ? (
-        <p className="card-empty" role="status">
-          {t('chatSettings.membersLoading')}
-        </p>
-      ) : null}
-      {members.length === 0 && membersState.status !== 'loading' ? (
-        <p className="card-empty">{t('chatSettings.membersEmpty')}</p>
-      ) : null}
-      {members.map((member) => (
-        <div className="member-row" key={member.user_id}>
-          <Avatar name={member.display_name} seed={member.user_id} size="xs" />
-          <span className="name">
-            {member.display_name}
-            <small>{t(roleKey(member.role))}</small>
-          </span>
-          <span className={`role role--${member.role.toLowerCase()}`}>
-            {roleLabel(member.role)}
-          </span>
-        </div>
-      ))}
-      <p className="pane-sub">{t('chatSettings.membersTabHint')}</p>
-      <div className="form-actions">
-        <button type="button" className="btn" onClick={onOpenMembers}>
-          {t('chatSettings.openMembersTab')}
-        </button>
-      </div>
+      <ChatInvitesPanel
+        chatId={chat.id}
+        actorRole={actorChatRole}
+        variant="members"
+        onNestedModalChange={setNestedModalOpen}
+      />
+      <ChatMembersPanel chat={chat} onLeft={onClose} onNestedModalChange={setNestedModalOpen} />
     </>
   );
 
@@ -353,25 +697,111 @@ export function ChatSettingsDialog({
     <>
       <div className="chat-settings-head">
         <span className="chat-settings-cover">
-          <img src={cover} alt="" />
+          <img src={currentCover} alt={t('chatSettings.cover.current')} />
         </span>
         <div>
           <div className="cs-name">{chat.name?.trim() || t('chatSettings.type.direct')}</div>
           <small>
-            {members.length > 0
-              ? t('chatSettings.coverMeta', { count: members.length, mode: modeLabel })
+            {chatMemberCount !== null
+              ? t('chatSettings.coverMeta', { count: chatMemberCount, mode: modeLabel })
               : t('chatSettings.coverMetaLoading', { mode: modeLabel })}
           </small>
         </div>
-        <button
-          type="button"
-          className="btn btn--sm"
-          disabled
-          title={t('chatSettings.coverUnavailable')}
-        >
-          {t('chatSettings.editCover')}
-        </button>
+        <div className="chat-settings-head__cover-actions">
+          <button
+            type="button"
+            className="btn btn--sm"
+            disabled={coverDisabledReason !== null || coverBusy || saving}
+            title={coverDisabledReason ?? t('chatSettings.cover.pickerHint')}
+            aria-describedby={coverHintId}
+            aria-expanded={coverPickerOpen}
+            onClick={() => {
+              setCoverPickerOpen((open) => !open);
+              if (!coverPickerOpen) void store.loadChatCoverImages(chat.id);
+            }}
+          >
+            {coverBusy && coverState.actionStatus === 'saving'
+              ? t('chatSettings.cover.working')
+              : t('chatSettings.cover.change')}
+          </button>
+          {chat.cover_file_id && canManageStructure ? (
+            <button
+              type="button"
+              className="btn btn--sm"
+              disabled={coverBusy || saving}
+              onClick={() => void handleRemoveCover()}
+            >
+              {coverState.actionStatus === 'removing'
+                ? t('chatSettings.cover.removing')
+                : t('chatSettings.cover.remove')}
+            </button>
+          ) : null}
+        </div>
       </div>
+      <p className="chat-settings-cover-hint" id={coverHintId}>
+        {isE2ee
+          ? t('chatSettings.cover.error.e2ee')
+          : canManageStructure || isDirect
+            ? t('chatSettings.cover.pickerHint')
+            : structureDisabledReason}
+      </p>
+      {coverActionError ? (
+        <p className="chat-settings-error" role="alert">
+          {coverErrorText(coverActionError)}
+        </p>
+      ) : null}
+      {coverPickerOpen && !isDirect && !isE2ee ? (
+        <section className="cover-picker" aria-label={t('chatSettings.cover.pickerTitle')}>
+          <p className="cover-picker__title">{t('chatSettings.cover.pickerTitle')}</p>
+          {coverImagesLoading ? (
+            <p className="pane-sub">{t('chatSettings.cover.loading')}</p>
+          ) : coverImagesError ? (
+            <div>
+              <p className="chat-settings-error" role="alert">
+                {coverErrorText(coverImagesError)}
+              </p>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => void store.loadChatCoverImages(chat.id, true)}
+              >
+                {t('chatSettings.cover.retry')}
+              </button>
+            </div>
+          ) : coverImages.length === 0 ? (
+            <p className="pane-sub">{t('chatSettings.cover.empty')}</p>
+          ) : (
+            <ul className="cover-picker__grid">
+              {coverImages.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className="cover-picker__item"
+                    disabled={coverBusy || item.id === chat.cover_file_id}
+                    aria-label={`${item.filename ?? item.id}: ${t('chatSettings.cover.select')}`}
+                    onClick={() => void handleSelectCover(item.id)}
+                  >
+                    {safeHttpUrl(item.media?.artwork_url) ? (
+                      <img
+                        src={safeHttpUrl(item.media?.artwork_url) ?? undefined}
+                        alt=""
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span className="cover-picker__fallback" aria-hidden="true">
+                        {item.filename ?? 'IMG'}
+                      </span>
+                    )}
+                    <span className="cover-picker__name">
+                      {item.filename ?? t('chatSettings.cover.select')}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
 
       <form
         id="chat-settings-form"
@@ -394,12 +824,12 @@ export function ChatSettingsDialog({
               type="text"
               value={name}
               autoComplete="off"
-              disabled={!canManage || saving}
+              disabled={!canManageName || saving}
               aria-invalid={Boolean(fieldErrors.name) || nameServerInvalid}
               aria-describedby={[
                 nameHintId,
                 fieldErrors.name ? nameErrorId : null,
-                !canManage ? readOnlyId : null,
+                !canManageName ? readOnlyId : null,
               ]
                 .filter(Boolean)
                 .join(' ')}
@@ -442,7 +872,7 @@ export function ChatSettingsDialog({
                 descriptionHintId,
                 fieldErrors.description ? descriptionErrorId : null,
                 isE2ee ? e2eeNoteId : null,
-                !canManage ? readOnlyId : null,
+                !canManageName ? readOnlyId : null,
               ]
                 .filter(Boolean)
                 .join(' ')}
@@ -479,6 +909,89 @@ export function ChatSettingsDialog({
           ) : null}
         </section>
 
+        {!isDirect ? (
+          <section className="chat-settings-section" aria-labelledby={`${readOnlyId}-policy`}>
+            <h3 className="chat-settings-section__title" id={`${readOnlyId}-policy`}>
+              {t('chatSettings.structure.title')}
+            </h3>
+            <p className="chat-settings-section__hint">{t('chatSettings.structure.hint')}</p>
+            <label className="chat-toggle">
+              <input
+                type="checkbox"
+                checked={readOnly}
+                disabled={!canManageStructure || saving}
+                aria-describedby={`${readOnlyId}-hint`}
+                onChange={(event) => {
+                  setReadOnly(event.target.checked);
+                  handleFieldChange();
+                }}
+              />
+              <span className="chat-toggle__body">
+                <b>{t('chatSettings.readOnlyLabel')}</b>
+                <small id={`${readOnlyId}-hint`}>{t('chatSettings.readOnlyHint')}</small>
+              </span>
+            </label>
+            {!canManageStructure ? (
+              <p className="chat-settings-readonly">{structureDisabledReason}</p>
+            ) : null}
+            <div className="form-grid">
+              <div className="form-row">
+                <label htmlFor={`${readOnlyId}-visibility`}>
+                  {t('chatSettings.visibilityLabel')}
+                </label>
+                <select
+                  id={`${readOnlyId}-visibility`}
+                  className="select"
+                  value={visibility}
+                  disabled={!canManageStructure || saving}
+                  onChange={(event) => {
+                    const next = event.target.value === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE';
+                    setVisibility(next);
+                    if (next === 'PUBLIC') setJoinPolicy('OPEN');
+                    else if (joinPolicy === 'OPEN') setJoinPolicy('INVITE_ONLY');
+                    handleFieldChange();
+                  }}
+                >
+                  <option value="PUBLIC">{t('chatSettings.visibility.PUBLIC')}</option>
+                  <option value="PRIVATE">{t('chatSettings.visibility.PRIVATE')}</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <label htmlFor={`${readOnlyId}-join-policy`}>
+                  {t('chatSettings.joinPolicyLabel')}
+                </label>
+                <select
+                  id={`${readOnlyId}-join-policy`}
+                  className="select"
+                  value={visibility === 'PUBLIC' ? 'OPEN' : joinPolicy}
+                  disabled={!canManageStructure || saving || visibility === 'PUBLIC'}
+                  onChange={(event) => {
+                    setJoinPolicy(event.target.value as ChatJoinPolicy);
+                    handleFieldChange();
+                  }}
+                >
+                  <option value="OPEN">{t('chatSettings.joinPolicy.OPEN')}</option>
+                  <option value="INVITE_ONLY">{t('chatSettings.joinPolicy.INVITE_ONLY')}</option>
+                  <option value="CLOSED">{t('chatSettings.joinPolicy.CLOSED')}</option>
+                </select>
+              </div>
+            </div>
+            <p className="pane-sub">{t('chatSettings.joinPolicyHint')}</p>
+            {canManageStructure && !canManageName ? (
+              <div className="form-actions">
+                <button
+                  type="submit"
+                  className="btn btn--accent"
+                  disabled={saving}
+                  aria-busy={saving}
+                >
+                  {saving ? t('chatSettings.saving') : t('chatSettings.structure.save')}
+                </button>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         <div className="form-grid">
           <div className="form-row">
             <label htmlFor="chat-type">{t('chatSettings.type')}</label>
@@ -493,28 +1006,21 @@ export function ChatSettingsDialog({
         </div>
 
         {!isDirect ? (
-          <div className="form-row">
-            <label htmlFor="chat-invite-main">{t('chatSettings.invite')}</label>
-            <div className="invite-row">
-              <input
-                id="chat-invite-main"
-                className="input"
-                readOnly
-                value={t('chatSettings.inviteShort')}
-              />
-              <button type="button" className="btn btn--sm" disabled>
-                <LinkIcon aria-hidden="true" />
-                {t('common.copy')}
-              </button>
-            </div>
-          </div>
+          <ChatInvitesPanel
+            chatId={chat.id}
+            actorRole={actorChatRole}
+            variant="main"
+            onOpenMembers={() => setActiveTab('members')}
+          />
         ) : null}
 
-        <div className="form-actions">
-          <button type="button" className="btn" onClick={onOpenMembers}>
-            {t('chatSettings.openMembersTab')}
-          </button>
-        </div>
+        {!isDirect ? (
+          <div className="form-actions">
+            <button type="button" className="btn" onClick={() => setActiveTab('members')}>
+              {t('chatSettings.openChatMembers')}
+            </button>
+          </div>
+        ) : null}
       </form>
     </>
   );
@@ -577,7 +1083,7 @@ export function ChatSettingsDialog({
         </div>
 
         <div className="modal-body">
-          {!canManage ? (
+          {!canManageName ? (
             <p className="chat-settings-readonly" id={readOnlyId}>
               {t('chatSettings.readOnly')}
             </p>
@@ -606,24 +1112,126 @@ export function ChatSettingsDialog({
             {activeTab === 'members' ? membersPane : null}
 
             {activeTab === 'rights' ? (
-              <>
-                {[
-                  ['chatSettings.rights.send', 'chatSettings.rights.sendHint'],
-                  ['chatSettings.rights.invite', 'chatSettings.rights.inviteHint'],
-                  ['chatSettings.rights.pin', 'chatSettings.rights.pinHint'],
-                  ['chatSettings.rights.plugins', 'chatSettings.rights.pluginsHint'],
-                  ['chatSettings.rights.export', 'chatSettings.rights.exportHint'],
-                ].map(([title, hint]) => (
-                  <div className="setting-row" key={title}>
-                    <div className="text">
-                      <b>{t(title as Parameters<typeof t>[0])}</b>
-                      <small>{t(hint as Parameters<typeof t>[0])}</small>
-                    </div>
-                    <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
+              <section className="chat-rights" aria-label={t('chatSettings.rights.title')}>
+                <div className="chat-rights__head">
+                  <div>
+                    <h3 className="chat-settings-section__title">
+                      {t('chatSettings.rights.title')}
+                    </h3>
+                    <p className="pane-sub">{t('chatSettings.rights.hint')}</p>
                   </div>
-                ))}
-                <p className="pane-sub">{t('chatSettings.rightsUnavailable')}</p>
-              </>
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={() => {
+                      setRightsDraft(null);
+                      setRightsNotice(null);
+                      void store.loadChatPermissions(chat.id, true);
+                    }}
+                    disabled={rightsLoading}
+                    aria-busy={rightsLoading}
+                  >
+                    {rightsLoading ? t('common.loading') : t('chatSettings.rights.retry')}
+                  </button>
+                </div>
+
+                {!canManageStructure && baseMatrix ? (
+                  <p className="chat-settings-readonly">{t('chatSettings.rights.readOnly')}</p>
+                ) : null}
+                {rightsNotice ? (
+                  <p className="chat-settings-notice" role="status">
+                    {rightsNotice}
+                  </p>
+                ) : null}
+                {rightsSaveError ? (
+                  <p className="chat-settings-error" role="alert">
+                    {rightsErrorText(rightsSaveError)}
+                  </p>
+                ) : null}
+
+                {rightsLoading && !baseMatrix ? (
+                  <p className="pane-sub" role="status">
+                    {t('chatSettings.rights.loading')}
+                  </p>
+                ) : rightsLoadError && !baseMatrix ? (
+                  <div>
+                    <p className="chat-settings-error" role="alert">
+                      {rightsErrorText(rightsLoadError)}
+                    </p>
+                    <button
+                      type="button"
+                      className="btn btn--sm"
+                      onClick={() => void store.loadChatPermissions(chat.id, true)}
+                    >
+                      {t('chatSettings.rights.retry')}
+                    </button>
+                  </div>
+                ) : baseMatrix ? (
+                  <>
+                    <div className="rights-matrix-wrap">
+                      <table className="rights-matrix">
+                        <caption className="visually-hidden">
+                          {t('chatSettings.rights.title')}
+                        </caption>
+                        <thead>
+                          <tr>
+                            <th scope="col">{t('chatSettings.rights.permission')}</th>
+                            {CHAT_PERMISSION_ROLES.map((role) => (
+                              <th scope="col" key={role}>
+                                {t(ROLE_LABEL[role])}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {CHAT_PERMISSION_KEYS.map((permission) => (
+                            <tr key={permission}>
+                              <th scope="row">
+                                <b>{t(PERMISSION_LABEL[permission])}</b>
+                                <small>{t(PERMISSION_HINT[permission])}</small>
+                              </th>
+                              {CHAT_PERMISSION_ROLES.map((role) => {
+                                const checked =
+                                  role === 'OWNER'
+                                    ? true
+                                    : roleRights(matrix, role)[permission] === true;
+                                return (
+                                  <td key={role}>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={!canEditRights || role === 'OWNER'}
+                                      aria-label={t('chatSettings.rights.checkbox', {
+                                        permission: t(PERMISSION_LABEL[permission]),
+                                        role: t(ROLE_LABEL[role]),
+                                      })}
+                                      onChange={() => handleToggleRight(role, permission)}
+                                    />
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="pane-sub">{t('chatSettings.rights.fixedOwner')}</p>
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="btn btn--accent"
+                        disabled={!canEditRights || rightsSaving || !rightsDirty}
+                        aria-busy={rightsSaving}
+                        onClick={() => void handleSaveRights()}
+                      >
+                        {rightsSaving
+                          ? t('chatSettings.rights.saving')
+                          : t('chatSettings.rights.save')}
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+              </section>
             ) : null}
 
             {activeTab === 'privacy' ? (
@@ -656,27 +1264,127 @@ export function ChatSettingsDialog({
 
             {activeTab === 'danger' ? (
               <div className="danger-cards">
+                {dangerNotice ? (
+                  <p className="chat-settings-notice" role="status">
+                    {dangerNotice}
+                  </p>
+                ) : null}
                 <div className="danger-card">
-                  <h4>{t('chatSettings.archive')}</h4>
+                  <h4>{chat.archived ? t('chatSettings.unarchive') : t('chatSettings.archive')}</h4>
                   <p>{t('chatSettings.archiveHint')}</p>
-                  <button type="button" className="btn btn--danger" disabled>
-                    {t('chatSettings.archive')}
+                  <p>{t('chatSettings.archivePersonal')}</p>
+                  <button
+                    type="button"
+                    className="btn btn--danger"
+                    disabled={archiveBusy || leavePending}
+                    aria-busy={archiveBusy}
+                    onClick={() => void handleArchive()}
+                  >
+                    {archiveBusy
+                      ? t(
+                          archiveState.status === 'unarchiving'
+                            ? 'chatSettings.unarchiveWorking'
+                            : 'chatSettings.archiveWorking',
+                        )
+                      : chat.archived
+                        ? t('chatSettings.unarchive')
+                        : t('chatSettings.archive')}
                   </button>
+                  {archiveError ? (
+                    <p className="chat-settings-error" role="alert">
+                      {archiveErrorText(archiveError)}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="danger-card">
-                  <h4>{isDirect ? t('chatSettings.blockContact') : t('chatSettings.leave')}</h4>
-                  <p>{isDirect ? t('chatSettings.blockHint') : t('chatSettings.leaveHint')}</p>
-                  <button type="button" className="btn btn--danger" disabled>
-                    {isDirect ? t('chatSettings.blockContact') : t('chatSettings.leave')}
-                  </button>
+                  <h4>
+                    {isDirect
+                      ? peerBlocked
+                        ? t('chatSettings.unblock')
+                        : t('chatSettings.blockContact')
+                      : t('chatSettings.leave')}
+                  </h4>
+                  <p>
+                    {isDirect
+                      ? t('chatSettings.blockLead', { name: peerName })
+                      : t('chatSettings.leaveHint')}
+                  </p>
+                  {isDirect ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn--danger"
+                        disabled={!chat.peer_id || blockPending}
+                        title={chat.peer_id ? undefined : t('chatSettings.blockUnavailableDirect')}
+                        aria-busy={blockPending}
+                        onClick={() => {
+                          if (!chat.peer_id) return;
+                          setDangerNotice(null);
+                          if (peerBlocked) void handleUnblock();
+                          else setBlockOpen(true);
+                        }}
+                      >
+                        {blockPending
+                          ? t('chatSettings.blocking')
+                          : peerBlocked
+                            ? t('chatSettings.unblock')
+                            : t('chatSettings.blockContact')}
+                      </button>
+                      {blockActionError ? (
+                        <p className="chat-settings-error" role="alert">
+                          {blockErrorText(blockActionError)}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn--danger"
+                        disabled={leavePending}
+                        aria-busy={leavePending}
+                        onClick={() => {
+                          setDangerNotice(null);
+                          setLeaveOpen(true);
+                        }}
+                      >
+                        {leavePending ? t('chatSettings.leaving') : t('chatSettings.leave')}
+                      </button>
+                      {leaveError ? (
+                        <p className="chat-settings-error" role="alert">
+                          {chatMembershipErrorText(leaveError)}
+                        </p>
+                      ) : null}
+                    </>
+                  )}
                 </div>
-                <div className="danger-card">
-                  <h4>{t('chatSettings.delete')}</h4>
-                  <p>{t('chatSettings.deleteHint')}</p>
-                  <button type="button" className="btn btn--danger" disabled>
-                    {t('chatSettings.delete')}
-                  </button>
-                </div>
+                {!isDirect ? (
+                  <div className="danger-card">
+                    <h4>{t('chatSettings.delete')}</h4>
+                    <p>{t('chatSettings.deleteHint')}</p>
+                    <button
+                      type="button"
+                      className="btn btn--danger"
+                      disabled={!canDelete || deleting || dangerBusy}
+                      aria-busy={deleting}
+                      title={canDelete ? undefined : t('chatSettings.deleteOwnerOnly')}
+                      onClick={() => {
+                        setDangerNotice(null);
+                        setDeleteOpen(true);
+                      }}
+                    >
+                      {deleting ? t('chatSettings.deleteBusy') : t('chatSettings.delete')}
+                    </button>
+                    {!canDelete ? (
+                      <p className="pane-sub">{t('chatSettings.deleteOwnerOnly')}</p>
+                    ) : null}
+                    {deleteError ? (
+                      <p className="chat-settings-error" role="alert">
+                        {archiveErrorText(deleteError)}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 <p className="chat-settings-danger__note" id={dangerNoteId}>
                   {t('chatSettings.dangerNote')}
                 </p>
@@ -691,7 +1399,7 @@ export function ChatSettingsDialog({
               {t('chatSettings.dangerClose')}
             </button>
           ) : activeTab === 'main' ? (
-            canManage ? (
+            canManageName ? (
               <>
                 <button type="button" className="btn" onClick={onClose} disabled={saving}>
                   {t('common.cancel')}
@@ -718,13 +1426,110 @@ export function ChatSettingsDialog({
           )}
         </div>
       </div>
+
+      {blockOpen ? (
+        <AdminConfirmDialog
+          title={t('chatSettings.blockConfirmTitle')}
+          description={
+            <>
+              <p className="admin-confirm__lead">
+                {t('chatSettings.blockLead', { name: peerName })}
+              </p>
+              <ul className="admin-confirm__list">
+                <li>{t('chatSettings.blockNote')}</li>
+              </ul>
+            </>
+          }
+          confirmLabel={t('chatSettings.blockConfirm')}
+          busyLabel={t('chatSettings.blocking')}
+          cancelLabel={t('common.cancel')}
+          destructive
+          busy={blockPending}
+          error={blockActionError ? blockActionErrorInfo(blockActionError) : null}
+          errorDetails={blockActionError}
+          onConfirm={() => void handleBlockConfirm()}
+          onClose={() => {
+            if (blockPending) return;
+            setBlockOpen(false);
+          }}
+        />
+      ) : null}
+
+      {leaveOpen ? (
+        <AdminConfirmDialog
+          title={t('chatSettings.leaveConfirmTitle')}
+          description={
+            <>
+              <p className="admin-confirm__lead">
+                {t('chatSettings.leaveConfirmLead', { name: peerName })}
+              </p>
+              <ul className="admin-confirm__list">
+                <li>{t('chatSettings.leaveConfirmNote')}</li>
+              </ul>
+            </>
+          }
+          confirmLabel={t('chatSettings.leaveConfirm')}
+          busyLabel={t('chatSettings.leaving')}
+          cancelLabel={t('common.cancel')}
+          destructive
+          busy={leavePending}
+          error={
+            leaveError
+              ? {
+                  text: chatMembershipErrorText(leaveError),
+                  tone: 'error',
+                  retryable: leaveError.isNetwork || leaveError.status >= 500,
+                  closeOnError: false,
+                }
+              : null
+          }
+          errorDetails={leaveError}
+          onConfirm={() => void handleLeaveConfirm()}
+          onClose={() => {
+            if (leavePending) return;
+            setLeaveOpen(false);
+          }}
+        />
+      ) : null}
+
+      {deleteOpen ? (
+        <AdminConfirmDialog
+          title={t('chatSettings.deleteConfirmTitle')}
+          description={
+            <>
+              <p className="admin-confirm__lead">
+                {t('chatSettings.deleteConfirmLead', {
+                  name: chat.name?.trim() || t('chatSettings.type.group'),
+                })}
+              </p>
+              <ul className="admin-confirm__list">
+                <li>{t('chatSettings.deleteConfirmNote')}</li>
+              </ul>
+            </>
+          }
+          confirmLabel={t('chatSettings.deleteConfirm')}
+          busyLabel={t('chatSettings.deleteBusy')}
+          cancelLabel={t('common.cancel')}
+          destructive
+          busy={deleting}
+          error={
+            deleteError
+              ? {
+                  text: archiveErrorText(deleteError),
+                  tone: 'error',
+                  retryable: deleteError.isNetwork || deleteError.status >= 500,
+                  closeOnError: false,
+                }
+              : null
+          }
+          errorDetails={deleteError}
+          onConfirm={() => void handleDeleteConfirm()}
+          onClose={() => {
+            if (deleting) return;
+            setDeleteOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
-}
-
-function roleKey(role: string): Parameters<typeof t>[0] {
-  if (role === 'OWNER') return 'details.role.OWNER';
-  if (role === 'ADMIN') return 'details.role.ADMIN';
-  if (role === 'GUEST') return 'details.role.GUEST';
-  return 'details.role.MEMBER';
 }

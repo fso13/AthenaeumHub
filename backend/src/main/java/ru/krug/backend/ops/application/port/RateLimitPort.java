@@ -17,4 +17,23 @@ public interface RateLimitPort {
      *         {@code Retry-After} when any window is exhausted
      */
     void checkKeyClaim(Principal principal, UUID chatId, UUID targetDeviceId);
+
+    /**
+     * P0-1 (#79): invite-token accept guard. A link token is a bearer secret, so a caller
+     * must not be able to enumerate/retry it unboundedly. The window is per user and
+     * independent from message/claim windows.
+     *
+     * @throws ru.krug.backend.shared.error.DomainException 429 {@code RATE_LIMITED} with
+     *         {@code Retry-After} when the window is exhausted
+     */
+    void checkInviteAccept(Principal principal);
+
+    /**
+     * P0-1 (#79): invite-link creation guard, per channel. A link is a bearer secret, so a
+     * chat cannot mint them unboundedly.
+     *
+     * @throws ru.krug.backend.shared.error.DomainException 429 {@code RATE_LIMITED} with
+     *         {@code Retry-After} when the window is exhausted
+     */
+    void checkInviteCreate(Principal principal, UUID chatId);
 }

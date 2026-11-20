@@ -648,3 +648,13 @@ export function SparklesIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+/** #80: pin/unpin a channel message. */
+export function PinIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M9.4 3.8h5.2l-.8 5.4 3 3v1.4H7.2v-1.4l3-3-.8-5.4Z" />
+      <path d="M12 13.6v6.6" />
+    </IconBase>
+  );
+}

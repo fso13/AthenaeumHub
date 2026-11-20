@@ -14,7 +14,8 @@ import { favoriteStickers, filterStickers, recentStickers } from '../stickers/mo
 import type { StickersState } from '../stickers/store';
 import { CloseIcon, StickerIcon } from './Icons';
 
-export type StickerSendBlockedReason = 'offline' | 'rate_limit' | 'e2ee_blocked' | null;
+export type StickerSendBlockedReason =
+  'offline' | 'rate_limit' | 'read_only' | 'e2ee_blocked' | null;
 
 interface StickerPickerProps {
   state: StickersState;
@@ -114,9 +115,11 @@ export function StickerPicker({
       ? t('stickers.offline')
       : sendBlockedReason === 'rate_limit'
         ? t('stickers.rateLimited', { seconds: rateLimitSeconds })
-        : sendBlockedReason === 'e2ee_blocked'
-          ? t('composer.e2eeBlocked')
-          : null;
+        : sendBlockedReason === 'read_only'
+          ? t('composer.readOnly')
+          : sendBlockedReason === 'e2ee_blocked'
+            ? t('composer.e2eeBlocked')
+            : null;
 
   const selectedPackId =
     activeTab.startsWith('pack:') && activeTab.length > 'pack:'.length

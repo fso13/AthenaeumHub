@@ -19,6 +19,7 @@ import {
   SmartphoneIcon,
   SunIcon,
 } from '../Icons';
+import { BlockedUsersCard } from '../BlockedUsersCard';
 import { NotificationPreferencesDialog } from '../NotificationPreferencesDialog';
 import { PageShell } from './PageShell';
 import { roleLabel, securityModeLabel, storageLimit, storageUsed, tariffLabel } from './pageData';
@@ -270,6 +271,7 @@ export function SettingsPage({
                 </div>
               </section>
               {securityCard}
+              <BlockedUsersCard />
             </>
           ) : null}
 

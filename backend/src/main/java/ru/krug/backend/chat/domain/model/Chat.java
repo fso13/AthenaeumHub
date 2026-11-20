@@ -90,6 +90,19 @@ public final class Chat {
     }
 
     /**
+     * Channel member management, invite links and leave are GROUP-only (#79). A DIRECT chat
+     * has a fixed participant pair, so the API answers {@code 422
+     * CHAT_MEMBERSHIP_UNSUPPORTED} instead of silently mutating it.
+     */
+    public void requireChannelMembership() {
+        if (type != Type.GROUP) {
+            throw DomainException.unprocessable(ErrorCode.CHAT_MEMBERSHIP_UNSUPPORTED,
+                    "Channel membership is only available for GROUP chats",
+                    Map.of("chat_type", type.name()));
+        }
+    }
+
+    /**
      * Copy with new editable settings. Validation/normalisation is the caller's job (see
      * {@code ChatSettingsPolicy}); the domain keeps the invariant that a DIRECT chat may
      * have no name while a named chat uses a trimmed 1..120 string.

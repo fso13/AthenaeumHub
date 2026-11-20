@@ -40,7 +40,11 @@ public record KrugProperties(
             @DefaultValue("60") int claimPerUser,
             @DefaultValue("60s") Duration claimUserWindow,
             @DefaultValue("10") int claimPerChat,
-            @DefaultValue("60s") Duration claimChatWindow) {
+            @DefaultValue("60s") Duration claimChatWindow,
+            @DefaultValue("10") int inviteAcceptPerUser,
+            @DefaultValue("60s") Duration inviteAcceptWindow,
+            @DefaultValue("30") int inviteCreatePerChat,
+            @DefaultValue("1h") Duration inviteCreateWindow) {
     }
 
     public record Outbox(Relay relay) {

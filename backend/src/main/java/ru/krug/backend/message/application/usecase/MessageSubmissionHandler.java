@@ -14,7 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import ru.krug.backend.auth.application.port.UserProfilePort;
 import ru.krug.backend.chat.application.port.ChatAccessPort;
+import ru.krug.backend.chat.application.port.ChatPermissionPort;
 import ru.krug.backend.chat.application.port.SeqAllocator;
+import ru.krug.backend.chat.domain.model.ChatPermission;
 import ru.krug.backend.message.application.command.SendMessageCommand;
 import ru.krug.backend.message.application.event.MessageCreatedNotification;
 import ru.krug.backend.message.application.model.AttachmentMediaView;
@@ -68,6 +70,7 @@ public class MessageSubmissionHandler {
 
     private final TenantContext tenantContext;
     private final ChatAccessPort chatAccess;
+    private final ChatPermissionPort chatPermissions;
     private final SeqAllocator seqAllocator;
     private final MessageRepository messageRepository;
     private final MessageEnvelopeRepository envelopeRepository;
@@ -85,6 +88,7 @@ public class MessageSubmissionHandler {
     private final ApplicationEventPublisher events;
 
     public MessageSubmissionHandler(TenantContext tenantContext, ChatAccessPort chatAccess,
+                                    ChatPermissionPort chatPermissions,
                                     SeqAllocator seqAllocator,
                                     MessageRepository messageRepository,
                                     MessageEnvelopeRepository envelopeRepository,
@@ -99,6 +103,7 @@ public class MessageSubmissionHandler {
                                     ApplicationEventPublisher events) {
         this.tenantContext = tenantContext;
         this.chatAccess = chatAccess;
+        this.chatPermissions = chatPermissions;
         this.seqAllocator = seqAllocator;
         this.messageRepository = messageRepository;
         this.envelopeRepository = envelopeRepository;
@@ -138,6 +143,12 @@ public class MessageSubmissionHandler {
             }
             return replayed;
         }
+
+        // P0-2: the configurable rights matrix and the read-only flag gate a real send.
+        // A replay above returns the stored message unchanged, so a channel that became
+        // read-only does not break an idempotent retry.
+        chatPermissions.requireAllowed(principal.workspaceId(), chatId, principal.userId(),
+                ChatPermission.POST_MESSAGES);
 
         // Replays bypass the limiter (they do no work); a real send consumes quota. If the
         // limiter rejects, the whole transaction rolls back, including the reservation.

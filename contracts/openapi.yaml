@@ -20,6 +20,7 @@ tags:
   - name: auth
   - name: devices
   - name: workspaces
+  - name: users
   - name: realtime
   - name: files
   - name: stickers
@@ -76,9 +77,22 @@ paths:
     get:
       tags: [chats]
       operationId: listChats
+      summary: Список чатов воркспейса (основной список или личный архив)
+      description: >
+        По умолчанию возвращает все чаты пользователя, кроме архивированных им лично.
+        `archived=true` возвращает только личный архив вызывающего. Архив user-local:
+        архивирование одним участником не меняет список других. Элемент `ChatSummary`
+        содержит аддитивные `cover_file_id`, `read_only`, `join_policy` и `archived`.
       parameters:
         - $ref: "#/components/parameters/WorkspaceId"
         - $ref: "#/components/parameters/DeviceId"
+        - name: archived
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: >
+            `false`/absent — основной список (без личного архива); `true` — только
+            личный архив вызывающего.
       responses:
         "200":
           description: Чаты воркспейса
@@ -1692,6 +1706,311 @@ paths:
         "422":
           $ref: "#/components/responses/Unprocessable"
 
+    delete:
+      tags: [chat]
+      operationId: deleteChat
+      summary: Мягко удалить GROUP-канал (OWNER)
+      description: >
+        Только ACTIVE OWNER канала. Мягкое удаление: `deleted_at = now()`, строка,
+        участники, сообщения и файлы сохраняются; канал исчезает из всех списков и
+        access-путей, повторный DELETE — `404` (существование уже скрыто). Ссылка на
+        обложку очищается в том же запросе; сам attachment остаётся на обычном
+        retention/GC файлового flow. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`; выход
+        из канала — отдельный `POST /chats/{chatId}/leave`. Аудит `chat.deleted` без
+        контента.
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '204':
+          description: Канал мягко удалён
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/cover:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+    post:
+      tags: [chat]
+      operationId: setChatCover
+      summary: Обложка канала из существующего вложения
+      description: >
+        OWNER/ADMIN канала. `file_id` — существующее managed-вложение этого же чата:
+        изображение (`image/*` или `media.kind=IMAGE`) в состоянии READY/BOUND и
+        CLEAN/SKIPPED. Нового upload-эндпоинта нет: файл загружается обычным flow и
+        передаётся ссылкой. Неизвестное/чужое/из другого чата вложение — `404` без
+        раскрытия существования; не изображение — `422 CHAT_COVER_INVALID`;
+        не просканировано — `409 ATTACHMENT_NOT_READY`; карантин — `423
+        ATTACHMENT_QUARANTINED`. E2EE-чат — `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`,
+        DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Повтор той же обложки идемпотентен
+        (`200`) и не пишет новый аудит. Аудит `chat.cover.updated` без file id.
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCoverRequest'
+      responses:
+        '200':
+          description: Обложка установлена; возвращается полный Chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Chat'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '423':
+          description: Вложение в карантине (ATTACHMENT_QUARANTINED)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [chat]
+      operationId: deleteChatCover
+      summary: Удалить обложку канала
+      description: >
+        OWNER/ADMIN канала; идемпотентно (`204`, в том числе если обложки не было).
+        Сам attachment не удаляется: он остаётся обычным вложением файлового flow.
+        Аудит `chat.cover.updated` пишется только при фактическом удалении.
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '204':
+          description: Обложка удалена (или уже отсутствовала)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/permissions:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - $ref: '#/components/parameters/DeviceId'
+    get:
+      tags: [chat]
+      operationId: getChatPermissions
+      summary: Матрица прав канала по ролям
+      description: >
+        Любой ACTIVE-участник GROUP-канала видит эффективную матрицу: `post_messages`,
+        `invite_members`, `create_polls`, `start_calls`, `pin_messages`, `change_info`
+        для ролей OWNER/ADMIN/MODERATOR/MEMBER/GUEST. OWNER всегда `true`. Отсутствующая
+        строка заменяется встроенным дефолтом, поэтому ответ всегда полный. DIRECT —
+        `422 CHAT_MEMBERSHIP_UNSUPPORTED`, не-участник — `404`.
+      responses:
+        '200':
+          description: Эффективная матрица прав
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatPermissions'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    patch:
+      tags: [chat]
+      operationId: updateChatPermissions
+      summary: Изменить матрицу прав канала
+      description: >
+        OWNER/ADMIN канала. Partial-патч по ролям: отсутствующая роль/право не меняется.
+        `owner` не принимается (`422 VALIDATION_FAILED`, OWNER всегда имеет все права).
+        Пустой объект/роль без прав — `422 VALIDATION_FAILED`. Изменения применяются
+        атомарно с последующими проверками (сообщения, инвайты, опросы, звонки, пины,
+        change_info). Аудит `chat.permissions.updated` содержит только имена ролей и прав.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatPermissionsUpdate'
+      responses:
+        '200':
+          description: Обновлённая эффективная матрица
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatPermissions'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/archive:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      tags: [chat]
+      operationId: archiveChat
+      summary: Архивировать чат для себя (user-local)
+      description: >
+        Любой ACTIVE-участник, включая DIRECT. Личный архив: чат скрывается только из
+        основного списка вызывающего (`GET /workspaces/{id}/chats`), другие участники
+        не затронуты. Идемпотентно (`204`). Аудит не пишется: это личное UI-состояние,
+        а не действие над каналом. Не-участник — `404`.
+      responses:
+        '204':
+          description: Чат в личном архиве (или уже там)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /chats/{chatId}/unarchive:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      tags: [chat]
+      operationId: unarchiveChat
+      summary: Убрать чат из личного архива
+      description: >
+        Любой ACTIVE-участник. Идемпотентно (`204`, в том числе если чат не был в
+        архиве). Не-участник — `404`.
+      responses:
+        '204':
+          description: Чат возвращён в основной список (или уже был там)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /chats/{chatId}/pins:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - $ref: '#/components/parameters/DeviceId'
+    get:
+      tags: [chat]
+      operationId: listChatPins
+      summary: Закреплённые сообщения канала
+      description: >
+        ACTIVE-участник GROUP-канала. Только метаданные (`chat_id`, `message_id`,
+        `pinned_by`, `pinned_at`), без текста и без E2EE-контента; порядок — новые пины
+        первыми. Пины удалённых сообщений не возвращаются. DIRECT — `422
+        CHAT_MEMBERSHIP_UNSUPPORTED`.
+      responses:
+        '200':
+          description: Список закреплений
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatPinList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    post:
+      tags: [chat]
+      operationId: pinChatMessage
+      summary: Закрепить сообщение канала
+      description: >
+        Право `pin_messages` (по умолчанию OWNER/ADMIN/MODERATOR). Сообщение должно
+        существовать в этом чате и не быть удалённым, иначе `404`. Уникальность
+        `(chat_id, message_id)`: повтор — `200` с текущим пином и без нового аудита,
+        первый успешный вызов — `201`. Лимит 50 пинов — `409 CHAT_PIN_LIMIT`.
+        E2EE-чат — `422 E2EE_METADATA_FORBIDDEN` (метаданные таймлайна не хранятся).
+        DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: только `message_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatPinRequest'
+      responses:
+        '201':
+          description: Сообщение закреплено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatPin'
+        '200':
+          description: Сообщение уже закреплено (идемпотентный повтор)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatPin'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/pins/{messageId}:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - name: messageId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: '#/components/parameters/DeviceId'
+    delete:
+      tags: [chat]
+      operationId: unpinChatMessage
+      summary: Открепить сообщение канала
+      description: >
+        Право `pin_messages`. Идемпотентно: `204`, в том числе если пин уже снят
+        (включая случай удалённого сообщения — метаданные можно очистить). Аудит
+        `chat.pin.removed` только при фактическом удалении; только `message_id`.
+        DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`.
+      responses:
+        '204':
+          description: Пин снят (или уже отсутствовал)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
   /chats/{chatId}/plugins:
     get:
       tags: [plugins]
@@ -1804,11 +2123,13 @@ paths:
       operationId: createPoll
       summary: Создать опрос (плагин `polls`)
       description: >
-        Создавать опрос может любой ACTIVE-участник чата при включённом плагине `polls`.
+        Создавать опрос может ACTIVE-участник чата при включённом плагине `polls` и
+        праве `create_polls` (по умолчанию OWNER/ADMIN/MODERATOR/MEMBER; GUEST — нет).
         Вопрос — plain text 1..500 символов без HTML/control-символов; 2..10 уникальных
         вариантов по 1..200 символов. Создатель фиксируется сервером и только он может
-        закрыть опрос. В E2EE-чате плагин недоступен. Audit пишет только id опроса и
-        действие — без вопроса и текста вариантов.
+        закрыть опрос. В read-only канале создание опроса — `403 CHAT_READ_ONLY`; без
+        права — `403 CHAT_PERMISSION_DENIED`. В E2EE-чате плагин недоступен. Audit пишет
+        только id опроса и действие — без вопроса и текста вариантов.
       requestBody:
         required: true
         content:
@@ -2173,6 +2494,11 @@ paths:
         чате, сам не быть ответом (максимальная глубина 1) и не быть удалённым; тот же
         `Idempotency-Key`. В E2EE-чате треды не поддерживаются → `422
         THREADS_E2EE_UNSUPPORTED`. Ответ на ответ → `422 THREAD_NESTING_UNSUPPORTED`.
+        P0-2: канал с `read_only=true` отклоняет отправку не-OWNER/ADMIN ролью (`403
+        CHAT_READ_ONLY`); право `post_messages` из матрицы канала проверяется отдельно
+        (`403 CHAT_PERMISSION_DENIED`). Идемпотентный replay сохранённого
+        `Idempotency-Key` возвращается до этих проверок и не ломается включением
+        read-only.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -2401,14 +2727,20 @@ paths:
   /chats/{chatId}/members:
     get:
       tags: [chat]
-      summary: List active chat member ids
-      description: Active membership only; no display names or profile data. Used by group-call participant selection.
+      summary: List active chat members
+      description: >
+        Только ACTIVE-участники канала. `members[]` содержит `user_id`, `display_name`,
+        `role`, `status`, `joined_at`; `user_ids` сохранён как аддитивная плоская проекция
+        для выбора участников группового звонка. Email, устройства и ключи не
+        возвращаются. Стабильный порядок `display_name ASC, user_id ASC`. Вызывающий
+        должен быть ACTIVE-участником чата, иначе `404` без раскрытия существования чата.
+        DIRECT возвращает двух участников.
       operationId: listChatMembers
       parameters:
         - $ref: '#/components/parameters/ChatId'
       responses:
         '200':
-          description: Active member ids
+          description: ACTIVE-участники чата (детали и плоский список id)
           content:
             application/json:
               schema:
@@ -2419,6 +2751,343 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+    post:
+      tags: [chat]
+      operationId: addChatMember
+      summary: Добавить ACTIVE-участника воркспейса в GROUP-канал
+      description: >
+        OWNER/ADMIN канала либо роль с правом `invite_members` (по умолчанию также
+        MODERATOR); добавляемый — ACTIVE-участник того же воркспейса (иначе `404
+        USER_NOT_FOUND`). Разрешено для PUBLIC и PRIVATE GROUP-каналов; DIRECT —
+        `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Роль по умолчанию `MEMBER`; OWNER может
+        назначать любую роль, ADMIN — только `MODERATOR`/`MEMBER`/`GUEST`, а роль ниже
+        ADMIN с `invite_members` — только `MEMBER`/`GUEST` (`403 ROLE_CHANGE_FORBIDDEN`).
+        Идемпотентно:
+        повтор для уже ACTIVE-участника не меняет его роль и возвращает `200` с текущей
+        ролью; первый успешный вызов — `201`. Смена роли существующего участника — только
+        через PATCH. Лимиты чатов (user/workspace) не расходуются. Аудит содержит только
+        `user_id` и `role`, без email и display name.
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddChatMemberRequest'
+      responses:
+        '201':
+          description: Участник добавлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMember'
+        '200':
+          description: Участник уже ACTIVE — идемпотентный повтор, роль не меняется
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/DeviceId'
+    patch:
+      tags: [chat]
+      operationId: changeChatMemberRole
+      summary: Изменить роль участника канала
+      description: >
+        OWNER/ADMIN канала. Нельзя менять собственную роль (`409 SELF_ACTION_FORBIDDEN`),
+        нельзя снять последнего ACTIVE OWNER (`409 LAST_OWNER`). ADMIN не может менять
+        OWNER/ADMIN и назначать `OWNER`/`ADMIN` (`403 ROLE_CHANGE_FORBIDDEN`); OWNER может
+        назначать любую роль. Неизвестный/не-Active участник — `404 MEMBER_NOT_FOUND`.
+        Повтор той же роли идемпотентен (`200`) и не пишет аудит. DIRECT —
+        `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: `user_id`, `previous_role`, `role`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeChatMemberRoleRequest'
+      responses:
+        '200':
+          description: Роль изменена (или уже была такой)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMember'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    delete:
+      tags: [chat]
+      operationId: removeChatMember
+      summary: Удалить участника канала (soft) или выйти самому
+      description: >
+        OWNER/ADMIN канала либо self (leave). Мягкое удаление: `status = 'REMOVED'`, строка
+        и `joined_at` сохраняются, доступ пропадает при следующем запросе. Нельзя удалить
+        последнего ACTIVE OWNER (`409 LAST_OWNER`); ADMIN не может удалять OWNER/ADMIN
+        (`403 ROLE_CHANGE_FORBIDDEN`). Self-удаление идемпотентно (`204` даже если уже
+        REMOVED); удаление другого не-Active участника — `404 MEMBER_NOT_FOUND`. DIRECT —
+        `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: `user_id` и `role`.
+      responses:
+        '204':
+          description: Участник удалён (soft) или уже отсутствует
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/leave:
+    post:
+      tags: [chat]
+      operationId: leaveChat
+      summary: Выйти из GROUP-канала (alias self-removal)
+      description: >
+        Идемпотентный alias `DELETE /chats/{chatId}/members/{me}`: `204`, в том числе при
+        повторном вызове. Последний ACTIVE OWNER выйти не может — `409 LAST_OWNER`.
+        DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: `user_id`, `role`.
+      parameters:
+        - $ref: '#/components/parameters/ChatId'
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '204':
+          description: Вы вышли из канала (или уже не участник)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/invites:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+    get:
+      tags: [chat]
+      operationId: listChatInvites
+      summary: Список invite-ссылок канала
+      description: >
+        OWNER/ADMIN канала. Возвращает только метаданные (`id`, `role`, `status`,
+        `used_count`, `max_uses`, `expires_at`, `created_at`, `created_by`); сам токен и его
+        hash никогда не возвращаются повторно. `status` вычисляется на сервере:
+        `ACTIVE`/`EXPIRED`/`EXHAUSTED`/`REVOKED`. DIRECT — `422
+        CHAT_MEMBERSHIP_UNSUPPORTED`.
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Invite-ссылки канала
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatInviteList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    post:
+      tags: [chat]
+      operationId: createChatInvite
+      summary: Создать invite-ссылку канала (токен возвращается один раз)
+      description: >
+        OWNER/ADMIN канала либо роль с правом `invite_members` (по умолчанию также
+        MODERATOR). Разрешено для PUBLIC и PRIVATE GROUP-каналов. Роль приглашения
+        по умолчанию `MEMBER`; `OWNER` приглашением не назначается (владелец назначается
+        через PATCH/add). ADMIN может создать приглашение только на
+        `MODERATOR`/`MEMBER`/`GUEST`, а роль ниже ADMIN — только на `MEMBER`/`GUEST`
+        (`403 ROLE_CHANGE_FORBIDDEN`). В БД хранится только
+        SHA-256 hash токена; сырой токен возвращается ровно один раз в `token` и больше не
+        восстановим. `expires_in_seconds` по умолчанию 7 дней (300…2592000), `max_uses`
+        опционален (1…1000; отсутствие — без ограничения). Аудит: `invite_id`, `role`,
+        `max_uses`, `expires_at` — без токена/hash. Повторные POST создают новые ссылки
+        (Idempotency-Key не применяется, иначе пришлось бы хранить сырой токен).
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatInviteCreateRequest'
+      responses:
+        '201':
+          description: Invite создан; `token` возвращается один раз
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatInviteCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /chats/{chatId}/invites/{inviteId}:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - $ref: '#/components/parameters/InviteId'
+      - $ref: '#/components/parameters/DeviceId'
+    delete:
+      tags: [chat]
+      operationId: revokeChatInvite
+      summary: Отозвать invite-ссылку канала
+      description: >
+        OWNER/ADMIN канала. `revoked_at = now()`: ссылка перестаёт работать (`410
+        INVITE_REVOKED`). Идемпотентно: повторный вызов — `204` без нового аудита.
+        Неизвестный invite этого канала — `404 INVITE_NOT_FOUND`.
+      responses:
+        '204':
+          description: Invite отозван (или уже был отозван)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+
+  /invites/{token}/accept:
+    post:
+      tags: [chat]
+      operationId: acceptChatInvite
+      summary: Принять invite-ссылку канала
+      description: >
+        Вызывающий должен быть ACTIVE-участником воркспейса канала (иначе `403`), иначе
+        `404 INVITE_NOT_FOUND` без раскрытия существования. Присоединение — с ролью
+        приглашения. Идемпотентно: если вызывающий уже ACTIVE-участник, возвращается `200`
+        с `already_member=true`, `used_count` не увеличивается и аудит не пишется. Истёкшая
+        ссылка — `410 INVITE_EXPIRED`, отозванная — `410 INVITE_REVOKED`, исчерпавшая
+        `max_uses` — `410 INVITE_EXHAUSTED`. Rate limit per user (`429 RATE_LIMITED` с
+        `Retry-After`). Аудит только при фактическом вступлении: `invite_id`, `user_id`,
+        `role`.
+      parameters:
+        - $ref: '#/components/parameters/InviteToken'
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Вступление выполнено или уже было выполнено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteAcceptResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Gone'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /users/{userId}/block:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      tags: [users]
+      operationId: blockUser
+      summary: Заблокировать пользователя
+      description: >
+        Только для себя: блокирует вызывающий. Идемпотентно (`204`, повтор не создаёт
+        новую запись и аудит). Нельзя заблокировать себя (`400 VALIDATION_FAILED`) или
+        неизвестного/неактивного пользователя (`404 USER_NOT_FOUND`). В ответе нет email
+        и display name; аудит — `user_id` цели.
+      responses:
+        '204':
+          description: Пользователь заблокирован (или уже был)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [users]
+      operationId: unblockUser
+      summary: Разблокировать пользователя
+      description: >
+        Идемпотентно (`204`, в том числе если блокировки не было). Неизвестный пользователь
+        — `404 USER_NOT_FOUND`; self — `400 VALIDATION_FAILED`.
+      responses:
+        '204':
+          description: Блокировка снята (или её не было)
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /me/blocked:
+    get:
+      tags: [users]
+      operationId: listBlockedUsers
+      summary: Список заблокированных пользователей
+      description: >
+        Только собственные блокировки вызывающего. Поля — `user_id` и `blocked_at`; email,
+        display name, устройства и ключи не возвращаются. Стабильный порядок
+        `blocked_at DESC, user_id ASC`.
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Заблокированные пользователи
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlockedUserList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2442,6 +3111,25 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Идентификатор пользователя (участника воркспейса/канала).
+      schema: { type: string, format: uuid }
+    InviteId:
+      name: inviteId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    InviteToken:
+      name: token
+      in: path
+      required: true
+      description: >
+        Opaque invite-токен (base64url, 32 случайных байта). Хранится только его SHA-256
+        hash; сервер не логирует и не возвращает токен повторно.
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{20,128}$" }
     MessageId:
       name: messageId
       in: path
@@ -2507,9 +3195,48 @@ components:
       schema: { type: string, pattern: "^[a-f0-9]{64}$" }
 
   schemas:
+    ChatMember:
+      type: object
+      required: [user_id, display_name, role, status, joined_at]
+      description: >
+        ACTIVE-участник канала. `display_name` берётся из профиля пользователя;
+        email, устройства и ключи не возвращаются.
+      properties:
+        user_id: { type: string, format: uuid }
+        display_name: { type: string, minLength: 1, maxLength: 80 }
+        role:
+          type: string
+          enum: [OWNER, ADMIN, MODERATOR, MEMBER, GUEST]
+        status:
+          type: string
+          enum: [INVITED, ACTIVE, REMOVED]
+        joined_at: { type: string, format: date-time }
+    AddChatMemberRequest:
+      type: object
+      required: [user_id]
+      description: >
+        `role` по умолчанию `MEMBER`. `OWNER` назначает только OWNER канала; ADMIN может
+        назначать лишь `MODERATOR`/`MEMBER`/`GUEST`. Для уже ACTIVE-участника роль не
+        меняется (используйте PATCH).
+      properties:
+        user_id: { type: string, format: uuid }
+        role:
+          type: string
+          enum: [OWNER, ADMIN, MODERATOR, MEMBER, GUEST]
+          default: MEMBER
+    ChangeChatMemberRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [OWNER, ADMIN, MODERATOR, MEMBER, GUEST]
     ChatMemberIds:
       type: object
-      required: [user_ids]
+      required: [user_ids, members]
+      description: >
+        ACTIVE-участники канала. `members` — детали (display_name/role/status/joined_at),
+        `user_ids` — совместимая плоская проекция для выбора участников группового звонка.
       properties:
         user_ids:
           type: array
@@ -2518,6 +3245,105 @@ components:
             format: uuid
           minItems: 1
           maxItems: 1000
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMember'
+          minItems: 1
+          maxItems: 1000
+    ChatInvite:
+      type: object
+      required: [id, role, status, used_count, max_uses, expires_at, created_at]
+      description: >
+        Метаданные invite-ссылки канала. Токен и его hash никогда не возвращаются.
+        `status` вычисляется сервером: `REVOKED` приоритетнее `EXPIRED`, затем
+        `EXHAUSTED`, иначе `ACTIVE`.
+      properties:
+        id: { type: string, format: uuid }
+        role:
+          type: string
+          enum: [ADMIN, MODERATOR, MEMBER, GUEST]
+        status:
+          type: string
+          enum: [ACTIVE, EXPIRED, EXHAUSTED, REVOKED]
+        used_count: { type: integer, minimum: 0 }
+        max_uses:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 1000
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        created_by: { type: string, format: uuid }
+    ChatInviteCreated:
+      allOf:
+        - $ref: '#/components/schemas/ChatInvite'
+        - type: object
+          required: [token]
+          description: >
+            `token` возвращается ровно один раз при создании; повторно получить его
+            невозможно (в БД хранится только SHA-256 hash).
+          properties:
+            token:
+              type: string
+              pattern: "^[A-Za-z0-9_-]{20,128}$"
+    ChatInviteCreateRequest:
+      type: object
+      description: >
+        Все поля опциональны. `role` по умолчанию `MEMBER` (OWNER приглашением не
+        назначается). `expires_in_seconds` по умолчанию 604800 (7 дней), допустимо
+        300…2592000. `max_uses` отсутствует — без ограничения по числу вступлений.
+      properties:
+        role:
+          type: string
+          enum: [ADMIN, MODERATOR, MEMBER, GUEST]
+          default: MEMBER
+        max_uses:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 1000
+        expires_in_seconds:
+          type: integer
+          minimum: 300
+          maximum: 2592000
+          default: 604800
+    ChatInviteList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatInvite'
+    InviteAcceptResult:
+      type: object
+      required: [invite_id, workspace_id, chat_id, role, already_member]
+      description: >
+        Результат вступления. `already_member=true` означает идемпотентный повтор: роль —
+        текущая роль участника, `used_count` не менялся.
+      properties:
+        invite_id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        chat_id: { type: string, format: uuid }
+        role:
+          type: string
+          enum: [OWNER, ADMIN, MODERATOR, MEMBER, GUEST]
+        already_member: { type: boolean }
+    BlockedUser:
+      type: object
+      required: [user_id, blocked_at]
+      description: >
+        Собственная блокировка вызывающего. Email и display name не возвращаются.
+      properties:
+        user_id: { type: string, format: uuid }
+        blocked_at: { type: string, format: date-time }
+    BlockedUserList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlockedUser'
     Error:
       type: object
       required: [code, message, request_id]
@@ -2563,6 +3389,12 @@ components:
         assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a
         managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or
         the bounded provider call failed (Retry-After is set).
+        P0-2 (#80, channel settings): CHAT_READ_ONLY (403) — write in a read-only
+        channel; CHAT_PERMISSION_DENIED (403) — the role lacks a matrix right;
+        CHAT_COVER_INVALID (422) — the referenced attachment is not an image;
+        CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT (409)
+        — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description/cover in
+        an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE chat.
       properties:
         code: { type: string }
         message: { type: string }
@@ -3867,6 +4699,22 @@ components:
         last_message_at: { type: [string, "null"], format: date-time }
         unread_count: { type: integer, minimum: 0 }
         last_seq: { type: integer, format: int64, minimum: 0 }
+        cover_file_id:
+          type: [string, "null"]
+          format: uuid
+          description: P0-2 GROUP cover attachment id; null for DIRECT and when unset.
+        read_only:
+          type: boolean
+          description: P0-2 read-only flag (GROUP; false for DIRECT).
+        join_policy:
+          type: [string, "null"]
+          enum: [OPEN, INVITE_ONLY, CLOSED, null]
+          description: P0-2 GROUP join policy; null for DIRECT.
+        archived:
+          type: boolean
+          description: >
+            P0-2 caller-local archive flag. The main list excludes archived chats;
+            `?archived=true` returns only them.
 
     ChatList:
       type: object
@@ -4400,18 +5248,123 @@ components:
             not be listed and is added automatically. Must be absent, null or empty for
             PUBLIC and DIRECT. No private-channel invite links exist yet.
 
+    ChatCoverRequest:
+      type: object
+      required: [file_id]
+      additionalProperties: false
+      description: >
+        `POST /chats/{chatId}/cover`. There is no new upload endpoint: the id refers to an
+        existing managed attachment of the same chat.
+      properties:
+        file_id: { type: string, format: uuid }
+
+    ChatRolePermissions:
+      type: object
+      additionalProperties: false
+      description: Effective rights of one channel role (P0-2). Always complete.
+      properties:
+        post_messages: { type: boolean }
+        invite_members: { type: boolean }
+        create_polls: { type: boolean }
+        start_calls: { type: boolean }
+        pin_messages: { type: boolean }
+        change_info: { type: boolean }
+
+    ChatPermissions:
+      type: object
+      additionalProperties: false
+      description: >
+        Effective channel rights matrix by role (P0-2). `owner` is always all-true and
+        cannot be changed; the other roles are configurable per chat.
+      properties:
+        owner: { $ref: '#/components/schemas/ChatRolePermissions' }
+        admin: { $ref: '#/components/schemas/ChatRolePermissions' }
+        moderator: { $ref: '#/components/schemas/ChatRolePermissions' }
+        member: { $ref: '#/components/schemas/ChatRolePermissions' }
+        guest: { $ref: '#/components/schemas/ChatRolePermissions' }
+
+    ChatRolePermissionsUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        Partial rights of one role. An absent permission is left unchanged; `null` is
+        treated as "not provided".
+      properties:
+        post_messages: { type: [boolean, "null"] }
+        invite_members: { type: [boolean, "null"] }
+        create_polls: { type: [boolean, "null"] }
+        start_calls: { type: [boolean, "null"] }
+        pin_messages: { type: [boolean, "null"] }
+        change_info: { type: [boolean, "null"] }
+
+    ChatPermissionsUpdate:
+      type: object
+      additionalProperties: false
+      description: >
+        `PATCH /chats/{chatId}/permissions` and the `rights` field of
+        `PATCH /chats/{chatId}`. An explicit `owner` row is rejected with `422
+        VALIDATION_FAILED` (`owner_permissions_fixed`): OWNER always has every right. An
+        empty body or a role with no permission values is also `422 VALIDATION_FAILED`.
+      properties:
+        owner:
+          oneOf:
+            - $ref: '#/components/schemas/ChatRolePermissionsUpdate'
+            - type: "null"
+          description: >
+            Documented only to be rejected: OWNER rights are fixed and this row returns
+            `422 VALIDATION_FAILED` with `details.reason=owner_permissions_fixed`.
+        admin: { $ref: '#/components/schemas/ChatRolePermissionsUpdate' }
+        moderator: { $ref: '#/components/schemas/ChatRolePermissionsUpdate' }
+        member: { $ref: '#/components/schemas/ChatRolePermissionsUpdate' }
+        guest: { $ref: '#/components/schemas/ChatRolePermissionsUpdate' }
+
+    ChatPinRequest:
+      type: object
+      required: [message_id]
+      additionalProperties: false
+      properties:
+        message_id: { type: string, format: uuid }
+
+    ChatPin:
+      type: object
+      required: [chat_id, message_id, pinned_by, pinned_at]
+      additionalProperties: false
+      description: Pinned-message metadata only; never contains message content.
+      properties:
+        chat_id: { type: string, format: uuid }
+        message_id: { type: string, format: uuid }
+        pinned_by: { type: string, format: uuid }
+        pinned_at: { type: string, format: date-time }
+
+    ChatPinList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatPin'
+
     ChatUpdateRequest:
       type: object
       additionalProperties: false
       description: >
-        `PATCH /chats/{chatId}` (D1-BE3). Both fields are optional, but at least one must
-        be present and non-null. `name` is trimmed and internal whitespace is collapsed;
-        it must be 1..120 characters. `description` is trimmed, must be at most 500
-        characters, and `""` clears it to `null`. Names/descriptions are plain text:
+        `PATCH /chats/{chatId}` (D1-BE3 + P0-2). Every field is optional, but at least one
+        must be present and non-null. `name` is trimmed and internal whitespace is
+        collapsed; it must be 1..120 characters. `description` is trimmed, must be at most
+        500 characters, and `""` clears it to `null`. Names/descriptions are plain text:
         `<`, `>` and control characters (except `\n`/`\t` in description) are rejected.
-        In an E2EE chat `description` is rejected with
-        `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`; `name` is allowed. `security_mode` is
-        immutable and is never accepted in the body.
+        `name`/`description` require an ACTIVE workspace OWNER/ADMIN (D1-BE3) or a GROUP
+        participant whose role has `change_info`. `cover_file_id`, `read_only`,
+        `visibility`, `join_policy` and `rights` are structural channel settings: ACTIVE
+        chat OWNER/ADMIN only and GROUP only (DIRECT —
+        `422 CHAT_MEMBERSHIP_UNSUPPORTED`). `visibility=PUBLIC` requires/forces
+        `join_policy=OPEN`, otherwise `422 VALIDATION_FAILED`. In an E2EE chat
+        `description` and a cover are rejected with
+        `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`; name, read-only, visibility, join policy and
+        the rights matrix are policy metadata and stay allowed. `security_mode` is
+        immutable and is never accepted in the body. A successful request writes
+        `chat.updated` with changed field names only (no values, no rights values).
       properties:
         name:
           type: [string, "null"]
@@ -4424,6 +5377,39 @@ components:
           description: >
             New description; optional. Null is treated as "not provided"; an empty string
             after trim clears the description.
+        cover_file_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            P0-2 GROUP cover: an existing CLEAN image attachment of this chat. Same
+            validation as `POST /chats/{chatId}/cover`; a cover cannot be cleared through
+            this field (use `DELETE /cover`).
+        read_only:
+          type: [boolean, "null"]
+          description: >
+            P0-2 read-only channel: `post_messages`/`create_polls` are denied to every
+            role except chat OWNER/ADMIN (`403 CHAT_READ_ONLY`). GROUP only.
+        visibility:
+          type: [string, "null"]
+          enum: [PUBLIC, PRIVATE, null]
+          description: >
+            GROUP visibility. Switching to PUBLIC adds every ACTIVE workspace member and
+            requires/forces `join_policy=OPEN`; switching to PRIVATE keeps current members.
+        join_policy:
+          type: [string, "null"]
+          enum: [OPEN, INVITE_ONLY, CLOSED, null]
+          description: >
+            GROUP join policy. `OPEN` — workspace-wide auto-join (only with PUBLIC);
+            `INVITE_ONLY` — invite link or OWNER/ADMIN add; `CLOSED` — OWNER/ADMIN add
+            only, an invite accept answers `403 CHAT_JOIN_CLOSED`.
+        rights:
+          oneOf:
+            - $ref: '#/components/schemas/ChatPermissionsUpdate'
+            - type: "null"
+          description: >
+            Same partial per-role rights patch as `PATCH /chats/{chatId}/permissions`;
+            OWNER is rejected. Rights are applied atomically with the other fields and
+            audited as `chat.updated` + permission names.
 
     Chat:
       type: object
@@ -4451,6 +5437,22 @@ components:
         last_seq: { type: integer, format: int64, minimum: 0 }
         unread_count: { type: integer, minimum: 0 }
         created_at: { type: string, format: date-time }
+        cover_file_id:
+          type: [string, "null"]
+          format: uuid
+          description: P0-2 GROUP cover attachment id; null for DIRECT and when unset.
+        read_only:
+          type: boolean
+          description: P0-2 read-only flag (GROUP; false for DIRECT).
+        join_policy:
+          type: [string, "null"]
+          enum: [OPEN, INVITE_ONLY, CLOSED, null]
+          description: P0-2 GROUP join policy; null for DIRECT.
+        archived:
+          type: boolean
+          description: >
+            P0-2 caller-local archive state (never another participant's). The legacy
+            D1-BE3 `created_at` and all previous fields are unchanged.
 
     ReadRequest:
       type: object

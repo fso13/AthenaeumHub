@@ -14,9 +14,15 @@ import type {
   ApiErrorBody,
   ApiMessage,
   AuthLoginRequest,
+  BlockedUser,
   AuthRegisterRequest,
   AuthSession,
   Chat,
+  ChatInvite,
+  ChatMember,
+  ChatMembersResponse,
+  ChatPermissions,
+  ChatPin,
   ChatPluginState,
   CreateWorkspaceRequest,
   DeviceRegistration,
@@ -40,6 +46,7 @@ import type {
   UploadSession,
   WorkspaceMember,
   WorkspaceMemberPage,
+  InviteAcceptResult,
   WorkspaceRole,
   WorkspaceSummary,
 } from '../api/types';
@@ -113,6 +120,134 @@ function requireAuth(request: Request): Response | null {
     return errorResponse(401, 'UNAUTHENTICATED', 'Device id is missing');
   }
   return null;
+}
+
+/* ------------------------------------------------------------------------- */
+/* #79: channel members, invites and blocks                                  */
+/* ------------------------------------------------------------------------- */
+
+function activeChatMembers(db: MockDb, chatId: string): ChatMember[] {
+  return (db.chatMembers[chatId] ?? []).filter((member) => member.status === 'ACTIVE');
+}
+
+function chatActorMember(db: MockDb, chatId: string): ChatMember | null {
+  return activeChatMembers(db, chatId).find((member) => member.user_id === db.me.user.id) ?? null;
+}
+
+function chatOwnerCount(db: MockDb, chatId: string): number {
+  return activeChatMembers(db, chatId).filter((member) => member.role === 'OWNER').length;
+}
+
+function isManagerRole(role: ChatMember['role'] | undefined): boolean {
+  return role === 'OWNER' || role === 'ADMIN';
+}
+
+function chatMemberStatusOf(chat: ChatRecord | undefined): 'GROUP' | 'DIRECT' | null {
+  if (!chat) return null;
+  return chat.summary.type === 'DIRECT' ? 'DIRECT' : 'GROUP';
+}
+
+function actorCanManage(actor: ChatMember | null): boolean {
+  return actor !== null && isManagerRole(actor.role);
+}
+
+/* ------------------------------------------------------------------------- */
+/* #80: channel settings, rights matrix, pins and archive                    */
+/* ------------------------------------------------------------------------- */
+
+/** Built-in P0-2 matrix (mirrors `ChatPermissionPolicy`). */
+function defaultPermissionMatrix(): ChatPermissions {
+  const all = {
+    post_messages: true,
+    invite_members: true,
+    create_polls: true,
+    start_calls: true,
+    pin_messages: true,
+    change_info: true,
+  };
+  return {
+    owner: { ...all },
+    admin: { ...all },
+    moderator: {
+      post_messages: true,
+      invite_members: true,
+      create_polls: true,
+      start_calls: true,
+      pin_messages: true,
+      change_info: false,
+    },
+    member: {
+      post_messages: true,
+      invite_members: false,
+      create_polls: true,
+      start_calls: true,
+      pin_messages: false,
+      change_info: false,
+    },
+    guest: {
+      post_messages: true,
+      invite_members: false,
+      create_polls: false,
+      start_calls: false,
+      pin_messages: false,
+      change_info: false,
+    },
+  };
+}
+
+function matrixFor(db: MockDb, chatId: string): ChatPermissions {
+  return db.chatPermissions[chatId] ?? defaultPermissionMatrix();
+}
+
+const PERMISSION_KEYS = [
+  'post_messages',
+  'invite_members',
+  'create_polls',
+  'start_calls',
+  'pin_messages',
+  'change_info',
+] as const;
+
+const EDITABLE_ROLES = ['admin', 'moderator', 'member', 'guest'] as const;
+
+function roleAllowed(
+  matrix: ChatPermissions,
+  role: ChatMember['role'],
+  permission: (typeof PERMISSION_KEYS)[number],
+): boolean {
+  if (role === 'OWNER') return true;
+  const key = role.toLowerCase() as (typeof EDITABLE_ROLES)[number];
+  return matrix[key]?.[permission] === true;
+}
+
+/** #80: `Chat` representation of a summary (all additive fields included). */
+function chatResponseOf(summary: MockDb['chats'][string]['summary']): Chat {
+  return {
+    id: summary.id,
+    type: summary.type,
+    security_mode: summary.security_mode,
+    visibility: summary.visibility ?? null,
+    peer_id: summary.peer_id ?? null,
+    peer_has_e2ee_capable_devices: summary.peer_has_e2ee_capable_devices ?? false,
+    name: summary.name,
+    description: summary.description ?? null,
+    last_seq: summary.last_seq,
+    unread_count: summary.unread_count,
+    created_at: new Date().toISOString(),
+    cover_file_id: summary.cover_file_id ?? null,
+    read_only: summary.read_only ?? false,
+    join_policy: summary.join_policy ?? null,
+    archived: summary.archived ?? false,
+  };
+}
+
+/** Hide `expires_at`-driven status drift in the mock list (server computes it). */
+function presentInvite(invite: ChatInvite): ChatInvite {
+  if (invite.status === 'REVOKED' || invite.status === 'EXHAUSTED') return invite;
+  if (new Date(invite.expires_at).getTime() <= Date.now()) {
+    return { ...invite, status: 'EXPIRED' };
+  }
+  return invite;
 }
 
 type ChatLike = ChatRecord;
@@ -1723,14 +1858,598 @@ export function createHandlers(db: MockDb) {
       });
     }),
 
-    http.get(`${API}/chats/:chatId/members`, ({ params }) => {
-      const chat = db.chats[String(params.chatId)];
+    /* #79: channel participants plus the legacy flat `user_ids` projection. */
+    http.get(`${API}/chats/:chatId/members`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const chat = db.chats[chatId];
       if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
-      const ids =
-        chat.summary.type === 'DIRECT' && chat.summary.peer_id
-          ? [db.session.user.id, chat.summary.peer_id]
-          : db.workspaceMembers.map((member) => member.user_id);
-      return HttpResponse.json({ user_ids: ids });
+      if (db.chatMemberDelayMs > 0) await delay(db.chatMemberDelayMs);
+      if (db.forceChatMemberListError) {
+        const forced = db.forceChatMemberListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const members = activeChatMembers(db, chatId);
+      const response: ChatMembersResponse = {
+        user_ids: members.map((member) => member.user_id),
+        members,
+      };
+      return HttpResponse.json(response);
+    }),
+
+    http.post(`${API}/chats/:chatId/members`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const chat = db.chats[chatId];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const userId = typeof body.user_id === 'string' ? body.user_id : '';
+      const role = body.role ?? 'MEMBER';
+      if (!UUID_RE.test(userId)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'user_id is invalid', {
+          details: { field: 'user_id' },
+        });
+      }
+      if (
+        role !== 'OWNER' &&
+        role !== 'ADMIN' &&
+        role !== 'MODERATOR' &&
+        role !== 'MEMBER' &&
+        role !== 'GUEST'
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'role is invalid', {
+          details: { field: 'role' },
+        });
+      }
+      db.chatMemberRequests.push({
+        chatId,
+        action: 'add',
+        userId,
+        role,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatMemberAddError) {
+        const forced = db.forceChatMemberAddError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (chatMemberStatusOf(chat) === 'DIRECT') {
+        return errorResponse(
+          422,
+          'CHAT_MEMBERSHIP_UNSUPPORTED',
+          'DIRECT chats have no membership management',
+        );
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(403, 'FORBIDDEN', 'Not a chat member');
+      if (!actorCanManage(actor)) return errorResponse(403, 'FORBIDDEN', 'Not a chat manager');
+      if (role === 'OWNER' && actor.role !== 'OWNER') {
+        return errorResponse(403, 'ROLE_CHANGE_FORBIDDEN', 'OWNER cannot be assigned');
+      }
+      if (actor.role === 'ADMIN' && role === 'ADMIN') {
+        return errorResponse(403, 'ROLE_CHANGE_FORBIDDEN', 'Role cannot be assigned');
+      }
+      const workspaceMember = db.workspaceMembers.find((member) => member.user_id === userId);
+      if (!workspaceMember) return errorResponse(404, 'USER_NOT_FOUND', 'User not found');
+      const rows = (db.chatMembers[chatId] ??= []);
+      const existing = rows.find((member) => member.user_id === userId);
+      if (existing?.status === 'ACTIVE') {
+        return HttpResponse.json(existing, { status: 200 });
+      }
+      if (existing) {
+        existing.role = role;
+        existing.status = 'ACTIVE';
+        existing.joined_at = new Date().toISOString();
+        return HttpResponse.json(existing, { status: 201 });
+      }
+      const member: ChatMember = {
+        user_id: userId,
+        display_name: workspaceMember.display_name,
+        role,
+        status: 'ACTIVE',
+        joined_at: new Date().toISOString(),
+      };
+      rows.push(member);
+      return HttpResponse.json(member, { status: 201 });
+    }),
+
+    http.patch(`${API}/chats/:chatId/members/:userId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const userId = String(params.userId);
+      const chat = db.chats[chatId];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const role = body.role;
+      if (
+        role !== 'OWNER' &&
+        role !== 'ADMIN' &&
+        role !== 'MODERATOR' &&
+        role !== 'MEMBER' &&
+        role !== 'GUEST'
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'role is invalid', {
+          details: { field: 'role' },
+        });
+      }
+      db.chatMemberRequests.push({
+        chatId,
+        action: 'role',
+        userId,
+        role,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatMemberRoleError) {
+        const forced = db.forceChatMemberRoleError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (chatMemberStatusOf(chat) === 'DIRECT') {
+        return errorResponse(
+          422,
+          'CHAT_MEMBERSHIP_UNSUPPORTED',
+          'DIRECT chats have no membership management',
+        );
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(403, 'FORBIDDEN', 'Not a chat member');
+      if (!actorCanManage(actor)) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a chat manager');
+      }
+      const target = activeChatMembers(db, chatId).find((member) => member.user_id === userId);
+      if (!target) return errorResponse(404, 'MEMBER_NOT_FOUND', 'Member not found');
+      if (target.user_id === actor.user_id) {
+        return errorResponse(409, 'SELF_ACTION_FORBIDDEN', 'Cannot change your own role');
+      }
+      if (actor.role === 'ADMIN' && (target.role === 'OWNER' || target.role === 'ADMIN')) {
+        return errorResponse(403, 'ROLE_CHANGE_FORBIDDEN', 'Role change forbidden');
+      }
+      if (actor.role === 'ADMIN' && (role === 'OWNER' || role === 'ADMIN')) {
+        return errorResponse(403, 'ROLE_CHANGE_FORBIDDEN', 'Role cannot be assigned');
+      }
+      if (target.role === 'OWNER' && role !== 'OWNER' && chatOwnerCount(db, chatId) <= 1) {
+        return errorResponse(409, 'LAST_OWNER', 'Cannot demote the last owner');
+      }
+      if (target.role === role) return HttpResponse.json(target);
+      target.role = role;
+      return HttpResponse.json(target);
+    }),
+
+    http.delete(`${API}/chats/:chatId/members/:userId`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const userId = String(params.userId);
+      const chat = db.chats[chatId];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatMemberRequests.push({
+        chatId,
+        action: 'remove',
+        userId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatMemberRemoveError) {
+        const forced = db.forceChatMemberRemoveError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (chatMemberStatusOf(chat) === 'DIRECT') {
+        return errorResponse(
+          422,
+          'CHAT_MEMBERSHIP_UNSUPPORTED',
+          'DIRECT chats have no membership management',
+        );
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(403, 'FORBIDDEN', 'Not a chat member');
+      const target = activeChatMembers(db, chatId).find((member) => member.user_id === userId);
+      if (!target) {
+        if (userId === actor.user_id) return new HttpResponse(null, { status: 204 });
+        return errorResponse(404, 'MEMBER_NOT_FOUND', 'Member not found');
+      }
+      const isSelf = target.user_id === actor.user_id;
+      if (!isSelf) {
+        if (!actorCanManage(actor)) {
+          return errorResponse(403, 'FORBIDDEN', 'Not a chat manager');
+        }
+        if (actor.role === 'ADMIN' && (target.role === 'OWNER' || target.role === 'ADMIN')) {
+          return errorResponse(403, 'ROLE_CHANGE_FORBIDDEN', 'Cannot remove this member');
+        }
+      }
+      if (target.role === 'OWNER' && chatOwnerCount(db, chatId) <= 1) {
+        return errorResponse(409, 'LAST_OWNER', 'Cannot remove the last owner');
+      }
+      target.status = 'REMOVED';
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/chats/:chatId/leave`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const chat = db.chats[chatId];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatMemberRequests.push({
+        chatId,
+        action: 'leave',
+        userId: db.me.user.id,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatMemberLeaveError) {
+        const forced = db.forceChatMemberLeaveError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (chatMemberStatusOf(chat) === 'DIRECT') {
+        return errorResponse(
+          422,
+          'CHAT_MEMBERSHIP_UNSUPPORTED',
+          'DIRECT chats have no membership management',
+        );
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return new HttpResponse(null, { status: 204 });
+      if (actor.role === 'OWNER' && chatOwnerCount(db, chatId) <= 1) {
+        return errorResponse(409, 'LAST_OWNER', 'Cannot leave as the last owner');
+      }
+      actor.status = 'REMOVED';
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /* #79: invite links (metadata list; the token appears once on create). */
+    http.get(`${API}/chats/:chatId/invites`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const chat = db.chats[chatId];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (db.forceChatInviteListError) {
+        const forced = db.forceChatInviteListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (chatMemberStatusOf(chat) === 'DIRECT') {
+        return errorResponse(
+          422,
+          'CHAT_MEMBERSHIP_UNSUPPORTED',
+          'DIRECT chats have no invite links',
+        );
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(403, 'FORBIDDEN', 'Not a chat member');
+      if (!actorCanManage(actor)) return errorResponse(403, 'FORBIDDEN', 'Not a chat manager');
+      return HttpResponse.json({
+        items: (db.chatInvites[chatId] ?? []).map(presentInvite),
+      });
+    }),
+
+    http.post(`${API}/chats/:chatId/invites`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const chat = db.chats[chatId];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const body = asRecord(await readJson(request)) ?? {};
+      db.chatInviteRequests.push({
+        chatId,
+        action: 'create',
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatInviteCreateError) {
+        const forced = db.forceChatInviteCreateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (chatMemberStatusOf(chat) === 'DIRECT') {
+        return errorResponse(
+          422,
+          'CHAT_MEMBERSHIP_UNSUPPORTED',
+          'DIRECT chats have no invite links',
+        );
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(403, 'FORBIDDEN', 'Not a chat member');
+      if (!actorCanManage(actor)) return errorResponse(403, 'FORBIDDEN', 'Not a chat manager');
+      const role = body.role ?? 'MEMBER';
+      if (role !== 'ADMIN' && role !== 'MODERATOR' && role !== 'MEMBER' && role !== 'GUEST') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'role is invalid', {
+          details: { field: 'role' },
+        });
+      }
+      if (actor.role === 'ADMIN' && role === 'ADMIN') {
+        return errorResponse(403, 'ROLE_CHANGE_FORBIDDEN', 'Role cannot be assigned');
+      }
+      const maxUses = body.max_uses;
+      if (
+        maxUses !== undefined &&
+        maxUses !== null &&
+        (typeof maxUses !== 'number' || !Number.isInteger(maxUses) || maxUses < 1 || maxUses > 1000)
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'max_uses is invalid', {
+          details: { field: 'max_uses' },
+        });
+      }
+      const expiresIn = body.expires_in_seconds ?? 604800;
+      if (
+        typeof expiresIn !== 'number' ||
+        !Number.isInteger(expiresIn) ||
+        expiresIn < 300 ||
+        expiresIn > 2_592_000
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'expires_in_seconds is invalid', {
+          details: { field: 'expires_in_seconds' },
+        });
+      }
+      const now = new Date();
+      const invite: ChatInvite = {
+        id: newUuid(),
+        role,
+        status: 'ACTIVE',
+        used_count: 0,
+        max_uses: typeof maxUses === 'number' ? maxUses : null,
+        expires_at: new Date(now.getTime() + expiresIn * 1000).toISOString(),
+        created_at: now.toISOString(),
+        created_by: db.me.user.id,
+      };
+      (db.chatInvites[chatId] ??= []).unshift(invite);
+      const token = newUuid().replace(/-/g, '');
+      db.chatInviteTokens.set(token, { chatId, inviteId: invite.id });
+      return HttpResponse.json({ ...invite, token }, { status: 201 });
+    }),
+
+    http.delete(`${API}/chats/:chatId/invites/:inviteId`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const inviteId = String(params.inviteId);
+      const chat = db.chats[chatId];
+      if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatInviteRequests.push({
+        chatId,
+        action: 'revoke',
+        inviteId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatInviteRevokeError) {
+        const forced = db.forceChatInviteRevokeError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (chatMemberStatusOf(chat) === 'DIRECT') {
+        return errorResponse(
+          422,
+          'CHAT_MEMBERSHIP_UNSUPPORTED',
+          'DIRECT chats have no invite links',
+        );
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(403, 'FORBIDDEN', 'Not a chat member');
+      if (!actorCanManage(actor)) return errorResponse(403, 'FORBIDDEN', 'Not a chat manager');
+      const invite = (db.chatInvites[chatId] ?? []).find((item) => item.id === inviteId);
+      if (!invite) return errorResponse(404, 'INVITE_NOT_FOUND', 'Invite not found');
+      invite.status = 'REVOKED';
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/invites/:token/accept`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const token = String(params.token);
+      const mapping = db.chatInviteTokens.get(token);
+      const record = mapping
+        ? (db.chatInvites[mapping.chatId] ?? []).find((item) => item.id === mapping.inviteId)
+        : undefined;
+      if (!mapping || !record) {
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ERROR',
+        });
+        return errorResponse(404, 'INVITE_NOT_FOUND', 'Invite not found');
+      }
+      if (db.forceInviteAcceptError) {
+        const forced = db.forceInviteAcceptError;
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ERROR',
+        });
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const chat = db.chats[mapping.chatId];
+      if (!chat) {
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ERROR',
+        });
+        return errorResponse(404, 'INVITE_NOT_FOUND', 'Invite not found');
+      }
+      const workspaceMember = db.workspaceMembers.some(
+        (member) => member.user_id === db.me.user.id,
+      );
+      if (!workspaceMember) {
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ERROR',
+        });
+        return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      }
+      const existing = activeChatMembers(db, mapping.chatId).find(
+        (member) => member.user_id === db.me.user.id,
+      );
+      if (existing) {
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ALREADY_MEMBER',
+        });
+        const result: InviteAcceptResult = {
+          invite_id: record.id,
+          workspace_id: chat.workspaceId,
+          chat_id: chat.summary.id,
+          role: existing.role,
+          already_member: true,
+        };
+        return HttpResponse.json(result);
+      }
+      const presented = presentInvite(record);
+      if (presented.status === 'REVOKED') {
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ERROR',
+        });
+        return errorResponse(410, 'INVITE_REVOKED', 'Invite was revoked');
+      }
+      if (presented.status === 'EXPIRED') {
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ERROR',
+        });
+        return errorResponse(410, 'INVITE_EXPIRED', 'Invite expired');
+      }
+      if (presented.status === 'EXHAUSTED' || record.used_count >= (record.max_uses ?? Infinity)) {
+        db.inviteAcceptRequests.push({
+          token,
+          deviceId: request.headers.get('x-device-id'),
+          result: 'ERROR',
+        });
+        return errorResponse(410, 'INVITE_EXHAUSTED', 'Invite exhausted');
+      }
+      const rows = (db.chatMembers[mapping.chatId] ??= []);
+      const row = rows.find((member) => member.user_id === db.me.user.id);
+      if (row) {
+        row.status = 'ACTIVE';
+        row.role = record.role;
+        row.joined_at = new Date().toISOString();
+      } else {
+        rows.push({
+          user_id: db.me.user.id,
+          display_name: db.me.user.display_name,
+          role: record.role,
+          status: 'ACTIVE',
+          joined_at: new Date().toISOString(),
+        });
+      }
+      record.used_count += 1;
+      if (record.max_uses !== null && record.used_count >= record.max_uses) {
+        record.status = 'EXHAUSTED';
+      }
+      db.inviteAcceptRequests.push({
+        token,
+        deviceId: request.headers.get('x-device-id'),
+        result: 'OK',
+      });
+      const result: InviteAcceptResult = {
+        invite_id: record.id,
+        workspace_id: chat.workspaceId,
+        chat_id: chat.summary.id,
+        role: record.role,
+        already_member: false,
+      };
+      return HttpResponse.json(result);
+    }),
+
+    /* #79: self-service blocks. */
+    http.post(`${API}/users/:userId/block`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const userId = String(params.userId);
+      db.blockRequests.push({
+        userId,
+        action: 'BLOCK',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceBlockError) {
+        const forced = db.forceBlockError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (userId === db.me.user.id) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Cannot block yourself');
+      }
+      const known = db.memberUsers.some((user) => user.user_id === userId);
+      if (!known) return errorResponse(404, 'USER_NOT_FOUND', 'User not found');
+      if (!db.blockedUsers.some((user) => user.user_id === userId)) {
+        db.blockedUsers.push({ user_id: userId, blocked_at: new Date().toISOString() });
+      }
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.delete(`${API}/users/:userId/block`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const userId = String(params.userId);
+      db.blockRequests.push({
+        userId,
+        action: 'UNBLOCK',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceBlockError) {
+        const forced = db.forceBlockError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (userId === db.me.user.id) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Cannot unblock yourself');
+      }
+      const known = db.memberUsers.some((user) => user.user_id === userId);
+      if (!known) return errorResponse(404, 'USER_NOT_FOUND', 'User not found');
+      db.blockedUsers = db.blockedUsers.filter((user) => user.user_id !== userId);
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.get(`${API}/me/blocked`, ({ request }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      if (db.forceBlockedListError) {
+        const forced = db.forceBlockedListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const items: BlockedUser[] = [...db.blockedUsers].sort(
+        (left, right) =>
+          right.blocked_at.localeCompare(left.blocked_at) ||
+          left.user_id.localeCompare(right.user_id),
+      );
+      return HttpResponse.json({ items });
     }),
 
     http.get(`${API}/chats/:chatId/plugins`, async ({ request, params }) => {
@@ -2367,9 +3086,13 @@ export function createHandlers(db: MockDb) {
       if (!workspace) {
         return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
       }
+      // #80: `?archived=true` is the caller's personal archive only; absent or
+      // `false` is the main list without archived chats.
+      const archived = new URL(request.url).searchParams.get('archived') === 'true';
       return HttpResponse.json({
         items: Object.values(db.chats)
           .filter((chat) => chat.workspaceId === workspace.id)
+          .filter((chat) => (chat.summary.archived ?? false) === archived)
           // #78: a PRIVATE channel appears only for the creator and the
           // selected members (single-user mock RLS).
           .filter(
@@ -2413,26 +3136,141 @@ export function createHandlers(db: MockDb) {
         });
       }
 
-      if (workspace.role !== 'OWNER' && workspace.role !== 'ADMIN') {
-        return errorResponse(403, 'FORBIDDEN', 'Not a workspace owner/admin');
-      }
-
+      const workspaceManager = workspace.role === 'OWNER' || workspace.role === 'ADMIN';
+      const actor = chatActorMember(db, chatId);
       const hasName = body.name !== undefined && body.name !== null;
       const hasDescription = body.description !== undefined && body.description !== null;
-      if (!hasName && !hasDescription) {
+      const hasCover = typeof body.cover_file_id === 'string';
+      const hasReadOnly = body.read_only !== undefined && body.read_only !== null;
+      const hasVisibility = body.visibility !== undefined && body.visibility !== null;
+      const hasJoinPolicy = body.join_policy !== undefined && body.join_policy !== null;
+      const hasRights = body.rights !== undefined && body.rights !== null;
+      const hasStructural = hasCover || hasReadOnly || hasVisibility || hasJoinPolicy || hasRights;
+      if (!hasName && !hasDescription && !hasStructural) {
         return errorResponse(422, 'VALIDATION_FAILED', 'At least one field is required', {
           details: { reason: 'empty_patch' },
         });
       }
-      if (record.summary.security_mode === 'E2EE' && hasDescription) {
+      if ((hasName || hasDescription) && !workspaceManager) {
+        // P0-2 (#80): a channel role with `change_info` may edit name/description.
+        const changeInfo =
+          actor !== null && roleAllowed(matrixFor(db, chatId), actor.role, 'change_info');
+        if (!changeInfo) {
+          return errorResponse(403, 'FORBIDDEN', 'Not a workspace owner/admin');
+        }
+      }
+      if (hasStructural) {
+        if (record.summary.type === 'DIRECT') {
+          return errorResponse(
+            422,
+            'CHAT_MEMBERSHIP_UNSUPPORTED',
+            'DIRECT chats have no channel settings',
+          );
+        }
+        if (!actorCanManage(actor)) {
+          return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+        }
+      }
+      if (record.summary.security_mode === 'E2EE' && (hasDescription || hasCover)) {
         return errorResponse(
           422,
           'CHAT_SETTINGS_E2EE_UNSUPPORTED',
-          'Description is not available in an E2EE chat',
+          'Description and cover are not available in an E2EE chat',
         );
       }
 
       const next = { ...record.summary };
+      if (hasReadOnly) {
+        if (typeof body.read_only !== 'boolean') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'read_only must be a boolean', {
+            details: { field: 'read_only' },
+          });
+        }
+        next.read_only = body.read_only;
+      }
+      if (hasVisibility) {
+        if (body.visibility !== 'PUBLIC' && body.visibility !== 'PRIVATE') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'visibility is invalid', {
+            details: { field: 'visibility' },
+          });
+        }
+        next.visibility = body.visibility;
+        // Server rule: PUBLIC requires/forces OPEN.
+        if (body.visibility === 'PUBLIC') next.join_policy = 'OPEN';
+        else if (next.join_policy === 'OPEN') next.join_policy = 'INVITE_ONLY';
+      }
+      if (hasJoinPolicy) {
+        if (
+          body.join_policy !== 'OPEN' &&
+          body.join_policy !== 'INVITE_ONLY' &&
+          body.join_policy !== 'CLOSED'
+        ) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'join_policy is invalid', {
+            details: { field: 'join_policy' },
+          });
+        }
+        if (next.visibility === 'PUBLIC' && body.join_policy !== 'OPEN') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'PUBLIC requires OPEN', {
+            details: { field: 'join_policy' },
+          });
+        }
+        next.join_policy = body.join_policy;
+      }
+      if (hasCover) {
+        const file = db.fileCenterItems.find((item) => item.id === body.cover_file_id);
+        if (!file || file.chat_id !== chatId) {
+          return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
+        }
+        next.cover_file_id = file.id;
+      }
+      if (hasRights) {
+        const rights = body.rights;
+        if (rights === null || typeof rights !== 'object' || Array.isArray(rights)) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'rights must be an object', {
+            details: { field: 'rights' },
+          });
+        }
+        const recordRights = rights as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(recordRights, 'owner')) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'OWNER rights are fixed', {
+            details: { reason: 'owner_permissions_fixed' },
+          });
+        }
+        const roleKeys = Object.keys(recordRights);
+        if (roleKeys.length === 0) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'rights must not be empty');
+        }
+        const matrix = { ...matrixFor(db, chatId) };
+        for (const role of roleKeys) {
+          if (!(EDITABLE_ROLES as readonly string[]).includes(role)) {
+            return errorResponse(400, 'VALIDATION_FAILED', 'role is invalid', {
+              details: { field: 'role' },
+            });
+          }
+          const rolePatch = recordRights[role];
+          if (rolePatch === null || typeof rolePatch !== 'object') {
+            return errorResponse(422, 'VALIDATION_FAILED', 'role rights must be an object');
+          }
+          const key = role as (typeof EDITABLE_ROLES)[number];
+          const current = { ...(matrix[key] ?? {}) };
+          const values = rolePatch as Record<string, unknown>;
+          let changed = 0;
+          for (const permission of PERMISSION_KEYS) {
+            const value = values[permission];
+            if (value === undefined || value === null) continue;
+            if (typeof value !== 'boolean') {
+              return errorResponse(422, 'VALIDATION_FAILED', 'right must be a boolean');
+            }
+            current[permission] = value;
+            changed += 1;
+          }
+          if (changed === 0) {
+            return errorResponse(422, 'VALIDATION_FAILED', 'role has no permission values');
+          }
+          matrix[key] = current;
+        }
+        db.chatPermissions[chatId] = matrix;
+      }
       if (hasName) {
         if (typeof body.name !== 'string') {
           return errorResponse(422, 'VALIDATION_FAILED', 'name must be a string', {
@@ -2473,19 +3311,380 @@ export function createHandlers(db: MockDb) {
       }
 
       record.summary = next;
-      const chat: Chat = {
-        id: next.id,
-        type: next.type,
-        security_mode: next.security_mode,
-        peer_id: next.peer_id ?? null,
-        peer_has_e2ee_capable_devices: next.peer_has_e2ee_capable_devices ?? false,
-        name: next.name,
-        description: next.description ?? null,
-        last_seq: next.last_seq,
-        unread_count: next.unread_count,
-        created_at: new Date().toISOString(),
+      return HttpResponse.json(chatResponseOf(next));
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* #80: cover, rights, archive, pins and OWNER deletion                */
+    /* ------------------------------------------------------------------ */
+
+    http.post(`${API}/chats/:chatId/cover`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const fileId = typeof body.file_id === 'string' ? body.file_id : null;
+      db.chatCoverRequests.push({
+        chatId,
+        fileId,
+        action: 'SET',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatCoverError) {
+        const forced = db.forceChatCoverError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no cover');
+      }
+      if (record.summary.security_mode === 'E2EE') {
+        return errorResponse(422, 'CHAT_SETTINGS_E2EE_UNSUPPORTED', 'E2EE has no cover');
+      }
+      if (!actorCanManage(chatActorMember(db, chatId))) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+      }
+      if (fileId === null) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'file_id is required', {
+          details: { field: 'file_id' },
+        });
+      }
+      const file = db.fileCenterItems.find((item) => item.id === fileId);
+      if (!file || file.chat_id !== chatId) {
+        return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
+      }
+      const isImage = (file.mime_type ?? '').startsWith('image/');
+      if (!isImage) return errorResponse(422, 'CHAT_COVER_INVALID', 'Attachment is not an image');
+      if (file.scan_status !== 'CLEAN' && file.scan_status !== 'SKIPPED') {
+        return errorResponse(
+          file.scan_status === 'INFECTED' ? 423 : 409,
+          file.scan_status === 'INFECTED' ? 'ATTACHMENT_QUARANTINED' : 'ATTACHMENT_NOT_READY',
+          'Attachment is not cover-ready',
+        );
+      }
+      record.summary = { ...record.summary, cover_file_id: file.id };
+      return HttpResponse.json(chatResponseOf(record.summary));
+    }),
+
+    http.delete(`${API}/chats/:chatId/cover`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatCoverRequests.push({
+        chatId,
+        fileId: null,
+        action: 'DELETE',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatCoverError) {
+        const forced = db.forceChatCoverError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no cover');
+      }
+      if (!actorCanManage(chatActorMember(db, chatId))) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+      }
+      record.summary = { ...record.summary, cover_file_id: null };
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.get(`${API}/chats/:chatId/permissions`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatPermissionsRequests.push({
+        chatId,
+        body: null,
+        action: 'GET',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatPermissionsError) {
+        const forced = db.forceChatPermissionsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no matrix');
+      }
+      if (!chatActorMember(db, chatId)) {
+        return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      }
+      return HttpResponse.json(matrixFor(db, chatId));
+    }),
+
+    http.patch(`${API}/chats/:chatId/permissions`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      db.chatPermissionsRequests.push({
+        chatId,
+        body,
+        action: 'PATCH',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatPermissionsUpdateError) {
+        const forced = db.forceChatPermissionsUpdateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no matrix');
+      }
+      if (!actorCanManage(chatActorMember(db, chatId))) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'owner')) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'OWNER rights are fixed', {
+          details: { reason: 'owner_permissions_fixed' },
+        });
+      }
+      const roleKeys = Object.keys(body);
+      if (roleKeys.length === 0) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'At least one role is required');
+      }
+      const matrix = { ...matrixFor(db, chatId) };
+      for (const role of roleKeys) {
+        if (!(EDITABLE_ROLES as readonly string[]).includes(role)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'role is invalid', {
+            details: { field: 'role' },
+          });
+        }
+        const rolePatch = asRecord(body[role]);
+        if (!rolePatch) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'role rights must be an object');
+        }
+        const key = role as (typeof EDITABLE_ROLES)[number];
+        const current = { ...(matrix[key] ?? {}) };
+        let changed = 0;
+        for (const permission of PERMISSION_KEYS) {
+          const value = rolePatch[permission];
+          if (value === undefined || value === null) continue;
+          if (typeof value !== 'boolean') {
+            return errorResponse(422, 'VALIDATION_FAILED', 'right must be a boolean');
+          }
+          current[permission] = value;
+          changed += 1;
+        }
+        if (changed === 0) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'role has no permission values');
+        }
+        matrix[key] = current;
+      }
+      db.chatPermissions[chatId] = matrix;
+      return HttpResponse.json(matrix);
+    }),
+
+    http.post(`${API}/chats/:chatId/archive`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatArchiveRequests.push({
+        chatId,
+        action: 'ARCHIVE',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatArchiveError) {
+        const forced = db.forceChatArchiveError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      record.summary = { ...record.summary, archived: true };
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/chats/:chatId/unarchive`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatArchiveRequests.push({
+        chatId,
+        action: 'UNARCHIVE',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatArchiveError) {
+        const forced = db.forceChatArchiveError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      record.summary = { ...record.summary, archived: false };
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.get(`${API}/chats/:chatId/pins`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatPinRequests.push({
+        chatId,
+        messageId: null,
+        action: 'LIST',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatPinsError) {
+        const forced = db.forceChatPinsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no pins');
+      }
+      // Deleted messages are hidden from the pin list.
+      const items = (db.chatPins[chatId] ?? []).filter((pin) => {
+        const message = record.messages.find((item) => item.id === pin.message_id);
+        return !message || !message.deleted_at;
+      });
+      return HttpResponse.json({ items });
+    }),
+
+    http.post(`${API}/chats/:chatId/pins`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const messageIdValue = typeof body.message_id === 'string' ? body.message_id : null;
+      db.chatPinRequests.push({
+        chatId,
+        messageId: messageIdValue,
+        action: 'PIN',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatPinError) {
+        const forced = db.forceChatPinError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no pins');
+      }
+      if (record.summary.security_mode === 'E2EE') {
+        return errorResponse(422, 'E2EE_METADATA_FORBIDDEN', 'E2EE has no pins');
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (!roleAllowed(matrixFor(db, chatId), actor.role, 'pin_messages')) {
+        return errorResponse(403, 'CHAT_PERMISSION_DENIED', 'No pin_messages right');
+      }
+      const message = record.messages.find(
+        (item) => item.id === messageIdValue && !item.deleted_at,
+      );
+      if (!message) return errorResponse(404, 'NOT_FOUND', 'Message not found');
+      const pins = db.chatPins[chatId] ?? [];
+      const existing = pins.find((pin) => pin.message_id === message.id);
+      if (existing) return HttpResponse.json(existing, { status: 200 });
+      if (pins.length >= 50) {
+        return errorResponse(409, 'CHAT_PIN_LIMIT', 'Pin limit reached');
+      }
+      const pin: ChatPin = {
+        chat_id: chatId,
+        message_id: message.id,
+        pinned_by: db.me.user.id,
+        pinned_at: new Date().toISOString(),
       };
-      return HttpResponse.json(chat);
+      db.chatPins[chatId] = [pin, ...pins];
+      return HttpResponse.json(pin, { status: 201 });
+    }),
+
+    http.delete(`${API}/chats/:chatId/pins/:messageId`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const messageIdValue = String(params.messageId);
+      db.chatPinRequests.push({
+        chatId,
+        messageId: messageIdValue,
+        action: 'UNPIN',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatPinError) {
+        const forced = db.forceChatPinError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no pins');
+      }
+      const actor = chatActorMember(db, chatId);
+      if (!actor) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (!roleAllowed(matrixFor(db, chatId), actor.role, 'pin_messages')) {
+        return errorResponse(403, 'CHAT_PERMISSION_DENIED', 'No pin_messages right');
+      }
+      db.chatPins[chatId] = (db.chatPins[chatId] ?? []).filter(
+        (pin) => pin.message_id !== messageIdValue,
+      );
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.delete(`${API}/chats/:chatId`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatDeleteRequests.push({
+        chatId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatDeleteError) {
+        const forced = db.forceChatDeleteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT cannot be deleted');
+      }
+      const actor = chatActorMember(db, chatId);
+      if (actor?.role !== 'OWNER') {
+        return errorResponse(403, 'FORBIDDEN', 'Only the channel OWNER can delete');
+      }
+      delete db.chats[chatId];
+      db.chatPins[chatId] = [];
+      db.chatPermissions[chatId] = defaultPermissionMatrix();
+      return new HttpResponse(null, { status: 204 });
     }),
 
     /**
@@ -3775,6 +4974,17 @@ export function createHandlers(db: MockDb) {
           status: replay.status,
           headers: { ...replay.headers, 'Idempotent-Replay': 'true' },
         });
+      }
+
+      // P0-2 (#80): read-only blocks every role except chat OWNER/ADMIN.
+      // An idempotent replay above still returns the stored message.
+      if (chat.summary.read_only) {
+        const actor = chatActorMember(db, chat.summary.id);
+        if (actor && !isManagerRole(actor.role)) {
+          return errorResponse(403, 'CHAT_READ_ONLY', 'The channel is read-only', {
+            details: { chat_id: chat.summary.id },
+          });
+        }
       }
 
       if (db.forceSendError) {

@@ -44,6 +44,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * Список чатов воркспейса (основной список или личный архив)
+         * @description По умолчанию возвращает все чаты пользователя, кроме архивированных им лично. `archived=true` возвращает только личный архив вызывающего. Архив user-local: архивирование одним участником не меняет список других. Элемент `ChatSummary` содержит аддитивные `cover_file_id`, `read_only`, `join_policy` и `archived`.
+         */
         get: operations["listChats"];
         put?: never;
         /** Создать DIRECT/GROUP-чат; повтор DIRECT-пары идемпотентен (200) */
@@ -880,7 +884,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Мягко удалить GROUP-канал (OWNER)
+         * @description Только ACTIVE OWNER канала. Мягкое удаление: `deleted_at = now()`, строка, участники, сообщения и файлы сохраняются; канал исчезает из всех списков и access-путей, повторный DELETE — `404` (существование уже скрыто). Ссылка на обложку очищается в том же запросе; сам attachment остаётся на обычном retention/GC файлового flow. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`; выход из канала — отдельный `POST /chats/{chatId}/leave`. Аудит `chat.deleted` без контента.
+         */
+        delete: operations["deleteChat"];
         options?: never;
         head?: never;
         /**
@@ -888,6 +896,161 @@ export interface paths {
          * @description Merged-патч настроек чата: `name` и/или `description`. Вызывающий должен быть ACTIVE-участником воркспейса чата с ролью `OWNER` или `ADMIN` (роли чата не используются). `MEMBER`/`GUEST` получают `403 FORBIDDEN`; неизвестный, удалённый или чужой чат — `404` без раскрытия существования. Тело без `name` и `description` — `422 VALIDATION_FAILED`. `name` после trim/collapse пробелов — 1..120 символов, `description` — до 500 символов, `description: ""` очищает описание в `null`. Строки — plain text: управляющие символы (кроме `\n`/`\t` в описании) и `<`/`>` отклоняются `422 VALIDATION_FAILED`; сервер ничего не экранирует и не интерпретирует как HTML. В E2EE-чате разрешён только `name`: `description` (включая очистку) отклоняется `422 CHAT_SETTINGS_E2EE_UNSUPPORTED` без частичного применения. `security_mode` неизменяем. Идемпотентность и оптимистическая блокировка не требуются; успешный запрос пишет audit `chat.updated` (metadata — только имена изменённых полей, без значений).
          */
         patch: operations["updateChat"];
+        trace?: never;
+    };
+    "/chats/{chatId}/cover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Обложка канала из существующего вложения
+         * @description OWNER/ADMIN канала. `file_id` — существующее managed-вложение этого же чата: изображение (`image/*` или `media.kind=IMAGE`) в состоянии READY/BOUND и CLEAN/SKIPPED. Нового upload-эндпоинта нет: файл загружается обычным flow и передаётся ссылкой. Неизвестное/чужое/из другого чата вложение — `404` без раскрытия существования; не изображение — `422 CHAT_COVER_INVALID`; не просканировано — `409 ATTACHMENT_NOT_READY`; карантин — `423 ATTACHMENT_QUARANTINED`. E2EE-чат — `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`, DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Повтор той же обложки идемпотентен (`200`) и не пишет новый аудит. Аудит `chat.cover.updated` без file id.
+         */
+        post: operations["setChatCover"];
+        /**
+         * Удалить обложку канала
+         * @description OWNER/ADMIN канала; идемпотентно (`204`, в том числе если обложки не было). Сам attachment не удаляется: он остаётся обычным вложением файлового flow. Аудит `chat.cover.updated` пишется только при фактическом удалении.
+         */
+        delete: operations["deleteChatCover"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/permissions": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Матрица прав канала по ролям
+         * @description Любой ACTIVE-участник GROUP-канала видит эффективную матрицу: `post_messages`, `invite_members`, `create_polls`, `start_calls`, `pin_messages`, `change_info` для ролей OWNER/ADMIN/MODERATOR/MEMBER/GUEST. OWNER всегда `true`. Отсутствующая строка заменяется встроенным дефолтом, поэтому ответ всегда полный. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`, не-участник — `404`.
+         */
+        get: operations["getChatPermissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Изменить матрицу прав канала
+         * @description OWNER/ADMIN канала. Partial-патч по ролям: отсутствующая роль/право не меняется. `owner` не принимается (`422 VALIDATION_FAILED`, OWNER всегда имеет все права). Пустой объект/роль без прав — `422 VALIDATION_FAILED`. Изменения применяются атомарно с последующими проверками (сообщения, инвайты, опросы, звонки, пины, change_info). Аудит `chat.permissions.updated` содержит только имена ролей и прав.
+         */
+        patch: operations["updateChatPermissions"];
+        trace?: never;
+    };
+    "/chats/{chatId}/archive": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Архивировать чат для себя (user-local)
+         * @description Любой ACTIVE-участник, включая DIRECT. Личный архив: чат скрывается только из основного списка вызывающего (`GET /workspaces/{id}/chats`), другие участники не затронуты. Идемпотентно (`204`). Аудит не пишется: это личное UI-состояние, а не действие над каналом. Не-участник — `404`.
+         */
+        post: operations["archiveChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/unarchive": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Убрать чат из личного архива
+         * @description Любой ACTIVE-участник. Идемпотентно (`204`, в том числе если чат не был в архиве). Не-участник — `404`.
+         */
+        post: operations["unarchiveChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/pins": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Закреплённые сообщения канала
+         * @description ACTIVE-участник GROUP-канала. Только метаданные (`chat_id`, `message_id`, `pinned_by`, `pinned_at`), без текста и без E2EE-контента; порядок — новые пины первыми. Пины удалённых сообщений не возвращаются. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`.
+         */
+        get: operations["listChatPins"];
+        put?: never;
+        /**
+         * Закрепить сообщение канала
+         * @description Право `pin_messages` (по умолчанию OWNER/ADMIN/MODERATOR). Сообщение должно существовать в этом чате и не быть удалённым, иначе `404`. Уникальность `(chat_id, message_id)`: повтор — `200` с текущим пином и без нового аудита, первый успешный вызов — `201`. Лимит 50 пинов — `409 CHAT_PIN_LIMIT`. E2EE-чат — `422 E2EE_METADATA_FORBIDDEN` (метаданные таймлайна не хранятся). DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: только `message_id`.
+         */
+        post: operations["pinChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/pins/{messageId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Открепить сообщение канала
+         * @description Право `pin_messages`. Идемпотентно: `204`, в том числе если пин уже снят (включая случай удалённого сообщения — метаданные можно очистить). Аудит `chat.pin.removed` только при фактическом удалении; только `message_id`. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`.
+         */
+        delete: operations["unpinChatMessage"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/chats/{chatId}/plugins": {
@@ -949,7 +1112,7 @@ export interface paths {
         put?: never;
         /**
          * Создать опрос (плагин `polls`)
-         * @description Создавать опрос может любой ACTIVE-участник чата при включённом плагине `polls`. Вопрос — plain text 1..500 символов без HTML/control-символов; 2..10 уникальных вариантов по 1..200 символов. Создатель фиксируется сервером и только он может закрыть опрос. В E2EE-чате плагин недоступен. Audit пишет только id опроса и действие — без вопроса и текста вариантов.
+         * @description Создавать опрос может ACTIVE-участник чата при включённом плагине `polls` и праве `create_polls` (по умолчанию OWNER/ADMIN/MODERATOR/MEMBER; GUEST — нет). Вопрос — plain text 1..500 символов без HTML/control-символов; 2..10 уникальных вариантов по 1..200 символов. Создатель фиксируется сервером и только он может закрыть опрос. В read-only канале создание опроса — `403 CHAT_READ_ONLY`; без права — `403 CHAT_PERMISSION_DENIED`. В E2EE-чате плагин недоступен. Audit пишет только id опроса и действие — без вопроса и текста вариантов.
          */
         post: operations["createPoll"];
         delete?: never;
@@ -1136,7 +1299,7 @@ export interface paths {
         put?: never;
         /**
          * Отправить сообщение; managed — text/attachments, E2EE — только envelopes
-         * @description С `thread_root_id` создаётся ответ в тред: корень должен существовать в том же чате, сам не быть ответом (максимальная глубина 1) и не быть удалённым; тот же `Idempotency-Key`. В E2EE-чате треды не поддерживаются → `422 THREADS_E2EE_UNSUPPORTED`. Ответ на ответ → `422 THREAD_NESTING_UNSUPPORTED`.
+         * @description С `thread_root_id` создаётся ответ в тред: корень должен существовать в том же чате, сам не быть ответом (максимальная глубина 1) и не быть удалённым; тот же `Idempotency-Key`. В E2EE-чате треды не поддерживаются → `422 THREADS_E2EE_UNSUPPORTED`. Ответ на ответ → `422 THREAD_NESTING_UNSUPPORTED`. P0-2: канал с `read_only=true` отклоняет отправку не-OWNER/ADMIN ролью (`403 CHAT_READ_ONLY`); право `post_messages` из матрицы канала проверяется отдельно (`403 CHAT_PERMISSION_DENIED`). Идемпотентный replay сохранённого `Idempotency-Key` возвращается до этих проверок и не ломается включением read-only.
          */
         post: operations["sendMessage"];
         delete?: never;
@@ -1270,10 +1433,184 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List active chat member ids
-         * @description Active membership only; no display names or profile data. Used by group-call participant selection.
+         * List active chat members
+         * @description Только ACTIVE-участники канала. `members[]` содержит `user_id`, `display_name`, `role`, `status`, `joined_at`; `user_ids` сохранён как аддитивная плоская проекция для выбора участников группового звонка. Email, устройства и ключи не возвращаются. Стабильный порядок `display_name ASC, user_id ASC`. Вызывающий должен быть ACTIVE-участником чата, иначе `404` без раскрытия существования чата. DIRECT возвращает двух участников.
          */
         get: operations["listChatMembers"];
+        put?: never;
+        /**
+         * Добавить ACTIVE-участника воркспейса в GROUP-канал
+         * @description OWNER/ADMIN канала либо роль с правом `invite_members` (по умолчанию также MODERATOR); добавляемый — ACTIVE-участник того же воркспейса (иначе `404 USER_NOT_FOUND`). Разрешено для PUBLIC и PRIVATE GROUP-каналов; DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Роль по умолчанию `MEMBER`; OWNER может назначать любую роль, ADMIN — только `MODERATOR`/`MEMBER`/`GUEST`, а роль ниже ADMIN с `invite_members` — только `MEMBER`/`GUEST` (`403 ROLE_CHANGE_FORBIDDEN`). Идемпотентно: повтор для уже ACTIVE-участника не меняет его роль и возвращает `200` с текущей ролью; первый успешный вызов — `201`. Смена роли существующего участника — только через PATCH. Лимиты чатов (user/workspace) не расходуются. Аудит содержит только `user_id` и `role`, без email и display name.
+         */
+        post: operations["addChatMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/members/{userId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                /** @description Идентификатор пользователя (участника воркспейса/канала). */
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Удалить участника канала (soft) или выйти самому
+         * @description OWNER/ADMIN канала либо self (leave). Мягкое удаление: `status = 'REMOVED'`, строка и `joined_at` сохраняются, доступ пропадает при следующем запросе. Нельзя удалить последнего ACTIVE OWNER (`409 LAST_OWNER`); ADMIN не может удалять OWNER/ADMIN (`403 ROLE_CHANGE_FORBIDDEN`). Self-удаление идемпотентно (`204` даже если уже REMOVED); удаление другого не-Active участника — `404 MEMBER_NOT_FOUND`. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: `user_id` и `role`.
+         */
+        delete: operations["removeChatMember"];
+        options?: never;
+        head?: never;
+        /**
+         * Изменить роль участника канала
+         * @description OWNER/ADMIN канала. Нельзя менять собственную роль (`409 SELF_ACTION_FORBIDDEN`), нельзя снять последнего ACTIVE OWNER (`409 LAST_OWNER`). ADMIN не может менять OWNER/ADMIN и назначать `OWNER`/`ADMIN` (`403 ROLE_CHANGE_FORBIDDEN`); OWNER может назначать любую роль. Неизвестный/не-Active участник — `404 MEMBER_NOT_FOUND`. Повтор той же роли идемпотентен (`200`) и не пишет аудит. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: `user_id`, `previous_role`, `role`.
+         */
+        patch: operations["changeChatMemberRole"];
+        trace?: never;
+    };
+    "/chats/{chatId}/leave": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Выйти из GROUP-канала (alias self-removal)
+         * @description Идемпотентный alias `DELETE /chats/{chatId}/members/{me}`: `204`, в том числе при повторном вызове. Последний ACTIVE OWNER выйти не может — `409 LAST_OWNER`. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Аудит: `user_id`, `role`.
+         */
+        post: operations["leaveChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Список invite-ссылок канала
+         * @description OWNER/ADMIN канала. Возвращает только метаданные (`id`, `role`, `status`, `used_count`, `max_uses`, `expires_at`, `created_at`, `created_by`); сам токен и его hash никогда не возвращаются повторно. `status` вычисляется на сервере: `ACTIVE`/`EXPIRED`/`EXHAUSTED`/`REVOKED`. DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`.
+         */
+        get: operations["listChatInvites"];
+        put?: never;
+        /**
+         * Создать invite-ссылку канала (токен возвращается один раз)
+         * @description OWNER/ADMIN канала либо роль с правом `invite_members` (по умолчанию также MODERATOR). Разрешено для PUBLIC и PRIVATE GROUP-каналов. Роль приглашения по умолчанию `MEMBER`; `OWNER` приглашением не назначается (владелец назначается через PATCH/add). ADMIN может создать приглашение только на `MODERATOR`/`MEMBER`/`GUEST`, а роль ниже ADMIN — только на `MEMBER`/`GUEST` (`403 ROLE_CHANGE_FORBIDDEN`). В БД хранится только SHA-256 hash токена; сырой токен возвращается ровно один раз в `token` и больше не восстановим. `expires_in_seconds` по умолчанию 7 дней (300…2592000), `max_uses` опционален (1…1000; отсутствие — без ограничения). Аудит: `invite_id`, `role`, `max_uses`, `expires_at` — без токена/hash. Повторные POST создают новые ссылки (Idempotency-Key не применяется, иначе пришлось бы хранить сырой токен).
+         */
+        post: operations["createChatInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/invites/{inviteId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                inviteId: components["parameters"]["InviteId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отозвать invite-ссылку канала
+         * @description OWNER/ADMIN канала. `revoked_at = now()`: ссылка перестаёт работать (`410 INVITE_REVOKED`). Идемпотентно: повторный вызов — `204` без нового аудита. Неизвестный invite этого канала — `404 INVITE_NOT_FOUND`.
+         */
+        delete: operations["revokeChatInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/invites/{token}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Принять invite-ссылку канала
+         * @description Вызывающий должен быть ACTIVE-участником воркспейса канала (иначе `403`), иначе `404 INVITE_NOT_FOUND` без раскрытия существования. Присоединение — с ролью приглашения. Идемпотентно: если вызывающий уже ACTIVE-участник, возвращается `200` с `already_member=true`, `used_count` не увеличивается и аудит не пишется. Истёкшая ссылка — `410 INVITE_EXPIRED`, отозванная — `410 INVITE_REVOKED`, исчерпавшая `max_uses` — `410 INVITE_EXHAUSTED`. Rate limit per user (`429 RATE_LIMITED` с `Retry-After`). Аудит только при фактическом вступлении: `invite_id`, `user_id`, `role`.
+         */
+        post: operations["acceptChatInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/users/{userId}/block": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                /** @description Идентификатор пользователя (участника воркспейса/канала). */
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Заблокировать пользователя
+         * @description Только для себя: блокирует вызывающий. Идемпотентно (`204`, повтор не создаёт новую запись и аудит). Нельзя заблокировать себя (`400 VALIDATION_FAILED`) или неизвестного/неактивного пользователя (`404 USER_NOT_FOUND`). В ответе нет email и display name; аудит — `user_id` цели.
+         */
+        post: operations["blockUser"];
+        /**
+         * Разблокировать пользователя
+         * @description Идемпотентно (`204`, в том числе если блокировки не было). Неизвестный пользователь — `404 USER_NOT_FOUND`; self — `400 VALIDATION_FAILED`.
+         */
+        delete: operations["unblockUser"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/blocked": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Список заблокированных пользователей
+         * @description Только собственные блокировки вызывающего. Поля — `user_id` и `blocked_at`; email, display name, устройства и ключи не возвращаются. Стабильный порядок `blocked_at DESC, user_id ASC`.
+         */
+        get: operations["listBlockedUsers"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1286,10 +1623,94 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description ACTIVE-участник канала. `display_name` берётся из профиля пользователя; email, устройства и ключи не возвращаются. */
+        ChatMember: {
+            /** Format: uuid */
+            user_id: string;
+            display_name: string;
+            /** @enum {string} */
+            role: "OWNER" | "ADMIN" | "MODERATOR" | "MEMBER" | "GUEST";
+            /** @enum {string} */
+            status: "INVITED" | "ACTIVE" | "REMOVED";
+            /** Format: date-time */
+            joined_at: string;
+        };
+        /** @description `role` по умолчанию `MEMBER`. `OWNER` назначает только OWNER канала; ADMIN может назначать лишь `MODERATOR`/`MEMBER`/`GUEST`. Для уже ACTIVE-участника роль не меняется (используйте PATCH). */
+        AddChatMemberRequest: {
+            /** Format: uuid */
+            user_id: string;
+            /**
+             * @default MEMBER
+             * @enum {string}
+             */
+            role: "OWNER" | "ADMIN" | "MODERATOR" | "MEMBER" | "GUEST";
+        };
+        ChangeChatMemberRoleRequest: {
+            /** @enum {string} */
+            role: "OWNER" | "ADMIN" | "MODERATOR" | "MEMBER" | "GUEST";
+        };
+        /** @description ACTIVE-участники канала. `members` — детали (display_name/role/status/joined_at), `user_ids` — совместимая плоская проекция для выбора участников группового звонка. */
         ChatMemberIds: {
             user_ids: string[];
+            members: components["schemas"]["ChatMember"][];
         };
-        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). */
+        /** @description Метаданные invite-ссылки канала. Токен и его hash никогда не возвращаются. `status` вычисляется сервером: `REVOKED` приоритетнее `EXPIRED`, затем `EXHAUSTED`, иначе `ACTIVE`. */
+        ChatInvite: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            role: "ADMIN" | "MODERATOR" | "MEMBER" | "GUEST";
+            /** @enum {string} */
+            status: "ACTIVE" | "EXPIRED" | "EXHAUSTED" | "REVOKED";
+            used_count: number;
+            max_uses: number | null;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by?: string;
+        };
+        ChatInviteCreated: components["schemas"]["ChatInvite"] & {
+            token: string;
+        };
+        /** @description Все поля опциональны. `role` по умолчанию `MEMBER` (OWNER приглашением не назначается). `expires_in_seconds` по умолчанию 604800 (7 дней), допустимо 300…2592000. `max_uses` отсутствует — без ограничения по числу вступлений. */
+        ChatInviteCreateRequest: {
+            /**
+             * @default MEMBER
+             * @enum {string}
+             */
+            role: "ADMIN" | "MODERATOR" | "MEMBER" | "GUEST";
+            max_uses?: number | null;
+            /** @default 604800 */
+            expires_in_seconds: number;
+        };
+        ChatInviteList: {
+            items: components["schemas"]["ChatInvite"][];
+        };
+        /** @description Результат вступления. `already_member=true` означает идемпотентный повтор: роль — текущая роль участника, `used_count` не менялся. */
+        InviteAcceptResult: {
+            /** Format: uuid */
+            invite_id: string;
+            /** Format: uuid */
+            workspace_id: string;
+            /** Format: uuid */
+            chat_id: string;
+            /** @enum {string} */
+            role: "OWNER" | "ADMIN" | "MODERATOR" | "MEMBER" | "GUEST";
+            already_member: boolean;
+        };
+        /** @description Собственная блокировка вызывающего. Email и display name не возвращаются. */
+        BlockedUser: {
+            /** Format: uuid */
+            user_id: string;
+            /** Format: date-time */
+            blocked_at: string;
+        };
+        BlockedUserList: {
+            items: components["schemas"]["BlockedUser"][];
+        };
+        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). P0-2 (#80, channel settings): CHAT_READ_ONLY (403) — write in a read-only channel; CHAT_PERMISSION_DENIED (403) — the role lacks a matrix right; CHAT_COVER_INVALID (422) — the referenced attachment is not an image; CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT (409) — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description/cover in an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE chat. */
         Error: {
             code: string;
             message: string;
@@ -2084,6 +2505,20 @@ export interface components {
             unread_count: number;
             /** Format: int64 */
             last_seq: number;
+            /**
+             * Format: uuid
+             * @description P0-2 GROUP cover attachment id; null for DIRECT and when unset.
+             */
+            cover_file_id?: string | null;
+            /** @description P0-2 read-only flag (GROUP; false for DIRECT). */
+            read_only?: boolean;
+            /**
+             * @description P0-2 GROUP join policy; null for DIRECT.
+             * @enum {string|null}
+             */
+            join_policy?: "OPEN" | "INVITE_ONLY" | "CLOSED" | null;
+            /** @description P0-2 caller-local archive flag. The main list excludes archived chats; `?archived=true` returns only them. */
+            archived?: boolean;
         };
         ChatList: {
             items: components["schemas"]["ChatSummary"][];
@@ -2375,12 +2810,89 @@ export interface components {
             /** @description PRIVATE GROUP only: 1..100 distinct ACTIVE workspace member ids. The creator may not be listed and is added automatically. Must be absent, null or empty for PUBLIC and DIRECT. No private-channel invite links exist yet. */
             member_ids?: string[] | null;
         };
-        /** @description `PATCH /chats/{chatId}` (D1-BE3). Both fields are optional, but at least one must be present and non-null. `name` is trimmed and internal whitespace is collapsed; it must be 1..120 characters. `description` is trimmed, must be at most 500 characters, and `""` clears it to `null`. Names/descriptions are plain text: `<`, `>` and control characters (except `\n`/`\t` in description) are rejected. In an E2EE chat `description` is rejected with `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`; `name` is allowed. `security_mode` is immutable and is never accepted in the body. */
+        /** @description `POST /chats/{chatId}/cover`. There is no new upload endpoint: the id refers to an existing managed attachment of the same chat. */
+        ChatCoverRequest: {
+            /** Format: uuid */
+            file_id: string;
+        };
+        /** @description Effective rights of one channel role (P0-2). Always complete. */
+        ChatRolePermissions: {
+            post_messages?: boolean;
+            invite_members?: boolean;
+            create_polls?: boolean;
+            start_calls?: boolean;
+            pin_messages?: boolean;
+            change_info?: boolean;
+        };
+        /** @description Effective channel rights matrix by role (P0-2). `owner` is always all-true and cannot be changed; the other roles are configurable per chat. */
+        ChatPermissions: {
+            owner?: components["schemas"]["ChatRolePermissions"];
+            admin?: components["schemas"]["ChatRolePermissions"];
+            moderator?: components["schemas"]["ChatRolePermissions"];
+            member?: components["schemas"]["ChatRolePermissions"];
+            guest?: components["schemas"]["ChatRolePermissions"];
+        };
+        /** @description Partial rights of one role. An absent permission is left unchanged; `null` is treated as "not provided". */
+        ChatRolePermissionsUpdate: {
+            post_messages?: boolean | null;
+            invite_members?: boolean | null;
+            create_polls?: boolean | null;
+            start_calls?: boolean | null;
+            pin_messages?: boolean | null;
+            change_info?: boolean | null;
+        };
+        /** @description `PATCH /chats/{chatId}/permissions` and the `rights` field of `PATCH /chats/{chatId}`. An explicit `owner` row is rejected with `422 VALIDATION_FAILED` (`owner_permissions_fixed`): OWNER always has every right. An empty body or a role with no permission values is also `422 VALIDATION_FAILED`. */
+        ChatPermissionsUpdate: {
+            /** @description Documented only to be rejected: OWNER rights are fixed and this row returns `422 VALIDATION_FAILED` with `details.reason=owner_permissions_fixed`. */
+            owner?: components["schemas"]["ChatRolePermissionsUpdate"] | null;
+            admin?: components["schemas"]["ChatRolePermissionsUpdate"];
+            moderator?: components["schemas"]["ChatRolePermissionsUpdate"];
+            member?: components["schemas"]["ChatRolePermissionsUpdate"];
+            guest?: components["schemas"]["ChatRolePermissionsUpdate"];
+        };
+        ChatPinRequest: {
+            /** Format: uuid */
+            message_id: string;
+        };
+        /** @description Pinned-message metadata only; never contains message content. */
+        ChatPin: {
+            /** Format: uuid */
+            chat_id: string;
+            /** Format: uuid */
+            message_id: string;
+            /** Format: uuid */
+            pinned_by: string;
+            /** Format: date-time */
+            pinned_at: string;
+        };
+        ChatPinList: {
+            items: components["schemas"]["ChatPin"][];
+        };
+        /** @description `PATCH /chats/{chatId}` (D1-BE3 + P0-2). Every field is optional, but at least one must be present and non-null. `name` is trimmed and internal whitespace is collapsed; it must be 1..120 characters. `description` is trimmed, must be at most 500 characters, and `""` clears it to `null`. Names/descriptions are plain text: `<`, `>` and control characters (except `\n`/`\t` in description) are rejected. `name`/`description` require an ACTIVE workspace OWNER/ADMIN (D1-BE3) or a GROUP participant whose role has `change_info`. `cover_file_id`, `read_only`, `visibility`, `join_policy` and `rights` are structural channel settings: ACTIVE chat OWNER/ADMIN only and GROUP only (DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`). `visibility=PUBLIC` requires/forces `join_policy=OPEN`, otherwise `422 VALIDATION_FAILED`. In an E2EE chat `description` and a cover are rejected with `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`; name, read-only, visibility, join policy and the rights matrix are policy metadata and stay allowed. `security_mode` is immutable and is never accepted in the body. A successful request writes `chat.updated` with changed field names only (no values, no rights values). */
         ChatUpdateRequest: {
             /** @description New chat name; optional. Null is treated as "not provided". */
             name?: string | null;
             /** @description New description; optional. Null is treated as "not provided"; an empty string after trim clears the description. */
             description?: string | null;
+            /**
+             * Format: uuid
+             * @description P0-2 GROUP cover: an existing CLEAN image attachment of this chat. Same validation as `POST /chats/{chatId}/cover`; a cover cannot be cleared through this field (use `DELETE /cover`).
+             */
+            cover_file_id?: string | null;
+            /** @description P0-2 read-only channel: `post_messages`/`create_polls` are denied to every role except chat OWNER/ADMIN (`403 CHAT_READ_ONLY`). GROUP only. */
+            read_only?: boolean | null;
+            /**
+             * @description GROUP visibility. Switching to PUBLIC adds every ACTIVE workspace member and requires/forces `join_policy=OPEN`; switching to PRIVATE keeps current members.
+             * @enum {string|null}
+             */
+            visibility?: "PUBLIC" | "PRIVATE" | null;
+            /**
+             * @description GROUP join policy. `OPEN` — workspace-wide auto-join (only with PUBLIC); `INVITE_ONLY` — invite link or OWNER/ADMIN add; `CLOSED` — OWNER/ADMIN add only, an invite accept answers `403 CHAT_JOIN_CLOSED`.
+             * @enum {string|null}
+             */
+            join_policy?: "OPEN" | "INVITE_ONLY" | "CLOSED" | null;
+            /** @description Same partial per-role rights patch as `PATCH /chats/{chatId}/permissions`; OWNER is rejected. Rights are applied atomically with the other fields and audited as `chat.updated` + permission names. */
+            rights?: components["schemas"]["ChatPermissionsUpdate"] | null;
         };
         Chat: {
             /** Format: uuid */
@@ -2406,6 +2918,20 @@ export interface components {
             unread_count: number;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description P0-2 GROUP cover attachment id; null for DIRECT and when unset.
+             */
+            cover_file_id?: string | null;
+            /** @description P0-2 read-only flag (GROUP; false for DIRECT). */
+            read_only?: boolean;
+            /**
+             * @description P0-2 GROUP join policy; null for DIRECT.
+             * @enum {string|null}
+             */
+            join_policy?: "OPEN" | "INVITE_ONLY" | "CLOSED" | null;
+            /** @description P0-2 caller-local archive state (never another participant's). The legacy D1-BE3 `created_at` and all previous fields are unchanged. */
+            archived?: boolean;
         };
         ReadRequest: {
             /** Format: int64 */
@@ -2540,6 +3066,11 @@ export interface components {
         DeviceId: string;
         IdempotencyKey: string;
         ChatId: string;
+        /** @description Идентификатор пользователя (участника воркспейса/канала). */
+        UserId: string;
+        InviteId: string;
+        /** @description Opaque invite-токен (base64url, 32 случайных байта). Хранится только его SHA-256 hash; сервер не логирует и не возвращает токен повторно. */
+        InviteToken: string;
         MessageId: string;
         /** @description Одна emoji-последовательность в percent-encoding, без HTML/пробелов/control. */
         Emoji: string;
@@ -2614,7 +3145,10 @@ export interface operations {
     };
     listChats: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description `false`/absent — основной список (без личного архива); `true` — только личный архив вызывающего. */
+                archived?: boolean;
+            };
             header: {
                 "X-Device-Id": components["parameters"]["DeviceId"];
             };
@@ -4173,6 +4707,30 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    deleteChat: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Канал мягко удалён */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
     updateChat: {
         parameters: {
             query?: never;
@@ -4204,6 +4762,284 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    setChatCover: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatCoverRequest"];
+            };
+        };
+        responses: {
+            /** @description Обложка установлена; возвращается полный Chat */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Chat"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Вложение в карантине (ATTACHMENT_QUARANTINED) */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteChatCover: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Обложка удалена (или уже отсутствовала) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    getChatPermissions: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Эффективная матрица прав */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPermissions"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    updateChatPermissions: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatPermissionsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Обновлённая эффективная матрица */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPermissions"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    archiveChat: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Чат в личном архиве (или уже там) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    unarchiveChat: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Чат возвращён в основной список (или уже был там) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listChatPins: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Список закреплений */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPinList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    pinChatMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatPinRequest"];
+            };
+        };
+        responses: {
+            /** @description Сообщение уже закреплено (идемпотентный повтор) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPin"];
+                };
+            };
+            /** @description Сообщение закреплено */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPin"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    unpinChatMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                messageId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Пин снят (или уже отсутствовал) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
         };
     };
@@ -4858,7 +5694,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Active member ids */
+            /** @description ACTIVE-участники чата (детали и плоский список id) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4870,6 +5706,335 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    addChatMember: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddChatMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Участник уже ACTIVE — идемпотентный повтор, роль не меняется */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMember"];
+                };
+            };
+            /** @description Участник добавлен */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMember"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    removeChatMember: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                /** @description Идентификатор пользователя (участника воркспейса/канала). */
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Участник удалён (soft) или уже отсутствует */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    changeChatMemberRole: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                /** @description Идентификатор пользователя (участника воркспейса/канала). */
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeChatMemberRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Роль изменена (или уже была такой) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMember"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    leaveChat: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Вы вышли из канала (или уже не участник) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    listChatInvites: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invite-ссылки канала */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatInviteList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    createChatInvite: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChatInviteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Invite создан; `token` возвращается один раз */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatInviteCreated"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    revokeChatInvite: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                inviteId: components["parameters"]["InviteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invite отозван (или уже был отозван) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    acceptChatInvite: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                /** @description Opaque invite-токен (base64url, 32 случайных байта). Хранится только его SHA-256 hash; сервер не логирует и не возвращает токен повторно. */
+                token: components["parameters"]["InviteToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Вступление выполнено или уже было выполнено */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteAcceptResult"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            410: components["responses"]["Gone"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    blockUser: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                /** @description Идентификатор пользователя (участника воркспейса/канала). */
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Пользователь заблокирован (или уже был) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    unblockUser: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                /** @description Идентификатор пользователя (участника воркспейса/канала). */
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Блокировка снята (или её не было) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listBlockedUsers: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Заблокированные пользователи */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockedUserList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
 }

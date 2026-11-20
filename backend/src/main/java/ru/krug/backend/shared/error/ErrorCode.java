@@ -158,6 +158,20 @@ public final class ErrorCode {
     public static final String MESSAGE_NOT_TRANSLATABLE = "MESSAGE_NOT_TRANSLATABLE";
     public static final String TRANSLATION_UNAVAILABLE = "TRANSLATION_UNAVAILABLE";
 
+    // P0-2 (#80): channel settings — cover, read-only, join policy, rights, archive, pins.
+    public static final String CHAT_READ_ONLY = "CHAT_READ_ONLY";
+    public static final String CHAT_PERMISSION_DENIED = "CHAT_PERMISSION_DENIED";
+    public static final String CHAT_COVER_INVALID = "CHAT_COVER_INVALID";
+    public static final String CHAT_JOIN_CLOSED = "CHAT_JOIN_CLOSED";
+    public static final String CHAT_PIN_LIMIT = "CHAT_PIN_LIMIT";
+
+    // P0-1 (#79): channel member management and invite links.
+    public static final String CHAT_MEMBERSHIP_UNSUPPORTED = "CHAT_MEMBERSHIP_UNSUPPORTED";
+    public static final String INVITE_NOT_FOUND = "INVITE_NOT_FOUND";
+    public static final String INVITE_REVOKED = "INVITE_REVOKED";
+    public static final String INVITE_EXPIRED = "INVITE_EXPIRED";
+    public static final String INVITE_EXHAUSTED = "INVITE_EXHAUSTED";
+
     private ErrorCode() {
     }
 }

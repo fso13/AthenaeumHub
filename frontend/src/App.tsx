@@ -26,11 +26,32 @@ import { CreateChatDialog } from './components/CreateChatDialog';
 import { AdminScreen } from './components/admin/AdminScreen';
 import { SetupWizard } from './components/admin/SetupWizard';
 import { AppShell } from './components/AppShell';
+import { InviteAcceptPage } from './components/InviteAcceptPage';
 import { WorkspaceMembersDialog } from './components/WorkspaceMembersDialog';
 
 interface AppProps {
   store: ChatStore;
   config: AppConfig;
+}
+
+/**
+ * #79 `/invite/:token` route. The app has no routing library, so the pathname
+ * is parsed here and both auth contours render the same accept screen. Any
+ * `/invite/...` URL is claimed so a malformed token gets an honest error
+ * instead of falling through to the chat surface.
+ */
+function parseInviteRoute(location: string): { matched: boolean; token: string | null } {
+  const pathname = location.split('?')[0] ?? '/';
+  if (pathname !== '/invite' && !pathname.startsWith('/invite/')) {
+    return { matched: false, token: null };
+  }
+  const raw = pathname.slice('/invite'.length).replace(/^\/+|\/+$/g, '');
+  if (raw.length === 0) return { matched: true, token: null };
+  try {
+    return { matched: true, token: decodeURIComponent(raw) };
+  } catch {
+    return { matched: true, token: null };
+  }
 }
 
 export function App({ store, config }: AppProps) {
@@ -101,7 +122,10 @@ function ChatWorkspace({
 
 /** F-01 dev mode: POST /dev/session on boot and on 401. */
 function DevApp({ store, config }: AppProps) {
+  const location = useLocation();
+  const invite = parseInviteRoute(location);
   useChatRuntime(store, config);
+  if (invite.matched) return <InviteAcceptPage token={invite.token} />;
   return <ChatWorkspace config={config} />;
 }
 
@@ -116,6 +140,7 @@ function PasswordApp({ store, config }: AppProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.split('?')[0] ?? '/';
+  const inviteRoute = parseInviteRoute(location);
   const identityRef = useRef<string | null>(null);
   const identity = auth.user?.sub ?? null;
 
@@ -177,12 +202,13 @@ function PasswordApp({ store, config }: AppProps) {
   useEffect(() => {
     if (setupLoading || setupError || setupRequired) return;
     if (pathname === '/setup' || pathname === '/admin') return;
-    if (state.onboardingRequired && pathname !== '/onboarding') {
+    if (state.onboardingRequired && pathname !== '/onboarding' && !inviteRoute.matched) {
       navigate('/onboarding', { replace: true });
     } else if (!state.onboardingRequired && pathname === '/onboarding') {
       if (state.sessionStatus === 'ready') navigate('/', { replace: true });
     }
   }, [
+    inviteRoute.matched,
     pathname,
     state.onboardingRequired,
     state.sessionStatus,
@@ -239,6 +265,10 @@ function PasswordApp({ store, config }: AppProps) {
         onLogout={logout}
       />
     );
+  }
+
+  if (inviteRoute.matched) {
+    return <InviteAcceptPage token={inviteRoute.token} />;
   }
 
   if (state.onboardingRequired) {

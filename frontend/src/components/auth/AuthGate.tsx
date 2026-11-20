@@ -18,12 +18,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.split('?')[0] ?? '/';
+  // #79: the invite route must survive the login round-trip. It stays in the
+  // URL while the anonymous user sees the login screen, so the accept page is
+  // restored immediately after authentication.
+  const isInviteRoute = pathname === '/invite' || pathname.startsWith('/invite/');
 
   useEffect(() => {
     if (auth.status === 'anonymous') {
       if (pathname === '/verify' && !pending) {
         navigate('/login?verification=missing', { replace: true });
-      } else if (!AUTH_ROUTES.has(pathname)) {
+      } else if (!AUTH_ROUTES.has(pathname) && !isInviteRoute) {
         navigate('/login', { replace: true });
       }
       return;
@@ -31,7 +35,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (auth.status === 'authenticated' && AUTH_ROUTES.has(pathname)) {
       navigate('/', { replace: true });
     }
-  }, [auth.status, pathname, pending, navigate]);
+  }, [auth.status, isInviteRoute, pathname, pending, navigate]);
 
   if (auth.status === 'loading') return <SplashScreen />;
 

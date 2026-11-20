@@ -10,7 +10,12 @@ import type {
   AuthLoginRequest,
   AuthRegisterRequest,
   AuthVerifyEmailRequest,
+  BlockedUser,
   Chat,
+  ChatInvite,
+  ChatMember,
+  ChatPermissions,
+  ChatPin,
   ChatSummary,
   Device,
   FileItem,
@@ -37,6 +42,10 @@ import type {
 } from '../api/types';
 import { newUuid } from '../lib/ids';
 import {
+  buildChatInvites,
+  buildChatMembers,
+  buildChatPermissions,
+  buildChatPins,
   buildChatSummaries,
   buildDirectMessages,
   buildGroupMessages,
@@ -50,6 +59,7 @@ import {
   MOCK_DISPLAY_NAME,
   MOCK_DEMO_EMAIL,
   MOCK_DEMO_PASSWORD,
+  MOCK_INVITE_TOKENS,
   mockSession,
   type MockMemberUser,
 } from './fixtures';
@@ -277,10 +287,62 @@ export interface MockMemberRemoveRequestRecord {
   deviceId: string | null;
 }
 
+/** #79: channel-membership request observed by the mock. */
+export interface MockChatMemberRequestRecord {
+  chatId: string;
+  action: 'add' | 'role' | 'remove' | 'leave';
+  userId: string;
+  role?: ChatMember['role'];
+  deviceId: string | null;
+}
+
+/** #79: invite-link request observed by the mock. */
+export interface MockChatInviteRequestRecord {
+  chatId: string;
+  action: 'create' | 'revoke';
+  inviteId?: string;
+  body?: Record<string, unknown>;
+  deviceId: string | null;
+}
+
+export interface MockInviteAcceptRequestRecord {
+  token: string;
+  deviceId: string | null;
+  result: 'OK' | 'ALREADY_MEMBER' | 'ERROR';
+}
+
 /** D1-FE5: `PATCH /chats/{chatId}` body observed by the mock. */
 export interface MockChatSettingsRequestRecord {
   chatId: string;
   body: Record<string, unknown>;
+  deviceId: string | null;
+}
+
+/** #80: cover and rights requests observed by the mock. */
+export interface MockChatCoverRequestRecord {
+  chatId: string;
+  fileId: string | null;
+  action: 'SET' | 'DELETE';
+  deviceId: string | null;
+}
+
+export interface MockChatPermissionsRequestRecord {
+  chatId: string;
+  body: Record<string, unknown> | null;
+  action: 'GET' | 'PATCH';
+  deviceId: string | null;
+}
+
+export interface MockChatPinRequestRecord {
+  chatId: string;
+  messageId: string | null;
+  action: 'LIST' | 'PIN' | 'UNPIN';
+  deviceId: string | null;
+}
+
+export interface MockChatArchiveRequestRecord {
+  chatId: string;
+  action: 'ARCHIVE' | 'UNARCHIVE';
   deviceId: string | null;
 }
 
@@ -401,10 +463,46 @@ export interface MockDb {
   forceMemberAddError: ForcedSendError | null;
   forceMemberRoleError: ForcedSendError | null;
   forceMemberRemoveError: ForcedSendError | null;
+  /** #79: channel participants (GROUP + DIRECT), invite links and blocks. */
+  chatMembers: Record<string, ChatMember[]>;
+  chatMemberRequests: MockChatMemberRequestRecord[];
+  chatMemberDelayMs: number;
+  forceChatMemberListError: ForcedSendError | null;
+  forceChatMemberAddError: ForcedSendError | null;
+  forceChatMemberRoleError: ForcedSendError | null;
+  forceChatMemberRemoveError: ForcedSendError | null;
+  forceChatMemberLeaveError: ForcedSendError | null;
+  chatInvites: Record<string, ChatInvite[]>;
+  chatInviteTokens: Map<string, { chatId: string; inviteId: string }>;
+  chatInviteRequests: MockChatInviteRequestRecord[];
+  inviteAcceptRequests: MockInviteAcceptRequestRecord[];
+  forceChatInviteListError: ForcedSendError | null;
+  forceChatInviteCreateError: ForcedSendError | null;
+  forceChatInviteRevokeError: ForcedSendError | null;
+  forceInviteAcceptError: ForcedSendError | null;
+  blockedUsers: BlockedUser[];
+  blockRequests: Array<{ userId: string; action: 'BLOCK' | 'UNBLOCK'; deviceId: string | null }>;
+  forceBlockedListError: ForcedSendError | null;
+  forceBlockError: ForcedSendError | null;
   /** D1-FE5: chat settings requests and injectable failures. */
   chatSettingsRequests: MockChatSettingsRequestRecord[];
   chatSettingsDelayMs: number;
   forceChatSettingsError: ForcedSendError | null;
+  /** P0-2 (#80): cover, rights, pins, archive and OWNER deletion. */
+  chatPermissions: Record<string, ChatPermissions>;
+  chatPermissionsRequests: MockChatPermissionsRequestRecord[];
+  chatCoverRequests: MockChatCoverRequestRecord[];
+  chatPins: Record<string, ChatPin[]>;
+  chatPinRequests: MockChatPinRequestRecord[];
+  chatArchiveRequests: MockChatArchiveRequestRecord[];
+  chatDeleteRequests: Array<{ chatId: string; deviceId: string | null }>;
+  forceChatCoverError: ForcedSendError | null;
+  forceChatPermissionsError: ForcedSendError | null;
+  forceChatPermissionsUpdateError: ForcedSendError | null;
+  forceChatPinsError: ForcedSendError | null;
+  forceChatPinError: ForcedSendError | null;
+  forceChatArchiveError: ForcedSendError | null;
+  forceChatDeleteError: ForcedSendError | null;
   /** D1.1 (#69): built-in plugin catalog and per-chat switches. */
   pluginCatalog: Plugin[];
   pluginCatalogRequests: number;
@@ -730,6 +828,15 @@ export function createMockProfileSessions(): ProfileSession[] {
   ];
 }
 
+function buildMockInviteTokens(): Map<string, { chatId: string; inviteId: string }> {
+  return new Map([
+    [MOCK_INVITE_TOKENS.active, { chatId: IDS.groupChat, inviteId: IDS.inviteActive }],
+    [MOCK_INVITE_TOKENS.exhausted, { chatId: IDS.groupChat, inviteId: IDS.inviteExhausted }],
+    [MOCK_INVITE_TOKENS.expired, { chatId: IDS.groupChat, inviteId: IDS.inviteExpired }],
+    [MOCK_INVITE_TOKENS.revoked, { chatId: IDS.groupChat, inviteId: IDS.inviteRevoked }],
+  ]);
+}
+
 export function createMockDb(): MockDb {
   return {
     session: clone(mockSession),
@@ -750,9 +857,43 @@ export function createMockDb(): MockDb {
     forceMemberAddError: null,
     forceMemberRoleError: null,
     forceMemberRemoveError: null,
+    chatMembers: buildChatMembers(),
+    chatMemberRequests: [],
+    chatMemberDelayMs: 0,
+    forceChatMemberListError: null,
+    forceChatMemberAddError: null,
+    forceChatMemberRoleError: null,
+    forceChatMemberRemoveError: null,
+    forceChatMemberLeaveError: null,
+    chatInvites: buildChatInvites(),
+    chatInviteTokens: buildMockInviteTokens(),
+    chatInviteRequests: [],
+    inviteAcceptRequests: [],
+    forceChatInviteListError: null,
+    forceChatInviteCreateError: null,
+    forceChatInviteRevokeError: null,
+    forceInviteAcceptError: null,
+    blockedUsers: [],
+    blockRequests: [],
+    forceBlockedListError: null,
+    forceBlockError: null,
     chatSettingsRequests: [],
     chatSettingsDelayMs: 0,
     forceChatSettingsError: null,
+    chatPermissions: buildChatPermissions(),
+    chatPermissionsRequests: [],
+    chatCoverRequests: [],
+    chatPins: buildChatPins(),
+    chatPinRequests: [],
+    chatArchiveRequests: [],
+    chatDeleteRequests: [],
+    forceChatCoverError: null,
+    forceChatPermissionsError: null,
+    forceChatPermissionsUpdateError: null,
+    forceChatPinsError: null,
+    forceChatPinError: null,
+    forceChatArchiveError: null,
+    forceChatDeleteError: null,
     pluginCatalog: createMockPluginCatalog(),
     pluginCatalogRequests: 0,
     pluginCatalogDelayMs: 0,
@@ -907,9 +1048,43 @@ export function resetMockDb(db: MockDb): void {
   db.forceMemberAddError = null;
   db.forceMemberRoleError = null;
   db.forceMemberRemoveError = null;
+  db.chatMembers = fresh.chatMembers;
+  db.chatMemberRequests = [];
+  db.chatMemberDelayMs = 0;
+  db.forceChatMemberListError = null;
+  db.forceChatMemberAddError = null;
+  db.forceChatMemberRoleError = null;
+  db.forceChatMemberRemoveError = null;
+  db.forceChatMemberLeaveError = null;
+  db.chatInvites = fresh.chatInvites;
+  db.chatInviteTokens = fresh.chatInviteTokens;
+  db.chatInviteRequests = [];
+  db.inviteAcceptRequests = [];
+  db.forceChatInviteListError = null;
+  db.forceChatInviteCreateError = null;
+  db.forceChatInviteRevokeError = null;
+  db.forceInviteAcceptError = null;
+  db.blockedUsers = fresh.blockedUsers;
+  db.blockRequests = [];
+  db.forceBlockedListError = null;
+  db.forceBlockError = null;
   db.chatSettingsRequests = [];
   db.chatSettingsDelayMs = 0;
   db.forceChatSettingsError = null;
+  db.chatPermissions = fresh.chatPermissions;
+  db.chatPermissionsRequests = [];
+  db.chatCoverRequests = [];
+  db.chatPins = fresh.chatPins;
+  db.chatPinRequests = [];
+  db.chatArchiveRequests = [];
+  db.chatDeleteRequests = [];
+  db.forceChatCoverError = null;
+  db.forceChatPermissionsError = null;
+  db.forceChatPermissionsUpdateError = null;
+  db.forceChatPinsError = null;
+  db.forceChatPinError = null;
+  db.forceChatArchiveError = null;
+  db.forceChatDeleteError = null;
   db.pluginCatalog = fresh.pluginCatalog;
   db.pluginCatalogRequests = 0;
   db.pluginCatalogDelayMs = 0;

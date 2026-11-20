@@ -224,10 +224,6 @@ export function AppShell({
         open={chatSettingsOpen}
         chat={activeChat}
         onClose={() => setChatSettingsOpen(false)}
-        onOpenMembers={() => {
-          setChatSettingsOpen(false);
-          onOpenMembers?.();
-        }}
       />
       <ProfileDialog
         open={profileOpen}

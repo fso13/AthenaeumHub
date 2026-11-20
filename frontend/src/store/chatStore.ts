@@ -1,18 +1,36 @@
 import type { ChatApi, ListMessagesQuery } from '../api/endpoints';
 import { ApiError, isApiError, toApiError } from '../api/problem';
 import type {
+  AddChatMemberRequest,
   AddWorkspaceMemberRequest,
   ApiAttachment,
   ApiMessage,
   AssignableMemberRole,
   AuthUser,
+  BlockedUser,
+  ChangeChatMemberRoleRequest,
   ChangeWorkspaceMemberRoleRequest,
   Chat,
+  ChatCoverRequest,
   ChatCreateRequest,
+  ChatInvite,
+  ChatInviteCreateRequest,
+  ChatInviteCreated,
+  ChatMember,
+  ChatMemberRole,
+  ChatMembersResponse,
+  ChatPermissionKey,
+  ChatPermissionRole,
+  ChatPermissions,
+  ChatPermissionsUpdate,
+  ChatPin,
+  ChatRolePermissions,
   ChatSummary,
   ChatUpdateRequest,
   ChatVisibility,
   Device,
+  FileItem,
+  InviteAcceptResult,
   MeResponse,
   MeUser,
   MessageCreateBody,
@@ -364,6 +382,299 @@ export function createEmptyChatSettingsState(): ChatSettingsState {
   return { chatId: null, status: 'idle', error: null };
 }
 
+/**
+ * #79 channel membership. Rows come from `GET /chats/{chatId}/members` and
+ * every mutation replaces state only after the server response; there is no
+ * optimistic role/row change. Errors are kept next to the affected row so a
+ * `409 LAST_OWNER` or `403 ROLE_CHANGE_FORBIDDEN` is explained honestly.
+ */
+export interface ChatMembersState {
+  chatId: string | null;
+  status: LoadStatus;
+  items: ChatMember[];
+  error: ApiError | null;
+  addStatus: 'idle' | 'adding' | 'error';
+  addError: ApiError | null;
+  rolePendingUserId: string | null;
+  roleError: { userId: string; error: ApiError } | null;
+  removePendingUserId: string | null;
+  removeError: { userId: string; error: ApiError } | null;
+  leaveStatus: 'idle' | 'leaving' | 'error';
+  leaveError: ApiError | null;
+}
+
+export function createEmptyChatMembersState(): ChatMembersState {
+  return {
+    chatId: null,
+    status: 'idle',
+    items: [],
+    error: null,
+    addStatus: 'idle',
+    addError: null,
+    rolePendingUserId: null,
+    roleError: null,
+    removePendingUserId: null,
+    removeError: null,
+    leaveStatus: 'idle',
+    leaveError: null,
+  };
+}
+
+/**
+ * #79 invite links. `created` holds the one-time raw token and is cleared only
+ * when the dialog closes (the server cannot return it again). The list keeps
+ * server-computed statuses (`ACTIVE`/`EXPIRED`/`EXHAUSTED`/`REVOKED`).
+ */
+export interface ChatInvitesState {
+  chatId: string | null;
+  status: LoadStatus;
+  error: ApiError | null;
+  items: ChatInvite[];
+  created: ChatInviteCreated | null;
+  createStatus: 'idle' | 'creating' | 'error';
+  createError: ApiError | null;
+  revokePendingId: string | null;
+  revokeError: { inviteId: string; error: ApiError } | null;
+}
+
+export function createEmptyChatInvitesState(): ChatInvitesState {
+  return {
+    chatId: null,
+    status: 'idle',
+    error: null,
+    items: [],
+    created: null,
+    createStatus: 'idle',
+    createError: null,
+    revokePendingId: null,
+    revokeError: null,
+  };
+}
+
+/** #79 self-service blocks (`GET /me/blocked` has no display name/email). */
+export interface BlockedUsersState {
+  status: LoadStatus;
+  items: BlockedUser[];
+  error: ApiError | null;
+  pendingUserId: string | null;
+  actionError: { userId: string; error: ApiError } | null;
+}
+
+export function createEmptyBlockedUsersState(): BlockedUsersState {
+  return {
+    status: 'idle',
+    items: [],
+    error: null,
+    pendingUserId: null,
+    actionError: null,
+  };
+}
+
+/** #79 invite-accept screen state (`POST /invites/{token}/accept`). */
+export interface InviteAcceptState {
+  token: string | null;
+  status: 'idle' | 'accepting' | 'accepted' | 'error';
+  result: InviteAcceptResult | null;
+  error: ApiError | null;
+}
+
+export function createEmptyInviteAcceptState(): InviteAcceptState {
+  return { token: null, status: 'idle', result: null, error: null };
+}
+
+/* ------------------------------------------------------------------------- */
+/* P0-2 (#80): channel cover, rights matrix, pins, archive, deletion         */
+/* ------------------------------------------------------------------------- */
+
+/** The six configurable rights, in the contract/wire order. */
+export const CHAT_PERMISSION_KEYS: readonly ChatPermissionKey[] = [
+  'post_messages',
+  'invite_members',
+  'create_polls',
+  'start_calls',
+  'pin_messages',
+  'change_info',
+];
+
+/** Roles shown in the matrix; OWNER is fixed and never editable. */
+export const CHAT_PERMISSION_ROLES: readonly ChatPermissionRole[] = [
+  'OWNER',
+  'ADMIN',
+  'MODERATOR',
+  'MEMBER',
+  'GUEST',
+];
+
+const ALL_RIGHTS: ChatRolePermissions = {
+  post_messages: true,
+  invite_members: true,
+  create_polls: true,
+  start_calls: true,
+  pin_messages: true,
+  change_info: true,
+};
+
+/** Built-in default matrix (SYSTEM-ANALYSIS §10.3 + product decisions). */
+export function defaultChatPermissions(): ChatPermissions {
+  return {
+    owner: { ...ALL_RIGHTS },
+    admin: { ...ALL_RIGHTS },
+    moderator: {
+      post_messages: true,
+      invite_members: true,
+      create_polls: true,
+      start_calls: true,
+      pin_messages: true,
+      change_info: false,
+    },
+    member: {
+      post_messages: true,
+      invite_members: false,
+      create_polls: true,
+      start_calls: true,
+      pin_messages: false,
+      change_info: false,
+    },
+    guest: {
+      post_messages: true,
+      invite_members: false,
+      create_polls: false,
+      start_calls: false,
+      pin_messages: false,
+      change_info: false,
+    },
+  };
+}
+
+function rolePermissions(
+  matrix: ChatPermissions | null,
+  role: ChatPermissionRole,
+): ChatRolePermissions {
+  const key = role.toLowerCase() as Lowercase<ChatPermissionRole>;
+  return matrix?.[key] ?? defaultChatPermissions()[key] ?? {};
+}
+
+/** Effective right of a role (OWNER is always allowed, matrix may be absent). */
+export function chatPermissionAllowed(
+  matrix: ChatPermissions | null,
+  role: ChatPermissionRole | ChatMemberRole | null | undefined,
+  permission: ChatPermissionKey,
+): boolean {
+  if (!role) return false;
+  if (role === 'OWNER') return true;
+  return rolePermissions(matrix, role)[permission] === true;
+}
+
+/** #80 rights matrix: loaded per chat; the server response is authoritative. */
+export interface ChatPermissionsState {
+  chatId: string | null;
+  status: LoadStatus;
+  matrix: ChatPermissions | null;
+  error: ApiError | null;
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error';
+  saveError: ApiError | null;
+}
+
+export function createEmptyChatPermissionsState(): ChatPermissionsState {
+  return {
+    chatId: null,
+    status: 'idle',
+    matrix: null,
+    error: null,
+    saveStatus: 'idle',
+    saveError: null,
+  };
+}
+
+/** #80 cover editor: existing chat images are candidates (no upload endpoint). */
+export interface ChatCoverState {
+  chatId: string | null;
+  /** Candidate image metadata from `GET /files?chat_id&kind=IMAGE`. */
+  imagesStatus: LoadStatus;
+  images: FileItem[];
+  imagesError: ApiError | null;
+  actionStatus: 'idle' | 'saving' | 'removing' | 'saved' | 'error';
+  actionError: ApiError | null;
+}
+
+export function createEmptyChatCoverState(): ChatCoverState {
+  return {
+    chatId: null,
+    imagesStatus: 'idle',
+    images: [],
+    imagesError: null,
+    actionStatus: 'idle',
+    actionError: null,
+  };
+}
+
+/** #80 pinned messages (metadata only) plus per-message pending/error state. */
+export interface ChatPinsState {
+  chatId: string | null;
+  status: LoadStatus;
+  items: ChatPin[];
+  error: ApiError | null;
+  pendingMessageId: string | null;
+  actionError: { messageId: string; error: ApiError } | null;
+  /** `409 CHAT_PIN_LIMIT`: the server's 50-pin cap was reached. */
+  limitReached: boolean;
+}
+
+export function createEmptyChatPinsState(): ChatPinsState {
+  return {
+    chatId: null,
+    status: 'idle',
+    items: [],
+    error: null,
+    pendingMessageId: null,
+    actionError: null,
+    limitReached: false,
+  };
+}
+
+/** #80 user-local archive action state (never shared with other members). */
+export interface ChatArchiveState {
+  chatId: string | null;
+  status: 'idle' | 'archiving' | 'unarchiving' | 'error';
+  error: ApiError | null;
+}
+
+export function createEmptyChatArchiveState(): ChatArchiveState {
+  return { chatId: null, status: 'idle', error: null };
+}
+
+/** #80 soft deletion by the ACTIVE chat OWNER. */
+export interface ChatDeletionState {
+  chatId: string | null;
+  status: 'idle' | 'deleting' | 'error';
+  error: ApiError | null;
+}
+
+export function createEmptyChatDeletionState(): ChatDeletionState {
+  return { chatId: null, status: 'idle', error: null };
+}
+
+/** #80 archived list (`GET /chats?archived=true`), separate from the main list. */
+export interface ArchivedChatsState {
+  workspaceId: string | null;
+  status: LoadStatus;
+  items: ChatSummary[];
+  error: ApiError | null;
+  pendingChatId: string | null;
+  actionError: { chatId: string; error: ApiError } | null;
+}
+
+export function createEmptyArchivedChatsState(): ArchivedChatsState {
+  return {
+    workspaceId: null,
+    status: 'idle',
+    items: [],
+    error: null,
+    pendingChatId: null,
+    actionError: null,
+  };
+}
+
 /** D1-FE5 profile device projection (`GET /devices`, no keys rendered). */
 export interface DevicesState {
   items: Device[];
@@ -448,6 +759,26 @@ export interface AppState {
   workspaceMemberAdmin: WorkspaceMemberAdminState;
   /** D1-FE5: server-confirmed `PATCH /chats/{chatId}` state. */
   chatSettings: ChatSettingsState;
+  /** #79: chat-scoped participant directory and mutation feedback. */
+  chatMembers: ChatMembersState;
+  /** #79: chat-scoped invite links plus the one-time created token. */
+  chatInvites: ChatInvitesState;
+  /** #79: own blocked users. */
+  blockedUsers: BlockedUsersState;
+  /** #79: `/invite/:token` accept outcome. */
+  inviteAccept: InviteAcceptState;
+  /** P0-2 (#80): effective rights matrix for the settings dialog/MessageActions. */
+  chatPermissions: ChatPermissionsState;
+  /** P0-2 (#80): cover editor (existing chat images only). */
+  chatCover: ChatCoverState;
+  /** P0-2 (#80): pinned-message metadata. */
+  chatPins: ChatPinsState;
+  /** P0-2 (#80): archive/unarchive feedback for the settings danger zone. */
+  chatArchive: ChatArchiveState;
+  /** P0-2 (#80): OWNER-only soft delete state. */
+  chatDeletion: ChatDeletionState;
+  /** P0-2 (#80): caller-local archived chats, kept out of the main list. */
+  archivedChats: ArchivedChatsState;
   /** D1-FE5: `GET /devices` for the profile modal. */
   devices: DevicesState;
 }
@@ -516,6 +847,67 @@ export function isAssignableMemberRole(role: string): role is AssignableMemberRo
   return role === 'ADMIN' || role === 'MEMBER' || role === 'GUEST';
 }
 
+/* ------------------------------------------------------------------------- */
+/* #79 channel roles                                                         */
+/* ------------------------------------------------------------------------- */
+
+/** Channel-level manager roles; workspace roles do not grant chat rights. */
+export function isChatManagerRole(role: ChatMemberRole | null | undefined): boolean {
+  return role === 'OWNER' || role === 'ADMIN';
+}
+
+/**
+ * Roles the actor may assign, mirroring the backend contract:
+ * OWNER assigns any channel role; ADMIN never assigns OWNER/ADMIN.
+ */
+export function assignableChatRoles(
+  actorRole: ChatMemberRole | null | undefined,
+): ChatMemberRole[] {
+  if (actorRole === 'OWNER') return ['OWNER', 'ADMIN', 'MODERATOR', 'MEMBER', 'GUEST'];
+  if (actorRole === 'ADMIN') return ['MODERATOR', 'MEMBER', 'GUEST'];
+  return [];
+}
+
+/** ADMIN cannot touch OWNER/ADMIN rows; nobody changes their own role. */
+export function canManageChatMember(
+  actorRole: ChatMemberRole | null | undefined,
+  actorId: string | null,
+  target: Pick<ChatMember, 'user_id' | 'role'>,
+): boolean {
+  if (!isChatManagerRole(actorRole) || actorId === null || target.user_id === actorId) {
+    return false;
+  }
+  if (actorRole === 'ADMIN') return target.role !== 'OWNER' && target.role !== 'ADMIN';
+  return true;
+}
+
+/** Server rules for add/PATCH: OWNER only through add/PATCH, never via invites. */
+export function isChatRole(value: string): value is ChatMemberRole {
+  return (
+    value === 'OWNER' ||
+    value === 'ADMIN' ||
+    value === 'MODERATOR' ||
+    value === 'MEMBER' ||
+    value === 'GUEST'
+  );
+}
+
+/** Stable server order (`display_name ASC, user_id ASC`). */
+function sortChatMembers(items: ChatMember[]): ChatMember[] {
+  return [...items].sort(
+    (left, right) =>
+      left.display_name.localeCompare(right.display_name, 'ru') ||
+      left.user_id.localeCompare(right.user_id),
+  );
+}
+
+/** Replace/insert one server-returned row without inventing fields. */
+function upsertChatMember(items: ChatMember[], member: ChatMember): ChatMember[] {
+  const next = items.filter((item) => item.user_id !== member.user_id);
+  next.push(member);
+  return sortChatMembers(next);
+}
+
 export function createEmptyNotificationsState(): NotificationsState {
   return {
     items: [],
@@ -579,6 +971,10 @@ export function toChatSummary(chat: Chat): ChatSummary {
     last_message_at: null,
     unread_count: chat.unread_count,
     last_seq: chat.last_seq,
+    cover_file_id: chat.cover_file_id ?? null,
+    read_only: chat.read_only ?? false,
+    join_policy: chat.join_policy ?? null,
+    archived: chat.archived ?? false,
   };
 }
 
@@ -601,6 +997,10 @@ function chatSummaryFromChat(chat: Chat, previous: ChatSummary | undefined): Cha
     last_message_at: previous?.last_message_at ?? null,
     unread_count: chat.unread_count,
     last_seq: chat.last_seq,
+    cover_file_id: chat.cover_file_id ?? previous?.cover_file_id ?? null,
+    read_only: chat.read_only ?? previous?.read_only ?? false,
+    join_policy: chat.join_policy ?? previous?.join_policy ?? null,
+    archived: chat.archived ?? previous?.archived ?? false,
   };
 }
 
@@ -681,6 +1081,22 @@ export class ChatStore {
   private membersToken = 0;
   private membersInFlight: Promise<void> | null = null;
   private membersLoadMoreInFlight = false;
+  /** #79: chat-scoped member/invite reads are invalidated by generation. */
+  private chatMembersToken = 0;
+  private chatMembersInFlight: Promise<void> | null = null;
+  private chatInvitesToken = 0;
+  private chatInvitesInFlight: Promise<void> | null = null;
+  /** P0-2 (#80): generation guards for the matrix, cover candidates and pins. */
+  private chatPermissionsToken = 0;
+  private chatPermissionsInFlight: Promise<void> | null = null;
+  private chatCoverToken = 0;
+  private chatCoverInFlight: Promise<void> | null = null;
+  private chatPinsToken = 0;
+  private chatPinsInFlight: Promise<void> | null = null;
+  private archivedChatsToken = 0;
+  private archivedChatsInFlight: Promise<void> | null = null;
+  private blockedUsersInFlight: Promise<void> | null = null;
+  private inviteAcceptInFlight: Promise<boolean> | null = null;
   /** D1-FE5: dedupes profile device reads; reset on workspace switch. */
   private devicesInFlight: Promise<void> | null = null;
   /** #72: dedupes the profile-modal `/me` read. */
@@ -761,6 +1177,16 @@ export class ChatStore {
       workspaceMembers: createEmptyWorkspaceMembersState(),
       workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
       chatSettings: createEmptyChatSettingsState(),
+      chatMembers: createEmptyChatMembersState(),
+      chatInvites: createEmptyChatInvitesState(),
+      blockedUsers: createEmptyBlockedUsersState(),
+      inviteAccept: createEmptyInviteAcceptState(),
+      chatPermissions: createEmptyChatPermissionsState(),
+      chatCover: createEmptyChatCoverState(),
+      chatPins: createEmptyChatPinsState(),
+      chatArchive: createEmptyChatArchiveState(),
+      chatDeletion: createEmptyChatDeletionState(),
+      archivedChats: createEmptyArchivedChatsState(),
       devices: createEmptyDevicesState(),
     };
 
@@ -1113,6 +1539,20 @@ export class ChatStore {
     this.realtime?.stop();
     this.calls.stop();
     this.notificationEpoch += 1;
+    this.chatMembersToken += 1;
+    this.chatMembersInFlight = null;
+    this.chatInvitesToken += 1;
+    this.chatInvitesInFlight = null;
+    this.chatPermissionsToken += 1;
+    this.chatPermissionsInFlight = null;
+    this.chatCoverToken += 1;
+    this.chatCoverInFlight = null;
+    this.chatPinsToken += 1;
+    this.chatPinsInFlight = null;
+    this.archivedChatsToken += 1;
+    this.archivedChatsInFlight = null;
+    this.blockedUsersInFlight = null;
+    this.inviteAcceptInFlight = null;
     writeDeviceWorkspaceId(workspace.id);
     this.files.setWorkspace(workspace.id, workspace.role ?? null);
     // D1-FE1: keep the outgoing workspace badge truthful after `chats` is
@@ -1160,6 +1600,16 @@ export class ChatStore {
       workspaceMembers: createEmptyWorkspaceMembersState(),
       workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
       chatSettings: createEmptyChatSettingsState(),
+      chatMembers: createEmptyChatMembersState(),
+      chatInvites: createEmptyChatInvitesState(),
+      blockedUsers: createEmptyBlockedUsersState(),
+      inviteAccept: createEmptyInviteAcceptState(),
+      chatPermissions: createEmptyChatPermissionsState(),
+      chatCover: createEmptyChatCoverState(),
+      chatPins: createEmptyChatPinsState(),
+      chatArchive: createEmptyChatArchiveState(),
+      chatDeletion: createEmptyChatDeletionState(),
+      archivedChats: createEmptyArchivedChatsState(),
       devices: createEmptyDevicesState(),
     });
     this.devicesInFlight = null;
@@ -1683,6 +2133,1352 @@ export class ChatStore {
     }
   }
 
+  /* ------------------------------------------------------------------ */
+  /* #79: channel members                                               */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * `GET /chats/{chatId}/members`. One chat at a time is cached; a response
+   * for another chat is dropped by the generation guard. Load-more does not
+   * exist: the contract returns the complete ACTIVE participant list.
+   */
+  loadChatMembers(chatId: string, force = false): Promise<void> {
+    const current = this.state.chatMembers;
+    if (!force && current.chatId === chatId) {
+      if (current.status === 'ready') return Promise.resolve();
+      if (current.status === 'loading' && this.chatMembersInFlight) {
+        return this.chatMembersInFlight;
+      }
+    }
+    const token = ++this.chatMembersToken;
+    this.patch({
+      chatMembers: { ...createEmptyChatMembersState(), chatId, status: 'loading' },
+    });
+    const promise = (async () => {
+      try {
+        const response: ChatMembersResponse = await this.api.listChatMembers(chatId);
+        if (token !== this.chatMembersToken || this.state.chatMembers.chatId !== chatId) return;
+        this.patch({
+          chatMembers: {
+            ...this.state.chatMembers,
+            items: sortChatMembers(response.members),
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        if (token !== this.chatMembersToken || this.state.chatMembers.chatId !== chatId) return;
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          chatMembers: {
+            ...this.state.chatMembers,
+            status: 'error',
+            error: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        if (token === this.chatMembersToken) this.chatMembersInFlight = null;
+      }
+    })();
+    this.chatMembersInFlight = promise;
+    return promise;
+  }
+
+  /**
+   * `POST /chats/{chatId}/members`. The server response is authoritative (a
+   * repeat add keeps the existing role); no row is created before it arrives.
+   */
+  async addChatMember(chatId: string, userId: string, role: ChatMemberRole): Promise<boolean> {
+    if (this.state.chatMembers.addStatus === 'adding') return false;
+    const body: AddChatMemberRequest = { user_id: userId, role };
+    this.patch({
+      chatMembers: {
+        ...this.state.chatMembers,
+        chatId,
+        addStatus: 'adding',
+        addError: null,
+      },
+    });
+    try {
+      const member = await this.api.addChatMember(chatId, body);
+      if (this.state.chatMembers.chatId !== chatId) return false;
+      this.patch({
+        chatMembers: {
+          ...this.state.chatMembers,
+          items: upsertChatMember(this.state.chatMembers.items, member),
+          status: 'ready',
+          error: null,
+          addStatus: 'idle',
+          addError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatMembers.chatId !== chatId) return false;
+      this.patch({
+        chatMembers: {
+          ...this.state.chatMembers,
+          addStatus: 'error',
+          addError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `PATCH /chats/{chatId}/members/{userId}` (OWNER/ADMIN ceiling is server-side). */
+  async changeChatMemberRole(
+    chatId: string,
+    userId: string,
+    role: ChatMemberRole,
+  ): Promise<boolean> {
+    if (this.state.chatMembers.rolePendingUserId !== null) return false;
+    const body: ChangeChatMemberRoleRequest = { role };
+    this.patch({
+      chatMembers: {
+        ...this.state.chatMembers,
+        chatId,
+        rolePendingUserId: userId,
+        roleError: null,
+      },
+    });
+    try {
+      const member = await this.api.changeChatMemberRole(chatId, userId, body);
+      if (this.state.chatMembers.chatId !== chatId) return false;
+      this.patch({
+        chatMembers: {
+          ...this.state.chatMembers,
+          items: upsertChatMember(this.state.chatMembers.items, member),
+          status: 'ready',
+          error: null,
+          rolePendingUserId: null,
+          roleError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatMembers.chatId !== chatId) return false;
+      this.patch({
+        chatMembers: {
+          ...this.state.chatMembers,
+          rolePendingUserId: null,
+          roleError: { userId, error: apiError },
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `DELETE /chats/{chatId}/members/{userId}` (soft removal; no row loss on error). */
+  async removeChatMember(chatId: string, userId: string): Promise<boolean> {
+    if (this.state.chatMembers.removePendingUserId !== null) return false;
+    this.patch({
+      chatMembers: {
+        ...this.state.chatMembers,
+        chatId,
+        removePendingUserId: userId,
+        removeError: null,
+      },
+    });
+    try {
+      await this.api.removeChatMember(chatId, userId);
+      if (this.state.chatMembers.chatId !== chatId) return false;
+      this.patch({
+        chatMembers: {
+          ...this.state.chatMembers,
+          items: this.state.chatMembers.items.filter((item) => item.user_id !== userId),
+          status: 'ready',
+          error: null,
+          removePendingUserId: null,
+          removeError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatMembers.chatId !== chatId) return false;
+      this.patch({
+        chatMembers: {
+          ...this.state.chatMembers,
+          removePendingUserId: null,
+          removeError: { userId, error: apiError },
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * `POST /chats/{chatId}/leave`. On `204` the channel disappears from the
+   * local list immediately (the server removed the ACTIVE participant row);
+   * the next chat becomes active. Failures keep the chat and return the error.
+   */
+  async leaveChat(chatId: string): Promise<boolean> {
+    if (this.state.chatMembers.leaveStatus === 'leaving') return false;
+    this.patch({
+      chatMembers: {
+        ...this.state.chatMembers,
+        chatId,
+        leaveStatus: 'leaving',
+        leaveError: null,
+      },
+    });
+    try {
+      await this.api.leaveChat(chatId);
+      const chats = this.state.chats.filter((chat) => chat.id !== chatId);
+      const slices = { ...this.state.slices };
+      delete slices[chatId];
+      const activeChatId =
+        this.state.activeChatId === chatId ? (chats[0]?.id ?? null) : this.state.activeChatId;
+      const activeThread =
+        this.state.activeThread?.chatId === chatId ? null : this.state.activeThread;
+      this.patch({
+        chats,
+        slices,
+        activeChatId,
+        activeThread,
+        workspaceUnread: this.withActiveWorkspaceUnread(chats),
+        chatMembers: createEmptyChatMembersState(),
+        chatInvites: createEmptyChatInvitesState(),
+        chatPermissions: createEmptyChatPermissionsState(),
+        chatPins: createEmptyChatPinsState(),
+        chatCover: createEmptyChatCoverState(),
+        chatArchive: createEmptyChatArchiveState(),
+        chatDeletion: createEmptyChatDeletionState(),
+      });
+      if (activeChatId) {
+        void this.loadChat(activeChatId);
+        this.updateRealtimeSubscriptions();
+      }
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        chatMembers: {
+          ...this.state.chatMembers,
+          leaveStatus: 'error',
+          leaveError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** Drop cached channel rows/feedback when the dialog opens, closes or switches. */
+  clearChatMembers(): void {
+    this.chatMembersToken += 1;
+    this.chatMembersInFlight = null;
+    const current = this.state.chatMembers;
+    if (
+      current.chatId !== null ||
+      current.status !== 'idle' ||
+      current.items.length > 0 ||
+      current.error !== null ||
+      current.addStatus !== 'idle' ||
+      current.rolePendingUserId !== null ||
+      current.roleError !== null ||
+      current.removePendingUserId !== null ||
+      current.removeError !== null ||
+      current.leaveStatus !== 'idle' ||
+      current.leaveError !== null
+    ) {
+      this.patch({ chatMembers: createEmptyChatMembersState() });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* #79: invite links                                                  */
+  /* ------------------------------------------------------------------ */
+
+  /** `GET /chats/{chatId}/invites` (OWNER/ADMIN metadata list, no tokens). */
+  loadChatInvites(chatId: string, force = false): Promise<void> {
+    const current = this.state.chatInvites;
+    if (!force && current.chatId === chatId) {
+      if (current.status === 'ready') return Promise.resolve();
+      if (current.status === 'loading' && this.chatInvitesInFlight) {
+        return this.chatInvitesInFlight;
+      }
+    }
+    const token = ++this.chatInvitesToken;
+    this.patch({
+      chatInvites: {
+        ...createEmptyChatInvitesState(),
+        chatId,
+        status: 'loading',
+        // The one-time token survives a list refresh until the dialog closes.
+        created: current.chatId === chatId ? current.created : null,
+      },
+    });
+    const promise = (async () => {
+      try {
+        const list = await this.api.listChatInvites(chatId);
+        if (token !== this.chatInvitesToken || this.state.chatInvites.chatId !== chatId) return;
+        this.patch({
+          chatInvites: {
+            ...this.state.chatInvites,
+            items: list.items,
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        if (token !== this.chatInvitesToken || this.state.chatInvites.chatId !== chatId) return;
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          chatInvites: {
+            ...this.state.chatInvites,
+            status: 'error',
+            error: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        if (token === this.chatInvitesToken) this.chatInvitesInFlight = null;
+      }
+    })();
+    this.chatInvitesInFlight = promise;
+    return promise;
+  }
+
+  /**
+   * `POST /chats/{chatId}/invites`. The raw token is returned exactly once and
+   * kept in `created` until the dialog closes; it is never put in the list.
+   */
+  async createChatInvite(chatId: string, body: ChatInviteCreateRequest): Promise<boolean> {
+    if (this.state.chatInvites.createStatus === 'creating') return false;
+    this.patch({
+      chatInvites: {
+        ...this.state.chatInvites,
+        chatId,
+        createStatus: 'creating',
+        createError: null,
+      },
+    });
+    try {
+      const created = await this.api.createChatInvite(chatId, body);
+      if (this.state.chatInvites.chatId !== chatId) return false;
+      const invite: ChatInvite = {
+        id: created.id,
+        role: created.role,
+        status: created.status,
+        used_count: created.used_count,
+        max_uses: created.max_uses,
+        expires_at: created.expires_at,
+        created_at: created.created_at,
+        ...(created.created_by ? { created_by: created.created_by } : {}),
+      };
+      this.patch({
+        chatInvites: {
+          ...this.state.chatInvites,
+          items: [invite, ...this.state.chatInvites.items.filter((item) => item.id !== invite.id)],
+          created,
+          createStatus: 'idle',
+          createError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatInvites.chatId !== chatId) return false;
+      this.patch({
+        chatInvites: {
+          ...this.state.chatInvites,
+          createStatus: 'error',
+          createError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * `DELETE /chats/{chatId}/invites/{inviteId}` (soft revoke, idempotent
+   * `204`). The row is marked `REVOKED` only after that success; the raw token
+   * of an already created invite is never shown again.
+   */
+  async revokeChatInvite(chatId: string, inviteId: string): Promise<boolean> {
+    if (this.state.chatInvites.revokePendingId !== null) return false;
+    this.patch({
+      chatInvites: {
+        ...this.state.chatInvites,
+        chatId,
+        revokePendingId: inviteId,
+        revokeError: null,
+      },
+    });
+    try {
+      await this.api.revokeChatInvite(chatId, inviteId);
+      if (this.state.chatInvites.chatId !== chatId) return false;
+      this.patch({
+        chatInvites: {
+          ...this.state.chatInvites,
+          items: this.state.chatInvites.items.map((item) =>
+            item.id === inviteId ? { ...item, status: 'REVOKED' } : item,
+          ),
+          revokePendingId: null,
+          revokeError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatInvites.chatId !== chatId) return false;
+      this.patch({
+        chatInvites: {
+          ...this.state.chatInvites,
+          revokePendingId: null,
+          revokeError: { inviteId, error: apiError },
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  clearChatInvites(): void {
+    this.chatInvitesToken += 1;
+    this.chatInvitesInFlight = null;
+    const current = this.state.chatInvites;
+    if (
+      current.chatId !== null ||
+      current.status !== 'idle' ||
+      current.items.length > 0 ||
+      current.created !== null ||
+      current.error !== null ||
+      current.createStatus !== 'idle' ||
+      current.createError !== null ||
+      current.revokePendingId !== null ||
+      current.revokeError !== null
+    ) {
+      this.patch({ chatInvites: createEmptyChatInvitesState() });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* P0-2 (#80): channel cover                                          */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * `GET /files?chat_id=…&kind=IMAGE` (file center). The cover is an existing
+   * managed image of this chat; there is no upload endpoint in this flow. Only
+   * CLEAN/SKIPPED rows are offered because the server rejects anything else.
+   */
+  loadChatCoverImages(chatId: string, force = false): Promise<void> {
+    const current = this.state.chatCover;
+    if (!force && current.chatId === chatId) {
+      if (current.imagesStatus === 'ready') return Promise.resolve();
+      if (current.imagesStatus === 'loading' && this.chatCoverInFlight) {
+        return this.chatCoverInFlight;
+      }
+    }
+    const token = ++this.chatCoverToken;
+    this.patch({
+      chatCover: {
+        ...createEmptyChatCoverState(),
+        chatId,
+        imagesStatus: 'loading',
+        images: current.chatId === chatId ? current.images : [],
+        actionStatus: current.chatId === chatId ? current.actionStatus : 'idle',
+        actionError: current.chatId === chatId ? current.actionError : null,
+      },
+    });
+    const promise = (async () => {
+      try {
+        const page = await this.api.listFiles({ chatId, kind: 'IMAGE', limit: 50 });
+        if (token !== this.chatCoverToken || this.state.chatCover.chatId !== chatId) return;
+        this.patch({
+          chatCover: {
+            ...this.state.chatCover,
+            images: page.items.filter(
+              (item) => item.scan_status === 'CLEAN' || item.scan_status === 'SKIPPED',
+            ),
+            imagesStatus: 'ready',
+            imagesError: null,
+          },
+        });
+      } catch (error) {
+        if (token !== this.chatCoverToken || this.state.chatCover.chatId !== chatId) return;
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          chatCover: {
+            ...this.state.chatCover,
+            images: [],
+            imagesStatus: 'error',
+            imagesError: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        if (token === this.chatCoverToken) this.chatCoverInFlight = null;
+      }
+    })();
+    this.chatCoverInFlight = promise;
+    return promise;
+  }
+
+  /** `POST /chats/{chatId}/cover`; the returned `Chat` is authoritative. */
+  async setChatCover(chatId: string, fileId: string): Promise<boolean> {
+    if (this.state.chatCover.actionStatus === 'saving') return false;
+    this.patch({
+      chatCover: {
+        ...this.state.chatCover,
+        chatId,
+        actionStatus: 'saving',
+        actionError: null,
+      },
+    });
+    const body: ChatCoverRequest = { file_id: fileId };
+    try {
+      const updated = await this.api.setChatCover(chatId, body);
+      this.applyChatSummary(updated);
+      if (this.state.chatCover.chatId !== chatId) return false;
+      this.patch({
+        chatCover: {
+          ...this.state.chatCover,
+          actionStatus: 'saved',
+          actionError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatCover.chatId !== chatId) return false;
+      this.patch({
+        chatCover: {
+          ...this.state.chatCover,
+          actionStatus: 'error',
+          actionError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `DELETE /chats/{chatId}/cover` (idempotent; the attachment stays). */
+  async removeChatCover(chatId: string): Promise<boolean> {
+    if (this.state.chatCover.actionStatus === 'removing') return false;
+    this.patch({
+      chatCover: {
+        ...this.state.chatCover,
+        chatId,
+        actionStatus: 'removing',
+        actionError: null,
+      },
+    });
+    try {
+      await this.api.deleteChatCover(chatId);
+      if (this.state.chatCover.chatId !== chatId) return false;
+      const chats = this.state.chats.map((chat) =>
+        chat.id === chatId ? { ...chat, cover_file_id: null } : chat,
+      );
+      this.patch({
+        chats,
+        chatCover: {
+          ...this.state.chatCover,
+          actionStatus: 'saved',
+          actionError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatCover.chatId !== chatId) return false;
+      this.patch({
+        chatCover: {
+          ...this.state.chatCover,
+          actionStatus: 'error',
+          actionError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  clearChatCover(): void {
+    this.chatCoverToken += 1;
+    this.chatCoverInFlight = null;
+    const current = this.state.chatCover;
+    if (
+      current.chatId !== null ||
+      current.imagesStatus !== 'idle' ||
+      current.images.length > 0 ||
+      current.imagesError !== null ||
+      current.actionStatus !== 'idle' ||
+      current.actionError !== null
+    ) {
+      this.patch({ chatCover: createEmptyChatCoverState() });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* P0-2 (#80): rights matrix                                          */
+  /* ------------------------------------------------------------------ */
+
+  /** `GET /chats/{chatId}/permissions` (any ACTIVE GROUP participant). */
+  loadChatPermissions(chatId: string, force = false): Promise<void> {
+    const current = this.state.chatPermissions;
+    if (!force && current.chatId === chatId) {
+      if (current.status === 'ready') return Promise.resolve();
+      if (current.status === 'loading' && this.chatPermissionsInFlight) {
+        return this.chatPermissionsInFlight;
+      }
+    }
+    const token = ++this.chatPermissionsToken;
+    this.patch({
+      chatPermissions: {
+        ...createEmptyChatPermissionsState(),
+        chatId,
+        status: 'loading',
+      },
+    });
+    const promise = (async () => {
+      try {
+        const matrix = await this.api.getChatPermissions(chatId);
+        if (token !== this.chatPermissionsToken || this.state.chatPermissions.chatId !== chatId) {
+          return;
+        }
+        this.patch({
+          chatPermissions: {
+            ...this.state.chatPermissions,
+            matrix,
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        if (token !== this.chatPermissionsToken || this.state.chatPermissions.chatId !== chatId) {
+          return;
+        }
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          chatPermissions: {
+            ...this.state.chatPermissions,
+            status: 'error',
+            error: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        if (token === this.chatPermissionsToken) this.chatPermissionsInFlight = null;
+      }
+    })();
+    this.chatPermissionsInFlight = promise;
+    return promise;
+  }
+
+  /** `PATCH /chats/{chatId}/permissions`; only changed roles are sent. */
+  async saveChatPermissions(chatId: string, patch: ChatPermissionsUpdate): Promise<boolean> {
+    if (this.state.chatPermissions.saveStatus === 'saving') return false;
+    if (Object.keys(patch).length === 0) {
+      this.patch({
+        chatPermissions: {
+          ...this.state.chatPermissions,
+          chatId,
+          saveStatus: 'error',
+          saveError: ApiError.client(
+            'VALIDATION_FAILED',
+            'At least one role right is required',
+            422,
+            { reason: 'empty_patch' },
+          ),
+        },
+      });
+      return false;
+    }
+    this.patch({
+      chatPermissions: {
+        ...this.state.chatPermissions,
+        chatId,
+        saveStatus: 'saving',
+        saveError: null,
+      },
+    });
+    try {
+      const matrix = await this.api.updateChatPermissions(chatId, patch);
+      if (this.state.chatPermissions.chatId !== chatId) return false;
+      this.patch({
+        chatPermissions: {
+          ...this.state.chatPermissions,
+          matrix,
+          status: 'ready',
+          error: null,
+          saveStatus: 'saved',
+          saveError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatPermissions.chatId !== chatId) return false;
+      this.patch({
+        chatPermissions: {
+          ...this.state.chatPermissions,
+          saveStatus: 'error',
+          saveError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  clearChatPermissions(): void {
+    this.chatPermissionsToken += 1;
+    this.chatPermissionsInFlight = null;
+    const current = this.state.chatPermissions;
+    if (
+      current.chatId !== null ||
+      current.status !== 'idle' ||
+      current.matrix !== null ||
+      current.error !== null ||
+      current.saveStatus !== 'idle' ||
+      current.saveError !== null
+    ) {
+      this.patch({ chatPermissions: createEmptyChatPermissionsState() });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* P0-2 (#80): pinned messages                                       */
+  /* ------------------------------------------------------------------ */
+
+  /** `GET /chats/{chatId}/pins` (metadata only, newest first). */
+  loadChatPins(chatId: string, force = false): Promise<void> {
+    const current = this.state.chatPins;
+    if (!force && current.chatId === chatId) {
+      if (current.status === 'ready') return Promise.resolve();
+      if (current.status === 'loading' && this.chatPinsInFlight) return this.chatPinsInFlight;
+    }
+    const token = ++this.chatPinsToken;
+    this.patch({
+      chatPins: {
+        ...createEmptyChatPinsState(),
+        chatId,
+        status: 'loading',
+      },
+    });
+    const promise = (async () => {
+      try {
+        const list = await this.api.listChatPins(chatId);
+        if (token !== this.chatPinsToken || this.state.chatPins.chatId !== chatId) return;
+        this.patch({
+          chatPins: {
+            ...this.state.chatPins,
+            items: list.items,
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        if (token !== this.chatPinsToken || this.state.chatPins.chatId !== chatId) return;
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          chatPins: {
+            ...this.state.chatPins,
+            status: 'error',
+            error: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        if (token === this.chatPinsToken) this.chatPinsInFlight = null;
+      }
+    })();
+    this.chatPinsInFlight = promise;
+    return promise;
+  }
+
+  /** `POST /chats/{chatId}/pins` (`409 CHAT_PIN_LIMIT` is kept honestly). */
+  async pinMessage(chatId: string, messageId: string): Promise<boolean> {
+    if (this.state.chatPins.pendingMessageId !== null) return false;
+    this.patch({
+      chatPins: {
+        ...this.state.chatPins,
+        chatId,
+        pendingMessageId: messageId,
+        actionError: null,
+        limitReached: false,
+      },
+    });
+    try {
+      const pin = await this.api.pinChatMessage(chatId, messageId);
+      if (this.state.chatPins.chatId !== chatId) return false;
+      this.patch({
+        chatPins: {
+          ...this.state.chatPins,
+          items: [
+            pin,
+            ...this.state.chatPins.items.filter((item) => item.message_id !== messageId),
+          ],
+          status: 'ready',
+          error: null,
+          pendingMessageId: null,
+          actionError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatPins.chatId !== chatId) return false;
+      this.patch({
+        chatPins: {
+          ...this.state.chatPins,
+          pendingMessageId: null,
+          actionError: { messageId, error: apiError },
+          limitReached: apiError.code === 'CHAT_PIN_LIMIT',
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `DELETE /chats/{chatId}/pins/{messageId}` (idempotent `204`). */
+  async unpinMessage(chatId: string, messageId: string): Promise<boolean> {
+    if (this.state.chatPins.pendingMessageId !== null) return false;
+    this.patch({
+      chatPins: {
+        ...this.state.chatPins,
+        chatId,
+        pendingMessageId: messageId,
+        actionError: null,
+        limitReached: false,
+      },
+    });
+    try {
+      await this.api.unpinChatMessage(chatId, messageId);
+      if (this.state.chatPins.chatId !== chatId) return false;
+      this.patch({
+        chatPins: {
+          ...this.state.chatPins,
+          items: this.state.chatPins.items.filter((item) => item.message_id !== messageId),
+          status: 'ready',
+          error: null,
+          pendingMessageId: null,
+          actionError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatPins.chatId !== chatId) return false;
+      this.patch({
+        chatPins: {
+          ...this.state.chatPins,
+          pendingMessageId: null,
+          actionError: { messageId, error: apiError },
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  clearChatPins(): void {
+    this.chatPinsToken += 1;
+    this.chatPinsInFlight = null;
+    const current = this.state.chatPins;
+    if (
+      current.chatId !== null ||
+      current.status !== 'idle' ||
+      current.items.length > 0 ||
+      current.error !== null ||
+      current.pendingMessageId !== null ||
+      current.actionError !== null ||
+      current.limitReached
+    ) {
+      this.patch({ chatPins: createEmptyChatPinsState() });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* P0-2 (#80): archive, unarchive and soft delete                     */
+  /* ------------------------------------------------------------------ */
+
+  /** `POST /chats/{chatId}/archive` (user-local; DIRECT included). */
+  async archiveChat(chatId: string): Promise<boolean> {
+    if (this.state.chatArchive.status === 'archiving') return false;
+    const workspaceId = this.currentWorkspaceId();
+    const previous = this.state.chats.find((chat) => chat.id === chatId) ?? null;
+    this.patch({
+      chatArchive: { chatId, status: 'archiving', error: null },
+      chatDeletion: createEmptyChatDeletionState(),
+    });
+    try {
+      await this.api.archiveChat(chatId);
+      if (previous && this.state.archivedChats.status === 'ready') {
+        this.patch({
+          archivedChats: {
+            ...this.state.archivedChats,
+            items: [
+              { ...previous, archived: true },
+              ...this.state.archivedChats.items.filter((chat) => chat.id !== chatId),
+            ],
+          },
+        });
+      }
+      if (workspaceId) await this.reloadChatsForWorkspace(workspaceId);
+      this.patch({
+        chatArchive: { chatId, status: 'idle', error: null },
+        chatCover: createEmptyChatCoverState(),
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        chatArchive: { chatId, status: 'error', error: apiError },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `POST /chats/{chatId}/unarchive` (user-local, idempotent). */
+  async unarchiveChat(chatId: string): Promise<boolean> {
+    if (this.state.chatArchive.status === 'unarchiving') return false;
+    const workspaceId = this.state.archivedChats.workspaceId ?? this.currentWorkspaceId();
+    this.patch({
+      chatArchive: { chatId, status: 'unarchiving', error: null },
+      archivedChats: {
+        ...this.state.archivedChats,
+        pendingChatId: chatId,
+        actionError: null,
+      },
+    });
+    try {
+      await this.api.unarchiveChat(chatId);
+      this.patch({
+        archivedChats: {
+          ...this.state.archivedChats,
+          items: this.state.archivedChats.items.filter((chat) => chat.id !== chatId),
+          pendingChatId: null,
+          actionError: null,
+        },
+        chatArchive: { chatId, status: 'idle', error: null },
+      });
+      if (workspaceId) await this.reloadChatsForWorkspace(workspaceId);
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        chatArchive: { chatId, status: 'error', error: apiError },
+        archivedChats: {
+          ...this.state.archivedChats,
+          pendingChatId: null,
+          actionError: { chatId, error: apiError },
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `GET /workspaces/{id}/chats?archived=true` (separate from the main list). */
+  loadArchivedChats(force = false): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) return Promise.resolve();
+    const current = this.state.archivedChats;
+    if (!force && current.workspaceId === workspaceId) {
+      if (current.status === 'ready') return Promise.resolve();
+      if (current.status === 'loading' && this.archivedChatsInFlight) {
+        return this.archivedChatsInFlight;
+      }
+    }
+    const token = ++this.archivedChatsToken;
+    this.patch({
+      archivedChats: {
+        ...createEmptyArchivedChatsState(),
+        workspaceId,
+        status: 'loading',
+      },
+    });
+    const promise = (async () => {
+      try {
+        const list = await this.api.listChats(workspaceId, true);
+        if (token !== this.archivedChatsToken) return;
+        if (this.currentWorkspaceId() !== workspaceId) return;
+        this.patch({
+          archivedChats: {
+            ...this.state.archivedChats,
+            items: list.items,
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        if (token !== this.archivedChatsToken) return;
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          archivedChats: {
+            ...this.state.archivedChats,
+            items: [],
+            status: 'error',
+            error: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        if (token === this.archivedChatsToken) this.archivedChatsInFlight = null;
+      }
+    })();
+    this.archivedChatsInFlight = promise;
+    return promise;
+  }
+
+  /** `DELETE /chats/{chatId}`: ACTIVE chat OWNER only, soft delete. */
+  async deleteOwnChat(chatId: string): Promise<boolean> {
+    if (this.state.chatDeletion.status === 'deleting') return false;
+    const workspaceId = this.currentWorkspaceId();
+    this.patch({
+      chatDeletion: { chatId, status: 'deleting', error: null },
+      chatArchive: createEmptyChatArchiveState(),
+    });
+    try {
+      await this.api.deleteOwnChat(chatId);
+      const chats = this.state.chats.filter((chat) => chat.id !== chatId);
+      const slices = { ...this.state.slices };
+      delete slices[chatId];
+      const activeChatId =
+        this.state.activeChatId === chatId ? (chats[0]?.id ?? null) : this.state.activeChatId;
+      const activeThread =
+        this.state.activeThread?.chatId === chatId ? null : this.state.activeThread;
+      this.patch({
+        chats,
+        slices,
+        activeChatId,
+        activeThread,
+        workspaceUnread: this.withActiveWorkspaceUnread(chats),
+        chatMembers: createEmptyChatMembersState(),
+        chatInvites: createEmptyChatInvitesState(),
+        chatPermissions: createEmptyChatPermissionsState(),
+        chatPins: createEmptyChatPinsState(),
+        chatCover: createEmptyChatCoverState(),
+        chatDeletion: { chatId, status: 'idle', error: null },
+        archivedChats: {
+          ...this.state.archivedChats,
+          items: this.state.archivedChats.items.filter((chat) => chat.id !== chatId),
+        },
+      });
+      if (workspaceId) void this.reloadChatsForWorkspace(workspaceId);
+      if (activeChatId && this.state.activeChatId === activeChatId) {
+        void this.loadChat(activeChatId);
+        this.updateRealtimeSubscriptions();
+      }
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        chatDeletion: { chatId, status: 'error', error: apiError },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  clearChatArchive(): void {
+    const archive = this.state.chatArchive;
+    if (archive.chatId !== null || archive.status !== 'idle' || archive.error !== null) {
+      this.patch({ chatArchive: createEmptyChatArchiveState() });
+    }
+    const deletion = this.state.chatDeletion;
+    if (deletion.chatId !== null || deletion.status !== 'idle' || deletion.error !== null) {
+      this.patch({ chatDeletion: createEmptyChatDeletionState() });
+    }
+  }
+
+  /**
+   * Viewer role in a GROUP chat, derived from the loaded member directory.
+   * `null` means "not loaded yet" (the server still enforces everything).
+   */
+  chatActorRole(chatId: string): ChatMemberRole | null {
+    const members = this.state.chatMembers;
+    if (members.chatId !== chatId) return null;
+    const viewerId = this.viewerId();
+    if (!viewerId) return null;
+    return members.items.find((member) => member.user_id === viewerId)?.role ?? null;
+  }
+
+  /** `pin_messages` right for the viewer (OWNER/ADMIN always allowed). */
+  canPinMessages(chatId: string): boolean {
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    if (!chat || chat.type !== 'GROUP' || chat.security_mode === 'E2EE') return false;
+    const role = this.chatActorRole(chatId);
+    if (role === null) return false;
+    if (isChatManagerRole(role)) return true;
+    const matrix =
+      this.state.chatPermissions.chatId === chatId ? this.state.chatPermissions.matrix : null;
+    return chatPermissionAllowed(matrix, role, 'pin_messages');
+  }
+
+  /**
+   * Read-only channel: server denies send/poll to every role except OWNER/ADMIN
+   * (`403 CHAT_READ_ONLY`). Unknown role keeps the server as the authority.
+   */
+  canPostInChat(chatId: string): boolean {
+    const chat = this.state.chats.find((item) => item.id === chatId) ?? null;
+    if (!chat?.read_only) return true;
+    const role = this.chatActorRole(chatId);
+    if (role === null) return true;
+    return role === 'OWNER' || role === 'ADMIN';
+  }
+
+  /** Apply a server-returned full `Chat` to the list and archived rows. */
+  private applyChatSummary(updated: Chat): void {
+    const patch: Partial<AppState> = {
+      chats: this.state.chats.map((chat) =>
+        chat.id === updated.id ? chatSummaryFromChat(updated, chat) : chat,
+      ),
+      archivedChats: {
+        ...this.state.archivedChats,
+        items: this.state.archivedChats.items.map((chat) =>
+          chat.id === updated.id ? chatSummaryFromChat(updated, chat) : chat,
+        ),
+      },
+    };
+    this.patch(patch);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* #79: self-service blocks                                           */
+  /* ------------------------------------------------------------------ */
+
+  /** `GET /me/blocked` (own rows only; no display name/email in the contract). */
+  async loadBlockedUsers(force = false): Promise<void> {
+    if (!force && this.state.blockedUsers.status === 'ready') return;
+    if (this.blockedUsersInFlight) return this.blockedUsersInFlight;
+    this.patch({
+      blockedUsers: { ...this.state.blockedUsers, status: 'loading', error: null },
+    });
+    this.blockedUsersInFlight = (async () => {
+      try {
+        const list = await this.api.listBlockedUsers();
+        this.patch({
+          blockedUsers: {
+            ...this.state.blockedUsers,
+            items: list.items,
+            status: 'ready',
+            error: null,
+          },
+        });
+      } catch (error) {
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          blockedUsers: {
+            ...this.state.blockedUsers,
+            status: 'error',
+            error: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+      } finally {
+        this.blockedUsersInFlight = null;
+      }
+    })();
+    return this.blockedUsersInFlight;
+  }
+
+  /** `POST /users/{userId}/block` (idempotent; re-reads the list on success). */
+  async blockUser(userId: string): Promise<boolean> {
+    if (this.state.blockedUsers.pendingUserId !== null) return false;
+    this.patch({
+      blockedUsers: {
+        ...this.state.blockedUsers,
+        pendingUserId: userId,
+        actionError: null,
+      },
+    });
+    try {
+      await this.api.blockUser(userId);
+      this.patch({
+        blockedUsers: {
+          ...this.state.blockedUsers,
+          pendingUserId: null,
+          actionError: null,
+        },
+      });
+      // Do not invent `blocked_at`: the server list is the source of truth.
+      if (this.state.blockedUsers.status === 'ready') {
+        await this.loadBlockedUsers(true);
+      }
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        blockedUsers: {
+          ...this.state.blockedUsers,
+          pendingUserId: null,
+          actionError: { userId, error: apiError },
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `DELETE /users/{userId}/block` (idempotent; the row disappears on `204`). */
+  async unblockUser(userId: string): Promise<boolean> {
+    if (this.state.blockedUsers.pendingUserId !== null) return false;
+    this.patch({
+      blockedUsers: {
+        ...this.state.blockedUsers,
+        pendingUserId: userId,
+        actionError: null,
+      },
+    });
+    try {
+      await this.api.unblockUser(userId);
+      this.patch({
+        blockedUsers: {
+          ...this.state.blockedUsers,
+          items: this.state.blockedUsers.items.filter((item) => item.user_id !== userId),
+          pendingUserId: null,
+          actionError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        blockedUsers: {
+          ...this.state.blockedUsers,
+          pendingUserId: null,
+          actionError: { userId, error: apiError },
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* #79: invite accept route                                           */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * `POST /invites/{token}/accept`. The server is idempotent for an existing
+   * ACTIVE member (`already_member=true`, no use consumed) and maps expired,
+   * revoked and exhausted links to `410` with distinct codes; every outcome is
+   * kept in `inviteAccept` so the page can explain it honestly.
+   */
+  acceptChatInvite(token: string): Promise<boolean> {
+    if (this.inviteAcceptInFlight) return this.inviteAcceptInFlight;
+    const current = this.state.inviteAccept;
+    if (current.status === 'accepted' && current.result !== null && current.token === token) {
+      return Promise.resolve(true);
+    }
+    this.patch({
+      inviteAccept: { token, status: 'accepting', result: null, error: null },
+    });
+    const promise = (async () => {
+      try {
+        const result = await this.api.acceptChatInvite(token);
+        this.patch({
+          inviteAccept: { token, status: 'accepted', result, error: null },
+        });
+        return true;
+      } catch (error) {
+        const apiError = toApiError(error);
+        this.handleFailure(apiError);
+        this.patch({
+          inviteAccept: {
+            token,
+            status: 'error',
+            result: null,
+            error: apiError,
+          },
+          authExpired: apiError.status === 401 ? true : this.state.authExpired,
+        });
+        return false;
+      } finally {
+        this.inviteAcceptInFlight = null;
+      }
+    })();
+    this.inviteAcceptInFlight = promise;
+    return promise;
+  }
+
+  /** Reload the active workspace chat list and open the accepted channel. */
+  async openInviteTarget(result: InviteAcceptResult): Promise<boolean> {
+    if (result.workspace_id !== this.state.activeWorkspaceId) {
+      await this.selectWorkspace(result.workspace_id);
+    } else {
+      await this.reloadChatsForWorkspace(result.workspace_id);
+    }
+    if (!this.state.slices[result.chat_id]) return false;
+    await this.setActiveChat(result.chat_id);
+    return true;
+  }
+
+  resetInviteAccept(): void {
+    if (this.inviteAcceptInFlight) return;
+    const current = this.state.inviteAccept;
+    if (current.status !== 'idle' || current.token !== null || current.error !== null) {
+      this.patch({ inviteAccept: createEmptyInviteAcceptState() });
+    }
+  }
+
+  /** Merge a fresh chat list without dropping already loaded message slices. */
+  private async reloadChatsForWorkspace(workspaceId: string): Promise<void> {
+    try {
+      const list = await this.api.listChats(workspaceId);
+      if (this.currentWorkspaceId() !== workspaceId) return;
+      const chats = list.items;
+      const slices = { ...this.state.slices };
+      for (const chat of chats) {
+        slices[chat.id] ??= createEmptySlice(chat.id, chat.unread_count);
+      }
+      for (const id of Object.keys(slices)) {
+        if (!chats.some((chat) => chat.id === id)) delete slices[id];
+      }
+      const activeChatId =
+        this.state.activeChatId !== null &&
+        chats.some((chat) => chat.id === this.state.activeChatId)
+          ? this.state.activeChatId
+          : (chats[0]?.id ?? null);
+      this.patch({
+        chats,
+        slices,
+        activeChatId,
+        workspaceUnread: this.withActiveWorkspaceUnread(chats),
+      });
+    } catch (error) {
+      this.handleFailure(toApiError(error));
+    }
+  }
+
   /**
    * D1-FE5: `PATCH /chats/{chatId}`. The server is the only source of truth:
    * no optimistic chat/header update, and the list is re-read after a `200` so
@@ -1704,6 +3500,11 @@ export class ChatStore {
     const body: ChatUpdateRequest = {};
     if (patch.name !== undefined) body.name = patch.name;
     if (patch.description !== undefined) body.description = patch.description;
+    if (patch.cover_file_id !== undefined) body.cover_file_id = patch.cover_file_id;
+    if (patch.read_only !== undefined) body.read_only = patch.read_only;
+    if (patch.visibility !== undefined) body.visibility = patch.visibility;
+    if (patch.join_policy !== undefined) body.join_policy = patch.join_policy;
+    if (patch.rights !== undefined) body.rights = patch.rights;
     if (Object.keys(body).length === 0) {
       this.patch({
         chatSettings: {
@@ -2084,6 +3885,20 @@ export class ChatStore {
     this.membersToken += 1;
     this.membersInFlight = null;
     this.membersLoadMoreInFlight = false;
+    this.chatMembersToken += 1;
+    this.chatMembersInFlight = null;
+    this.chatInvitesToken += 1;
+    this.chatInvitesInFlight = null;
+    this.chatPermissionsToken += 1;
+    this.chatPermissionsInFlight = null;
+    this.chatCoverToken += 1;
+    this.chatCoverInFlight = null;
+    this.chatPinsToken += 1;
+    this.chatPinsInFlight = null;
+    this.archivedChatsToken += 1;
+    this.archivedChatsInFlight = null;
+    this.blockedUsersInFlight = null;
+    this.inviteAcceptInFlight = null;
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.seenEventIds.length = 0;
@@ -2129,6 +3944,16 @@ export class ChatStore {
       workspaceMembers: createEmptyWorkspaceMembersState(),
       workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
       chatSettings: createEmptyChatSettingsState(),
+      chatMembers: createEmptyChatMembersState(),
+      chatInvites: createEmptyChatInvitesState(),
+      blockedUsers: createEmptyBlockedUsersState(),
+      inviteAccept: createEmptyInviteAcceptState(),
+      chatPermissions: createEmptyChatPermissionsState(),
+      chatCover: createEmptyChatCoverState(),
+      chatPins: createEmptyChatPinsState(),
+      chatArchive: createEmptyChatArchiveState(),
+      chatDeletion: createEmptyChatDeletionState(),
+      archivedChats: createEmptyArchivedChatsState(),
       devices: createEmptyDevicesState(),
     });
     this.devicesInFlight = null;

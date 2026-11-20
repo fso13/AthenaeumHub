@@ -10,6 +10,7 @@ import {
   EditIcon,
   EmojiIcon,
   MoreIcon,
+  PinIcon,
   ReplyIcon,
   ThreadIcon,
   TranslateIcon,
@@ -216,6 +217,7 @@ export function MessageActions({
   onOpenThread,
 }: MessageActionsProps) {
   const store = useChatStore();
+  const state = useChatState();
   const pluginActions = usePluginActionsStore();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -229,6 +231,31 @@ export function MessageActions({
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [actionFailure, setActionFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const pinsState = state.chatPins;
+  const pinned =
+    pinsState.chatId === message.chat_id &&
+    pinsState.items.some((pin) => pin.message_id === message.id);
+  const pinAllowed = store.canPinMessages(message.chat_id);
+  const pinPending = pinsState.pendingMessageId === message.id;
+  const togglePin = async () => {
+    setActionFailure(null);
+    if (pinned) {
+      await store.unpinMessage(message.chat_id, message.id);
+      return;
+    }
+    const ok = await store.pinMessage(message.chat_id, message.id);
+    if (!ok) {
+      const failure = store.getSnapshot().chatPins.actionError;
+      if (failure?.messageId === message.id) {
+        setActionFailure(
+          failure.error.code === 'CHAT_PIN_LIMIT'
+            ? t('message.pinLimit')
+            : describeError(failure.error).message,
+        );
+      }
+    }
+  };
 
   const toolsId = useId();
   const editTitleId = useId();
@@ -416,6 +443,27 @@ export function MessageActions({
 
   // With replies the always-visible ThreadLink is the single entry point; the
   // hover action only creates an empty thread (no duplicate accessible name).
+  const pinAction =
+    !e2eeChat && pinAllowed ? (
+      <button
+        type="button"
+        className="msg-tool"
+        disabled={pinPending}
+        aria-pressed={pinned}
+        aria-label={pinned ? t('message.unpin') : t('message.pin')}
+        title={
+          pinned
+            ? t('message.unpin')
+            : pinsState.limitReached
+              ? t('message.pinLimit')
+              : t('message.pin')
+        }
+        onClick={() => void togglePin()}
+      >
+        <PinIcon aria-hidden="true" />
+      </button>
+    ) : null;
+
   const threadAction =
     canThread && threadsAvailable && onOpenThread && threadReplyCount === 0 ? (
       <button
@@ -761,6 +809,7 @@ export function MessageActions({
           <TrashIcon aria-hidden="true" />
         </button>
         {replyAction}
+        {pinAction}
         {threadAction}
         {picker}
         {translateMenu}

@@ -146,6 +146,12 @@ krug:
     claim-user-window: ${KRUG_RATE_LIMIT_CLAIM_USER_WINDOW:60s}
     claim-per-chat: ${KRUG_RATE_LIMIT_CLAIM_PER_CHAT:10}
     claim-chat-window: ${KRUG_RATE_LIMIT_CLAIM_CHAT_WINDOW:60s}
+    # P0-1 (#79): invite links. Accept is capped per user (token guessing/abuse) and create
+    # is capped per channel (link spam); both windows are independent of sends/claims.
+    invite-accept-per-user: ${KRUG_RATE_LIMIT_INVITE_ACCEPT_PER_USER:10}
+    invite-accept-window: ${KRUG_RATE_LIMIT_INVITE_ACCEPT_WINDOW:60s}
+    invite-create-per-chat: ${KRUG_RATE_LIMIT_INVITE_CREATE_PER_CHAT:30}
+    invite-create-window: ${KRUG_RATE_LIMIT_INVITE_CREATE_WINDOW:1h}
   outbox:
     relay:
       enabled: ${KRUG_OUTBOX_RELAY_ENABLED:true}

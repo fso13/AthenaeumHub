@@ -75,8 +75,8 @@ public class CallSignalingService {
         }
 
         RealtimeCallAccess access = callAccess.check(session.workspaceId(), chatId,
-                session.userId(), signal.conference(), Set.copyOf(signal.recipients()),
-                "realtime:" + session.sessionId());
+                session.userId(), signal.kind(), signal.conference(),
+                Set.copyOf(signal.recipients()), "realtime:" + session.sessionId());
         if (!access.accepted()) {
             throw rejectionFor(access.reason());
         }

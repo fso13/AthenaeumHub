@@ -169,8 +169,8 @@ public class ChatCreateService {
         }
         boolean peerCapable = chatRepository.peerHasE2eeCapableDevices(workspaceId, chat.id(),
                 principal.userId());
-        return new CreateChatResult(201, new ChatView(chat.id(), "DIRECT", mode, null, peerId,
-                peerCapable, null, null, null, 0, 0, clock.now()), false);
+        return new CreateChatResult(201,
+                ChatViewAssembler.createdDirect(chat, peerId, peerCapable, clock.now()), false);
     }
 
     private CreateChatResult createGroup(Principal principal, UUID workspaceId, String mode,
@@ -235,9 +235,10 @@ public class ChatCreateService {
                 clock.now()));
         idempotency.complete(scoped, scope, idempotencyKey.toString(), requestHash, 201,
                 chat.id());
-        return new CreateChatResult(201, new ChatView(chat.id(), "GROUP", mode,
-                visibility.name(), null, false, chat.name(), chat.description(), null, 0, 0,
-                clock.now()), false);
+        return new CreateChatResult(201, ChatViewAssembler.createdGroup(chat, visibility,
+                ru.krug.backend.chat.domain.model.ChannelJoinPolicy.forVisibility(visibility),
+                clock.now()),
+                false);
     }
 
     private void validateVisibilityMembers(Principal principal, UUID workspaceId,
@@ -332,11 +333,17 @@ public class ChatCreateService {
                     visibility == null ? null : visibility.name(), summary.peerId(),
                     summary.peerHasE2eeCapableDevices(), summary.name(),
                     summary.description(), null, summary.lastSeq(), summary.unreadCount(),
-                    summary.createdAt());
+                    summary.createdAt(), summary.coverFileId(), summary.readOnly(),
+                    summary.joinPolicy() == null ? null : summary.joinPolicy().name(),
+                    summary.archived());
         }
         return new ChatView(chat.id(), chat.type().name(), chat.securityMode().name(),
                 fallbackVisibility == null ? null : fallbackVisibility.name(), null, false,
-                chat.name(), chat.description(), null, 0, 0, null);
+                chat.name(), chat.description(), null, 0, 0, null, null, false,
+                fallbackVisibility == null ? null
+                        : ru.krug.backend.chat.domain.model.ChannelJoinPolicy
+                                .forVisibility(fallbackVisibility).name(),
+                false);
     }
 
     private static Chat.Type parseType(String value) {
