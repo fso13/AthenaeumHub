@@ -2,7 +2,6 @@ package ru.krug.backend.message.application.usecase;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -19,18 +18,21 @@ import ru.krug.backend.chat.application.port.SeqAllocator;
 import ru.krug.backend.chat.domain.model.ChatPermission;
 import ru.krug.backend.message.application.command.SendMessageCommand;
 import ru.krug.backend.message.application.event.MessageCreatedNotification;
-import ru.krug.backend.message.application.model.AttachmentMediaView;
+import ru.krug.backend.message.application.event.MessageMentionNotification;
 import ru.krug.backend.message.application.model.E2eeSendPlan;
 import ru.krug.backend.message.application.model.EnvelopeBatch;
 import ru.krug.backend.message.application.model.MessageAttachmentView;
+import ru.krug.backend.message.application.model.MentionPlan;
 import ru.krug.backend.message.application.model.MessageCreateInput;
 import ru.krug.backend.message.application.model.MessageView;
 import ru.krug.backend.message.application.model.SendMessageResult;
 import ru.krug.backend.message.application.port.DlpGuardPort;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
+import ru.krug.backend.message.application.port.MessageMentionPort;
 import ru.krug.backend.message.application.port.MessageChatContextPort;
 import ru.krug.backend.message.application.service.E2eeEnvelopeValidator;
 import ru.krug.backend.message.application.service.EnvelopeFingerprint;
+import ru.krug.backend.message.application.service.MessageEventPayload;
 import ru.krug.backend.message.domain.event.MessageCreatedEvent;
 import ru.krug.backend.message.domain.model.CryptoEnvelope;
 import ru.krug.backend.message.domain.model.Message;
@@ -81,6 +83,7 @@ public class MessageSubmissionHandler {
     private final RateLimitPort rateLimit;
     private final MessageQueryHandler queryHandler;
     private final MessageAttachmentPort attachmentPort;
+    private final MessageMentionPort mentionPort;
     private final StickerCatalogPort stickerCatalog;
     private final MessageChatContextPort chatContext;
     private final E2eeEnvelopeValidator envelopeValidator;
@@ -98,6 +101,7 @@ public class MessageSubmissionHandler {
                                     IdempotencyPort idempotency, RateLimitPort rateLimit,
                                     MessageQueryHandler queryHandler,
                                     MessageAttachmentPort attachmentPort,
+                                    MessageMentionPort mentionPort,
                                     StickerCatalogPort stickerCatalog,
                                     MessageChatContextPort chatContext,
                                     E2eeEnvelopeValidator envelopeValidator,
@@ -115,6 +119,7 @@ public class MessageSubmissionHandler {
         this.rateLimit = rateLimit;
         this.queryHandler = queryHandler;
         this.attachmentPort = attachmentPort;
+        this.mentionPort = mentionPort;
         this.stickerCatalog = stickerCatalog;
         this.chatContext = chatContext;
         this.envelopeValidator = envelopeValidator;
@@ -179,6 +184,16 @@ public class MessageSubmissionHandler {
             throw DomainException.badRequest("text or attachment_ids must be present",
                     Map.of("field", "text", "reason", "empty_message"));
         }
+        if (input.hasMentions() && input.isSticker()) {
+            throw DomainException.unprocessable(ErrorCode.VALIDATION_FAILED,
+                    "A sticker message cannot mention users", Map.of("field", "mentions"));
+        }
+        // #83: validate the mention audience before seq allocation. An unknown/non-member id
+        // is 422 MENTION_INVALID; @all by a non-OWNER/ADMIN is 403 MENTION_ALL_FORBIDDEN.
+        MentionPlan mentionPlan = input.hasMentions()
+                ? mentionPort.plan(principal, principal.workspaceId(), chatId,
+                        access.memberRole(), input.mentions(), input.mentionAll())
+                : MentionPlan.empty();
         if (input.threadRootId() != null) {
             Message root = messageRepository.findById(principal.workspaceId(),
                     input.threadRootId()).orElse(null);
@@ -213,8 +228,12 @@ public class MessageSubmissionHandler {
                         input.clientMessageId(), now)
                 : Message.createText(messageId, principal.workspaceId(), chatId, seq,
                         principal.userId(), principal.deviceId(), senderDisplayName, body,
-                        input.replyToId(), input.threadRootId(), input.clientMessageId(), now);
+                        input.replyToId(), input.threadRootId(), input.clientMessageId(),
+                        mentionPlan.mentionedUserIds(), mentionPlan.all(), now);
         messageRepository.save(message);
+        // Mention inbox rows are written in the message transaction: a failed send cannot
+        // leave a mention that points at a non-existent message.
+        mentionPort.record(principal.workspaceId(), chatId, messageId, mentionPlan, now);
 
         MessageView view = MessageView.from(message).withAttachments(attachments)
                 .withSticker(sticker);
@@ -222,13 +241,20 @@ public class MessageSubmissionHandler {
                 chatId, seq, principal.userId(), now,
                 input.hasText() ? input.text().getBytes(StandardCharsets.UTF_8).length : 0);
         outbox.append(new OutboxEvent(principal.workspaceId(), "message", message.id(),
-                "message.created", 1, chatId.toString(), payload(event, view), now));
+                "message.created", 1, chatId.toString(),
+                MessageEventPayload.of(event, view), now));
 
         idempotency.complete(principal, SendMessageCommand.IDEMPOTENCY_SCOPE,
                 idempotencyKey.toString(), requestHash, 201, message.id());
         // Realtime fan-out listens AFTER_COMMIT; a rollback (including idempotency failure)
         // never reaches WS subscribers.
         events.publishEvent(new MessageCreatedNotification(principal.workspaceId(), view));
+        // MENTION fan-out listens AFTER_COMMIT (generic title, no body); the durable inbox
+        // rows above are already committed with the message.
+        if (mentionPlan.hasMentions()) {
+            events.publishEvent(new MessageMentionNotification(principal.workspaceId(), chatId,
+                    messageId, principal.userId(), mentionPlan.recipientIds(), now));
+        }
         return new SendMessageResult(201, view, false);
     }
 
@@ -273,7 +299,8 @@ public class MessageSubmissionHandler {
         MessageCreatedEvent event = new MessageCreatedEvent(messageId, principal.workspaceId(),
                 chatId, seq, principal.userId(), now, 0);
         outbox.append(new OutboxEvent(principal.workspaceId(), "message", messageId,
-                "message.created", 1, chatId.toString(), payload(event, view), now));
+                "message.created", 1, chatId.toString(),
+                MessageEventPayload.of(event, view), now));
         idempotency.complete(principal, SendMessageCommand.IDEMPOTENCY_SCOPE,
                 idempotencyKey.toString(), requestHash, 201, messageId);
         events.publishEvent(new MessageCreatedNotification(principal.workspaceId(), view,
@@ -309,6 +336,10 @@ public class MessageSubmissionHandler {
         if (input.replyToId() != null) {
             throw plaintext("reply_to_id",
                     "reply_to_id is carried inside the encrypted payload");
+        }
+        if (input.hasMentions()) {
+            // Mention ids are server-visible metadata and would leak who was addressed.
+            throw plaintext("mentions", "mentions are forbidden in an E2EE chat");
         }
     }
 
@@ -382,54 +413,4 @@ public class MessageSubmissionHandler {
                 Map.of("flag", "e2ee.enabled"));
     }
 
-    private static Map<String, Object> mediaMap(AttachmentMediaView media) {
-        if (media == null) {
-            return null;
-        }
-        Map<String, Object> item = new LinkedHashMap<>();
-        item.put("kind", media.kind());
-        item.put("duration_ms", media.durationMs());
-        item.put("width", media.width());
-        item.put("height", media.height());
-        item.put("title", media.title());
-        item.put("artist", media.artist());
-        item.put("album", media.album());
-        item.put("year", media.year());
-        item.put("genre", media.genre());
-        item.put("artwork_url", media.artworkUrl());
-        item.put("metadata_source", media.metadataSource());
-        return item;
-    }
-
-    private static Map<String, Object> payload(MessageCreatedEvent event, MessageView view) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("message_id", event.messageId());
-        payload.put("chat_id", event.chatId());
-        payload.put("seq", event.seq());
-        payload.put("sender_id", event.senderId());
-        payload.put("type", view.type());
-        payload.put("thread_root_id", view.threadRootId());
-        payload.put("sticker_id", view.stickerId());
-        if (view.sticker() != null) {
-            payload.put("sticker", Map.of(
-                    "id", view.sticker().id(),
-                    "pack_id", view.sticker().packId(),
-                    "alt", view.sticker().alt(),
-                    "url", view.sticker().url(),
-                    "favorite", view.sticker().favorite()));
-        }
-        payload.put("created_at", event.createdAt().toString());
-        payload.put("size_bytes", event.sizeBytes());
-        payload.put("attachments", view.attachments().stream().map(attachment -> {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("id", attachment.id());
-            item.put("filename", attachment.filename());
-            item.put("size_bytes", attachment.sizeBytes());
-            item.put("mime_type", attachment.mimeType());
-            item.put("scan_status", attachment.scanStatus());
-            item.put("media", mediaMap(attachment.media()));
-            return item;
-        }).toList());
-        return payload;
-    }
 }

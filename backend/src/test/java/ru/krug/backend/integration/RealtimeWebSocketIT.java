@@ -31,12 +31,14 @@ import ru.krug.backend.ops.api.dto.SessionResponse;
 import ru.krug.backend.realtime.domain.model.TicketToken;
 import ru.krug.backend.shared.application.model.IssuedToken;
 import ru.krug.backend.shared.application.port.TokenIssuer;
+import ru.krug.backend.support.OpenApiContract;
 import ru.krug.backend.support.WebSocketIntegrationTestBase;
 
 @ActiveProfiles("test")
 class RealtimeWebSocketIT extends WebSocketIntegrationTestBase {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(8);
+    private static final OpenApiContract CONTRACT = OpenApiContract.load();
 
     @Autowired
     private TokenIssuer tokenIssuer;
@@ -255,6 +257,132 @@ class RealtimeWebSocketIT extends WebSocketIntegrationTestBase {
                 .isEqualTo(204);
         assertThat(client.awaitEventWithin("message.deleted", Duration.ofMillis(400))).isNull();
         client.close();
+    }
+
+    @Test
+    void pollAndTaskMessagesAreBroadcastAndReplayedWithEmbeddedContent() throws Exception {
+        SessionResponse session = devSession();
+        UUID chatId = session.chat().id();
+        enablePlugin(session, chatId, "polls");
+        enablePlugin(session, chatId, "tasks");
+
+        WebSocketClient live = connect(ticket(session).get("ticket").asText());
+        live.awaitType("hello", TIMEOUT);
+        live.send(subscribeFrame(chatId, 0, false));
+        live.awaitType("subscribed", TIMEOUT);
+
+        JsonNode poll = createPoll(session, chatId, "Lunch?", "Pizza", "Sushi");
+        UUID pollId = UUID.fromString(poll.get("id").asText());
+        UUID pollMessageId = UUID.fromString(poll.get("message_id").asText());
+        String pizza = poll.get("options").get(0).get("id").asText();
+
+        JsonNode pollEvent = live.awaitEvent("message.created", TIMEOUT);
+        JsonNode pollPayload = pollEvent.get("payload");
+        CONTRACT.assertValid("Message", pollPayload);
+        assertThat(pollEvent.get("seq").asLong()).isEqualTo(1);
+        assertThat(pollPayload.get("id").asText()).isEqualTo(pollMessageId.toString());
+        assertThat(pollPayload.get("type").asText()).isEqualTo("POLL");
+        assertThat(pollPayload.get("text").isNull()).isTrue();
+        assertThat(pollPayload.get("poll_id").asText()).isEqualTo(pollId.toString());
+        assertThat(pollPayload.get("poll").get("question").asText()).isEqualTo("Lunch?");
+        assertThat(pollPayload.get("poll").get("options")).hasSize(2);
+        assertThat(pollPayload.get("poll").get("my_option_id").isNull()).isTrue();
+
+        // A vote changes the entity, not the timeline: no second message.created/seq.
+        ResponseEntity<String> voted = vote(session, chatId, pollId, pizza);
+        assertThat(voted.getStatusCode().value()).isEqualTo(200);
+        assertThat(live.awaitEventWithin("message.created", Duration.ofMillis(400))).isNull();
+
+        JsonNode task = createTask(session, chatId, "Prepare report");
+        UUID taskId = UUID.fromString(task.get("id").asText());
+        UUID taskMessageId = UUID.fromString(task.get("message_id").asText());
+        JsonNode taskEvent = live.awaitEvent("message.created", TIMEOUT);
+        JsonNode taskPayload = taskEvent.get("payload");
+        CONTRACT.assertValid("Message", taskPayload);
+        assertThat(taskEvent.get("seq").asLong()).isEqualTo(2);
+        assertThat(taskPayload.get("id").asText()).isEqualTo(taskMessageId.toString());
+        assertThat(taskPayload.get("type").asText()).isEqualTo("TASK");
+        assertThat(taskPayload.get("task_id").asText()).isEqualTo(taskId.toString());
+        assertThat(taskPayload.get("task").get("title").asText()).isEqualTo("Prepare report");
+        assertThat(taskPayload.get("task").get("done").asBoolean()).isFalse();
+
+        completeTask(session, chatId, taskId, true);
+
+        // Reconnect: replay resolves the current embedded state (vote + completion), while
+        // the message count and seq stay unchanged.
+        live.close();
+        WebSocketClient replayed = connect(ticket(session).get("ticket").asText());
+        replayed.awaitType("hello", TIMEOUT);
+        replayed.send(subscribeFrame(chatId, 0, false));
+        replayed.awaitType("subscribed", TIMEOUT);
+
+        JsonNode replayPoll = replayed.awaitEvent("message.created", TIMEOUT);
+        JsonNode replayTask = replayed.awaitEvent("message.created", TIMEOUT);
+        assertThat(replayPoll.get("seq").asLong()).isEqualTo(1);
+        assertThat(replayTask.get("seq").asLong()).isEqualTo(2);
+        assertThat(replayPoll.get("payload").get("poll").get("my_option_id").asText())
+                .isEqualTo(pizza);
+        assertThat(replayPoll.get("payload").get("poll").get("total_votes").asInt()).isEqualTo(1);
+        assertThat(replayTask.get("payload").get("task").get("done").asBoolean()).isTrue();
+        assertThat(replayTask.get("payload").get("task").get("completed_by").asText())
+                .isEqualTo(session.user().id().toString());
+        replayed.close();
+    }
+
+    private void enablePlugin(SessionResponse session, UUID chatId, String pluginId) {
+        HttpHeaders headers = authHeaders(session);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<String> response = rest.exchange(
+                url("/api/v1/chats/" + chatId + "/plugins/" + pluginId), HttpMethod.PATCH,
+                new HttpEntity<>("{\"enabled\":true}", headers), String.class);
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+    }
+
+    private JsonNode createPoll(SessionResponse session, UUID chatId, String question,
+                                String... options) throws Exception {
+        HttpHeaders headers = authHeaders(session);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.add("Idempotency-Key", UUID.randomUUID().toString());
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("question", question);
+        body.put("options", java.util.List.of(options));
+        ResponseEntity<String> response = rest.exchange(url("/api/v1/chats/" + chatId + "/polls"),
+                HttpMethod.POST,
+                new HttpEntity<>(objectMapper.writeValueAsString(body), headers), String.class);
+        assertThat(response.getStatusCode().value()).as(response.getBody()).isEqualTo(201);
+        return json(response.getBody());
+    }
+
+    private JsonNode createTask(SessionResponse session, UUID chatId, String title)
+            throws Exception {
+        HttpHeaders headers = authHeaders(session);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.add("Idempotency-Key", UUID.randomUUID().toString());
+        ResponseEntity<String> response = rest.exchange(url("/api/v1/chats/" + chatId + "/tasks"),
+                HttpMethod.POST,
+                new HttpEntity<>(objectMapper.writeValueAsString(
+                        java.util.Map.of("title", title)), headers), String.class);
+        assertThat(response.getStatusCode().value()).as(response.getBody()).isEqualTo(201);
+        return json(response.getBody());
+    }
+
+    private void completeTask(SessionResponse session, UUID chatId, UUID taskId, boolean done) {
+        HttpHeaders headers = authHeaders(session);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<String> response = rest.exchange(
+                url("/api/v1/chats/" + chatId + "/tasks/" + taskId), HttpMethod.PATCH,
+                new HttpEntity<>("{\"done\":" + done + "}", headers), String.class);
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
+    }
+
+    private ResponseEntity<String> vote(SessionResponse session, UUID chatId, UUID pollId,
+                                        String optionId) {
+        HttpHeaders headers = authHeaders(session);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return rest.exchange(url("/api/v1/chats/" + chatId + "/polls/" + pollId + "/votes"),
+                HttpMethod.POST,
+                new HttpEntity<>("{\"option_id\":\"" + optionId + "\"}", headers),
+                String.class);
     }
 
     private ResponseEntity<String> patchMessage(SessionResponse session, UUID chatId,

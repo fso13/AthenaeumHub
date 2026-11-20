@@ -23,5 +23,10 @@ public record MessageCreateRequest(
         @JsonDeserialize(using = CanonicalUuidDeserializer.class) UUID threadRootId,
         @JsonDeserialize(contentUsing = CanonicalUuidDeserializer.class)
         List<UUID> attachmentIds,
-        JsonNode envelopes) {
+        JsonNode envelopes,
+        /** #83: explicit mentioned users; must be active members of the target chat. */
+        @JsonDeserialize(contentUsing = CanonicalUuidDeserializer.class)
+        List<UUID> mentions,
+        /** #83: {@code @all}; only chat OWNER/ADMIN may set it. */
+        Boolean mentionAll) {
 }

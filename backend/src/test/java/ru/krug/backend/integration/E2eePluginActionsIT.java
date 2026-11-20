@@ -87,6 +87,9 @@ class E2eePluginActionsIT extends IntegrationTestBase {
         assertThat(migrator().queryForObject(
                 "SELECT count(*) FROM plugin.tasks WHERE chat_id = ?", Long.class, chatId))
                 .isZero();
+        // #95: no poll/task entity means no POLL/TASK timeline message either; nothing
+        // plaintext or ciphertext is written for a rejected E2EE plugin action.
+        assertThat(messageCount(chatId)).isZero();
         assertThat(migrator().queryForObject("""
                 SELECT count(*) FROM audit.audit_events
                  WHERE actor_id = ?

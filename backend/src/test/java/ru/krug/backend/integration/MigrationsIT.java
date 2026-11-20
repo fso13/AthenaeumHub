@@ -327,4 +327,61 @@ class MigrationsIT extends IntegrationTestBase {
                 """, Integer.class);
         assertThat(functions).isEqualTo(1);
     }
+
+    @Test
+    void addsOverviewAdminExportSessionsAndTranslationObjects() {
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'chat' AND indexname = 'ix_chats_ws_active'
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'message' AND indexname = 'ix_messages_ws_created'
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'audit' AND indexname = 'ix_audit_events_created'
+                """, Integer.class)).isEqualTo(1);
+
+        for (String function : List.of("workspace.overview_stats", "ops.admin_audit_export",
+                "ops.admin_user_subject")) {
+            String[] parts = function.split("\\.");
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM pg_proc p
+                      JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = ? AND p.proname = ? AND p.prosecdef
+                    """, Integer.class, parts[0], parts[1])).as(function).isEqualTo(1);
+            assertThat(jdbc.queryForObject("""
+                    SELECT has_function_privilege('krug_app', p.oid, 'EXECUTE')
+                      FROM pg_proc p
+                      JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = ? AND p.proname = ?
+                    """, Boolean.class, parts[0], parts[1])).as(function).isTrue();
+        }
+
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'plugin_translation_settings'
+                """, Integer.class)).isEqualTo(5);
+        for (String forbidden : List.of("api_key", "secret", "token", "password",
+                "credential")) {
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM information_schema.columns
+                     WHERE table_schema = 'ops' AND table_name = 'plugin_translation_settings'
+                       AND column_name = ?
+                    """, Integer.class, forbidden)).as(forbidden).isZero();
+        }
+        assertThat(jdbc.queryForObject("""
+                SELECT has_table_privilege('krug_app', 'ops.plugin_translation_settings',
+                                           'SELECT')
+                """, Boolean.class)).isTrue();
+        assertThat(jdbc.queryForObject("""
+                SELECT has_table_privilege('krug_app', 'ops.plugin_translation_settings',
+                                           'INSERT')
+                """, Boolean.class)).isTrue();
+        assertThat(jdbc.queryForObject("""
+                SELECT has_table_privilege('krug_app', 'ops.plugin_translation_settings',
+                                           'UPDATE')
+                """, Boolean.class)).isTrue();
+    }
 }

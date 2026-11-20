@@ -151,6 +151,10 @@ public class MessageRepositoryAdapter implements MessageRepository {
                                deleted_by = ?2,
                                body_ciphertext = NULL,
                                content_meta = '{}'::jsonb,
+                               -- #83: delete-for-all purges mention metadata as well; the
+                               -- per-recipient inbox rows stay as content-free pointers.
+                               mentions = '[]'::jsonb,
+                               mention_all = false,
                                version = version + 1
                          WHERE id = ?3 AND workspace_id = ?4 AND chat_id = ?5
                            AND deleted_at IS NULL

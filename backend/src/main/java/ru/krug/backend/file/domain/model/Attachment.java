@@ -42,9 +42,9 @@ public final class Attachment {
                        Instant updatedAt, Instant deletedAt) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
-        // chatId is null only for an unbound DIRECT_IMAGE; uploadId is null only for
-        // DIRECT_IMAGE (there is no upload session on that path). Both are re-checked by
-        // the V48 source-shape constraint.
+        // chatId is null for an unbound DIRECT_IMAGE and for a global WORKSPACE file before
+        // it is attached to a message; uploadId is null only for DIRECT_IMAGE. Both are
+        // re-checked by the V48/V50 source-shape constraint.
         this.chatId = chatId;
         this.uploadId = uploadId;
         this.userId = Objects.requireNonNull(userId, "userId");
@@ -98,6 +98,19 @@ public final class Attachment {
                 AttachmentSource.DIRECT_IMAGE, now, now, null);
     }
 
+    /**
+     * Global workspace file (#83): regular upload/AV pipeline, but not attached to any chat
+     * yet. {@code chatId} stays null until the file is bound to a message.
+     */
+    public static Attachment workspaceFile(UUID id, UUID workspaceId, UUID uploadId,
+                                           UUID userId, String filename, String mimeType,
+                                           MediaMetadata media, long sizeBytes, Sha256 sha256,
+                                           String objectKey, Instant now) {
+        return new Attachment(id, workspaceId, null, uploadId, userId, null, filename, mimeType,
+                media, sizeBytes, sha256, objectKey, AttachmentStatus.READY, ScanStatus.PENDING,
+                AttachmentSource.WORKSPACE, now, now, null);
+    }
+
     public static Attachment reconstitute(UUID id, UUID workspaceId, UUID chatId, UUID uploadId,
                                           UUID userId, UUID messageId, String filename,
                                           String mimeType, MediaMetadata media, long sizeBytes,
@@ -129,6 +142,27 @@ public final class Attachment {
     public Attachment bindTo(UUID messageIdValue, Instant now) {
         assertBindable();
         return with(AttachmentStatus.BOUND, scanStatus, now, messageIdValue);
+    }
+
+    /**
+     * Binds a global workspace file to a message: the attachment now belongs to that chat
+     * (so the regular chat-membership visibility in the file center applies from now on).
+     */
+    public Attachment bindTo(UUID messageIdValue, UUID chatIdValue, Instant now) {
+        assertBindable();
+        return new Attachment(id, workspaceId, chatIdValue, uploadId, userId, messageIdValue,
+                filename, mimeType, media, sizeBytes, sha256, objectKey,
+                AttachmentStatus.BOUND, scanStatus, source, createdAt, now, deletedAt);
+    }
+
+    /** Owner/admin rename of an active file; only the display name changes. */
+    public Attachment rename(String newFilename, Instant now) {
+        if (newFilename == null || newFilename.isBlank() || newFilename.length() > 255) {
+            throw new IllegalArgumentException("filename must be 1..255 characters");
+        }
+        return new Attachment(id, workspaceId, chatId, uploadId, userId, messageId, newFilename,
+                mimeType, media, sizeBytes, sha256, objectKey, status, scanStatus, source,
+                createdAt, now, deletedAt);
     }
 
     public Attachment markDeleted(Instant now) {
@@ -174,6 +208,11 @@ public final class Attachment {
     /** Direct images are never message attachments (checked before a message bind). */
     public boolean isDirectImage() {
         return source == AttachmentSource.DIRECT_IMAGE;
+    }
+
+    /** A global workspace file (see {@link AttachmentSource#WORKSPACE}). */
+    public boolean isWorkspaceFile() {
+        return source == AttachmentSource.WORKSPACE;
     }
 
     public boolean isBound() {

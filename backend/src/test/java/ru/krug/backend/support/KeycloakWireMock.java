@@ -276,6 +276,9 @@ public final class KeycloakWireMock {
                 if (path.equals("/admin/realms/krug/users") && method.equals("GET")) {
                     return listUsers(request.getUrl());
                 }
+                if (path.startsWith("/admin/realms/krug/sessions/")) {
+                    return deleteSessionById(path, method);
+                }
                 if (path.startsWith("/admin/realms/krug/users/")) {
                     if (path.contains("/sessions")) {
                         return sessions(path, method);
@@ -445,8 +448,24 @@ public final class KeycloakWireMock {
             return json(200, toJson(payload));
         }
 
-        private Response adminLogout(String path) {
-            String[] parts = path.split("/");
+        /**
+         * Keycloak 26 realm-level {@code DELETE /admin/realms/{realm}/sessions/{id}}. The
+         * fake does not need the owner: it removes the id from every user's session list.
+         */
+        private Response deleteSessionById(String path, String method) {
+            if (failAdminSessions) {
+                return json(503, "{\"error\":\"service_unavailable\"}");
+            }
+            if (!method.equals("DELETE")) {
+                return json(405, "{\"error\":\"method_not_allowed\"}");
+            }
+            String sessionId = path.substring(path.lastIndexOf('/') + 1);
+            sessionsByUser.values().forEach(list ->
+                    list.removeIf(session -> session.id().equals(sessionId)));
+            return Response.response().status(204).build();
+        }
+
+        private Response adminLogout(String path) {            String[] parts = path.split("/");
             UUID id;
             try {
                 id = UUID.fromString(parts[parts.length - 2]);

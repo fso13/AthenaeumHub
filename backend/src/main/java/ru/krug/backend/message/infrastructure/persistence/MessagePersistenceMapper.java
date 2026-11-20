@@ -1,6 +1,8 @@
 package ru.krug.backend.message.infrastructure.persistence;
 
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import org.springframework.stereotype.Component;
 
@@ -31,9 +33,10 @@ public class MessagePersistenceMapper {
                 Message.Type.valueOf(entity.getType()),
                 CryptoScheme.valueOf(entity.getCryptoScheme()),
                 text == null ? null : new MessageBody(text), entity.getStickerId(),
-                entity.getReplyToId(), entity.getThreadRootId(), entity.getClientMessageId(),
-                entity.getCreatedAt(), entity.getEditedAt(), entity.getDeletedAt(),
-                entity.getVersion());
+                entity.getPollId(), entity.getTaskId(), entity.getReplyToId(),
+                entity.getThreadRootId(), entity.getClientMessageId(), mentions(entity),
+                entity.isMentionAll(), entity.getCreatedAt(),
+                entity.getEditedAt(), entity.getDeletedAt(), entity.getVersion());
     }
 
     public MessageEntity toEntity(Message message) {
@@ -46,8 +49,17 @@ public class MessagePersistenceMapper {
                 message.id(), message.workspaceId(), message.chatId(), message.seq(),
                 message.senderId(), message.senderDeviceId(), message.senderDisplayName(),
                 message.type().name(), message.cryptoScheme().name(), ciphertext, contentMeta,
-                message.clientMessageId(), message.stickerId(), message.replyToId(),
-                message.threadRootId(), message.createdAt(), message.version());
+                message.clientMessageId(), message.stickerId(), message.pollId(),
+                message.taskId(), message.replyToId(), message.threadRootId(),
+                message.mentions(), message.mentionAll(), message.createdAt(),
+                message.version());
+    }
+
+    private static List<UUID> mentions(MessageEntity entity) {
+        if (entity.getMentions() == null || entity.getMentions().isEmpty()) {
+            return List.of();
+        }
+        return entity.getMentions().stream().map(UUID::fromString).toList();
     }
 
 }

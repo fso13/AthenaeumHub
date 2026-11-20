@@ -223,6 +223,10 @@ export interface MessageActionsProps {
   e2eeChat: boolean;
   allowReply: boolean;
   onReply?: (message: ApiMessage) => void;
+  /** #95: structured poll/task cards have no thread entry point. */
+  allowThread?: boolean;
+  /** #95: never offer delete-for-all on a poll/task card (it would orphan the object). */
+  structured?: boolean;
   threadsAvailable: boolean;
   threadDisabledReason: string | null;
   threadReplyCount: number;
@@ -241,6 +245,8 @@ export function MessageActions({
   e2eeChat,
   allowReply,
   onReply,
+  allowThread = true,
+  structured = false,
   threadsAvailable,
   threadDisabledReason,
   threadReplyCount,
@@ -495,7 +501,7 @@ export function MessageActions({
     ) : null;
 
   const threadAction =
-    canThread && threadsAvailable && onOpenThread && threadReplyCount === 0 ? (
+    allowThread && canThread && threadsAvailable && onOpenThread && threadReplyCount === 0 ? (
       <button
         type="button"
         className="msg-tool"
@@ -505,7 +511,7 @@ export function MessageActions({
       >
         <ThreadIcon aria-hidden="true" />
       </button>
-    ) : canThread && !threadsAvailable && threadDisabledReason ? (
+    ) : allowThread && canThread && !threadsAvailable && threadDisabledReason ? (
       <button
         type="button"
         className="msg-tool"
@@ -585,7 +591,7 @@ export function MessageActions({
         <span className="delete-menu__label">{t('message.deleteMe')}</span>
         <span className="delete-menu__hint">{t('message.deleteMeHint')}</span>
       </button>
-      {mine ? (
+      {mine && !structured ? (
         <button
           type="button"
           className="delete-menu__item delete-menu__item--danger"
@@ -602,6 +608,7 @@ export function MessageActions({
           <span className="delete-menu__hint">{t('message.deleteAllHint')}</span>
         </button>
       ) : null}
+      {structured ? <p className="delete-menu__hint">{t('message.deleteStructuredHint')}</p> : null}
     </div>
   ) : null;
 

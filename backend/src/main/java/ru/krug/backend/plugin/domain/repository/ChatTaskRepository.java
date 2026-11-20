@@ -1,6 +1,7 @@
 package ru.krug.backend.plugin.domain.repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,6 +20,9 @@ public interface ChatTaskRepository {
 
     /** Open tasks first, then completed; newest first inside each group. */
     List<ChatTask> findByChat(UUID workspaceId, UUID chatId, int limit);
+
+    /** Bounded batch read for embedded message projections. */
+    List<ChatTask> findByIds(UUID workspaceId, UUID chatId, Collection<UUID> taskIds);
 
     /**
      * Conditional completion update. Returns the updated task, or empty when the task does

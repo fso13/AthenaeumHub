@@ -6,11 +6,14 @@ import type {
   ChatPin,
   ChatSummary,
   MeResponse,
+  Mention,
   Notification,
   NotificationPreference,
+  Poll,
   Session,
   StickerPack,
   StickerRef,
+  Task,
   WorkspaceMember,
   WorkspaceSummary,
 } from '../api/types';
@@ -358,6 +361,60 @@ export function messageId(seq: number): string {
   return `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`;
 }
 
+/**
+ * #95: deterministic timeline messages for the two server-owned plugin types.
+ * Seq 36 is a seeded poll and seq 42 a seeded task; replacing two TEXT drafts
+ * keeps the fixture history at 45 rows (existing pagination tests unchanged).
+ */
+export const SEED_POLL_SEQ = 36;
+export const SEED_TASK_SEQ = 42;
+
+export function buildSeedPoll(): Poll {
+  return {
+    id: 'd0000000-0000-4000-8000-000000000001',
+    question: 'Куда идём на обед в пятницу?',
+    options: [
+      { id: 'd0000000-0000-4000-8000-000000000101', text: 'Пицца', position: 0, votes: 2 },
+      { id: 'd0000000-0000-4000-8000-000000000102', text: 'Суши', position: 1, votes: 1 },
+      {
+        id: 'd0000000-0000-4000-8000-000000000103',
+        text: 'Веганское кафе',
+        position: 2,
+        votes: 0,
+      },
+    ],
+    creator_id: IDS.user,
+    closed: false,
+    closed_at: null,
+    created_at: iso(16, 9, 30),
+    my_option_id: 'd0000000-0000-4000-8000-000000000102',
+    total_votes: 3,
+  };
+}
+
+/** Votes behind `buildSeedPoll()`; one voice per user, viewer chose "Суши". */
+export function buildSeedPollVotes(): Map<string, string> {
+  return new Map([
+    [IDS.anna, 'd0000000-0000-4000-8000-000000000101'],
+    [IDS.mark, 'd0000000-0000-4000-8000-000000000101'],
+    [IDS.user, 'd0000000-0000-4000-8000-000000000102'],
+  ]);
+}
+
+export function buildSeedTask(): Task {
+  return {
+    id: 'e0000000-0000-4000-8000-000000000001',
+    title: 'Подготовить демо для команды',
+    creator_id: IDS.user,
+    assignee_id: IDS.anna,
+    due_at: iso(25, 12, 0),
+    done: false,
+    completed_by: null,
+    completed_at: null,
+    created_at: iso(16, 9, 42),
+  };
+}
+
 /* E5-F: built-in sticker packs. Assets live in `frontend/public/stickers/**`. */
 export const STICKER_PACK_IDS = {
   krug: 'a1111111-1111-4111-8111-111111111111',
@@ -433,6 +490,10 @@ interface DraftMessage {
   sticker?: StickerRef;
   reply_to_id?: string | null;
   deleted_at?: string | null;
+  /** #95: embedded server projection for `type=POLL`. */
+  poll?: Poll;
+  /** #95: embedded server projection for `type=TASK`. */
+  task?: Task;
   /** #61: seeds the visible reaction chips (aggregate by emoji). */
   reactions?: ApiMessage['reactions'];
 }
@@ -507,6 +568,26 @@ function buildGroupDrafts(): DraftMessage[] {
   const popular = drafts.find((draft) => draft.seq === 37);
   if (popular) popular.reactions = [{ emoji: '🎉', count: 4, me: true }];
 
+  // #95: server-created plugin messages. They have no plain text; the poll/task
+  // object is the content and the creator is the viewer so close/toggle paths
+  // are visible in the fixture.
+  const pollDraft = drafts.find((draft) => draft.seq === SEED_POLL_SEQ);
+  if (pollDraft) {
+    const poll = buildSeedPoll();
+    pollDraft.type = 'POLL';
+    pollDraft.text = '';
+    pollDraft.sender = { id: IDS.user, name: MOCK_DISPLAY_NAME };
+    pollDraft.poll = poll;
+  }
+  const taskDraft = drafts.find((draft) => draft.seq === SEED_TASK_SEQ);
+  if (taskDraft) {
+    const task = buildSeedTask();
+    taskDraft.type = 'TASK';
+    taskDraft.text = '';
+    taskDraft.sender = { id: IDS.user, name: MOCK_DISPLAY_NAME };
+    taskDraft.task = task;
+  }
+
   return drafts;
 }
 
@@ -518,7 +599,8 @@ function toMessage(chatId: string, draft: DraftMessage): ApiMessage {
     type: draft.type ?? 'TEXT',
     sender_id: draft.sender?.id ?? null,
     sender_display_name: draft.sender?.name ?? null,
-    text: draft.text,
+    // #95: server-created POLL/TASK messages never carry plain text.
+    text: draft.poll || draft.task ? null : draft.text,
     reply_to_id: draft.reply_to_id ?? null,
     created_at: draft.created_at,
     edited_at: null,
@@ -526,6 +608,8 @@ function toMessage(chatId: string, draft: DraftMessage): ApiMessage {
     version: 1,
     reactions: draft.reactions ?? [],
     ...(draft.sticker ? { sticker_id: draft.sticker.id, sticker: { ...draft.sticker } } : {}),
+    ...(draft.poll ? { poll_id: draft.poll.id, poll: draft.poll } : {}),
+    ...(draft.task ? { task_id: draft.task.id, task: draft.task } : {}),
   };
 }
 
@@ -635,6 +719,34 @@ export function buildNotifications(): Notification[] {
       body: null,
       created_at: iso(15, 18, 0),
       read: true,
+    },
+  ];
+}
+
+/** Deterministic mention-inbox rows: one unread group mention, one read direct. */
+export function buildMentions(): Mention[] {
+  return [
+    {
+      id: 'e0000000-0000-4000-8000-000000000001',
+      chat_id: IDS.groupChat,
+      chat_name: 'Команда «Восход»',
+      message_id: messageId(2),
+      sender_id: IDS.anna,
+      sender_display_name: 'Анна Петрова',
+      mention_all: false,
+      read_at: null,
+      created_at: iso(16, 9, 30),
+    },
+    {
+      id: 'e0000000-0000-4000-8000-000000000002',
+      chat_id: IDS.directChat,
+      chat_name: 'Анна Петрова',
+      message_id: messageId(1),
+      sender_id: IDS.anna,
+      sender_display_name: 'Анна Петрова',
+      mention_all: true,
+      read_at: iso(16, 9, 40),
+      created_at: iso(16, 9, 10),
     },
   ];
 }

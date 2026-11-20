@@ -8,12 +8,17 @@ import ru.krug.backend.message.api.dto.EnvelopeCoverageResponse;
 import ru.krug.backend.message.api.dto.MessagePageInfo;
 import ru.krug.backend.message.api.dto.MessagePageResponse;
 import ru.krug.backend.message.api.dto.MessageResponse;
+import ru.krug.backend.message.api.dto.MessagePollOptionResponse;
+import ru.krug.backend.message.api.dto.MessagePollResponse;
 import ru.krug.backend.message.api.dto.MessageStickerResponse;
+import ru.krug.backend.message.api.dto.MessageTaskResponse;
 import ru.krug.backend.message.api.dto.ReactionSummaryResponse;
 import ru.krug.backend.message.api.dto.ThreadSummaryResponse;
 import ru.krug.backend.message.application.model.AttachmentMediaView;
 import ru.krug.backend.message.application.model.EnvelopeCoverageView;
 import ru.krug.backend.message.application.model.MessagePageView;
+import ru.krug.backend.message.application.model.EmbeddedPollView;
+import ru.krug.backend.message.application.model.EmbeddedTaskView;
 import ru.krug.backend.message.application.model.MessageStickerView;
 import ru.krug.backend.message.application.model.MessageView;
 import ru.krug.backend.message.application.model.ThreadSummaryView;
@@ -58,7 +63,12 @@ public final class MessageApiMapper {
                 view.threadRootId(), view.createdAt(), view.editedAt(), view.deletedAt(),
                 view.version(), view.clientMessageId(), view.crypto(), view.stickerId(),
                 sticker(view.sticker()), attachments, reactions,
-                summary(view.threadSummary()), coverage(coverage));
+                summary(view.threadSummary()), coverage(coverage),
+                view.pluginContent() == null ? null : view.pluginContent().pollId(),
+                poll(view.pluginContent() == null ? null : view.pluginContent().poll()),
+                view.pluginContent() == null ? null : view.pluginContent().taskId(),
+                task(view.pluginContent() == null ? null : view.pluginContent().task()),
+                view.mentions(), view.mentionAll());
     }
 
     public static MessagePageResponse toResponse(MessagePageView view) {
@@ -85,6 +95,28 @@ public final class MessageApiMapper {
         return new EnvelopeCoverageResponse(coverage.devices(), coverage.covered(),
                 coverage.peerDevices(), coverage.peerCovered(), coverage.selfDevices(),
                 coverage.selfCovered(), coverage.uncoveredDeviceIds(), coverage.warning());
+    }
+
+    private static MessagePollResponse poll(EmbeddedPollView poll) {
+        if (poll == null) {
+            return null;
+        }
+        return new MessagePollResponse(poll.id(), poll.question(),
+                poll.options().stream()
+                        .map(option -> new MessagePollOptionResponse(option.id(), option.text(),
+                                option.position(), option.votes()))
+                        .toList(),
+                poll.creatorId(), poll.closed(), poll.closedAt(), poll.createdAt(),
+                poll.myOptionId(), poll.totalVotes());
+    }
+
+    private static MessageTaskResponse task(EmbeddedTaskView task) {
+        if (task == null) {
+            return null;
+        }
+        return new MessageTaskResponse(task.id(), task.title(), task.creatorId(),
+                task.assigneeId(), task.dueAt(), task.done(), task.completedBy(),
+                task.completedAt(), task.createdAt());
     }
 
     private static MessageStickerResponse sticker(MessageStickerView sticker) {

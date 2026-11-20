@@ -1,7 +1,8 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ApiMessage } from '../api/types';
 import { groupMessagesByDay, scrollAdjustment, sortBySeq } from '../domain/messages';
 import { t } from '../i18n/ru';
+import { pluginMessageText } from '../plugins/messageCards';
 import type { ChatSlice, OutgoingMessage } from '../store/chatStore';
 import { ErrorDetails } from './ErrorDetails';
 import { ChevronUpIcon } from './Icons';
@@ -24,12 +25,24 @@ interface MessageListProps {
   threadDisabledReason?: string | null;
   /** Active workspace member names for @mention chips (managed only). */
   mentionNames?: readonly string[];
+  /** #95: server plugin gate for POLL/TASK cards in this chat. */
+  pollsEnabled?: boolean;
+  tasksEnabled?: boolean;
+  /** Workspace OWNER/ADMIN may complete any task. */
+  canManageTasks?: boolean;
+  /** `assignee_id`/`completed_by` display names for task cards. */
+  memberNames?: ReadonlyMap<string, string>;
+  /** #95: newly created poll/task message to scroll to and focus. */
+  focusRequest?: { id: string; nonce: number } | null;
+  onFocusHandled?: () => void;
   onLoadMore: () => void;
   onRetry: (clientMessageId: string) => void;
   onRestore: (item: OutgoingMessage) => void;
   onReply: (message: ApiMessage) => void;
   onOpenThread: (message: ApiMessage) => void;
 }
+
+const NO_MEMBERS: ReadonlyMap<string, string> = new Map();
 
 export function MessageList({
   slice,
@@ -42,6 +55,12 @@ export function MessageList({
   threadsAvailable = false,
   threadDisabledReason = null,
   mentionNames = [],
+  pollsEnabled = false,
+  tasksEnabled = false,
+  canManageTasks = false,
+  memberNames = NO_MEMBERS,
+  focusRequest = null,
+  onFocusHandled,
   onLoadMore,
   onRetry,
   onRestore,
@@ -53,6 +72,8 @@ export function MessageList({
   const previousFirstId = useRef<string | null>(null);
   const lastKey = useRef<string | null>(null);
   const initialScrollDone = useRef(false);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const highlightTimer = useRef<number | null>(null);
 
   const ordered = useMemo(
     () =>
@@ -69,7 +90,8 @@ export function MessageList({
     if (normalizedQuery.length === 0) return ordered;
     return ordered.filter((message) => {
       const decrypted = slice.e2ee[message.id]?.text ?? '';
-      const text = `${decrypted} ${message.text ?? ''}`.toLocaleLowerCase('ru');
+      const text =
+        `${decrypted} ${message.text ?? ''} ${pluginMessageText(message)}`.toLocaleLowerCase('ru');
       return text.includes(normalizedQuery);
     });
   }, [ordered, normalizedQuery, slice.e2ee]);
@@ -133,6 +155,34 @@ export function MessageList({
     }
     lastKey.current = key;
   }, [slice.messages, slice.outbox]);
+
+  // #95: after a successful create the dialog closes and the new card is
+  // scrolled to/selected. The request is retried on every render until the
+  // message exists (WS or REST catch-up may deliver it a beat later).
+  useEffect(() => {
+    if (!focusRequest) return;
+    const element = document.getElementById(`message-${focusRequest.id}`);
+    if (!element) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (typeof element.scrollIntoView === 'function') {
+      element.scrollIntoView({
+        block: 'center',
+        behavior: reduceMotion ? 'auto' : 'smooth',
+      });
+    }
+    element.focus({ preventScroll: true });
+    setHighlightedId(focusRequest.id);
+    if (highlightTimer.current !== null) window.clearTimeout(highlightTimer.current);
+    highlightTimer.current = window.setTimeout(() => setHighlightedId(null), 1_800);
+    onFocusHandled?.();
+  }, [focusRequest, visible, onFocusHandled]);
+
+  useEffect(
+    () => () => {
+      if (highlightTimer.current !== null) window.clearTimeout(highlightTimer.current);
+    },
+    [],
+  );
 
   const handleJumpTo = (messageId: string) => {
     const element = document.getElementById(`message-${messageId}`);
@@ -209,6 +259,7 @@ export function MessageList({
               key={item.message.id}
               message={item.message}
               mine={Boolean(viewerId) && item.message.sender_id === viewerId}
+              viewerId={viewerId}
               readByOthers={
                 Boolean(viewerId) &&
                 item.message.sender_id === viewerId &&
@@ -224,6 +275,11 @@ export function MessageList({
                   : null
               }
               mentionNames={mentionNames}
+              pollsEnabled={pollsEnabled}
+              tasksEnabled={tasksEnabled}
+              canManageTasks={canManageTasks}
+              memberNames={memberNames}
+              highlighted={highlightedId === item.message.id}
               replyTo={
                 item.message.reply_to_id ? (replyById.get(item.message.reply_to_id) ?? null) : null
               }

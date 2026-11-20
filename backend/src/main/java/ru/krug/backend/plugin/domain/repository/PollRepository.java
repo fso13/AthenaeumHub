@@ -1,6 +1,7 @@
 package ru.krug.backend.plugin.domain.repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,6 +22,10 @@ public interface PollRepository {
 
     /** Newest first; viewer-relative vote counts for every poll in one bounded query. */
     List<Poll> findByChat(UUID workspaceId, UUID chatId, UUID viewerId, int limit);
+
+    /** Bounded batch read for embedded message projections; viewer-relative. */
+    List<Poll> findByIds(UUID workspaceId, UUID chatId, Collection<UUID> pollIds,
+                         UUID viewerId);
 
     /**
      * One vote per (poll,user): inserts a new vote or moves the existing one.

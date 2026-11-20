@@ -8,12 +8,15 @@ import { ApiError, isApiError } from './problem';
 import type {
   AddChatMemberRequest,
   AddWorkspaceMemberRequest,
+  AdminAuditExportFormat,
   AdminAuditPage,
   AdminChatPage,
   AdminChatType,
   AdminOverview,
   AdminPluginPackage,
   AdminPluginPackageList,
+  AdminSessionPage,
+  AdminSessionRevokeAll,
   AdminSettings,
   AdminSettingsPatch,
   AdminStorage,
@@ -60,16 +63,20 @@ import type {
   DlpPolicyList,
   DlpPolicyUpdateRequest,
   DownloadUrl,
+  FileItem,
   FileKindFilter,
   FilePage,
+  FileRename,
   FileScanStatusFilter,
   InviteAcceptResult,
+  MentionPage,
   MediaImage,
   MeResponse,
   MessageCreateBody,
   MessageDeleteScope,
   MessageEdit,
   MessagePage,
+  MessageSearchPage,
   NotificationPage,
   NotificationPreference,
   NotificationPreferencePatch,
@@ -79,6 +86,7 @@ import type {
   ProfileSessions,
   ProfileUpdate,
   ReactionSummary,
+  ReadMentionsRequest,
   ReadNotificationsRequest,
   RealtimeTicket,
   Session,
@@ -90,6 +98,9 @@ import type {
   TaskList,
   TaskUpdate,
   Translation,
+  TranslationProviderSettings,
+  TranslationProviderTest,
+  TranslationProviderUpdate,
   TranslationRequest,
   TestEmailRequest,
   TestEmailResponse,
@@ -111,6 +122,7 @@ import type {
   WorkspaceLimits,
   WorkspaceMember,
   WorkspaceMemberPage,
+  WorkspaceOverview,
   WorkspacePermissionMatrix,
   WorkspacePermissionUpdate,
   WorkspaceSecurity,
@@ -164,6 +176,37 @@ export interface GetAdminStorageQuery {
  */
 export interface ListAdminAuditQuery {
   action?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/**
+ * #84 admin audit export. Same exact `action` filter as the page; the server
+ * caps the result at 10 000 rows and reports truncation through headers.
+ */
+export interface ExportAdminAuditQuery {
+  format: AdminAuditExportFormat;
+  action?: string;
+}
+
+/**
+ * Bounded export returned as a Blob so the browser writes exactly the server
+ * bytes. `rows`/`truncated` come from `X-Export-Rows`/`X-Export-Truncated`;
+ * `filename` comes from `Content-Disposition` when present.
+ */
+export interface AdminAuditExportResult {
+  blob: Blob;
+  filename: string | null;
+  rows: number | null;
+  truncated: boolean;
+}
+
+/**
+ * #84 Keycloak sessions of the selected local user. `cursor` is opaque and
+ * bound to `userId` server-side; the client only echoes it back.
+ */
+export interface ListAdminSessionsQuery {
+  userId: string;
   cursor?: string;
   limit?: number;
 }
@@ -243,6 +286,31 @@ export interface ListFilesQuery {
   mime?: string;
   /** Extension without the dot (max 10, `[A-Za-z0-9]`). */
   extension?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** #83: progress/cancellation for the one-shot global file upload. */
+export interface WorkspaceFileUploadOptions {
+  signal?: AbortSignal;
+  /** Bytes reported by `XMLHttpRequest.upload`; `total` may be 0 (unknown). */
+  onProgress?: (loaded: number, total: number) => void;
+}
+
+/** #83: `GET /workspaces/{id}/search/messages`; `q` is a literal substring. */
+export interface SearchMessagesQuery {
+  q: string;
+  chatId?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** #83: `GET /me/mentions`; `workspaceId` overrides the claim scope. */
+export interface ListMentionsQuery {
+  workspaceId?: string;
+  unread?: boolean;
   cursor?: string;
   limit?: number;
 }
@@ -375,6 +443,29 @@ export interface ChatApi {
   ): Promise<WorkspacePermissionMatrix>;
   /** #73: file-center page with metadata-only rows and the workspace quota. */
   listFiles(query?: ListFilesQuery): Promise<FilePage>;
+  /**
+   * #83: one-shot global workspace file (`multipart/form-data`). The server
+   * applies the same managed pipeline (type policy, quota, AV scan) and returns
+   * an unbound `FileItem`; the client never invents object keys or URLs.
+   */
+  uploadWorkspaceFile(
+    workspaceId: string,
+    file: File,
+    options?: WorkspaceFileUploadOptions,
+  ): Promise<FileItem>;
+  /** #83: display-name rename, owner only (server 404 hides existence). */
+  renameFile(fileId: string, body: FileRename, idempotencyKey: string): Promise<FileItem>;
+  /** #83: soft delete (owner or workspace OWNER/ADMIN); `204` is idempotent. */
+  deleteFile(fileId: string, idempotencyKey: string): Promise<void>;
+  /**
+   * #83: literal, case-insensitive managed-text search. E2EE/deleted/hidden
+   * rows never reach the client; `snippet` stays plain text.
+   */
+  searchMessages(workspaceId: string, query: SearchMessagesQuery): Promise<MessageSearchPage>;
+  /** #83: content-free mention inbox plus the workspace unread counter. */
+  listMentions(query?: ListMentionsQuery): Promise<MentionPage>;
+  /** #83: `ids[]`/`all` read markers; one idempotency key per action. */
+  markMentionsRead(body: ReadMentionsRequest, idempotencyKey: string): Promise<void>;
 
   /* E8: first-run setup and platform admin (server enforces the admin flag). */
   /** Public; no token is required and no admin flag is read. */
@@ -392,6 +483,23 @@ export interface ChatApi {
   activateUser(userId: string): Promise<void>;
   deleteChat(chatId: string): Promise<void>;
   listAdminAudit(query?: ListAdminAuditQuery): Promise<AdminAuditPage>;
+  /** #84: bounded CSV/JSON export of the installation audit log. */
+  exportAdminAudit(query: ExportAdminAuditQuery): Promise<AdminAuditExportResult>;
+  /** #84: live Keycloak sessions of one user (no IP/username/tokens). */
+  listAdminSessions(query: ListAdminSessionsQuery): Promise<AdminSessionPage>;
+  /** #84: idempotent `204`; a missing/already-revoked session is not an error. */
+  revokeAdminSession(sessionId: string): Promise<void>;
+  /** #84: revoke every session of the user; returns counters only. */
+  revokeAdminUserSessions(userId: string): Promise<AdminSessionRevokeAll>;
+  /** #84: effective translation provider settings (no secret field). */
+  getAdminTranslationProvider(): Promise<TranslationProviderSettings>;
+  updateAdminTranslationProvider(
+    body: TranslationProviderUpdate,
+  ): Promise<TranslationProviderSettings>;
+  /** #84: one bounded probe; the response carries status/latency only. */
+  testAdminTranslationProvider(): Promise<TranslationProviderTest>;
+  /** #84: workspace dashboard aggregates (counts/bytes and a small audit preview). */
+  getWorkspaceOverview(workspaceId: string): Promise<WorkspaceOverview>;
 
   registerDevice(body: DeviceRegistration, idempotencyKey: string): Promise<Device>;
   /** D1-FE5: profile device list (id/name/platform/status only in the UI). */
@@ -1007,6 +1115,78 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       });
     },
 
+    uploadWorkspaceFile(workspaceId, file, options = {}) {
+      return withReauth(async () => {
+        // The multipart field name is fixed by the contract. The upload carries
+        // its own progress surface; the store owns retry/cancel affordances.
+        const form = new FormData();
+        form.append('file', file, file.name);
+        const response = await client.postFormData<FileItem>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/files`,
+          form,
+          {
+            timeoutMs: 600_000,
+            signal: options.signal,
+            onProgress: options.onProgress,
+          },
+        );
+        return response.data;
+      });
+    },
+
+    renameFile(fileId, body, idempotencyKey) {
+      return withReauth(async () => {
+        const response = await client.patch<FileItem>(
+          `/files/${encodeURIComponent(fileId)}`,
+          body,
+          { idempotencyKey },
+        );
+        return response.data;
+      });
+    },
+
+    deleteFile(fileId, idempotencyKey) {
+      return withReauth(async () => {
+        await client.delete(`/files/${encodeURIComponent(fileId)}`, { idempotencyKey });
+      });
+    },
+
+    searchMessages(workspaceId, query) {
+      return withReauth(async () => {
+        const response = await client.get<MessageSearchPage>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/search/messages`,
+          {
+            // `q` is required by the contract; callers never issue an empty query.
+            q: query.q,
+            chat_id: query.chatId,
+            from: query.from,
+            to: query.to,
+            cursor: query.cursor,
+            limit: query.limit,
+          },
+        );
+        return response.data;
+      });
+    },
+
+    listMentions(query = {}) {
+      return withReauth(async () => {
+        const response = await client.get<MentionPage>('/me/mentions', {
+          workspace_id: query.workspaceId,
+          unread: query.unread,
+          cursor: query.cursor,
+          limit: query.limit,
+        });
+        return response.data;
+      });
+    },
+
+    markMentionsRead(body, idempotencyKey) {
+      return withReauth(async () => {
+        await client.post('/me/mentions/read', body, { idempotencyKey });
+      });
+    },
+
     getSetupStatus() {
       // Public contract operation: setup must be reachable before login and
       // must never trigger the app 401/refresh loop.
@@ -1109,6 +1289,87 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
           cursor: query.cursor,
           limit: query.limit,
         });
+        return response.data;
+      });
+    },
+
+    async exportAdminAudit(query) {
+      // #84: the export is a Blob so the browser writes the exact server
+      // bytes (RFC 4180 CSV or the bounded JSON object). Headers are the
+      // authoritative row count/truncation summary.
+      const response = await withReauth(async () =>
+        client.getBlob('/admin/audit/export', {
+          format: query.format,
+          action: query.action?.trim() || undefined,
+        }),
+      );
+      const rowsHeader = response.headers.get('x-export-rows');
+      const parsedRows = rowsHeader === null ? Number.NaN : Number.parseInt(rowsHeader, 10);
+      return {
+        blob: response.blob,
+        filename: contentDispositionFilename(response.headers.get('content-disposition')),
+        rows: Number.isFinite(parsedRows) && parsedRows >= 0 ? parsedRows : null,
+        truncated: response.headers.get('x-export-truncated') === 'true',
+      };
+    },
+
+    listAdminSessions(query) {
+      return withReauth(async () => {
+        const response = await client.get<AdminSessionPage>('/admin/sessions', {
+          user_id: query.userId,
+          cursor: query.cursor,
+          limit: query.limit,
+        });
+        return response.data;
+      });
+    },
+
+    revokeAdminSession(sessionId) {
+      return withReauth(async () => {
+        await client.delete(`/admin/sessions/${encodeURIComponent(sessionId)}`);
+      });
+    },
+
+    revokeAdminUserSessions(userId) {
+      return withReauth(async () => {
+        const response = await client.post<AdminSessionRevokeAll>(
+          `/admin/users/${encodeURIComponent(userId)}/revoke-sessions`,
+        );
+        return response.data;
+      });
+    },
+
+    getAdminTranslationProvider() {
+      return withReauth(async () => {
+        const response = await client.get<TranslationProviderSettings>('/admin/plugins/translate');
+        return response.data;
+      });
+    },
+
+    updateAdminTranslationProvider(body) {
+      return withReauth(async () => {
+        const response = await client.patch<TranslationProviderSettings>(
+          '/admin/plugins/translate',
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    testAdminTranslationProvider() {
+      return withReauth(async () => {
+        const response = await client.post<TranslationProviderTest>(
+          '/admin/plugins/translate/test',
+        );
+        return response.data;
+      });
+    },
+
+    getWorkspaceOverview(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.get<WorkspaceOverview>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/overview`,
+        );
         return response.data;
       });
     },

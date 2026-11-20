@@ -12,27 +12,42 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import ru.krug.backend.plugin.application.model.EffectiveTranslationSettings;
+import ru.krug.backend.plugin.application.port.TranslationProbePort;
 import ru.krug.backend.plugin.application.port.TranslationProviderPort;
 import ru.krug.backend.plugin.application.port.TranslationUnavailableException;
+import ru.krug.backend.plugin.application.usecase.TranslationSettingsService;
 import ru.krug.backend.plugin.infrastructure.config.TranslationProperties;
 
 /**
- * Bounded HTTP adapter for an explicitly configured {@code krug.plugins.translate.url}.
+ * Bounded HTTP adapter for the installation translation provider.
  *
- * <p>Contract of the configured provider: {@code POST {url}} with
- * {@code {"text":"...","target":"ru"}} and a {@code 200} JSON answer {@code {"text":"..."}}.
- * The source text, URL and provider body are never logged. Connect/read timeouts and a
- * response-size cap bound the call; any deviation is an unavailable translation, never a
- * fabricated success. With an empty URL the adapter fails immediately and makes no call.</p>
+ * <p>The URL is read at runtime from {@link TranslationSettingsService} (administrator
+ * setting, with the legacy {@code krug.plugins.translate.url} environment fallback), so a
+ * PATCH takes effect on the next call without a restart. Contract of the provider:
+ * {@code POST {url}} with {@code {"text":"...","target":"ru"}} and a {@code 200} JSON answer
+ * {@code {"text":"..."}}. Source text, URL and provider body are never logged. Connect/read
+ * timeouts and a response-size cap bound the call; any deviation is an unavailable
+ * translation, never a fabricated success.</p>
+ *
+ * <p>The health probe uses a constant text and discards the answer: it never returns or logs
+ * translated content.</p>
  */
 @Component
-public class HttpTranslationProvider implements TranslationProviderPort {
+public class HttpTranslationProvider implements TranslationProviderPort, TranslationProbePort {
 
+    private static final String PROBE_TEXT = "ping";
+    private static final String PROBE_TARGET = "en";
+
+    private final TranslationSettingsService settings;
     private final TranslationProperties properties;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
 
-    public HttpTranslationProvider(TranslationProperties properties, ObjectMapper objectMapper) {
+    public HttpTranslationProvider(TranslationSettingsService settings,
+                                   TranslationProperties properties,
+                                   ObjectMapper objectMapper) {
+        this.settings = settings;
         this.properties = properties;
         this.objectMapper = objectMapper;
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -43,10 +58,24 @@ public class HttpTranslationProvider implements TranslationProviderPort {
 
     @Override
     public String translate(String text, String targetLanguage) {
-        String url = properties.url();
-        if (url.isEmpty() || !(url.startsWith("http://") || url.startsWith("https://"))) {
+        EffectiveTranslationSettings current = settings.current();
+        if (!current.usable() || !acceptable(current.url())) {
             throw new TranslationUnavailableException();
         }
+        return send(current.url(), text, targetLanguage);
+    }
+
+    @Override
+    public void probe() {
+        EffectiveTranslationSettings current = settings.current();
+        if (!current.usable() || !acceptable(current.url())) {
+            throw new TranslationUnavailableException();
+        }
+        // The constant probe answer is deliberately discarded.
+        send(current.url(), PROBE_TEXT, PROBE_TARGET);
+    }
+
+    private String send(String url, String text, String targetLanguage) {
         Map<String, String> payload = new LinkedHashMap<>();
         payload.put("text", text);
         payload.put("target", targetLanguage);
@@ -77,6 +106,12 @@ public class HttpTranslationProvider implements TranslationProviderPort {
             // Deliberately no message/body/URL in the surfaced exception or logs.
             throw new TranslationUnavailableException();
         }
+    }
+
+    private static boolean acceptable(String url) {
+        return url != null
+                && (url.regionMatches(true, 0, "http://", 0, 7)
+                || url.regionMatches(true, 0, "https://", 0, 8));
     }
 
     private static long positiveMillis(Duration duration, long fallback) {

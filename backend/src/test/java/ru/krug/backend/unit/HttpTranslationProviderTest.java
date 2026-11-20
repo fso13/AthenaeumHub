@@ -7,6 +7,8 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 
@@ -17,7 +19,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import ru.krug.backend.plugin.application.model.EffectiveTranslationSettings;
 import ru.krug.backend.plugin.application.port.TranslationUnavailableException;
+import ru.krug.backend.plugin.application.usecase.TranslationSettingsService;
 import ru.krug.backend.plugin.infrastructure.config.TranslationProperties;
 import ru.krug.backend.plugin.infrastructure.translation.HttpTranslationProvider;
 
@@ -87,8 +91,13 @@ class HttpTranslationProviderTest {
     }
 
     private HttpTranslationProvider provider(String url, int maxResponseBytes) {
-        return new HttpTranslationProvider(new TranslationProperties(url,
-                Duration.ofSeconds(1), Duration.ofSeconds(1), maxResponseBytes),
+        TranslationSettingsService settings = mock(TranslationSettingsService.class);
+        when(settings.current()).thenReturn(url == null || url.isBlank()
+                ? EffectiveTranslationSettings.disabled()
+                : new EffectiveTranslationSettings(true, url));
+        return new HttpTranslationProvider(settings,
+                new TranslationProperties(url, Duration.ofSeconds(1), Duration.ofSeconds(1),
+                        maxResponseBytes),
                 new ObjectMapper());
     }
 

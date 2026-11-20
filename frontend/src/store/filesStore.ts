@@ -87,6 +87,8 @@ export interface FilesState {
   preflightError: ApiError | null;
   /** #73: server-backed file-center page (independent from loaded history). */
   fileCenter: FileCenterState;
+  /** #83: global upload progress/error for the file-center "Загрузить" button. */
+  fileCenterUpload: FileCenterUploadState;
 }
 
 /**
@@ -109,6 +111,9 @@ export interface FilesStoreDeps {
     ChatApi,
     | 'getWorkspaceLimits'
     | 'listFiles'
+    | 'uploadWorkspaceFile'
+    | 'renameFile'
+    | 'deleteFile'
     | 'preflightUpload'
     | 'initUpload'
     | 'getUpload'
@@ -166,6 +171,35 @@ function initialFileCenter(): FileCenterState {
   };
 }
 
+/**
+ * #83: one-shot global workspace upload (`POST /workspaces/{id}/files`).
+ * Deliberately separate from the resumable chat upload tasks: the endpoint is
+ * a single multipart request with upload progress and a terminal server verdict.
+ */
+export interface FileCenterUploadState {
+  status: 'idle' | 'uploading' | 'done' | 'error';
+  filename: string | null;
+  /** 0..100; stays at 0 when the browser cannot report the total. */
+  progress: number;
+  loadedBytes: number;
+  totalBytes: number;
+  error: ApiError | null;
+}
+
+/** Result of a rename/delete mutation; the server error is surfaced verbatim. */
+export type FileMutationResult<T> = { ok: true; value: T } | { ok: false; error: ApiError };
+
+function initialFileCenterUpload(): FileCenterUploadState {
+  return {
+    status: 'idle',
+    filename: null,
+    progress: 0,
+    loadedBytes: 0,
+    totalBytes: 0,
+    error: null,
+  };
+}
+
 function initialState(): FilesState {
   return {
     workspaceId: null,
@@ -177,6 +211,7 @@ function initialState(): FilesState {
     preflightStatus: 'idle',
     preflightError: null,
     fileCenter: initialFileCenter(),
+    fileCenterUpload: initialFileCenterUpload(),
   };
 }
 
@@ -197,6 +232,8 @@ export class FilesStore {
     { url: string; expiresAtMs: number; sizeBytes: number; sha256: string }
   >();
   private readonly downloadInFlight = new Map<string, Promise<DownloadUrl>>();
+  /** #83: the single in-flight one-shot global upload. */
+  private fileUploadController: AbortController | null = null;
   private limitsPromise: Promise<void> | null = null;
   /** #73: invalidates stale file-center responses after filter/workspace changes. */
   private fileCenterSeq = 0;
@@ -218,6 +255,8 @@ export class FilesStore {
 
   dispose(): void {
     this.disposed = true;
+    this.fileUploadController?.abort();
+    this.fileUploadController = null;
     this.abortControllers();
     this.listeners.clear();
     this.downloadCache.clear();
@@ -240,7 +279,9 @@ export class FilesStore {
       limits: changed ? null : this.state.limits,
       limitsStatus: workspaceId ? 'loading' : 'idle',
       limitsError: null,
-      ...(changed ? { fileCenter: initialFileCenter() } : {}),
+      ...(changed
+        ? { fileCenter: initialFileCenter(), fileCenterUpload: initialFileCenterUpload() }
+        : {}),
     });
     if (changed) this.fileCenterSeq += 1;
     if (workspaceId) void this.refreshLimits();
@@ -378,6 +419,154 @@ export class FilesStore {
           error: toApiError(error),
         },
       });
+    }
+  }
+
+  /**
+   * #83: re-run the last applied file-center query (filters preserved, cursor
+   * dropped). Used after an upload so the new server row appears on page one.
+   */
+  reloadFileCenter(): Promise<void> {
+    return this.loadFiles({ ...this.state.fileCenter.query, cursor: undefined });
+  }
+
+  /**
+   * #83: one-shot global upload with real progress. Returns the server row or
+   * `null` on failure/cancel; the explicit `fileCenterUpload` state carries the
+   * translated error surface. The server remains the source of the new row.
+   */
+  async uploadFile(file: File): Promise<FileItem | null> {
+    if (this.disposed) return null;
+    const workspaceId = this.state.workspaceId;
+    if (!workspaceId) {
+      this.patch({
+        fileCenterUpload: {
+          ...initialFileCenterUpload(),
+          status: 'error',
+          filename: file.name,
+          error: ApiError.client(
+            'WORKSPACE_REQUIRED',
+            'No active workspace for the file upload',
+            409,
+          ),
+        },
+      });
+      return null;
+    }
+    if (this.state.fileCenterUpload.status === 'uploading') return null;
+
+    const controller = new AbortController();
+    this.fileUploadController = controller;
+    const total = file.size;
+    this.patch({
+      fileCenterUpload: {
+        status: 'uploading',
+        filename: file.name,
+        progress: 0,
+        loadedBytes: 0,
+        totalBytes: total,
+        error: null,
+      },
+    });
+
+    try {
+      const item = await this.api.uploadWorkspaceFile(workspaceId, file, {
+        signal: controller.signal,
+        onProgress: (loaded, reportedTotal) => {
+          if (this.disposed || this.fileUploadController !== controller) return;
+          const size = reportedTotal > 0 ? reportedTotal : total;
+          const progress = size > 0 ? Math.min(100, Math.round((loaded * 100) / size)) : 0;
+          this.patch({
+            fileCenterUpload: {
+              ...this.state.fileCenterUpload,
+              loadedBytes: loaded,
+              totalBytes: size,
+              progress,
+            },
+          });
+        },
+      });
+      if (this.disposed || this.state.workspaceId !== workspaceId) return null;
+      this.patch({
+        fileCenterUpload: {
+          status: 'done',
+          filename: file.name,
+          progress: 100,
+          loadedBytes: total,
+          totalBytes: total,
+          error: null,
+        },
+      });
+      await this.reloadFileCenter();
+      void this.refreshLimits();
+      return item;
+    } catch (error) {
+      if (this.disposed) return null;
+      if (controller.signal.aborted) {
+        this.patch({ fileCenterUpload: initialFileCenterUpload() });
+        return null;
+      }
+      this.patch({
+        fileCenterUpload: {
+          ...this.state.fileCenterUpload,
+          status: 'error',
+          error: toApiError(error),
+        },
+      });
+      return null;
+    } finally {
+      if (this.fileUploadController === controller) this.fileUploadController = null;
+    }
+  }
+
+  /** Cancel an in-flight global upload (the server request is aborted). */
+  cancelFileUpload(): void {
+    this.fileUploadController?.abort();
+    this.fileUploadController = null;
+  }
+
+  /** Clear a finished/failed upload banner without touching the list. */
+  clearFileUpload(): void {
+    if (this.state.fileCenterUpload.status === 'uploading') return;
+    this.patch({ fileCenterUpload: initialFileCenterUpload() });
+  }
+
+  /** #83: owner-only display-name rename; the row is replaced by the server row. */
+  async renameFile(fileId: string, name: string): Promise<FileMutationResult<FileItem>> {
+    try {
+      const item = await this.api.renameFile(fileId, { name }, this.createId());
+      if (!this.disposed) {
+        const center = this.state.fileCenter;
+        this.patch({
+          fileCenter: {
+            ...center,
+            items: center.items.map((row) => (row.id === fileId ? { ...row, ...item } : row)),
+          },
+        });
+      }
+      return { ok: true, value: item };
+    } catch (error) {
+      return { ok: false, error: toApiError(error) };
+    }
+  }
+
+  /** #83: soft delete (owner or OWNER/ADMIN); the row disappears on `204`. */
+  async deleteFile(fileId: string): Promise<FileMutationResult<void>> {
+    try {
+      await this.api.deleteFile(fileId, this.createId());
+      if (!this.disposed) {
+        const center = this.state.fileCenter;
+        this.patch({
+          fileCenter: {
+            ...center,
+            items: center.items.filter((row) => row.id !== fileId),
+          },
+        });
+        void this.refreshLimits();
+      }
+      return { ok: true, value: undefined };
+    } catch (error) {
+      return { ok: false, error: toApiError(error) };
     }
   }
 
@@ -663,6 +852,8 @@ export class FilesStore {
 
   reset(): void {
     this.fileCenterSeq += 1;
+    this.fileUploadController?.abort();
+    this.fileUploadController = null;
     this.abortControllers();
     this.patch(initialState());
     this.downloadCache.clear();

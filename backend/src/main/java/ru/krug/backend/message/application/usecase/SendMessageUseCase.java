@@ -182,6 +182,12 @@ public class SendMessageUseCase {
             canonical.put("thread_root_id", command.input().threadRootId());
         }
         canonical.put("attachment_ids", command.input().attachmentIds());
+        // #83: mentions are part of the idempotency identity. Only add the fields when they
+        // are present so pre-#83 hashes (and their Idempotency-Key replays) stay unchanged.
+        if (command.input().hasMentions()) {
+            canonical.put("mentions", command.input().mentions());
+            canonical.put("mention_all", command.input().mentionAll());
+        }
         if (envelopes.present()) {
             // Deterministic fingerprint instead of the parsed JSON text: field order and
             // whitespace must not create a second idempotency identity for the same bytes.
@@ -239,6 +245,8 @@ public class SendMessageUseCase {
                 && Objects.equals(existing.text(), input.text())
                 && Objects.equals(existing.replyToId(), input.replyToId())
                 && Objects.equals(existing.threadRootId(), input.threadRootId())
+                && Objects.equals(existing.mentions(), input.mentions())
+                && existing.mentionAll() == input.mentionAll()
                 && Objects.equals(existing.attachments().stream()
                         .map(attachment -> attachment.id()).sorted().toList(),
                         input.attachmentIds().stream().sorted().toList());

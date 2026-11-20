@@ -2,6 +2,7 @@ import type {
   AdminAuditEvent,
   AdminChat,
   AdminPluginPackage,
+  AdminSession,
   AdminStorage,
   AdminUser,
   AdminUserStatus,
@@ -23,6 +24,7 @@ import type {
   DlpPolicy,
   FileItem,
   MeResponse,
+  Mention,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
@@ -43,6 +45,7 @@ import type {
   WorkspaceLimits,
   WorkspaceMember,
   WorkspaceMemberRole,
+  WorkspaceOverview,
   WorkspacePermissionMatrix,
   WorkspaceSecurity,
   WorkspaceSession,
@@ -60,6 +63,10 @@ import {
   buildMockMe,
   buildMemberUsers,
   buildNotificationPreferences,
+  buildSeedPoll,
+  buildSeedPollVotes,
+  buildSeedTask,
+  buildMentions,
   buildNotifications,
   buildStickerPacks,
   buildWorkspaceMembers,
@@ -396,7 +403,8 @@ export interface MockUploadPart {
 
 export interface MockUpload {
   id: string;
-  chatId: string;
+  /** #83: `null` for a global workspace file that is not bound to a chat. */
+  chatId: string | null;
   filename: string;
   size: number;
   mime: string | null;
@@ -429,6 +437,8 @@ export interface MockAdminDirectoryState {
   storageOverride: AdminStorage | null;
   /** E11-F audit page source; `null` uses the deterministic seeded events. */
   auditEventsOverride: AdminAuditEvent[] | null;
+  /** #84 export cap (10 000 in the real backend); suites lower it for truncation. */
+  auditExportLimit: number;
   usersDelayMs: number;
   chatsDelayMs: number;
   storageDelayMs: number;
@@ -437,6 +447,8 @@ export interface MockAdminDirectoryState {
   forceChatsError: ForcedSendError | null;
   forceStorageError: ForcedSendError | null;
   forceAuditError: ForcedSendError | null;
+  /** #84: export failures are injected without breaking the audit page. */
+  forceExportError: ForcedSendError | null;
   /** E11-F: action failures are injected per operation. */
   forceUserActionError: ForcedSendError | null;
   forceChatDeleteError: ForcedSendError | null;
@@ -471,6 +483,7 @@ export function createMockAdminDirectoryState(): MockAdminDirectoryState {
     chatsOverride: null,
     storageOverride: null,
     auditEventsOverride: null,
+    auditExportLimit: 10_000,
     usersDelayMs: 0,
     chatsDelayMs: 0,
     storageDelayMs: 0,
@@ -479,6 +492,7 @@ export function createMockAdminDirectoryState(): MockAdminDirectoryState {
     forceChatsError: null,
     forceStorageError: null,
     forceAuditError: null,
+    forceExportError: null,
     forceUserActionError: null,
     forceChatDeleteError: null,
     auditEvents: [],
@@ -490,6 +504,136 @@ export function createMockAdminDirectoryState(): MockAdminDirectoryState {
     auditRequests: [],
     userActionRequests: [],
     chatDeleteRequests: [],
+  };
+}
+
+/**
+ * #84 workspace overview knobs. The default projection is derived from the
+ * seeded chats/files/DLP rows; suites inject `override` when they need exact
+ * counters or a content-free audit preview.
+ */
+export interface MockWorkspaceOverviewState {
+  override: WorkspaceOverview | null;
+  delayMs: number;
+  forceError: ForcedSendError | null;
+  requests: Array<{ workspaceId: string }>;
+}
+
+export function createMockWorkspaceOverviewState(): MockWorkspaceOverviewState {
+  return { override: null, delayMs: 0, forceError: null, requests: [] };
+}
+
+/**
+ * #84 platform-admin sessions. Rows are contract-shaped: id, local user id,
+ * client-derived device label and timestamps only (never IP/username/tokens).
+ */
+export interface MockAdminSessionsState {
+  sessions: AdminSession[];
+  delayMs: number;
+  forceListError: ForcedSendError | null;
+  forceRevokeError: ForcedSendError | null;
+  forceRevokeAllError: ForcedSendError | null;
+  listRequests: Array<{ userId: string; cursor: string | null; limit: number }>;
+  revokeRequests: string[];
+  revokeAllRequests: number;
+}
+
+/** Deterministic sessions for the seeded users; no PII beyond the local id. */
+export function createMockAdminSessionsState(): MockAdminSessionsState {
+  const session = (
+    id: string,
+    userId: string,
+    device: string,
+    created: string,
+    lastSeen: string,
+    current = false,
+  ): AdminSession => ({
+    id,
+    user_id: userId,
+    device,
+    created_at: created,
+    last_seen_at: lastSeen,
+    current,
+  });
+  return {
+    sessions: [
+      session(
+        'f0000000-0000-4000-8000-000000000101',
+        IDS.user,
+        'krug-web · Chrome',
+        '2026-11-18T18:05:00.000Z',
+        '2026-11-20T14:55:00.000Z',
+        true,
+      ),
+      session(
+        'f0000000-0000-4000-8000-000000000102',
+        IDS.user,
+        'krug-mobile · iOS',
+        '2026-11-01T09:12:00.000Z',
+        '2026-11-19T12:40:00.000Z',
+      ),
+      session(
+        'f0000000-0000-4000-8000-000000000103',
+        IDS.anna,
+        'krug-web · Safari',
+        '2026-11-12T11:20:00.000Z',
+        '2026-11-19T11:05:00.000Z',
+      ),
+      session(
+        'f0000000-0000-4000-8000-000000000104',
+        IDS.anna,
+        'krug-mobile · Android',
+        '2026-11-14T08:00:00.000Z',
+        '2026-11-18T20:30:00.000Z',
+      ),
+      session(
+        'f0000000-0000-4000-8000-000000000105',
+        IDS.mark,
+        'krug-web · Firefox',
+        '2026-11-15T10:10:00.000Z',
+        '2026-11-18T09:05:00.000Z',
+      ),
+    ],
+    delayMs: 0,
+    forceListError: null,
+    forceRevokeError: null,
+    forceRevokeAllError: null,
+    listRequests: [],
+    revokeRequests: [],
+    revokeAllRequests: 0,
+  };
+}
+
+/**
+ * #84 translation-provider installation settings. The effective view has no
+ * secret field: only `enabled` and the https URL are stored/returned.
+ */
+export interface MockTranslationAdminState {
+  enabled: boolean;
+  url: string;
+  updates: Array<{ body: Record<string, unknown>; changed: boolean }>;
+  getRequests: number;
+  testRequests: number;
+  /** Result of the next probe; `UNAVAILABLE` simulates a provider failure. */
+  testStatus: 'OK' | 'UNAVAILABLE';
+  testLatencyMs: number;
+  forceGetError: ForcedSendError | null;
+  forceUpdateError: ForcedSendError | null;
+  forceTestError: ForcedSendError | null;
+}
+
+export function createMockTranslationAdminState(): MockTranslationAdminState {
+  return {
+    enabled: true,
+    url: 'https://translate.example.test/v1',
+    updates: [],
+    getRequests: 0,
+    testRequests: 0,
+    testStatus: 'OK',
+    testLatencyMs: 84,
+    forceGetError: null,
+    forceUpdateError: null,
+    forceTestError: null,
   };
 }
 
@@ -912,6 +1056,31 @@ export interface MockDb {
   fileCenterDelayMs: number;
   forceFileCenterError: ForcedSendError | null;
 
+  /* #83 global files: upload/rename/delete request log + injectable failures */
+  fileUploadRequests: Array<{ workspaceId: string; filename: string; size: number; mime: string }>;
+  fileRenameRequests: Array<{ fileId: string; name: string; idempotencyKey: string }>;
+  fileDeleteRequests: Array<{ fileId: string; idempotencyKey: string }>;
+  /** Ids already soft-deleted so a repeat DELETE is idempotent (204). */
+  deletedFileIds: Set<string>;
+  forceWorkspaceUploadError: ForcedSendError | null;
+  forceFileRenameError: ForcedSendError | null;
+  forceFileDeleteError: ForcedSendError | null;
+
+  /* #83 server search (`GET /workspaces/{id}/search/messages`) */
+  searchRequests: Array<Record<string, string | null>>;
+  searchDelayMs: number;
+  forceSearchError: ForcedSendError | null;
+
+  /* #83 mention inbox (`GET /me/mentions`, `POST /me/mentions/read`) */
+  mentions: Mention[];
+  mentionListRequests: Array<Record<string, string | null>>;
+  mentionReadRequests: Array<{
+    body: Record<string, unknown>;
+    idempotencyKey: string | null;
+  }>;
+  forceMentionListError: ForcedSendError | null;
+  forceMentionReadError: ForcedSendError | null;
+
   /* P0-4 (#82): own avatar, TOTP authenticator, workspace settings/invites */
   profileAvatarFileId: string | null;
   avatarRequests: Array<{ action: 'SET' | 'DELETE' | 'GET'; fileId: string | null }>;
@@ -1005,6 +1174,12 @@ export interface MockDb {
   forceTestEmailError: ForcedSendError | null;
   /** E9-F admin directory (users/chats/storage) mock knobs. */
   adminDirectory: MockAdminDirectoryState;
+  /** #84 workspace dashboard read model. */
+  workspaceOverview: MockWorkspaceOverviewState;
+  /** #84 platform-admin Keycloak sessions. */
+  adminSessions: MockAdminSessionsState;
+  /** #84 installation translation-provider settings. */
+  translationAdmin: MockTranslationAdminState;
   /** P0-3 (#81) workspace DLP/audit/sessions/settings mock state. */
   security: MockSecurityState;
 
@@ -1341,6 +1516,16 @@ function buildMockInviteTokens(): Map<string, { chatId: string; inviteId: string
   ]);
 }
 
+function buildSeedPolls(): Map<string, MockPollRecord> {
+  const poll = buildSeedPoll();
+  return new Map([[poll.id, { chatId: IDS.groupChat, poll, votes: buildSeedPollVotes() }]]);
+}
+
+function buildSeedTasks(): Map<string, MockTaskRecord> {
+  const task = buildSeedTask();
+  return new Map([[task.id, { chatId: IDS.groupChat, task }]]);
+}
+
 export function createMockDb(): MockDb {
   return {
     session: clone(mockSession),
@@ -1421,8 +1606,8 @@ export function createMockDb(): MockDb {
     forceAdminPluginPackagesError: null,
     forceInstallPluginPackageError: null,
     forceUninstallPluginPackageError: null,
-    polls: new Map(),
-    tasks: new Map(),
+    polls: buildSeedPolls(),
+    tasks: buildSeedTasks(),
     pollRequests: [],
     taskRequests: [],
     translationRequests: [],
@@ -1480,6 +1665,21 @@ export function createMockDb(): MockDb {
     fileCenterRequests: [],
     fileCenterDelayMs: 0,
     forceFileCenterError: null,
+    fileUploadRequests: [],
+    fileRenameRequests: [],
+    fileDeleteRequests: [],
+    deletedFileIds: new Set(),
+    forceWorkspaceUploadError: null,
+    forceFileRenameError: null,
+    forceFileDeleteError: null,
+    searchRequests: [],
+    searchDelayMs: 0,
+    forceSearchError: null,
+    mentions: buildMentions(),
+    mentionListRequests: [],
+    mentionReadRequests: [],
+    forceMentionListError: null,
+    forceMentionReadError: null,
 
     profileAvatarFileId: null,
     avatarRequests: [],
@@ -1540,6 +1740,9 @@ export function createMockDb(): MockDb {
     adminTestEmails: [],
     forceTestEmailError: null,
     adminDirectory: createMockAdminDirectoryState(),
+    workspaceOverview: createMockWorkspaceOverviewState(),
+    adminSessions: createMockAdminSessionsState(),
+    translationAdmin: createMockTranslationAdminState(),
     security: createMockSecurityState(),
 
     authUsers: [
@@ -1646,8 +1849,8 @@ export function resetMockDb(db: MockDb): void {
   db.forceAdminPluginPackagesError = null;
   db.forceInstallPluginPackageError = null;
   db.forceUninstallPluginPackageError = null;
-  db.polls.clear();
-  db.tasks.clear();
+  db.polls = fresh.polls;
+  db.tasks = fresh.tasks;
   db.pollRequests = [];
   db.taskRequests = [];
   db.translationRequests = [];
@@ -1702,6 +1905,21 @@ export function resetMockDb(db: MockDb): void {
   db.fileCenterRequests = [];
   db.fileCenterDelayMs = 0;
   db.forceFileCenterError = null;
+  db.fileUploadRequests = [];
+  db.fileRenameRequests = [];
+  db.fileDeleteRequests = [];
+  db.deletedFileIds = new Set();
+  db.forceWorkspaceUploadError = null;
+  db.forceFileRenameError = null;
+  db.forceFileDeleteError = null;
+  db.searchRequests = [];
+  db.searchDelayMs = 0;
+  db.forceSearchError = null;
+  db.mentions = fresh.mentions;
+  db.mentionListRequests = [];
+  db.mentionReadRequests = [];
+  db.forceMentionListError = null;
+  db.forceMentionReadError = null;
 
   db.profileAvatarFileId = null;
   db.avatarRequests = [];
@@ -1760,6 +1978,9 @@ export function resetMockDb(db: MockDb): void {
   db.adminTestEmails = [];
   db.forceTestEmailError = null;
   db.adminDirectory = fresh.adminDirectory;
+  db.workspaceOverview = fresh.workspaceOverview;
+  db.adminSessions = fresh.adminSessions;
+  db.translationAdmin = fresh.translationAdmin;
   db.security = fresh.security;
 
   db.authUsers = fresh.authUsers;
@@ -1824,6 +2045,46 @@ export function insertMockMessage(
       created_at: created,
     });
   }
+  return message;
+}
+
+/**
+ * #95: server-created POLL/TASK row. The backend writes the message together
+ * with the poll/task, so the mock must do the same and return its id.
+ */
+export function insertMockPluginMessage(
+  db: MockDb,
+  chatId: string,
+  input: { type: 'POLL'; poll: Poll } | { type: 'TASK'; task: Task },
+  sender: { id: string; name: string } = { id: db.me.user.id, name: MOCK_DISPLAY_NAME },
+): ApiMessage {
+  const chat = db.chats[chatId];
+  if (!chat) throw new Error(`Unknown mock chat: ${chatId}`);
+
+  const seq = chat.summary.last_seq + 1;
+  const created = new Date().toISOString();
+  const message: ApiMessage = {
+    id: `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`,
+    chat_id: chatId,
+    seq,
+    type: input.type,
+    sender_id: sender.id,
+    sender_display_name: sender.name,
+    text: null,
+    reply_to_id: null,
+    created_at: created,
+    edited_at: null,
+    deleted_at: null,
+    version: 1,
+    reactions: [],
+    ...(input.type === 'POLL'
+      ? { poll_id: input.poll.id, poll: input.poll }
+      : { task_id: input.task.id, task: input.task }),
+  };
+
+  chat.messages.push(message);
+  chat.summary.last_seq = seq;
+  chat.summary.last_message_at = created;
   return message;
 }
 

@@ -3,6 +3,7 @@ package ru.krug.backend.plugin.infrastructure.persistence;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -65,6 +66,25 @@ public class ChatTaskRepositoryAdapter implements ChatTaskRepository {
                 .setParameter(3, taskId)
                 .getResultList();
         return rows.stream().map(row -> toTask((Object[]) row)).findFirst();
+    }
+
+    @Override
+    public List<ChatTask> findByIds(UUID workspaceId, UUID chatId, Collection<UUID> taskIds) {
+        if (taskIds == null || taskIds.isEmpty()) {
+            return List.of();
+        }
+        List<?> rows = entityManager.createNativeQuery("""
+                        SELECT %s
+                          FROM plugin.tasks
+                         WHERE workspace_id = :workspaceId AND chat_id = :chatId
+                           AND id IN (:taskIds)
+                         ORDER BY created_at DESC, id DESC
+                        """.formatted(COLUMNS))
+                .setParameter("workspaceId", workspaceId)
+                .setParameter("chatId", chatId)
+                .setParameter("taskIds", taskIds)
+                .getResultList();
+        return rows.stream().map(row -> toTask((Object[]) row)).toList();
     }
 
     @Override

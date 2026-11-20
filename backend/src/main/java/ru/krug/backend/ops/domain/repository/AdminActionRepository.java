@@ -34,4 +34,10 @@ public interface AdminActionRepository {
      */
     List<AdminAuditRow> findAuditEvents(String action, Instant beforeCreatedAt, UUID beforeId,
                                         int limit);
+
+    /**
+     * Bounded export read ordered by {@code (created_at DESC, id DESC)}. The caller passes
+     * {@code MAX_ROWS + 1} to detect truncation; the SQL function caps the value at 10001.
+     */
+    List<AdminAuditRow> findAuditEventsForExport(String action, int limit);
 }

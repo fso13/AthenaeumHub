@@ -7,10 +7,14 @@ import type {
   AdminSettingsPatch,
   SetupStatus,
   TestEmailResponse,
+  TranslationProviderSettings,
+  TranslationProviderTest,
+  TranslationProviderUpdate,
 } from '../api/types';
 
 export type OpsLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 export type TestEmailStatus = 'idle' | 'sending' | 'sent' | 'error';
+export type TranslationTestStatus = 'idle' | 'testing' | 'done' | 'error';
 
 /**
  * E8 first-run setup + platform admin state. Global (installation-wide) data,
@@ -37,6 +41,16 @@ export interface OpsState {
   testEmailError: ApiError | null;
   /** Recipient of the last accepted test email; never a secret. */
   testEmailTo: string | null;
+
+  /** #84: effective installation translation-provider settings (no secret). */
+  translation: TranslationProviderSettings | null;
+  translationStatus: OpsLoadStatus;
+  translationError: ApiError | null;
+  translationSaving: boolean;
+  translationSaveError: ApiError | null;
+  translationTestStatus: TranslationTestStatus;
+  translationTest: TranslationProviderTest | null;
+  translationTestError: ApiError | null;
 }
 
 export type OpsApi = Pick<
@@ -53,6 +67,13 @@ export type OpsApi = Pick<
   | 'activateUser'
   | 'deleteChat'
   | 'listAdminAudit'
+  | 'exportAdminAudit'
+  | 'listAdminSessions'
+  | 'revokeAdminSession'
+  | 'revokeAdminUserSessions'
+  | 'getAdminTranslationProvider'
+  | 'updateAdminTranslationProvider'
+  | 'testAdminTranslationProvider'
 >;
 
 export interface OpsStoreDeps {
@@ -75,6 +96,14 @@ export function createInitialOpsState(): OpsState {
     testEmailStatus: 'idle',
     testEmailError: null,
     testEmailTo: null,
+    translation: null,
+    translationStatus: 'idle',
+    translationError: null,
+    translationSaving: false,
+    translationSaveError: null,
+    translationTestStatus: 'idle',
+    translationTest: null,
+    translationTestError: null,
   };
 }
 
@@ -95,6 +124,9 @@ export class OpsStore {
   private overviewPromise: Promise<void> | null = null;
   private savePromise: Promise<AdminSettings | null> | null = null;
   private testPromise: Promise<boolean> | null = null;
+  private translationPromise: Promise<void> | null = null;
+  private translationSavePromise: Promise<TranslationProviderSettings | null> | null = null;
+  private translationTestPromise: Promise<TranslationProviderTest | null> | null = null;
   /** Invalidates in-flight responses after logout/account switch. */
   private generation = 0;
   private disposed = false;
@@ -128,6 +160,9 @@ export class OpsStore {
     this.overviewPromise = null;
     this.savePromise = null;
     this.testPromise = null;
+    this.translationPromise = null;
+    this.translationSavePromise = null;
+    this.translationTestPromise = null;
     this.directory.reset();
     this.state = createInitialOpsState();
     this.emit();
@@ -221,7 +256,115 @@ export class OpsStore {
 
   /** `/admin` loads both cards in parallel; each card owns its error state. */
   loadAdmin(force = false): Promise<void> {
-    return Promise.all([this.loadSettings(force), this.loadOverview(force)]).then(() => undefined);
+    return Promise.all([
+      this.loadSettings(force),
+      this.loadOverview(force),
+      this.loadTranslation(force),
+    ]).then(() => undefined);
+  }
+
+  /** #84 effective translation-provider settings; no secret is returned. */
+  async loadTranslation(force = false): Promise<void> {
+    if (!force && (this.state.translationStatus === 'ready' || this.translationPromise)) {
+      return this.translationPromise ?? undefined;
+    }
+    if (this.translationPromise) return this.translationPromise;
+
+    const generation = this.generation;
+    this.patch({ translationStatus: 'loading', translationError: null });
+    this.translationPromise = (async () => {
+      try {
+        const translation = await this.api.getAdminTranslationProvider();
+        if (this.disposed || generation !== this.generation) return;
+        this.patch({ translation, translationStatus: 'ready', translationError: null });
+      } catch (error) {
+        if (this.disposed || generation !== this.generation) return;
+        this.patch({ translationStatus: 'error', translationError: toApiError(error) });
+      } finally {
+        if (generation === this.generation) this.translationPromise = null;
+      }
+    })();
+    return this.translationPromise;
+  }
+
+  /**
+   * #84 `PATCH /admin/plugins/translate` with a partial body. The server is the
+   * source of truth for the effective URL (including the environment fallback);
+   * a no-op repeat is idempotent and writes no second audit event.
+   */
+  async saveTranslation(
+    patch: TranslationProviderUpdate,
+  ): Promise<TranslationProviderSettings | null> {
+    if (this.translationSavePromise) return this.translationSavePromise;
+    const generation = this.generation;
+    this.patch({
+      translationSaving: true,
+      translationSaveError: null,
+      translationTestStatus: 'idle',
+      translationTest: null,
+      translationTestError: null,
+    });
+    this.translationSavePromise = (async () => {
+      try {
+        const translation = await this.api.updateAdminTranslationProvider(patch);
+        if (this.disposed || generation !== this.generation) return null;
+        this.patch({
+          translation,
+          translationStatus: 'ready',
+          translationError: null,
+          translationSaving: false,
+          translationSaveError: null,
+          translationTestStatus: 'idle',
+          translationTest: null,
+          translationTestError: null,
+        });
+        return translation;
+      } catch (error) {
+        if (this.disposed || generation !== this.generation) return null;
+        this.patch({
+          translationSaving: false,
+          translationSaveError: toApiError(error),
+        });
+        return null;
+      } finally {
+        if (generation === this.generation) this.translationSavePromise = null;
+      }
+    })();
+    return this.translationSavePromise;
+  }
+
+  /** #84 one bounded health probe; only status/latency ever reach the client. */
+  async testTranslation(): Promise<TranslationProviderTest | null> {
+    if (this.translationTestPromise) return this.translationTestPromise;
+    const generation = this.generation;
+    this.patch({
+      translationTestStatus: 'testing',
+      translationTestError: null,
+      translationTest: null,
+    });
+    this.translationTestPromise = (async () => {
+      try {
+        const result = await this.api.testAdminTranslationProvider();
+        if (this.disposed || generation !== this.generation) return null;
+        this.patch({
+          translationTestStatus: 'done',
+          translationTest: result,
+          translationTestError: null,
+        });
+        return result;
+      } catch (error) {
+        if (this.disposed || generation !== this.generation) return null;
+        this.patch({
+          translationTestStatus: 'error',
+          translationTest: null,
+          translationTestError: toApiError(error),
+        });
+        return null;
+      } finally {
+        if (generation === this.generation) this.translationTestPromise = null;
+      }
+    })();
+    return this.translationTestPromise;
   }
 
   /**

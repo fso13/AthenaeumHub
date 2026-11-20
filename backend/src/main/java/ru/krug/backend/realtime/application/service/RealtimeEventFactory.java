@@ -6,6 +6,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import ru.krug.backend.message.application.model.EmbeddedPollView;
+import ru.krug.backend.message.application.model.EmbeddedTaskView;
 import ru.krug.backend.realtime.application.model.AttachmentMediaSnapshot;
 import ru.krug.backend.realtime.application.model.EphemeralEvent;
 import ru.krug.backend.realtime.application.model.MessageSnapshot;
@@ -115,6 +117,16 @@ public final class RealtimeEventFactory {
         if (message.sticker() != null) {
             payload.put("sticker", sticker(message.sticker()));
         }
+        // #95: POLL/TASK timeline projection. Embedded content is viewer-relative for live
+        // frames and may be null on a tombstone; ids stay null for every other type.
+        payload.put("poll_id", message.pluginContent() == null
+                ? null : message.pluginContent().pollId());
+        payload.put("poll", message.pluginContent() == null || message.pluginContent().poll() == null
+                ? null : poll(message.pluginContent().poll()));
+        payload.put("task_id", message.pluginContent() == null
+                ? null : message.pluginContent().taskId());
+        payload.put("task", message.pluginContent() == null || message.pluginContent().task() == null
+                ? null : task(message.pluginContent().task()));
         payload.put("attachments", message.attachments().stream().map(attachment -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", attachment.id());
@@ -155,6 +167,41 @@ public final class RealtimeEventFactory {
         item.put("genre", media.genre());
         item.put("artwork_url", media.artworkUrl());
         item.put("metadata_source", media.metadataSource());
+        return item;
+    }
+
+    private static Map<String, Object> poll(EmbeddedPollView poll) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id", poll.id());
+        item.put("question", poll.question());
+        item.put("options", poll.options().stream().map(option -> {
+            Map<String, Object> optionItem = new LinkedHashMap<>();
+            optionItem.put("id", option.id());
+            optionItem.put("text", option.text());
+            optionItem.put("position", option.position());
+            optionItem.put("votes", option.votes());
+            return optionItem;
+        }).toList());
+        item.put("creator_id", poll.creatorId());
+        item.put("closed", poll.closed());
+        item.put("closed_at", poll.closedAt());
+        item.put("created_at", poll.createdAt());
+        item.put("my_option_id", poll.myOptionId());
+        item.put("total_votes", poll.totalVotes());
+        return item;
+    }
+
+    private static Map<String, Object> task(EmbeddedTaskView task) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id", task.id());
+        item.put("title", task.title());
+        item.put("creator_id", task.creatorId());
+        item.put("assignee_id", task.assigneeId());
+        item.put("due_at", task.dueAt());
+        item.put("done", task.done());
+        item.put("completed_by", task.completedBy());
+        item.put("completed_at", task.completedAt());
+        item.put("created_at", task.createdAt());
         return item;
     }
 

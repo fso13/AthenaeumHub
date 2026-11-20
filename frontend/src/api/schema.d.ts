@@ -323,6 +323,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ограниченный экспорт audit-лога установки (CSV/JSON)
+         * @description platform_admin. Читает append-only `audit.audit_events` через отдельную SECURITY DEFINER функцию, которая повторно проверяет platform_admin. Те же колонки, что у страницы (`id`, `action`, `actor_id`, `actor_email`, `target_type`, `target_id`, `created_at`); metadata JSONB, хэши hash-chain и request id не покидают БД. Экспорт ограничен 10 000 строк: при большем совпадении возвращаются первые 10 000 и `X-Export-Truncated: true`. `format=csv` — RFC 4180 (`text/csv; charset=UTF-8`), `format=json` — объект `AdminAuditExport`. Сам экспорт аудируется (`admin.audit.exported`, только format/returned/truncated).
+         */
+        get: operations["exportAdminAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Сессии выбранного пользователя (platform_admin)
+         * @description `user_id` обязателен. Локальный пользователь разрешается в непрозрачный Keycloak subject через SECURITY DEFINER функцию, повторно проверяющую platform_admin; неизвестный пользователь/identity — `404 USER_NOT_FOUND`. Возвращаются только id, client-derived device label и timestamps; IP-адрес, username, email и токены не пересекают границу. Порядок `last_seen_at DESC, id DESC`, cursor привязан к `user_id`. `current` отмечает сессию вызывающего по claim `sid`, если выбран он сам. Keycloak недоступен — `503 AUTH_UNAVAILABLE`. Чтение аудируется (`admin.sessions.viewed`, только счётчики).
+         */
+        get: operations["listAdminSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отозвать сессию по id (platform_admin)
+         * @description Отзывает одну сессию Keycloak по её id без необходимости знать владельца (realm-level endpoint Keycloak 26). Идемпотентно: уже отозванная/неизвестная сессия — `204`, без побочных эффектов. Keycloak недоступен — `503 AUTH_UNAVAILABLE`. Аудит хранит target id (если это uuid) и не хранит IP, username, токены или содержимое.
+         */
+        delete: operations["revokeAdminSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{userId}/revoke-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отозвать все сессии пользователя (platform_admin)
+         * @description Отзывает все активные Keycloak-сессии выбранного пользователя (`POST .../users/{id}/logout`). Локальный пользователь разрешается в Keycloak subject через SECURITY DEFINER функцию, повторно проверяющую platform_admin; неизвестный пользователь/identity — `404 USER_NOT_FOUND`. Возвращает только счётчики `revoked_sessions`/`affected_users`; session id, IP, username и токены не возвращаются. Действие аудируется (`admin.sessions.revoked_all`, только счётчики). Keycloak недоступен — `503 AUTH_UNAVAILABLE`; операция best-effort.
+         */
+        post: operations["revokeAdminUserSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/plugins/translate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Настройки translation-провайдера (platform_admin)
+         * @description Возвращает действующую конфигурацию `{enabled, url}`. Явная настройка администратора имеет приоритет; пока строки нет, действует fallback `KRUG_PLUGINS_TRANSLATE_URL`. Секретов/API-ключей в конфигурации нет, URL не логируется.
+         */
+        get: operations["getAdminTranslationProvider"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Изменить translation-провайдера (platform_admin)
+         * @description Частичное обновление; минимум одно поле. `url` — только абсолютный `https` URL с опциональным path; credentials/userinfo, query и fragment запрещены, длина ≤ 2048 (`422 TRANSLATION_URL_INVALID`). Включение без сохранённого и без environment URL — `422 TRANSLATION_URL_REQUIRED`. Повтор с теми же значениями идемпотентен и не создаёт второй audit-события. Аудит содержит `enabled` и `url_changed`, но не сам URL. Секреты не хранятся.
+         */
+        patch: operations["updateAdminTranslationProvider"];
+        trace?: never;
+    };
+    "/admin/plugins/translate/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Проверить доступность translation-провайдера (platform_admin)
+         * @description Один ограниченный по timeouts/size probe с константным текстом; ответ провайдера не возвращается и не логируется. `status` — `OK`, `DISABLED` (провайдер выключен, сетевого вызова нет) или `UNAVAILABLE` (ошибка/таймаут/непригодный ответ). `latency_ms` — измеренная длительность (0 для DISABLED). Тест аудируется (`admin.plugin.translate.tested`, только status/latency).
+         */
+        post: operations["testAdminTranslationProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/plugins": {
         parameters: {
             query?: never;
@@ -807,6 +931,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspaceId}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Агрегаты дашборда воркспейса (для любого ACTIVE-участника)
+         * @description Доступно любому ACTIVE-участнику ACTIVE-воркспейса; чужая/неизвестная workspace — `403` без раскрытия существования. Возвращаются только счётчики и байты: участники (`total`/`online`), чаты, сообщения (`total` — сумма выделенных последовательностей `chat_counters`, `last_24h` — реальные неудалённые строки за 24 часа), файлы (`total`, `used_bytes`, `reserved_bytes`), DLP-события за 24 часа, квота хранилища и до пяти последних audit-действий. `audit_recent` заполняется только для OWNER/ADMIN; остальные участники получают пустой список. `online` — live-сигнал single-node realtime (различные пользователи с открытым WS), не персистентный и ограничен `members.total`. Тексты сообщений, E2EE-конверты, имена файлов, IP и токены не возвращаются; SQL-функция повторно проверяет членство.
+         */
+        get: operations["getWorkspaceOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspaceId}/dlp/policies": {
         parameters: {
             query?: never;
@@ -1163,6 +1307,110 @@ export interface paths {
         get: operations["listFiles"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/files/{fileId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Мягко удалить глобальный файл (владелец или админ воркспейса)
+         * @description #83: soft delete (`status=DELETED`), объект удаляется из приватного бакета, а зарезервированная квота освобождается. Разрешено владельцу файла или OWNER/ADMIN воркспейса. Файл, привязанный к сообщению, отдельно не удаляется (409 `CONFLICT`): его жизненным циклом владеет сообщение. Trusted direct-image (аватар/обложка/лого) удаляется своим endpoint'ом (422 `IMAGE_INVALID`). Повторный DELETE идемпотентен.
+         */
+        delete: operations["deleteFile"];
+        options?: never;
+        head?: never;
+        /**
+         * Переименовать глобальный файл (владелец)
+         * @description #83: меняет только отображаемое имя вложения (`PATCH /files/{fileId}`); object key, sha256, scan_status и привязка к чату/сообщению не меняются. Доступно только загрузившему файл. Имя валидируется как безопасное display-имя (1..255, без `/`, `\`, control/bidi символов) → 400 `VALIDATION_FAILED`. Привязанный к сообщению файл переименовать можно (имя — presentation-слой).
+         */
+        patch: operations["renameFile"];
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Глобальный файл воркспейса (multipart, managed-пайплайн)
+         * @description #83: загрузка файла любого разрешённого типа из устройства. Используется тот же managed-пайплайн, что и для чата: active workspace membership, tariff/guest лимит размера, установленный `FileTypePolicy` (dangerous block + allowlist расширений и MIME), атомарный reserve квоты и AV-скан. Файл создаётся без чата (`source=WORKSPACE`, `scan_status=PENDING`); после чистого вердикта — `CLEAN` и доступен для скачивания, при INFECTED/FAILED — `QUARANTINED` (объект и квота освобождаются). Обходного «доверенного» пути нет: SKIPPED для этого endpoint'а невозможен. Файл виден владельцу в `GET /files`; привязать его к сообщению можно через `attachment_ids` при отправке. Object key строится только из серверных UUID, имя файла — валидируемое display-имя; содержимое/ключ/hash/URL не возвращаются. Транспортный лимит multipart — 512 MiB; большие файлы — через resumable `/uploads`.
+         */
+        post: operations["uploadWorkspaceFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/search/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Серверный поиск managed-сообщений воркспейса
+         * @description #83: literal-поиск без учёта регистра по plaintext managed-сообщений. Вызывающий должен быть ACTIVE-участником воркспейса; для каждого результата SQL дополнительно требует ACTIVE-участие в чате, поэтому поиск никогда не раскрывает содержимое чужого/приватного чата. Исключены: E2EE-чаты и сообщения (`crypto_scheme=E2EE_*`), удалённые чаты/сообщения (delete-for-all) и сообщения, скрытые вызывающим (delete-for-me). `q` — обычная подстрока (без regex/wildcard), 1..200 символов. Тело сообщения хранится в AES-GCM, поэтому сервер сканирует ограниченное окно кандидатов и фильтрует совпадения в памяти; `cursor` (непрозрачный, привязан к воркспейсу, `chat_id` и запросу) двигается по последнему просканированному кандидату, так что пустая страница не зацикливает пагинацию. `snippet` — plain text с диапазонами `highlights`; HTML не возвращается.
+         */
+        get: operations["searchMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/mentions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Mention-инбокс вызывающего
+         * @description #83: упоминания пользователя в текущем воркспейсе (workspace claim, иначе первый ACTIVE воркспейс; `workspace_id` переопределяет оба). Только ACTIVE-участник. Возвращаются только метаданные и состояние прочтения, без текста сообщения, отсортированные `created_at DESC, id DESC`. `unread=true` — только непрочитанные; `unread_count` — счётчик непрочитанных во всём воркспейсе (не только на странице). Инбокс не зависит от notification preferences: MUTE гасит уведомление, но не запись упоминания.
+         */
+        get: operations["listMentions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/mentions/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отметить упоминания прочитанными
+         * @description #83: `ids` (до 200, только свои строки) или `all=true` (весь инбокс текущего воркспейса). Идемпотентно: `read_at` выставляется один раз. `Idempotency-Key` обязателен, как у остальных мутаций.
+         */
+        post: operations["markMentionsRead"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2575,6 +2823,50 @@ export interface components {
             next_cursor?: string | null;
             has_more: boolean;
         };
+        /** @description JSON-представление ограниченного экспорта platform-audit. `exported_rows` ≤ 10 000; `truncated=true` означает, что совпадений больше и фильтр `action` нужно сузить. Колонки те же, что у `AdminAuditEvent`; metadata/hashes/request id отсутствуют. */
+        AdminAuditExport: {
+            items: components["schemas"]["AdminAuditEvent"][];
+            exported_rows: number;
+            truncated: boolean;
+        };
+        /** @description Сессия Keycloak выбранного пользователя без IP-адреса, username, email и токенов. `device` — метка клиента; `current` — сессия вызывающего по claim `sid`, если выбран он сам. */
+        AdminSession: {
+            id: string;
+            /** Format: uuid */
+            user_id: string;
+            device: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            current: boolean;
+        };
+        AdminSessionPage: {
+            items: components["schemas"]["AdminSession"][];
+            next_cursor?: string | null;
+            has_more: boolean;
+        };
+        AdminSessionRevokeAll: {
+            revoked_sessions: number;
+            affected_users: number;
+        };
+        /** @description Действующая конфигурация translation-провайдера. Секретов нет; `url` — абсолютный https URL или пустая строка. */
+        TranslationProviderSettings: {
+            enabled: boolean;
+            url: string;
+        };
+        TranslationProviderUpdate: {
+            enabled?: boolean;
+            /** @description Пустая строка очищает URL. Непустое значение — только абсолютный https URL с опциональным path; userinfo/query/fragment запрещены. */
+            url?: string;
+        };
+        /** @description Результат health-check без содержимого провайдера. `status` — OK, DISABLED или UNAVAILABLE; `latency_ms` — длительность probe (0 для DISABLED). */
+        TranslationProviderTest: {
+            /** @enum {string} */
+            status: "OK" | "DISABLED" | "UNAVAILABLE";
+            /** Format: int64 */
+            latency_ms: number;
+        };
         TestEmailRequest: {
             /** Format: email */
             to: string;
@@ -2994,6 +3286,11 @@ export interface components {
             my_option_id?: string | null;
             /** @description Число уникальных проголосовавших (один голос на пользователя). */
             total_votes: number;
+            /**
+             * Format: uuid
+             * @description #95: id сообщения `POLL` в ленте чата. Присутствует в ответе `POST /chats/{chatId}/polls` (создано в той же транзакции); list/vote/close его не возвращают.
+             */
+            message_id?: string | null;
         };
         PollList: {
             items: components["schemas"]["Poll"][];
@@ -3037,6 +3334,11 @@ export interface components {
             completed_at?: string | null;
             /** Format: date-time */
             created_at: string;
+            /**
+             * Format: uuid
+             * @description #95: id сообщения `TASK` в ленте чата. Присутствует в ответе `POST /chats/{chatId}/tasks`; list/update его не возвращают.
+             */
+            message_id?: string | null;
         };
         TaskList: {
             items: components["schemas"]["Task"][];
@@ -3064,6 +3366,56 @@ export interface components {
         Translation: {
             /** @description Plain text без HTML/control-символов; сервер не логирует его. */
             text: string;
+        };
+        /** @description Агрегаты дашборда воркспейса. Только счётчики/байты и до пяти последних audit-действий (для OWNER/ADMIN; остальные получают пустой `audit_recent`). Содержимое сообщений, E2EE-конверты, имена файлов, IP и токены отсутствуют. */
+        WorkspaceOverview: {
+            members: {
+                /** Format: int64 */
+                total: number;
+                /**
+                 * Format: int64
+                 * @description Live single-node realtime-сигнал: различные пользователи с открытым WS в этом воркспейсе; не персистентный, ограничен `members.total`.
+                 */
+                online: number;
+            };
+            /** Format: int64 */
+            chats: number;
+            messages: {
+                /**
+                 * Format: int64
+                 * @description Сумма выделенных последовательностей `chat_counters` (включая удалённые сообщения), без сканирования партиционированной ленты.
+                 */
+                total: number;
+                /**
+                 * Format: int64
+                 * @description Неудалённые строки `message.messages` за последние 24 часа.
+                 */
+                last_24h: number;
+            };
+            files: {
+                /**
+                 * Format: int64
+                 * @description Вложения со статусом READY/BOUND (объекты ещё хранятся).
+                 */
+                total: number;
+                /** Format: int64 */
+                used_bytes: number;
+                /** Format: int64 */
+                reserved_bytes: number;
+            };
+            dlp: {
+                /** Format: int64 */
+                events_last_24h: number;
+            };
+            storage: {
+                /** Format: int64 */
+                used_bytes: number;
+                /** Format: int64 */
+                quota_bytes: number;
+            };
+            audit_recent: components["schemas"]["WorkspaceAuditEvent"][];
+            /** Format: date-time */
+            generated_at: string;
         };
         WorkspaceLimits: {
             /** @enum {string} */
@@ -3227,13 +3579,13 @@ export interface components {
             size_bytes: number;
             sha256: string;
         };
-        /** @description File-center element (#73): `AttachmentRef` metadata plus chat/message provenance. Never contains the object key, content, sha256 or a presigned URL; download goes through `attachmentDownloadUrl`. `chat_name` is null for DIRECT chats (the client derives the peer name, D-S4-02). `message_id` is always present: unbound uploads are not part of the file center. */
+        /** @description File-center element (#73/#83): `AttachmentRef` metadata plus chat/message provenance. Never contains the object key, content, sha256 or a presigned URL; download goes through `attachmentDownloadUrl`. `chat_name` is null for DIRECT chats (the client derives the peer name, D-S4-02). `chat_id`/`message_id` are null for a global workspace file (#83) that has not been attached to a message yet; such a file is visible only to its uploader (and to workspace OWNER/ADMIN for moderation). */
         FileItem: components["schemas"]["AttachmentRef"] & {
             /** Format: uuid */
-            chat_id: string;
+            chat_id: string | null;
             chat_name?: string | null;
             /** Format: uuid */
-            message_id: string;
+            message_id: string | null;
             /** Format: date-time */
             created_at: string;
         };
@@ -3254,6 +3606,74 @@ export interface components {
                 has_more: boolean;
             };
             quota: components["schemas"]["FileQuotaSummary"] | null;
+        };
+        /** @description null */
+        FileRename: {
+            name: string;
+        };
+        /** @description #83: диапазон подсветки внутри `snippet` (start включительно, end исключительно). Смещения — в символах строки, как в JSON/JavaScript (UTF-16 code units). */
+        SearchHighlight: {
+            start: number;
+            end: number;
+        };
+        /** @description #83: одно попадание серверного поиска. `snippet` — plain text managed-сообщения (не HTML); клиент обязан рендерить его как текст и подсвечивать диапазоны `highlights`. E2EE-сообщения в выдачу не попадают. */
+        MessageSearchHit: {
+            /** Format: uuid */
+            message_id: string;
+            /** Format: uuid */
+            chat_id: string;
+            chat_name?: string | null;
+            /** Format: int64 */
+            seq: number;
+            /** Format: uuid */
+            sender_id?: string | null;
+            sender_display_name?: string | null;
+            snippet: string;
+            highlights: components["schemas"]["SearchHighlight"][];
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description #83: страница серверного поиска. `next_cursor` непрозрачен, привязан к воркспейсу, фильтру `chat_id` и нормализованному запросу; `has_more` — в окне сканирования остались кандидаты. */
+        MessageSearchPage: {
+            items: components["schemas"]["MessageSearchHit"][];
+            page: {
+                next_cursor?: string | null;
+                has_more: boolean;
+            };
+            query: string;
+        };
+        /** @description #83: запись mention-инбокса. Содержит только метаданные (без текста сообщения): чат, сообщение, автор и состояние прочтения. */
+        Mention: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            chat_id: string;
+            chat_name?: string | null;
+            /** Format: uuid */
+            message_id: string;
+            /** Format: uuid */
+            sender_id?: string | null;
+            sender_display_name?: string | null;
+            mention_all: boolean;
+            /** Format: date-time */
+            read_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description #83: страница mention-инбокса и счётчик непрочитанных в текущем воркспейсе. Сортировка `created_at DESC, id DESC`; `next_cursor` непрозрачен и привязан к воркспейсу и фильтру `unread`. */
+        MentionPage: {
+            items: components["schemas"]["Mention"][];
+            page: {
+                next_cursor?: string | null;
+                has_more: boolean;
+            };
+            /** Format: int64 */
+            unread_count: number;
+        };
+        /** @description #83: отметить упоминания прочитанными. Нужен `ids` (до 200) или `all=true`. Идемпотентно: уже прочитанные строки не меняются. */
+        ReadMentionsRequest: {
+            ids?: string[];
+            all?: boolean;
         };
         RealtimeTicket: {
             ticket: string;
@@ -3342,7 +3762,7 @@ export interface components {
             /** Format: int64 */
             seq: number;
             /** @enum {string} */
-            type: "TEXT" | "STICKER" | "SYSTEM";
+            type: "TEXT" | "STICKER" | "SYSTEM" | "POLL" | "TASK";
             /** Format: uuid */
             sender_id?: string | null;
             sender_display_name?: string | null;
@@ -3373,12 +3793,30 @@ export interface components {
             /** Format: uuid */
             sticker_id?: string | null;
             sticker?: (components["schemas"]["StickerRef"] | null) & components["schemas"]["StickerRef"];
+            /**
+             * Format: uuid
+             * @description #95: id опроса; не null только при `type=POLL`. Сервер создаёт такое сообщение вместе с опросом, клиентского POST сообщения с `type=POLL` нет.
+             */
+            poll_id?: string | null;
+            /** @description #95: встроенный опрос с актуальными голосами и `my_option_id` вызывающего. `null` для не-POLL сообщений и tombstone (delete-for-all). Не E2EE: серверные плагины в E2EE-чате недоступны. */
+            poll?: components["schemas"]["Poll"] | null;
+            /**
+             * Format: uuid
+             * @description #95: id задачи; не null только при `type=TASK`. Сообщение создаётся сервером вместе с задачей.
+             */
+            task_id?: string | null;
+            /** @description #95: встроенная задача с актуальным `done`/`completed_by`/`completed_at` (изменение задачи отражается при следующем history/replay чтении). `null` для не-TASK сообщений и tombstone. */
+            task?: components["schemas"]["Task"] | null;
             attachments?: components["schemas"]["AttachmentRef"][];
             /** @description Агрегированные реакции страницы: один элемент на emoji, `me` — ставил ли реакцию вызывающий. Считается одним запросом на страницу, без N+1. Для E2EE и удалённых сообщений всегда пуст. */
             reactions?: components["schemas"]["ReactionSummary"][];
             /** Format: uuid */
             client_message_id?: string | null;
             crypto?: components["schemas"]["CryptoEnvelope"] | null;
+            /** @description #83: явно упомянутые пользователи (id), в порядке запроса. Для E2EE, tombstone и сообщений без упоминаний — пустой массив. Клиент рисует @-упоминания по id; текст сообщения сохраняется как есть и не переписывается сервером. */
+            mentions?: string[];
+            /** @description #83: сообщение содержит `@all`. Для E2EE и tombstone всегда false. Рассылку получают активные участники чата на момент отправки, кроме автора. */
+            mention_all?: boolean;
         };
         /** @description Managed: text/sticker/attachments. E2EE: только `envelopes[]`; `text`, `sticker_id`, `attachment_ids`, `reply_to_id`, `thread_root_id` запрещены (422 E2EE_PLAINTEXT_FORBIDDEN / THREADS_E2EE_UNSUPPORTED). Managed-запрос с `envelopes` → 422 ENVELOPES_NOT_ALLOWED; при выключенном флаге E2EE → 409 E2EE_DISABLED. */
         MessageCreate: {
@@ -3397,6 +3835,13 @@ export interface components {
             /** Format: uuid */
             sticker_id?: string | null;
             attachment_ids?: string[];
+            /** @description #83: id активных участников чата. Не участник/неизвестный id → 422 `MENTION_INVALID` (без раскрытия существования). Дубликаты схлопываются. Для E2EE запрещено (422 `E2EE_PLAINTEXT_FORBIDDEN`), для STICKER — 422. */
+            mentions?: string[];
+            /**
+             * @description #83: `@all`. Разрешён только OWNER/ADMIN чата (403 `MENTION_ALL_FORBIDDEN`), в E2EE запрещён. Рассылается активным участникам чата на момент отправки, автор уведомление не получает.
+             * @default false
+             */
+            mention_all: boolean;
             envelopes?: components["schemas"]["CryptoEnvelope"][];
         };
         MessageEdit: {
@@ -4041,6 +4486,8 @@ export interface components {
     parameters: {
         DeviceId: string;
         IdempotencyKey: string;
+        /** @description #95: recommended for poll/task creation. With the header, a retry with the same key and body returns the original poll/task and its timeline message id instead of creating a second entity/message. Without it the server generates a fresh key, so every request is a new create. */
+        OptionalIdempotencyKey: string;
         ChatId: string;
         /** @description Идентификатор пользователя (участника воркспейса/канала). */
         UserId: string;
@@ -4638,6 +5085,188 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    exportAdminAudit: {
+        parameters: {
+            query: {
+                format: "csv" | "json";
+                /** @description Точное имя действия */
+                action?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Экспорт audit-лога */
+            200: {
+                headers: {
+                    "X-Export-Rows"?: number;
+                    "X-Export-Truncated"?: boolean;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAuditExport"];
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listAdminSessions: {
+        parameters: {
+            query: {
+                user_id: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница сессий */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSessionPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    revokeAdminSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Сессия отозвана (идемпотентно) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    revokeAdminUserSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Сессии отозваны */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSessionRevokeAll"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getAdminTranslationProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Действующие настройки */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranslationProviderSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateAdminTranslationProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TranslationProviderUpdate"];
+            };
+        };
+        responses: {
+            /** @description Настройки сохранены */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranslationProviderSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    testAdminTranslationProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Результат проверки */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranslationProviderTest"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
@@ -5560,6 +6189,32 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    getWorkspaceOverview: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Агрегаты воркспейса */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceOverview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
     listWorkspaceDlpPolicies: {
         parameters: {
             query?: never;
@@ -6248,6 +6903,203 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    deleteFile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                fileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Удалено (или уже удалено) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    renameFile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                fileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileRename"];
+            };
+        };
+        responses: {
+            /** @description Файл переименован */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileItem"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            410: components["responses"]["Gone"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    uploadWorkspaceFile: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                workspaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Файл сохранён и поставлен в AV-скан */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileItem"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    searchMessages: {
+        parameters: {
+            query: {
+                q: string;
+                chat_id?: string;
+                from?: string;
+                to?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница результатов поиска */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageSearchPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listMentions: {
+        parameters: {
+            query?: {
+                workspace_id?: string;
+                unread?: boolean;
+                cursor?: string;
+                limit?: number;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница упоминаний и unread_count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MentionPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    markMentionsRead: {
+        parameters: {
+            query?: {
+                workspace_id?: string;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReadMentionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Отмечено */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
     deleteChat: {
         parameters: {
             query?: never;
@@ -6776,6 +7628,8 @@ export interface operations {
             query?: never;
             header: {
                 "X-Device-Id": components["parameters"]["DeviceId"];
+                /** @description #95: recommended for poll/task creation. With the header, a retry with the same key and body returns the original poll/task and its timeline message id instead of creating a second entity/message. Without it the server generates a fresh key, so every request is a new create. */
+                "Idempotency-Key"?: components["parameters"]["OptionalIdempotencyKey"];
             };
             path: {
                 chatId: components["parameters"]["ChatId"];
@@ -6788,7 +7642,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Опрос создан */
+            /** @description Опрос создан; в той же транзакции создано сообщение `POLL` в ленте чата. `message_id` — id этого сообщения (его `type=POLL`, `poll_id` указывает на опрос). Повтор с тем же `Idempotency-Key` возвращает `Idempotent-Replay: true` и исходные `id`/`message_id`, не создавая второе сообщение. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -6905,6 +7759,8 @@ export interface operations {
             query?: never;
             header: {
                 "X-Device-Id": components["parameters"]["DeviceId"];
+                /** @description #95: recommended for poll/task creation. With the header, a retry with the same key and body returns the original poll/task and its timeline message id instead of creating a second entity/message. Without it the server generates a fresh key, so every request is a new create. */
+                "Idempotency-Key"?: components["parameters"]["OptionalIdempotencyKey"];
             };
             path: {
                 chatId: components["parameters"]["ChatId"];
@@ -6917,7 +7773,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Задача создана */
+            /** @description Задача создана; в той же транзакции создано сообщение `TASK` в ленте чата. `message_id` — id этого сообщения (его `type=TASK`, `task_id` указывает на задачу). Повтор с тем же `Idempotency-Key` возвращает `Idempotent-Replay: true` и исходные `id`/`message_id`, не создавая второе сообщение. */
             201: {
                 headers: {
                     [name: string]: unknown;

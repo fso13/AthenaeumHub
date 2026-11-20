@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getSession, setSession } from '../auth/session';
-import { IDS, mockSession } from '../mocks/fixtures';
+import { buildSeedPoll, buildSeedTask, IDS, mockSession } from '../mocks/fixtures';
 import { mockDb } from '../test/server';
 import { createApi } from './endpoints';
 import { ApiClient } from './http';
@@ -29,7 +29,10 @@ describe('D1.1 (#76) poll API', () => {
     enable('polls');
     const api = makeApi();
 
-    expect(await api.listPolls(GROUP)).toEqual({ items: [] });
+    // #95: the fixture chat already contains one server-created POLL message.
+    expect((await api.listPolls(GROUP)).items.map((poll) => poll.question)).toEqual([
+      buildSeedPoll().question,
+    ]);
 
     const created = await api.createPoll(GROUP, {
       question: 'Куда идём обедать?',
@@ -46,6 +49,13 @@ describe('D1.1 (#76) poll API', () => {
       [0, 'Пицца', 0],
       [1, 'Суши', 0],
     ]);
+    // The backend writes the POLL timeline message in the same transaction.
+    expect(created.message_id).toEqual(expect.any(String));
+    const pollMessage = mockDb.chats[GROUP]!.messages.find(
+      (message) => message.poll_id === created.id,
+    );
+    expect(pollMessage).toMatchObject({ id: created.message_id, type: 'POLL', text: null });
+    expect(pollMessage?.poll?.question).toBe('Куда идём обедать?');
 
     const [first, second] = created.options;
     if (!first || !second) throw new Error('Poll options missing');
@@ -148,7 +158,9 @@ describe('D1.1 (#76) task API', () => {
     enable('tasks');
     const api = makeApi();
 
-    expect(await api.listTasks(GROUP)).toEqual({ items: [] });
+    expect((await api.listTasks(GROUP)).items.map((task) => task.title)).toEqual([
+      buildSeedTask().title,
+    ]);
 
     const first = await api.createTask(GROUP, {
       title: 'Собрать макеты',
@@ -164,16 +176,27 @@ describe('D1.1 (#76) task API', () => {
       completed_by: null,
       completed_at: null,
     });
+    expect(first.message_id).toEqual(expect.any(String));
+    const taskMessage = mockDb.chats[GROUP]!.messages.find(
+      (message) => message.task_id === first.id,
+    );
+    expect(taskMessage).toMatchObject({ id: first.message_id, type: 'TASK', text: null });
 
     const done = await api.updateTask(GROUP, first.id, { done: true });
     expect(done.done).toBe(true);
     expect(done.completed_by).toBe(mockDb.me.user.id);
     expect(done.completed_at).toEqual(expect.any(String));
+    // History projection follows the server mutation without a new message row.
+    expect(taskMessage?.task?.done).toBe(true);
+    expect(
+      mockDb.chats[GROUP]!.messages.filter((message) => message.task_id === first.id),
+    ).toHaveLength(1);
 
     const second = await api.createTask(GROUP, { title: 'Сверить текст' });
     const list = await api.listTasks(GROUP);
     expect(list.items.map((task) => [task.title, task.done])).toEqual([
       ['Сверить текст', false],
+      [buildSeedTask().title, false],
       ['Собрать макеты', true],
     ]);
 

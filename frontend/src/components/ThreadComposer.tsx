@@ -21,6 +21,8 @@ interface ThreadComposerProps {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   mentionMembers?: readonly MentionMemberLike[];
   mentionsEnabled?: boolean;
+  /** #83: only chat OWNER/ADMIN may broadcast `@all`. */
+  allowMentionAll?: boolean;
   mentionDirectoryLoading?: boolean;
   onMentionDirectoryNeeded?: () => void;
 }
@@ -41,6 +43,7 @@ export function ThreadComposer({
   textareaRef,
   mentionMembers = NO_MENTION_MEMBERS,
   mentionsEnabled = false,
+  allowMentionAll = false,
   mentionDirectoryLoading = false,
   onMentionDirectoryNeeded,
 }: ThreadComposerProps) {
@@ -51,6 +54,7 @@ export function ThreadComposer({
     textareaRef,
     members: mentionMembers,
     enabled: mentionsEnabled,
+    allowAll: allowMentionAll,
     onDirectoryNeeded: onMentionDirectoryNeeded,
   });
   const canSend =

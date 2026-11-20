@@ -78,7 +78,8 @@ public class MessageController {
         }
         MessageCreateInput input = new MessageCreateInput(request.clientMessageId(),
                 request.type(), request.text(), request.stickerId(), request.replyToId(),
-                request.threadRootId(), request.attachmentIds(), request.envelopes());
+                request.threadRootId(), request.attachmentIds(), request.envelopes(),
+                request.mentions(), Boolean.TRUE.equals(request.mentionAll()));
         SendMessageResult result = sendMessageUseCase.send(
                 new SendMessageCommand(principal, chatId, key, input));
         ResponseEntity.BodyBuilder builder = ResponseEntity.status(result.status());

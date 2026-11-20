@@ -14,5 +14,10 @@ package ru.krug.backend.file.domain.model;
  */
 public enum AttachmentSource {
     UPLOAD,
-    DIRECT_IMAGE
+    DIRECT_IMAGE,
+    /**
+     * #83 workspace-scoped ("global") file. It uses the regular upload session + AV pipeline
+     * (unlike {@code DIRECT_IMAGE}), but has no chat until it is attached to a message.
+     */
+    WORKSPACE
 }

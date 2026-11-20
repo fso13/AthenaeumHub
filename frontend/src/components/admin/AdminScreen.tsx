@@ -175,7 +175,9 @@ export function AdminScreen({ onBackToChats, onOpenSetup, onLogout }: AdminScree
           {tab === 'audit' ? <AdminAuditSection /> : null}
           {tab === 'storage' ? <AdminStorageSection /> : null}
           {tab === 'plugins' ? <AdminPluginsSection /> : null}
-          {tab === 'settings' ? <AdminSettingsSection /> : null}
+          {tab === 'settings' ? (
+            <AdminSettingsSection onOpenTranslation={() => selectTab('plugins')} />
+          ) : null}
         </div>
       </div>
     </main>

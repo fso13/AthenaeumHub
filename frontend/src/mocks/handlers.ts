@@ -1,11 +1,14 @@
 import { delay, http, HttpResponse } from 'msw';
 import type {
   AdminAuditEvent,
+  AdminAuditExport,
   AdminAuditPage,
   AdminChat,
   AdminChatPage,
   AdminOverview,
   AdminPluginPackage,
+  AdminSession,
+  AdminSessionPage,
   AdminSettings,
   AdminStorage,
   AdminStorageTotals,
@@ -31,6 +34,7 @@ import type {
   DlpPolicy,
   DlpPolicyList,
   FileItem,
+  Mention,
   MessageCreateBody,
   Notification,
   NotificationPreference,
@@ -46,12 +50,15 @@ import type {
   SyncResponse,
   Task,
   ThreadSummary,
+  TranslationProviderSettings,
+  TranslationProviderTest,
   UploadInitRequest,
   UploadSession,
   WorkspaceAuditEvent,
   WorkspaceAuditPage,
   WorkspaceMember,
   WorkspaceMemberPage,
+  WorkspaceOverview,
   TwoFactorStatus,
   WorkspaceInvite,
   WorkspacePermissionEntry,
@@ -74,6 +81,7 @@ import {
   createDefaultWorkspacePermissions,
   createMockPluginCatalog,
   createMockTwoFactor,
+  insertMockPluginMessage,
   type ChatRecord,
   type MockAuthUserRecord,
   type MockDb,
@@ -591,6 +599,130 @@ function presentMessage(chat: ChatLike, message: ApiMessage): ApiMessage {
   };
 }
 
+/** #83: extensions the managed pipeline blocks outright (dangerous types). */
+const WORKSPACE_DANGEROUS_EXTENSIONS = new Set([
+  'exe',
+  'msi',
+  'bat',
+  'cmd',
+  'com',
+  'scr',
+  'ps1',
+  'sh',
+  'js',
+  'mjs',
+  'html',
+  'htm',
+  'svg',
+  'jar',
+  'apk',
+]);
+
+/** Safe display name: 1..255, no separators/control/bidi characters. */
+function validDisplayName(raw: unknown): raw is string {
+  if (typeof raw !== 'string') return false;
+  const name = raw.trim();
+  if (name.length < 1 || name.length > 255 || name !== raw) return false;
+  if (/[\\/]/.test(name)) return false;
+  for (const character of name) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  // Bidi overrides/isolates can visually spoof an extension.
+  return !/[\u202a-\u202e\u2066-\u2069]/.test(name);
+}
+
+interface SnippetRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * #83 plain-text snippet (≤240) centered on the first match, with highlight
+ * ranges in the snippet's own UTF-16 coordinates. No HTML is produced.
+ */
+function buildSearchSnippet(
+  text: string,
+  query: string,
+): { snippet: string; highlights: SnippetRange[] } {
+  const lowerText = text.toLocaleLowerCase('ru');
+  const lowerQuery = query.toLocaleLowerCase('ru');
+  const first = lowerText.indexOf(lowerQuery);
+  const max = 240;
+  let start = Math.max(0, first - 60);
+  let end = Math.min(text.length, start + max);
+  if (end - start < max) start = Math.max(0, end - max);
+  // Snap to code-point boundaries so a surrogate pair is never split.
+  if (start > 0 && /[\uDC00-\uDFFF]/.test(text.charAt(start))) start -= 1;
+  if (end < text.length && /[\uDC00-\uDFFF]/.test(text.charAt(end))) end += 1;
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < text.length ? '…' : '';
+  const snippet = `${prefix}${text.slice(start, end)}${suffix}`;
+
+  const highlights: SnippetRange[] = [];
+  let from = 0;
+  for (;;) {
+    const at = lowerText.indexOf(lowerQuery, from);
+    if (at < 0) break;
+    const rangeStart = at - start + prefix.length;
+    const rangeEnd = rangeStart + query.length;
+    if (rangeEnd > 0 && rangeStart < snippet.length) {
+      highlights.push({
+        start: Math.max(0, rangeStart),
+        end: Math.min(snippet.length, rangeEnd),
+      });
+    }
+    from = at + Math.max(1, lowerQuery.length);
+  }
+  return { snippet, highlights };
+}
+
+/** #83: UTF-8-safe base64url (queries are Cyrillic, `btoa` alone would throw). */
+function base64UrlEncode(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecode(value: string): string | null {
+  try {
+    const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+/** Cursor bound to the workspace, `q`, `chat_id` (and the unread flag). */
+function encodeCursor(prefix: string, offset: number, binding: string): string {
+  return base64UrlEncode(`${prefix}:${offset}:${binding}`);
+}
+
+function decodeCursor(raw: string, prefix: string, binding: string): number | null {
+  const decoded = base64UrlDecode(raw);
+  if (decoded === null || !decoded.startsWith(`${prefix}:`)) return null;
+  const rest = decoded.slice(prefix.length + 1);
+  const separator = rest.indexOf(':');
+  if (separator < 0) return null;
+  const offset = Number(rest.slice(0, separator));
+  const cursorBinding = rest.slice(separator + 1);
+  if (!Number.isInteger(offset) || offset < 0) return null;
+  if (cursorBinding !== binding) return null;
+  return offset;
+}
+
+const encodeSearchCursor = (offset: number, query: string, chatId: string | null): string =>
+  encodeCursor('msp1', offset, `${query}|${chatId ?? ''}`);
+
+const decodeSearchCursor = (raw: string, query: string, chatId: string | null): number | null =>
+  decodeCursor(raw, 'msp1', `${query}|${chatId ?? ''}`);
+
 /** Validates a thread root the same way the backend does (422, typed codes). */
 function validateThreadRoot(chat: ChatLike, rootId: string): Response | null {
   if (chat.summary.security_mode === 'E2EE') {
@@ -1101,6 +1233,86 @@ const SEEDED_AUDIT_EVENTS: AdminAuditEvent[] = [
 function adminAuditRows(db: MockDb): AdminAuditEvent[] {
   const base = db.adminDirectory.auditEventsOverride ?? SEEDED_AUDIT_EVENTS;
   return sortAdminRows([...base, ...db.adminDirectory.auditEvents]);
+}
+
+/**
+ * #84 workspace overview projection. Counts/bytes only plus at most five
+ * content-free audit rows; no message text, attachments, filenames or IP.
+ */
+function workspaceOverviewView(db: MockDb, workspaceId: string): WorkspaceOverview {
+  const members = db.workspaceMembers;
+  const messages = Object.values(db.chats).flatMap((chat) => chat.messages);
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const recentMessages = messages.filter(
+    (message) => !message.deleted_at && Date.parse(message.created_at) >= dayAgo,
+  );
+  const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+  const isManager = workspace?.role === 'OWNER' || workspace?.role === 'ADMIN';
+  return {
+    members: {
+      total: members.length,
+      online: Math.min(2, members.length),
+    },
+    chats: Object.keys(db.chats).length,
+    messages: {
+      total: messages.length,
+      last_24h: recentMessages.length,
+    },
+    files: {
+      total: db.attachments.size,
+      used_bytes: db.limits.usage.used,
+      reserved_bytes: db.limits.usage.reserved,
+    },
+    dlp: {
+      events_last_24h: db.security.dlpEvents.length,
+    },
+    storage: {
+      used_bytes: db.limits.usage.used,
+      quota_bytes: db.limits.usage.limit,
+    },
+    audit_recent: isManager ? sortSecurityEvents(db.security.auditEvents).slice(0, 5) : [],
+    generated_at: db.serverTime(),
+  };
+}
+
+/** Sorted, contract-shaped sessions of one local user (never another tenant). */
+function adminSessionRowsFor(db: MockDb, userId: string): AdminSession[] {
+  return db.adminSessions.sessions
+    .filter((session) => session.user_id === userId)
+    .sort(
+      (left, right) =>
+        right.last_seen_at.localeCompare(left.last_seen_at) || right.id.localeCompare(left.id),
+    );
+}
+
+/**
+ * #84 mock of `TranslationProviderUrl.normalize`: https only, absolute host,
+ * no credentials/query/fragment/control characters and no dot segments.
+ */
+function normalizeTranslationUrl(raw: string): string | null {
+  const value = raw.trim();
+  if (value.length === 0) return '';
+  if (value.length > 2048) return null;
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f || /\s/.test(char)) return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  if (!url.hostname) return null;
+  if (url.username !== '' || url.password !== '') return null;
+  if (url.search !== '' || url.hash !== '') return null;
+  if (/\/\.\.?(\/|$)/.test(url.pathname)) return null;
+  return value;
+}
+
+function translationSettingsView(db: MockDb): TranslationProviderSettings {
+  return { enabled: db.translationAdmin.enabled, url: db.translationAdmin.url };
 }
 
 function appendMockAudit(
@@ -2544,6 +2756,118 @@ export function createHandlers(db: MockDb) {
       return HttpResponse.json(overview);
     }),
 
+    /* #84: installation translation-provider configuration + health probe. */
+    http.get(`${API}/admin/plugins/translate`, ({ request }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      db.translationAdmin.getRequests += 1;
+      const forced = db.translationAdmin.forceGetError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      return HttpResponse.json(translationSettingsView(db));
+    }),
+
+    http.patch(`${API}/admin/plugins/translate`, async ({ request }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      const forced = db.translationAdmin.forceUpdateError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const allowed = ['enabled', 'url'];
+      if (Object.keys(body).some((key) => !allowed.includes(key))) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Unknown translation setting');
+      }
+      if (Object.keys(body).length === 0) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'At least one field is required');
+      }
+      if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'enabled must be a boolean', {
+          details: { field: 'enabled' },
+        });
+      }
+      const current = translationSettingsView(db);
+      const nextEnabled = body.enabled === undefined ? current.enabled : body.enabled;
+      let nextUrl = current.url;
+      if (body.url !== undefined) {
+        if (typeof body.url !== 'string') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'url must be a string', {
+            details: { field: 'url' },
+          });
+        }
+        const normalized = normalizeTranslationUrl(body.url);
+        if (normalized === null) {
+          return errorResponse(
+            422,
+            'TRANSLATION_URL_INVALID',
+            'Translation provider URL is invalid',
+            {
+              details: { field: 'url' },
+            },
+          );
+        }
+        nextUrl = normalized;
+      }
+      if (nextEnabled && nextUrl.length === 0) {
+        return errorResponse(
+          422,
+          'TRANSLATION_URL_REQUIRED',
+          'Translation provider URL is required when the provider is enabled',
+          { details: { field: 'url' } },
+        );
+      }
+      const changed = nextEnabled !== current.enabled || nextUrl !== current.url;
+      if (changed) {
+        db.translationAdmin.enabled = nextEnabled;
+        db.translationAdmin.url = nextUrl;
+        appendMockAudit(db, {
+          action: 'admin.plugin.translate.updated',
+          target_type: 'translation_provider',
+          target_id: null,
+        });
+      }
+      db.translationAdmin.updates.push({ body, changed });
+      return HttpResponse.json(translationSettingsView(db));
+    }),
+
+    http.post(`${API}/admin/plugins/translate/test`, ({ request }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      db.translationAdmin.testRequests += 1;
+      const forced = db.translationAdmin.forceTestError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const settings = translationSettingsView(db);
+      let result: TranslationProviderTest;
+      if (!settings.enabled || settings.url.length === 0) {
+        result = { status: 'DISABLED', latency_ms: 0 };
+      } else {
+        result = {
+          status: db.translationAdmin.testStatus,
+          latency_ms: Math.max(0, Math.min(60_000, db.translationAdmin.testLatencyMs)),
+        };
+      }
+      appendMockAudit(db, {
+        action: 'admin.plugin.translate.tested',
+        target_type: 'translation_provider',
+        target_id: null,
+      });
+      return HttpResponse.json(result);
+    }),
+
     /* E9-F: platform-admin directory (aggregates only, no content). */
     http.get(`${API}/admin/users`, async ({ request }) => {
       const forbidden = requirePlatformAdmin(db, request);
@@ -2730,6 +3054,168 @@ export function createHandlers(db: MockDb) {
       const rows = adminAuditRows(db).filter((event) => action === null || event.action === action);
       const page: AdminAuditPage = paginateAdminRows(rows, offset, limit, 'audit');
       return HttpResponse.json(page);
+    }),
+
+    /* #84: bounded platform-admin audit export (CSV/JSON Blob + headers). */
+    http.get(`${API}/admin/audit/export`, ({ request }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+
+      const url = new URL(request.url);
+      const format = url.searchParams.get('format');
+      const action = url.searchParams.get('action');
+      if (format !== 'csv' && format !== 'json') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'format must be csv or json', {
+          details: { field: 'format' },
+        });
+      }
+      if (action !== null && action.length > 120) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'action is longer than 120');
+      }
+      const forced = db.adminDirectory.forceExportError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const rows = adminAuditRows(db).filter((event) => action === null || event.action === action);
+      // The real endpoint hard-caps at 10 000 rows and reports truncation.
+      const cap = Math.max(0, Math.min(10_000, db.adminDirectory.auditExportLimit));
+      const items = rows.slice(0, cap);
+      const truncated = rows.length > items.length;
+      const filename = `admin-audit-${new Date().toISOString().slice(0, 10)}.${format}`;
+      const headers: Record<string, string> = {
+        'X-Export-Rows': String(items.length),
+        'X-Export-Truncated': String(truncated),
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      };
+      db.adminDirectory.auditRequests.push({ action, cursor: null, limit: 0 });
+      if (format === 'csv') {
+        const lines = ['created_at,action,actor_id,actor_email,target_type,target_id'];
+        for (const row of items) {
+          lines.push(
+            [
+              row.created_at,
+              row.action,
+              row.actor_id ?? '',
+              row.actor_email ?? '',
+              row.target_type ?? '',
+              row.target_id ?? '',
+            ]
+              .map(csvCell)
+              .join(','),
+          );
+        }
+        return new HttpResponse(`${lines.join('\n')}\n`, {
+          status: 200,
+          headers: { ...headers, 'Content-Type': 'text/csv; charset=UTF-8' },
+        });
+      }
+      const body: AdminAuditExport = {
+        items,
+        exported_rows: items.length,
+        truncated,
+      };
+      return HttpResponse.json(body, { status: 200, headers });
+    }),
+
+    /* #84: platform-admin Keycloak sessions of one local user. */
+    http.get(`${API}/admin/sessions`, async ({ request }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+
+      const url = new URL(request.url);
+      const userId = url.searchParams.get('user_id');
+      const cursor = url.searchParams.get('cursor');
+      const limit = Number(url.searchParams.get('limit') ?? '30');
+      if (userId === null || !UUID_RE.test(userId)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'user_id must be a UUID', {
+          details: { field: 'user_id' },
+        });
+      }
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'limit must be within 1..100');
+      }
+      // The cursor is bound to the selected user; replaying it for another
+      // user is a 400, exactly like the backend.
+      let offset = 0;
+      if (cursor !== null) {
+        const match = /^as:([0-9a-f-]{36}):(\d+)$/i.exec(cursor);
+        if (!match || match[1] !== userId) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'cursor is invalid');
+        }
+        offset = Number(match[2]);
+      }
+      db.adminSessions.listRequests.push({ userId, cursor, limit });
+      if (db.adminSessions.delayMs > 0) await delay(db.adminSessions.delayMs);
+      const forced = db.adminSessions.forceListError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!db.authUsers.some((user) => user.id === userId)) {
+        return errorResponse(404, 'USER_NOT_FOUND', 'User has no identity');
+      }
+      const rows = adminSessionRowsFor(db, userId);
+      const items = rows.slice(offset, offset + limit);
+      const hasMore = offset + limit < rows.length;
+      const page: AdminSessionPage = {
+        items,
+        next_cursor: hasMore ? `as:${userId}:${offset + limit}` : null,
+        has_more: hasMore,
+      };
+      return HttpResponse.json(page);
+    }),
+
+    http.delete(`${API}/admin/sessions/:sessionId`, ({ request, params }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      const forced = db.adminSessions.forceRevokeError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const sessionId = String(params.sessionId ?? '');
+      db.adminSessions.revokeRequests.push(sessionId);
+      // Idempotent: an unknown/already-revoked id is still 204.
+      db.adminSessions.sessions = db.adminSessions.sessions.filter(
+        (session) => session.id !== sessionId,
+      );
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/admin/users/:userId/revoke-sessions`, ({ request, params }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      const forced = db.adminSessions.forceRevokeAllError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const userId = String(params.userId ?? '');
+      if (!UUID_RE.test(userId)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'userId must be a UUID');
+      }
+      if (!db.authUsers.some((user) => user.id === userId)) {
+        return errorResponse(404, 'USER_NOT_FOUND', 'User has no identity');
+      }
+      db.adminSessions.revokeAllRequests += 1;
+      const removed = db.adminSessions.sessions.filter((session) => session.user_id === userId);
+      db.adminSessions.sessions = db.adminSessions.sessions.filter(
+        (session) => session.user_id !== userId,
+      );
+      return HttpResponse.json({
+        revoked_sessions: removed.length,
+        affected_users: removed.length > 0 ? 1 : 0,
+      });
     }),
 
     http.get(`${API}/sticker-packs`, async ({ request }) => {
@@ -3800,7 +4286,12 @@ export function createHandlers(db: MockDb) {
       };
       const record = { chatId, poll, votes: new Map<string, string>() };
       db.polls.set(poll.id, record);
-      return HttpResponse.json(pollView(record, db.me.user.id), { status: 201 });
+      // #95: the backend creates the POLL timeline message in the same
+      // transaction; the response carries its id and WS fans it out.
+      const view = pollView(record, db.me.user.id);
+      const message = insertMockPluginMessage(db, chatId, { type: 'POLL', poll: view });
+      publishMockMessageCreated(db, message);
+      return HttpResponse.json({ ...view, message_id: message.id }, { status: 201 });
     }),
 
     http.patch(`${API}/chats/:chatId/polls/:pollId`, async ({ request, params }) => {
@@ -3846,7 +4337,10 @@ export function createHandlers(db: MockDb) {
         record.poll.closed = true;
         record.poll.closed_at = new Date().toISOString();
       }
-      return HttpResponse.json(pollView(record, db.me.user.id));
+      const closedView = pollView(record, db.me.user.id);
+      const closedMessage = db.chats[chatId]?.messages.find((item) => item.poll_id === pollId);
+      if (closedMessage) closedMessage.poll = closedView;
+      return HttpResponse.json(closedView);
     }),
 
     http.post(`${API}/chats/:chatId/polls/:pollId/votes`, async ({ request, params }) => {
@@ -3890,7 +4384,12 @@ export function createHandlers(db: MockDb) {
       // One vote per user; a different option replaces the previous choice and
       // the aggregate is recomputed by `pollView`, never incremented here.
       record.votes.set(db.me.user.id, optionId);
-      return HttpResponse.json(pollView(record, db.me.user.id));
+      const votedView = pollView(record, db.me.user.id);
+      // History/replay reflects the latest projection; no `message.updated`
+      // frame is published (the contract does not rewrite plugin messages).
+      const votedMessage = db.chats[chatId]?.messages.find((item) => item.poll_id === pollId);
+      if (votedMessage) votedMessage.poll = votedView;
+      return HttpResponse.json(votedView);
     }),
 
     /* ------------------------------------------------------------------ */
@@ -3985,7 +4484,9 @@ export function createHandlers(db: MockDb) {
         created_at: new Date().toISOString(),
       };
       db.tasks.set(task.id, { chatId, task });
-      return HttpResponse.json(task, { status: 201 });
+      const message = insertMockPluginMessage(db, chatId, { type: 'TASK', task });
+      publishMockMessageCreated(db, message);
+      return HttpResponse.json({ ...task, message_id: message.id }, { status: 201 });
     }),
 
     http.patch(`${API}/chats/:chatId/tasks/:taskId`, async ({ request, params }) => {
@@ -4035,6 +4536,8 @@ export function createHandlers(db: MockDb) {
         task.completed_by = body.done ? db.me.user.id : null;
         task.completed_at = body.done ? new Date().toISOString() : null;
       }
+      const taskMessage = db.chats[chatId]?.messages.find((item) => item.task_id === taskId);
+      if (taskMessage) taskMessage.task = task;
       return HttpResponse.json(task);
     }),
 
@@ -5935,6 +6438,383 @@ export function createHandlers(db: MockDb) {
       });
     }),
 
+    /* #84: workspace dashboard aggregates (any ACTIVE member). */
+    http.get(`${API}/workspaces/:workspaceId/overview`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      db.workspaceOverview.requests.push({ workspaceId });
+      if (db.workspaceOverview.delayMs > 0) await delay(db.workspaceOverview.delayMs);
+      const forced = db.workspaceOverview.forceError;
+      if (forced) {
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      return HttpResponse.json(
+        db.workspaceOverview.override ?? workspaceOverviewView(db, workspaceId),
+      );
+    }),
+
+    /* #83: global workspace file upload (managed pipeline, multipart). */
+    http.post(`${API}/workspaces/:workspaceId/files`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      if (db.fileDelayMs > 0) await delay(db.fileDelayMs);
+      if (db.forceWorkspaceUploadError) {
+        const forced = db.forceWorkspaceUploadError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const form = await readMultipartForm(request);
+      if (!form?.file) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'file part is required');
+      }
+      const filename = form.file.fileName;
+      const size = form.file.bytes.byteLength;
+      const mime = form.file.contentType ?? '';
+      if (!validDisplayName(filename)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'filename is invalid', {
+          details: { field: 'file' },
+        });
+      }
+      if (size > db.limits.max_file_bytes) {
+        return errorResponse(413, 'FILE_TOO_LARGE', 'File exceeds the tariff limit', {
+          details: { max_file_bytes: db.limits.max_file_bytes },
+        });
+      }
+      if (db.limits.usage.used + db.limits.usage.reserved + size > db.limits.storage_bytes) {
+        return errorResponse(413, 'STORAGE_QUOTA_EXCEEDED', 'Workspace storage is full');
+      }
+      const extension = filename.split('.').pop()?.toLowerCase() ?? '';
+      if (WORKSPACE_DANGEROUS_EXTENSIONS.has(extension)) {
+        return errorResponse(422, 'DANGEROUS_TYPE_BLOCKED', 'File type is blocked', {
+          details: { extension },
+        });
+      }
+
+      const id = newUuid();
+      const uploadId = newUuid();
+      const created = new Date().toISOString();
+      const item: FileItem = {
+        id,
+        filename,
+        size_bytes: size,
+        mime_type: mime || null,
+        // The mock completes the AV step synchronously; production returns
+        // PENDING here and the scan handler flips it to CLEAN/QUARANTINED.
+        scan_status: 'CLEAN',
+        chat_id: null,
+        chat_name: null,
+        message_id: null,
+        created_at: created,
+      };
+      db.fileCenterItems.unshift(item);
+      db.limits.usage.used += size;
+      db.fileUploadRequests.push({ workspaceId, filename, size, mime });
+      db.uploads.set(uploadId, {
+        id: uploadId,
+        chatId: null,
+        filename,
+        size,
+        mime,
+        media: null,
+        declaredSha256: null,
+        partSize: Math.max(1, size),
+        totalParts: 1,
+        received: new Map(),
+        status: 'READY',
+        expiresAt: Date.now() + 86_400_000,
+        attachmentId: id,
+        scanStatus: 'CLEAN',
+        scanPollsRemaining: 0,
+        finalizedSha256: '0'.repeat(64),
+        createdAt: Date.now(),
+        reservedReleased: true,
+      });
+      db.attachments.set(id, {
+        ref: {
+          id,
+          filename,
+          size_bytes: size,
+          mime_type: mime || null,
+          scan_status: 'CLEAN',
+        },
+        uploadId,
+        messageId: null,
+      });
+      return HttpResponse.json(item, { status: 201 });
+    }),
+
+    /* #83: owner-only display-name rename. */
+    http.patch(`${API}/files/:fileId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const idempotencyKey = request.headers.get('idempotency-key');
+      if (!idempotencyKey) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Idempotency-Key header is required');
+      }
+      if (db.fileDelayMs > 0) await delay(db.fileDelayMs);
+      if (db.forceFileRenameError) {
+        const forced = db.forceFileRenameError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+        });
+      }
+      const item = db.fileCenterItems.find((row) => row.id === String(params.fileId));
+      if (!item) return errorResponse(404, 'NOT_FOUND', 'File not found');
+      const body = await readJson(request);
+      const name = (body as { name?: unknown } | null)?.name;
+      if (!validDisplayName(name)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'name must be 1..255 characters', {
+          details: { field: 'name' },
+        });
+      }
+      item.filename = name;
+      db.fileRenameRequests.push({ fileId: item.id, name, idempotencyKey });
+      return HttpResponse.json(item);
+    }),
+
+    /* #83: soft delete (owner or workspace OWNER/ADMIN); repeat is 204. */
+    http.delete(`${API}/files/:fileId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const idempotencyKey = request.headers.get('idempotency-key');
+      if (!idempotencyKey) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Idempotency-Key header is required');
+      }
+      if (db.fileDelayMs > 0) await delay(db.fileDelayMs);
+      if (db.forceFileDeleteError) {
+        const forced = db.forceFileDeleteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+        });
+      }
+      const fileId = String(params.fileId);
+      if (db.deletedFileIds.has(fileId)) return new HttpResponse(null, { status: 204 });
+      const index = db.fileCenterItems.findIndex((row) => row.id === fileId);
+      if (index < 0) return errorResponse(404, 'NOT_FOUND', 'File not found');
+      const item = db.fileCenterItems[index]!;
+      if (item.message_id !== null) {
+        return errorResponse(409, 'CONFLICT', 'File is attached to a message', {
+          details: { reason: 'attached_to_message' },
+        });
+      }
+      db.fileCenterItems.splice(index, 1);
+      db.deletedFileIds.add(fileId);
+      db.fileDeleteRequests.push({ fileId, idempotencyKey });
+      db.limits.usage.used = Math.max(0, db.limits.usage.used - item.size_bytes);
+      const attachment = db.attachments.get(fileId);
+      if (attachment) db.uploads.delete(attachment.uploadId);
+      db.attachments.delete(fileId);
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /* #83: literal managed-text search with snippet + highlight ranges. */
+    http.get(`${API}/workspaces/:workspaceId/search/messages`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      if (!db.me.workspaces.some((item) => item.id === workspaceId)) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      }
+      const url = new URL(request.url);
+      const record: Record<string, string | null> = {};
+      for (const key of ['q', 'chat_id', 'from', 'to', 'cursor', 'limit']) {
+        record[key] = url.searchParams.get(key);
+      }
+      db.searchRequests.push(record);
+      if (db.searchDelayMs > 0) await delay(db.searchDelayMs);
+      if (db.forceSearchError) {
+        const forced = db.forceSearchError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+        });
+      }
+      const q = record.q ?? '';
+      if (q.length < 1 || q.length > 200) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'q must be 1..200 characters', {
+          details: { field: 'q' },
+        });
+      }
+      const chatId = record.chat_id ?? null;
+      if (chatId !== null && !UUID_RE.test(chatId)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'chat_id must be a UUID', {
+          details: { field: 'chat_id' },
+        });
+      }
+      const limitRaw = record.limit;
+      const limit = limitRaw === null ? 20 : Number(limitRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'limit must be 1..50', {
+          details: { field: 'limit' },
+        });
+      }
+      let offset = 0;
+      if (record.cursor) {
+        const decoded = decodeSearchCursor(record.cursor, q, chatId);
+        if (decoded === null) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'cursor is invalid', {
+            details: { field: 'cursor' },
+          });
+        }
+        offset = decoded;
+      }
+
+      const needle = q.toLocaleLowerCase('ru');
+      const hits: Array<{
+        message_id: string;
+        chat_id: string;
+        chat_name: string | null;
+        seq: number;
+        sender_id: string | null;
+        sender_display_name: string | null;
+        snippet: string;
+        highlights: SnippetRange[];
+        created_at: string;
+      }> = [];
+      for (const chat of Object.values(db.chats)) {
+        if (chat.workspaceId !== workspaceId) continue;
+        if (chat.summary.security_mode !== 'MANAGED') continue;
+        if (chatId !== null && chat.summary.id !== chatId) continue;
+        for (const message of chat.messages) {
+          if (message.deleted_at || chat.hiddenMessageIds.has(message.id)) continue;
+          if (message.type !== 'TEXT' || !message.text) continue;
+          if (!message.text.toLocaleLowerCase('ru').includes(needle)) continue;
+          const { snippet, highlights } = buildSearchSnippet(message.text, q);
+          hits.push({
+            message_id: message.id,
+            chat_id: chat.summary.id,
+            chat_name: chat.summary.name ?? null,
+            seq: message.seq,
+            sender_id: message.sender_id ?? null,
+            sender_display_name: message.sender_display_name ?? null,
+            snippet,
+            highlights,
+            created_at: message.created_at,
+          });
+        }
+      }
+      hits.sort((left, right) => {
+        const byDate = right.created_at.localeCompare(left.created_at);
+        return byDate !== 0 ? byDate : right.message_id.localeCompare(left.message_id);
+      });
+      const pageItems = hits.slice(offset, offset + limit);
+      const nextOffset = offset + pageItems.length;
+      const hasMore = nextOffset < hits.length;
+      return HttpResponse.json({
+        items: pageItems,
+        page: {
+          next_cursor: hasMore ? encodeSearchCursor(nextOffset, q, chatId) : null,
+          has_more: hasMore,
+        },
+        query: q,
+      });
+    }),
+
+    /* #83: mention inbox (metadata only) + unread counter. */
+    http.get(`${API}/me/mentions`, async ({ request }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const url = new URL(request.url);
+      const record: Record<string, string | null> = {};
+      for (const key of ['workspace_id', 'unread', 'cursor', 'limit']) {
+        record[key] = url.searchParams.get(key);
+      }
+      db.mentionListRequests.push(record);
+      if (db.forceMentionListError) {
+        const forced = db.forceMentionListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+        });
+      }
+      const unreadOnly = record.unread === 'true';
+      const limitRaw = record.limit;
+      const limit = limitRaw === null ? 30 : Number(limitRaw);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'limit must be 1..100', {
+          details: { field: 'limit' },
+        });
+      }
+      const binding = `${unreadOnly ? 'unread' : 'all'}`;
+      let offset = 0;
+      if (record.cursor) {
+        const decoded = decodeCursor(record.cursor, 'mp1', binding);
+        if (decoded === null) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'cursor is invalid', {
+            details: { field: 'cursor' },
+          });
+        }
+        offset = decoded;
+      }
+      const sorted = [...db.mentions].sort((left, right) => {
+        const byDate = right.created_at.localeCompare(left.created_at);
+        return byDate !== 0 ? byDate : right.id.localeCompare(left.id);
+      });
+      const filtered = unreadOnly ? sorted.filter((item) => item.read_at === null) : sorted;
+      const pageItems = filtered.slice(offset, offset + limit);
+      const nextOffset = offset + pageItems.length;
+      const hasMore = nextOffset < filtered.length;
+      return HttpResponse.json({
+        items: pageItems,
+        page: {
+          next_cursor: hasMore ? encodeCursor('mp1', nextOffset, binding) : null,
+          has_more: hasMore,
+        },
+        unread_count: db.mentions.filter((item) => item.read_at === null).length,
+      });
+    }),
+
+    /* #83: mark mentions read; `ids` or `all`, one-shot `read_at` per row. */
+    http.post(`${API}/me/mentions/read`, async ({ request }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const idempotencyKey = request.headers.get('idempotency-key');
+      if (!idempotencyKey) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Idempotency-Key header is required');
+      }
+      const body = await readJson(request);
+      const candidate = (body ?? {}) as { ids?: unknown; all?: unknown };
+      db.mentionReadRequests.push({
+        body: candidate as Record<string, unknown>,
+        idempotencyKey,
+      });
+      if (db.forceMentionReadError) {
+        const forced = db.forceMentionReadError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+        });
+      }
+      const all = candidate.all === true;
+      const ids = candidate.ids;
+      if (!all && (!Array.isArray(ids) || ids.length === 0)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'ids or all is required', {
+          details: { field: 'ids' },
+        });
+      }
+      if (ids !== undefined && (!Array.isArray(ids) || ids.length > 200)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'ids must be an array of at most 200', {
+          details: { field: 'ids' },
+        });
+      }
+      const wanted = all ? null : new Set(ids as string[]);
+      const readAt = new Date().toISOString();
+      for (const mention of db.mentions) {
+        if (wanted !== null && !wanted.has(mention.id)) continue;
+        if (mention.read_at === null) mention.read_at = readAt;
+      }
+      return new HttpResponse(null, { status: 204 });
+    }),
+
     http.post(`${API}/uploads/preflight`, async ({ request }) => {
       const unauthorized = requireAuth(request);
       if (unauthorized) return unauthorized;
@@ -6665,6 +7545,9 @@ export function createHandlers(db: MockDb) {
       let text: string | null | undefined;
       const attachments: ApiAttachment[] = [];
       let sticker: StickerRef | null = null;
+      // #83: explicit mention payload, validated before `seq` allocation.
+      let mentionIds: string[] = [];
+      let mentionAll = false;
 
       if (candidate.type === 'STICKER') {
         const rawText = candidate.text;
@@ -6674,6 +7557,8 @@ export function createHandlers(db: MockDb) {
         if (
           hasText ||
           hasAttachments ||
+          (Array.isArray(candidate.mentions) && candidate.mentions.length > 0) ||
+          candidate.mention_all === true ||
           (rawText !== undefined && rawText !== null && typeof rawText !== 'string') ||
           (rawAttachments !== undefined &&
             rawAttachments !== null &&
@@ -6782,6 +7667,64 @@ export function createHandlers(db: MockDb) {
         }
       }
 
+      // #83: mention ids are active participants of *this* chat (no existence
+      // disclosure), `@all` is a chat-manager broadcast, E2EE forbids both.
+      const rawMentions = candidate.mentions;
+      if (rawMentions !== undefined && rawMentions !== null) {
+        if (!Array.isArray(rawMentions)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'mentions must be an array', {
+            details: { field: 'mentions' },
+          });
+        }
+        if (rawMentions.length > 50) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'mentions must contain at most 50 ids', {
+            details: { field: 'mentions', max_items: 50 },
+          });
+        }
+      }
+      if (candidate.mention_all !== undefined && typeof candidate.mention_all !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'mention_all must be a boolean', {
+          details: { field: 'mention_all' },
+        });
+      }
+      const wantsMentions =
+        (Array.isArray(rawMentions) && rawMentions.length > 0) || candidate.mention_all === true;
+      const isE2eeBody = Array.isArray(candidate.envelopes) && candidate.envelopes.length > 0;
+      if (wantsMentions && isE2eeBody) {
+        return errorResponse(
+          422,
+          'E2EE_PLAINTEXT_FORBIDDEN',
+          'E2EE messages must not contain mentions',
+          { details: { field: 'mentions' } },
+        );
+      }
+      if (!isE2eeBody) {
+        const participants = (db.chatMembers[chat.summary.id] ?? []).filter(
+          (member) => member.status === 'ACTIVE',
+        );
+        const participantIds = new Set(participants.map((member) => member.user_id));
+        const actor = chatActorMember(db, chat.summary.id);
+        for (const [index, id] of (Array.isArray(rawMentions) ? rawMentions : []).entries()) {
+          if (typeof id !== 'string' || !UUID_RE.test(id) || !participantIds.has(id)) {
+            return errorResponse(
+              422,
+              'MENTION_INVALID',
+              'A mentioned user is not an active chat participant',
+              { details: { index } },
+            );
+          }
+        }
+        if (candidate.mention_all === true && !isManagerRole(actor?.role)) {
+          return errorResponse(
+            403,
+            'MENTION_ALL_FORBIDDEN',
+            'Only a chat OWNER/ADMIN may mention everyone',
+          );
+        }
+        mentionIds = [...new Set((Array.isArray(rawMentions) ? rawMentions : []) as string[])];
+        mentionAll = candidate.mention_all === true;
+      }
+
       // Contract §7.3: client_message_id survives the Idempotency-Key TTL.
       const existingId = chat.clientMessageIds.get(candidate.client_message_id);
       if (existingId) {
@@ -6821,6 +7764,8 @@ export function createHandlers(db: MockDb) {
         reactions: [],
         ...(sticker ? { sticker_id: sticker.id, sticker } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
+        mentions: mentionIds,
+        mention_all: mentionAll,
       };
 
       for (const attachment of attachments) {
@@ -6833,6 +7778,32 @@ export function createHandlers(db: MockDb) {
       }
 
       chat.messages.push(message);
+
+      // #83: materialize the per-recipient inbox rows (`@all` includes every
+      // active participant at send time; the author never notifies themselves).
+      if (mentionIds.length > 0 || mentionAll) {
+        const activeMembers = (db.chatMembers[chat.summary.id] ?? []).filter(
+          (member) => member.status === 'ACTIVE',
+        );
+        const recipients = new Set<string>(mentionIds);
+        if (mentionAll) {
+          for (const member of activeMembers) recipients.add(member.user_id);
+        }
+        recipients.delete(db.session.user.id);
+        const createdMentions: Mention[] = [...recipients].map(() => ({
+          id: newUuid(),
+          chat_id: chat.summary.id,
+          chat_name: chat.summary.name ?? null,
+          message_id: message.id,
+          sender_id: message.sender_id ?? null,
+          sender_display_name: message.sender_display_name ?? null,
+          mention_all: mentionAll,
+          read_at: null,
+          created_at: created,
+        }));
+        db.mentions.unshift(...createdMentions);
+      }
+
       chat.summary.last_seq = seq;
       chat.summary.last_message_at = created;
       chat.summary.unread_count = 0;

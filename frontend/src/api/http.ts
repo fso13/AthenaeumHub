@@ -381,9 +381,15 @@ export class ApiClient {
    */
   delete<T>(
     path: string,
-    options: { auth?: boolean; body?: unknown } = {},
+    options: { auth?: boolean; body?: unknown; idempotencyKey?: string } = {},
   ): Promise<ApiResponse<T>> {
-    return this.request<T>({ method: 'DELETE', path, auth: options.auth, body: options.body });
+    return this.request<T>({
+      method: 'DELETE',
+      path,
+      auth: options.auth,
+      body: options.body,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 
   async request<T>(options: RequestOptions): Promise<ApiResponse<T>> {

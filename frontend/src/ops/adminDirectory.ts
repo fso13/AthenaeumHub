@@ -1,10 +1,13 @@
-import type { ChatApi, ListAdminChatsQuery } from '../api/endpoints';
+import type { AdminAuditExportResult, ChatApi, ListAdminChatsQuery } from '../api/endpoints';
 import { toApiError, type ApiError } from '../api/problem';
 import type {
   AdminAuditEvent,
+  AdminAuditExportFormat,
   AdminAuditPage,
   AdminChat,
   AdminChatPage,
+  AdminSessionPage,
+  AdminSessionRevokeAll,
   AdminStorage,
   AdminUser,
   AdminUserPage,
@@ -61,6 +64,36 @@ export interface AdminStorageState {
  */
 export interface AdminAuditState extends AdminListState<AdminAuditEvent> {
   action: string;
+  /** #84 bounded export: `X-Export-Rows`/`X-Export-Truncated` are authoritative. */
+  exportStatus: 'idle' | 'exporting' | 'done' | 'error';
+  exportFormat: AdminAuditExportFormat | null;
+  exportRows: number | null;
+  exportTruncated: boolean;
+  exportFilename: string | null;
+  exportError: ApiError | null;
+}
+
+/**
+ * #84 sessions of the selected user. The dialog opens one user at a time; a
+ * late response for another user is discarded through `userId`.
+ */
+export interface AdminSessionsState {
+  userId: string | null;
+  items: AdminSessionPage['items'];
+  nextCursor: string | null;
+  hasMore: boolean;
+  status: AdminListStatus;
+  error: ApiError | null;
+  loadingMore: boolean;
+  moreError: ApiError | null;
+  revokeStatus: 'idle' | 'revoking' | 'error';
+  revokingId: string | null;
+  revokeError: ApiError | null;
+  /** Session whose revoke failed; enables an honest retry of that exact row. */
+  revokeErrorId: string | null;
+  revokeAllStatus: 'idle' | 'revoking' | 'done' | 'error';
+  revokeAllError: ApiError | null;
+  revokeAllResult: AdminSessionRevokeAll | null;
 }
 
 export interface AdminDirectoryState {
@@ -68,6 +101,7 @@ export interface AdminDirectoryState {
   chats: AdminChatsState;
   audit: AdminAuditState;
   storage: AdminStorageState;
+  sessions: AdminSessionsState;
 }
 
 export interface AdminDirectoryApi {
@@ -78,6 +112,10 @@ export interface AdminDirectoryApi {
   activateUser: ChatApi['activateUser'];
   deleteChat: ChatApi['deleteChat'];
   listAdminAudit: ChatApi['listAdminAudit'];
+  exportAdminAudit: ChatApi['exportAdminAudit'];
+  listAdminSessions: ChatApi['listAdminSessions'];
+  revokeAdminSession: ChatApi['revokeAdminSession'];
+  revokeAdminUserSessions: ChatApi['revokeAdminUserSessions'];
 }
 
 /**
@@ -133,6 +171,29 @@ export function createInitialAdminDirectoryState(): AdminDirectoryState {
       loadingMore: false,
       moreError: null,
       action: '',
+      exportStatus: 'idle',
+      exportFormat: null,
+      exportRows: null,
+      exportTruncated: false,
+      exportFilename: null,
+      exportError: null,
+    },
+    sessions: {
+      userId: null,
+      items: [],
+      nextCursor: null,
+      hasMore: false,
+      status: 'idle',
+      error: null,
+      loadingMore: false,
+      moreError: null,
+      revokeStatus: 'idle',
+      revokingId: null,
+      revokeError: null,
+      revokeErrorId: null,
+      revokeAllStatus: 'idle',
+      revokeAllError: null,
+      revokeAllResult: null,
     },
   };
 }
@@ -160,10 +221,13 @@ export class AdminDirectoryStore {
   private chatsToken = 0;
   private storageToken = 0;
   private auditToken = 0;
+  private sessionsToken = 0;
+  private exportToken = 0;
   private usersInFlight: Promise<void> | null = null;
   private chatsInFlight: Promise<void> | null = null;
   private storageInFlight: Promise<void> | null = null;
   private auditInFlight: Promise<void> | null = null;
+  private sessionsInFlight: Promise<void> | null = null;
 
   constructor(deps: AdminDirectoryStoreDeps) {
     this.api = deps.api;
@@ -191,10 +255,13 @@ export class AdminDirectoryStore {
     this.chatsToken += 1;
     this.storageToken += 1;
     this.auditToken += 1;
+    this.sessionsToken += 1;
+    this.exportToken += 1;
     this.usersInFlight = null;
     this.chatsInFlight = null;
     this.storageInFlight = null;
     this.auditInFlight = null;
+    this.sessionsInFlight = null;
     this.state = createInitialAdminDirectoryState();
     this.emit();
   }
@@ -604,6 +671,12 @@ export class AdminDirectoryStore {
         error: null,
         loadingMore: false,
         moreError: null,
+        exportStatus: 'idle',
+        exportFormat: null,
+        exportRows: null,
+        exportTruncated: false,
+        exportFilename: null,
+        exportError: null,
       },
     });
     void this.loadAudit();
@@ -699,6 +772,306 @@ export class AdminDirectoryStore {
       });
     }
   }
+
+  /**
+   * #84 bounded audit export. The Blob is downloaded by the caller without
+   * re-encoding; `X-Export-Rows`/`X-Export-Truncated` are authoritative. For
+   * JSON the body is a fallback when the headers are missing.
+   */
+  async exportAudit(format: AdminAuditExportFormat): Promise<AdminAuditExportResult | null> {
+    if (this.state.audit.exportStatus === 'exporting') return null;
+    const generation = this.generation;
+    const token = ++this.exportToken;
+    this.patch({
+      ...this.state,
+      audit: {
+        ...this.state.audit,
+        exportStatus: 'exporting',
+        exportFormat: format,
+        exportRows: null,
+        exportTruncated: false,
+        exportFilename: null,
+        exportError: null,
+      },
+    });
+
+    try {
+      const result = await this.api.exportAdminAudit({
+        format,
+        action: this.state.audit.action || undefined,
+      });
+      if (this.disposed || generation !== this.generation || token !== this.exportToken)
+        return null;
+
+      let rows = result.rows;
+      let truncated = result.truncated;
+      if (format === 'json' && (rows === null || !truncated)) {
+        try {
+          const parsed = JSON.parse(await readBlobText(result.blob)) as {
+            exported_rows?: unknown;
+            truncated?: unknown;
+          };
+          if (rows === null && typeof parsed.exported_rows === 'number') {
+            rows = parsed.exported_rows;
+          }
+          if (parsed.truncated === true) truncated = true;
+        } catch {
+          // Headers stay authoritative; the bytes are still downloadable.
+        }
+      }
+      this.patch({
+        ...this.state,
+        audit: {
+          ...this.state.audit,
+          exportStatus: 'done',
+          exportFormat: format,
+          exportRows: rows,
+          exportTruncated: truncated,
+          exportFilename: result.filename,
+          exportError: null,
+        },
+      });
+      return { ...result, rows, truncated };
+    } catch (error) {
+      if (this.disposed || generation !== this.generation || token !== this.exportToken)
+        return null;
+      this.patch({
+        ...this.state,
+        audit: {
+          ...this.state.audit,
+          exportStatus: 'error',
+          exportError: toApiError(error),
+        },
+      });
+      return null;
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* Sessions (#84) — one selected user, opaque cursor, idempotent revoke    */
+  /* ---------------------------------------------------------------------- */
+
+  /** Open the sessions dialog for one user and load the first page. */
+  openSessions(userId: string): void {
+    if (this.state.sessions.userId === userId && this.state.sessions.status === 'ready') return;
+    this.sessionsToken += 1;
+    this.sessionsInFlight = null;
+    this.patch({
+      ...this.state,
+      sessions: {
+        ...createInitialAdminDirectoryState().sessions,
+        userId,
+        status: 'idle',
+      },
+    });
+    void this.loadSessions();
+  }
+
+  closeSessions(): void {
+    this.sessionsToken += 1;
+    this.sessionsInFlight = null;
+    this.patch({
+      ...this.state,
+      sessions: createInitialAdminDirectoryState().sessions,
+    });
+  }
+
+  async loadSessions(options: { force?: boolean } = {}): Promise<void> {
+    const userId = this.state.sessions.userId;
+    if (!userId) return;
+    if (this.sessionsInFlight) return this.sessionsInFlight;
+    if (!options.force && this.state.sessions.status === 'ready') return;
+
+    const generation = this.generation;
+    const token = ++this.sessionsToken;
+    this.patch({
+      ...this.state,
+      sessions: {
+        ...this.state.sessions,
+        status: 'loading',
+        error: null,
+        moreError: null,
+      },
+    });
+
+    this.sessionsInFlight = (async () => {
+      try {
+        const page: AdminSessionPage = await this.api.listAdminSessions({
+          userId,
+          limit: ADMIN_PAGE_SIZE,
+        });
+        if (this.disposed || generation !== this.generation || token !== this.sessionsToken) return;
+        this.patch({
+          ...this.state,
+          sessions: {
+            ...this.state.sessions,
+            items: page.items,
+            nextCursor: page.next_cursor ?? null,
+            hasMore: page.has_more && page.next_cursor !== null,
+            status: 'ready',
+            error: null,
+            loadingMore: false,
+            moreError: null,
+          },
+        });
+      } catch (error) {
+        if (this.disposed || generation !== this.generation || token !== this.sessionsToken) return;
+        this.patch({
+          ...this.state,
+          sessions: {
+            ...this.state.sessions,
+            status: 'error',
+            error: toApiError(error),
+          },
+        });
+      } finally {
+        if (generation === this.generation && token === this.sessionsToken) {
+          this.sessionsInFlight = null;
+        }
+      }
+    })();
+    return this.sessionsInFlight;
+  }
+
+  async loadMoreSessions(): Promise<void> {
+    const { sessions } = this.state;
+    const userId = sessions.userId;
+    if (!userId || !sessions.nextCursor || sessions.loadingMore) return;
+    if (sessions.status === 'loading') return;
+
+    const generation = this.generation;
+    const token = this.sessionsToken;
+    this.patch({
+      ...this.state,
+      sessions: { ...sessions, loadingMore: true, moreError: null },
+    });
+    try {
+      const page: AdminSessionPage = await this.api.listAdminSessions({
+        userId,
+        cursor: sessions.nextCursor,
+        limit: ADMIN_PAGE_SIZE,
+      });
+      if (this.disposed || generation !== this.generation || token !== this.sessionsToken) return;
+      const seen = new Set(this.state.sessions.items.map((item) => item.id));
+      this.patch({
+        ...this.state,
+        sessions: {
+          ...this.state.sessions,
+          items: [...this.state.sessions.items, ...page.items.filter((item) => !seen.has(item.id))],
+          nextCursor: page.next_cursor ?? null,
+          hasMore: page.has_more && page.next_cursor !== null,
+          loadingMore: false,
+          moreError: null,
+        },
+      });
+    } catch (error) {
+      if (this.disposed || generation !== this.generation || token !== this.sessionsToken) return;
+      this.patch({
+        ...this.state,
+        sessions: {
+          ...this.state.sessions,
+          loadingMore: false,
+          moreError: toApiError(error),
+        },
+      });
+    }
+  }
+
+  /** Idempotent revoke: the server returns `204` even for an unknown id. */
+  async revokeSession(sessionId: string): Promise<boolean> {
+    if (this.state.sessions.revokeStatus === 'revoking') return false;
+    const generation = this.generation;
+    const userId = this.state.sessions.userId;
+    this.patch({
+      ...this.state,
+      sessions: {
+        ...this.state.sessions,
+        revokeStatus: 'revoking',
+        revokingId: sessionId,
+        revokeError: null,
+        revokeErrorId: null,
+        revokeAllStatus: 'idle',
+        revokeAllError: null,
+        revokeAllResult: null,
+      },
+    });
+    try {
+      await this.api.revokeAdminSession(sessionId);
+      if (this.disposed || generation !== this.generation || userId !== this.state.sessions.userId)
+        return false;
+      this.patch({
+        ...this.state,
+        sessions: {
+          ...this.state.sessions,
+          items: this.state.sessions.items.filter((item) => item.id !== sessionId),
+          revokeStatus: 'idle',
+          revokingId: null,
+          revokeError: null,
+          revokeErrorId: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      if (this.disposed || generation !== this.generation) return false;
+      this.patch({
+        ...this.state,
+        sessions: {
+          ...this.state.sessions,
+          revokeStatus: 'error',
+          revokingId: null,
+          revokeError: toApiError(error),
+          revokeErrorId: sessionId,
+        },
+      });
+      return false;
+    }
+  }
+
+  async revokeAllSessions(): Promise<AdminSessionRevokeAll | null> {
+    const userId = this.state.sessions.userId;
+    if (!userId || this.state.sessions.revokeAllStatus === 'revoking') return null;
+    const generation = this.generation;
+    this.patch({
+      ...this.state,
+      sessions: {
+        ...this.state.sessions,
+        revokeAllStatus: 'revoking',
+        revokeAllError: null,
+        revokeAllResult: null,
+        revokeStatus: 'idle',
+        revokeError: null,
+        revokeErrorId: null,
+      },
+    });
+    try {
+      const result = await this.api.revokeAdminUserSessions(userId);
+      if (this.disposed || generation !== this.generation) return null;
+      this.patch({
+        ...this.state,
+        sessions: {
+          ...this.state.sessions,
+          items: [],
+          hasMore: false,
+          nextCursor: null,
+          revokeAllStatus: 'done',
+          revokeAllError: null,
+          revokeAllResult: result,
+        },
+      });
+      return result;
+    } catch (error) {
+      if (this.disposed || generation !== this.generation) return null;
+      this.patch({
+        ...this.state,
+        sessions: {
+          ...this.state.sessions,
+          revokeAllStatus: 'error',
+          revokeAllError: toApiError(error),
+        },
+      });
+      return null;
+    }
+  }
 }
 
 /** 409 codes that mean the requested state is already in effect. */
@@ -709,6 +1082,17 @@ function isAlreadyApplied(error: ApiError): boolean {
       error.code === 'USER_ALREADY_ACTIVE' ||
       error.code === 'CHAT_ALREADY_DELETED')
   );
+}
+
+/** `Blob.text()` fallback for older jsdom builds; browsers have both paths. */
+function readBlobText(blob: Blob): Promise<string> {
+  if (typeof blob.text === 'function') return blob.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
+    reader.readAsText(blob);
+  });
 }
 
 function dedupeAudit(items: AdminAuditEvent[]): AdminAuditEvent[] {

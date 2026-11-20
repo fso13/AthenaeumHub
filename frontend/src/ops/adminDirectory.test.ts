@@ -3,6 +3,7 @@ import type {
   AdminAuditEvent,
   AdminAuditPage,
   AdminChat,
+  AdminSession,
   AdminStorage,
   AdminUser,
   AdminUserPage,
@@ -55,6 +56,10 @@ function createFakeApi() {
     activateUser: vi.fn(),
     deleteChat: vi.fn(),
     listAdminAudit: vi.fn(),
+    exportAdminAudit: vi.fn(),
+    listAdminSessions: vi.fn(),
+    revokeAdminSession: vi.fn(),
+    revokeAdminUserSessions: vi.fn(),
   };
   return api;
 }
@@ -438,5 +443,158 @@ describe('admin directory store (E11-F actions + audit)', () => {
     await vi.waitFor(() => {
       expect(api.listAdminChats).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe('#84 admin export and sessions store', () => {
+  function session(id: string, userId: string, current = false): AdminSession {
+    return {
+      id,
+      user_id: userId,
+      device: `device-${id}`,
+      created_at: '2026-11-01T10:00:00Z',
+      last_seen_at: '2026-11-20T10:00:00Z',
+      current,
+    };
+  }
+
+  it('exports an audit Blob and stores header-derived counters', async () => {
+    const api = createFakeApi();
+    vi.mocked(api.exportAdminAudit).mockResolvedValueOnce({
+      blob: new Blob(['created_at,action\n'], { type: 'text/csv; charset=UTF-8' }),
+      filename: 'admin-audit-2026-11-20.csv',
+      rows: 2,
+      truncated: true,
+    });
+    const store = createAdminDirectoryStore({ api });
+
+    const result = await store.exportAudit('csv');
+
+    expect(result).toMatchObject({ rows: 2, truncated: true });
+    expect(api.exportAdminAudit).toHaveBeenCalledWith({ format: 'csv', action: undefined });
+    expect(store.getSnapshot().audit).toMatchObject({
+      exportStatus: 'done',
+      exportFormat: 'csv',
+      exportRows: 2,
+      exportTruncated: true,
+      exportFilename: 'admin-audit-2026-11-20.csv',
+    });
+  });
+
+  it('falls back to the bounded JSON body when export headers are absent', async () => {
+    const api = createFakeApi();
+    vi.mocked(api.exportAdminAudit).mockResolvedValueOnce({
+      blob: new Blob([JSON.stringify({ items: [], exported_rows: 5, truncated: true })], {
+        type: 'application/json',
+      }),
+      filename: null,
+      rows: null,
+      truncated: false,
+    });
+    const store = createAdminDirectoryStore({ api });
+
+    const result = await store.exportAudit('json');
+
+    expect(result).toMatchObject({ rows: 5, truncated: true });
+    expect(store.getSnapshot().audit.exportRows).toBe(5);
+  });
+
+  it('surfaces an export failure without dropping the loaded page', async () => {
+    const api = createFakeApi();
+    vi.mocked(api.listAdminAudit).mockResolvedValueOnce(page([], null));
+    vi.mocked(api.exportAdminAudit).mockRejectedValueOnce(
+      new ApiError({ source: 'http', status: 503, code: 'AUTH_UNAVAILABLE', message: 'down' }),
+    );
+    const store = createAdminDirectoryStore({ api });
+    await store.loadAudit();
+
+    expect(await store.exportAudit('csv')).toBeNull();
+    expect(store.getSnapshot().audit.exportStatus).toBe('error');
+    expect(store.getSnapshot().audit.exportError?.status).toBe(503);
+    expect(store.getSnapshot().audit.status).toBe('ready');
+  });
+
+  it('loads, paginates and revokes sessions for one selected user', async () => {
+    const api = createFakeApi();
+    vi.mocked(api.listAdminSessions)
+      .mockResolvedValueOnce({
+        items: [session('s1', 'u1', true)],
+        next_cursor: 'cursor-1',
+        has_more: true,
+      })
+      .mockResolvedValueOnce({
+        items: [session('s2', 'u1')],
+        next_cursor: null,
+        has_more: false,
+      });
+    vi.mocked(api.revokeAdminSession).mockResolvedValue(undefined);
+    const store = createAdminDirectoryStore({ api });
+
+    store.openSessions('u1');
+    await vi.waitFor(() => expect(store.getSnapshot().sessions.status).toBe('ready'));
+    expect(store.getSnapshot().sessions.items.map((item) => item.id)).toEqual(['s1']);
+    expect(api.listAdminSessions).toHaveBeenNthCalledWith(1, { userId: 'u1', limit: 25 });
+
+    await store.loadMoreSessions();
+    expect(store.getSnapshot().sessions.items.map((item) => item.id)).toEqual(['s1', 's2']);
+    expect(api.listAdminSessions).toHaveBeenNthCalledWith(2, {
+      userId: 'u1',
+      cursor: 'cursor-1',
+      limit: 25,
+    });
+
+    expect(await store.revokeSession('s1')).toBe(true);
+    expect(api.revokeAdminSession).toHaveBeenCalledWith('s1');
+    expect(store.getSnapshot().sessions.items.map((item) => item.id)).toEqual(['s2']);
+  });
+
+  it('revoke-all returns server counters and clears the list', async () => {
+    const api = createFakeApi();
+    vi.mocked(api.listAdminSessions).mockResolvedValueOnce({
+      items: [session('s1', 'u1'), session('s2', 'u1')],
+      next_cursor: null,
+      has_more: false,
+    });
+    vi.mocked(api.revokeAdminUserSessions).mockResolvedValueOnce({
+      revoked_sessions: 2,
+      affected_users: 1,
+    });
+    const store = createAdminDirectoryStore({ api });
+
+    store.openSessions('u1');
+    await vi.waitFor(() => expect(store.getSnapshot().sessions.status).toBe('ready'));
+
+    const result = await store.revokeAllSessions();
+
+    expect(result).toEqual({ revoked_sessions: 2, affected_users: 1 });
+    expect(api.revokeAdminUserSessions).toHaveBeenCalledWith('u1');
+    expect(store.getSnapshot().sessions.items).toEqual([]);
+    expect(store.getSnapshot().sessions.revokeAllStatus).toBe('done');
+    expect(store.getSnapshot().sessions.revokeAllResult).toEqual({
+      revoked_sessions: 2,
+      affected_users: 1,
+    });
+  });
+
+  it('keeps an honest revoke error and retries the exact session', async () => {
+    const api = createFakeApi();
+    vi.mocked(api.listAdminSessions).mockResolvedValueOnce({
+      items: [session('s1', 'u1')],
+      next_cursor: null,
+      has_more: false,
+    });
+    vi.mocked(api.revokeAdminSession)
+      .mockRejectedValueOnce(
+        new ApiError({ source: 'http', status: 503, code: 'AUTH_UNAVAILABLE', message: 'down' }),
+      )
+      .mockResolvedValueOnce(undefined);
+    const store = createAdminDirectoryStore({ api });
+    store.openSessions('u1');
+    await vi.waitFor(() => expect(store.getSnapshot().sessions.status).toBe('ready'));
+
+    expect(await store.revokeSession('s1')).toBe(false);
+    expect(store.getSnapshot().sessions.revokeErrorId).toBe('s1');
+    expect(await store.revokeSession('s1')).toBe(true);
+    expect(store.getSnapshot().sessions.items).toEqual([]);
   });
 });

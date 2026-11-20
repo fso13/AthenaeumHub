@@ -1,6 +1,7 @@
 package ru.krug.backend.message.domain.model;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -12,7 +13,7 @@ import java.util.UUID;
 public final class Message {
 
     public enum Type {
-        TEXT, STICKER, SYSTEM
+        TEXT, STICKER, SYSTEM, POLL, TASK
     }
 
     private final UUID id;
@@ -26,10 +27,18 @@ public final class Message {
     private final CryptoScheme cryptoScheme;
     private final MessageBody body;
     private final UUID stickerId;
+    /** Referenced poll; non-null iff {@link Type#POLL}. No body is stored for it. */
+    private final UUID pollId;
+    /** Referenced task; non-null iff {@link Type#TASK}. No body is stored for it. */
+    private final UUID taskId;
     private final UUID replyToId;
     /** Root of a flat thread; null for a main-feed message. Depth is always one. */
     private final UUID threadRootId;
     private final UUID clientMessageId;
+    /** Explicit mentioned users (#83); empty for E2EE and messages without mentions. */
+    private final List<UUID> mentions;
+    /** Whether the message used @all (#83); always false for E2EE. */
+    private final boolean mentionAll;
     private final Instant createdAt;
     private final Instant editedAt;
     private final Instant deletedAt;
@@ -38,8 +47,20 @@ public final class Message {
     private Message(UUID id, UUID workspaceId, UUID chatId, long seq, UUID senderId,
                     UUID senderDeviceId, String senderDisplayName, Type type,
                     CryptoScheme cryptoScheme, MessageBody body, UUID stickerId,
-                    UUID replyToId, UUID threadRootId, UUID clientMessageId, Instant createdAt,
-                    Instant editedAt, Instant deletedAt, int version) {
+                    UUID pollId, UUID taskId, UUID replyToId, UUID threadRootId,
+                    UUID clientMessageId, Instant createdAt, Instant editedAt,
+                    Instant deletedAt, int version) {
+        this(id, workspaceId, chatId, seq, senderId, senderDeviceId, senderDisplayName, type,
+                cryptoScheme, body, stickerId, pollId, taskId, replyToId, threadRootId,
+                clientMessageId, List.of(), false, createdAt, editedAt, deletedAt, version);
+    }
+
+    private Message(UUID id, UUID workspaceId, UUID chatId, long seq, UUID senderId,
+                    UUID senderDeviceId, String senderDisplayName, Type type,
+                    CryptoScheme cryptoScheme, MessageBody body, UUID stickerId,
+                    UUID pollId, UUID taskId, UUID replyToId, UUID threadRootId,
+                    UUID clientMessageId, List<UUID> mentions, boolean mentionAll,
+                    Instant createdAt, Instant editedAt, Instant deletedAt, int version) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
         this.chatId = Objects.requireNonNull(chatId, "chatId");
@@ -54,12 +75,16 @@ public final class Message {
         this.cryptoScheme = Objects.requireNonNull(cryptoScheme, "cryptoScheme");
         this.body = body;
         this.stickerId = stickerId;
+        this.pollId = pollId;
+        this.taskId = taskId;
         this.replyToId = replyToId;
         if (threadRootId != null && threadRootId.equals(id)) {
             throw new IllegalArgumentException("message cannot be its own thread root");
         }
         this.threadRootId = threadRootId;
         this.clientMessageId = clientMessageId;
+        this.mentions = mentions == null ? List.of() : List.copyOf(mentions);
+        this.mentionAll = mentionAll;
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt");
         this.editedAt = editedAt;
         this.deletedAt = deletedAt;
@@ -80,8 +105,23 @@ public final class Message {
                                      MessageBody body, UUID replyToId, UUID threadRootId,
                                      UUID clientMessageId, Instant createdAt) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
-                senderDisplayName, Type.TEXT, CryptoScheme.MANAGED, body, null, replyToId,
-                threadRootId, clientMessageId, createdAt, null, null, 1);
+                senderDisplayName, Type.TEXT, CryptoScheme.MANAGED, body, null, null, null,
+                replyToId, threadRootId, clientMessageId, createdAt, null, null, 1);
+    }
+
+    /**
+     * Managed TEXT message with mention metadata (#83). Mentions are never allowed on E2EE
+     * (the send path rejects them and the aggregate re-checks it).
+     */
+    public static Message createText(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                     UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                     MessageBody body, UUID replyToId, UUID threadRootId,
+                                     UUID clientMessageId, List<UUID> mentions,
+                                     boolean mentionAll, Instant createdAt) {
+        return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, Type.TEXT, CryptoScheme.MANAGED, body, null, null, null,
+                replyToId, threadRootId, clientMessageId, mentions, mentionAll, createdAt,
+                null, null, 1);
     }
 
     public static Message createSticker(UUID id, UUID workspaceId, UUID chatId, long seq,
@@ -98,8 +138,8 @@ public final class Message {
                                         UUID threadRootId, UUID clientMessageId,
                                         Instant createdAt) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
-                senderDisplayName, Type.STICKER, CryptoScheme.MANAGED, null, stickerId,
-                replyToId, threadRootId, clientMessageId, createdAt, null, null, 1);
+                senderDisplayName, Type.STICKER, CryptoScheme.MANAGED, null, stickerId, null,
+                null, replyToId, threadRootId, clientMessageId, createdAt, null, null, 1);
     }
 
     /**
@@ -112,7 +152,7 @@ public final class Message {
                                      Instant createdAt) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, Type.TEXT, CryptoScheme.E2EE_PAIRWISE, null, null, null,
-                null, clientMessageId, createdAt, null, null, 1);
+                null, null, null, clientMessageId, createdAt, null, null, 1);
     }
 
     public static Message reconstitute(UUID id, UUID workspaceId, UUID chatId, long seq,
@@ -122,8 +162,8 @@ public final class Message {
                                        Instant createdAt, Instant editedAt, Instant deletedAt,
                                        int version) {
         return reconstitute(id, workspaceId, chatId, seq, senderId, senderDeviceId,
-                senderDisplayName, type, cryptoScheme, body, stickerId, replyToId, null,
-                clientMessageId, createdAt, editedAt, deletedAt, version);
+                senderDisplayName, type, cryptoScheme, body, stickerId, null, null, replyToId,
+                null, clientMessageId, createdAt, editedAt, deletedAt, version);
     }
 
     public static Message reconstitute(UUID id, UUID workspaceId, UUID chatId, long seq,
@@ -132,9 +172,61 @@ public final class Message {
                                        UUID stickerId, UUID replyToId, UUID threadRootId,
                                        UUID clientMessageId, Instant createdAt, Instant editedAt,
                                        Instant deletedAt, int version) {
+        return reconstitute(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, type, cryptoScheme, body, stickerId, null, null, replyToId,
+                threadRootId, clientMessageId, createdAt, editedAt, deletedAt, version);
+    }
+
+    /**
+     * Server-created poll message: no body, no client_message_id, no thread/reply metadata.
+     * The poll id is the only content reference; the question/options are read through the
+     * embedded poll projection.
+     */
+    public static Message createPoll(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                     UUID senderId, UUID senderDeviceId,
+                                     String senderDisplayName, UUID pollId, Instant createdAt) {
         return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
-                senderDisplayName, type, cryptoScheme, body, stickerId, replyToId, threadRootId,
-                clientMessageId, createdAt, editedAt, deletedAt, version);
+                senderDisplayName, Type.POLL, CryptoScheme.MANAGED, null, null, pollId, null,
+                null, null, null, createdAt, null, null, 1);
+    }
+
+    /** Server-created task message; see {@link #createPoll}. */
+    public static Message createTask(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                     UUID senderId, UUID senderDeviceId,
+                                     String senderDisplayName, UUID taskId, Instant createdAt) {
+        return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, Type.TASK, CryptoScheme.MANAGED, null, null, null, taskId,
+                null, null, null, createdAt, null, null, 1);
+    }
+
+    /**
+     * Full reconstitution used by persistence; the shorter overloads are kept for callers
+     * that never carry a plugin reference (TEXT/STICKER/SYSTEM/E2EE).
+     */
+    public static Message reconstitute(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                       UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                       Type type, CryptoScheme cryptoScheme, MessageBody body,
+                                       UUID stickerId, UUID pollId, UUID taskId, UUID replyToId,
+                                       UUID threadRootId, UUID clientMessageId, Instant createdAt,
+                                       Instant editedAt, Instant deletedAt, int version) {
+        return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, type, cryptoScheme, body, stickerId, pollId, taskId,
+                replyToId, threadRootId, clientMessageId, createdAt, editedAt, deletedAt,
+                version);
+    }
+
+    /** Persistence reconstitution including #83 mention metadata. */
+    public static Message reconstitute(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                       UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                       Type type, CryptoScheme cryptoScheme, MessageBody body,
+                                       UUID stickerId, UUID pollId, UUID taskId, UUID replyToId,
+                                       UUID threadRootId, UUID clientMessageId, List<UUID> mentions,
+                                       boolean mentionAll, Instant createdAt, Instant editedAt,
+                                       Instant deletedAt, int version) {
+        return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, type, cryptoScheme, body, stickerId, pollId, taskId,
+                replyToId, threadRootId, clientMessageId, mentions, mentionAll, createdAt,
+                editedAt, deletedAt, version);
     }
 
     private void requireTypeInvariants() {
@@ -153,6 +245,10 @@ public final class Message {
             }
             if (threadRootId != null) {
                 throw new IllegalArgumentException("E2EE message must not have thread_root_id");
+            }
+            if (!mentions.isEmpty() || mentionAll) {
+                throw new IllegalArgumentException(
+                        "E2EE message must not carry mention metadata");
             }
             if (senderId == null || senderDeviceId == null) {
                 throw new IllegalArgumentException("E2EE message requires sender and device");
@@ -177,6 +273,36 @@ public final class Message {
         if (type == Type.SYSTEM && body != null) {
             throw new IllegalArgumentException("SYSTEM message must not have a body");
         }
+        if (type == Type.POLL || type == Type.TASK) {
+            if (senderId == null) {
+                throw new IllegalArgumentException("plugin message requires a sender");
+            }
+            if (body != null) {
+                throw new IllegalArgumentException("plugin message must not have a body");
+            }
+            if (stickerId != null) {
+                throw new IllegalArgumentException("plugin message must not have a sticker");
+            }
+            if (cryptoScheme != CryptoScheme.MANAGED) {
+                throw new IllegalArgumentException("plugin message must be MANAGED");
+            }
+            if (replyToId != null || threadRootId != null) {
+                throw new IllegalArgumentException(
+                        "plugin message must not be a reply or a thread root");
+            }
+            if (type == Type.POLL ? pollId == null || taskId != null
+                    : taskId == null || pollId != null) {
+                throw new IllegalArgumentException(
+                        "POLL requires pollId only; TASK requires taskId only");
+            }
+        } else if (pollId != null || taskId != null) {
+            throw new IllegalArgumentException(
+                    "pollId/taskId are only allowed on POLL/TASK messages");
+        }
+    }
+
+    public boolean isPluginMessage() {
+        return type == Type.POLL || type == Type.TASK;
     }
 
     public boolean isE2ee() {
@@ -227,6 +353,14 @@ public final class Message {
         return stickerId;
     }
 
+    public UUID pollId() {
+        return pollId;
+    }
+
+    public UUID taskId() {
+        return taskId;
+    }
+
     public UUID replyToId() {
         return replyToId;
     }
@@ -237,6 +371,15 @@ public final class Message {
 
     public UUID clientMessageId() {
         return clientMessageId;
+    }
+
+    /** Explicit mentioned user ids (#83); never populated for E2EE. */
+    public List<UUID> mentions() {
+        return mentions;
+    }
+
+    public boolean mentionAll() {
+        return mentionAll;
     }
 
     public Instant createdAt() {

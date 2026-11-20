@@ -35,18 +35,22 @@ import type {
   MediaImage,
   MeResponse,
   MeUser,
+  Mention,
   MessageCreateBody,
   MessageDeleteScope,
   MessageEdit,
+  MessageSearchHit,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
+  Poll,
   ProfileSession,
   ProfileUpdate,
   ReactionSummary,
   Session,
   StickerRef,
   SyncResponse,
+  Task,
   ThreadSummary,
   WorkspaceLimits,
   WorkspaceMember,
@@ -65,6 +69,10 @@ import {
   createProfileWorkspaceStore,
   type ProfileWorkspaceStore,
 } from '../profile/profileWorkspaceStore';
+import {
+  createWorkspaceOverviewStore,
+  type WorkspaceOverviewStore,
+} from '../workspace/overviewStore';
 import { readDeviceWorkspaceId, writeDeviceWorkspaceId } from '../workspace/deviceWorkspace';
 import { getDeviceId, getSession, setSession } from '../auth/session';
 import { setRuntimeDeviceId } from '../auth/runtime';
@@ -142,6 +150,12 @@ export interface OutgoingMessage {
   replyToId: string | null;
   /** Ready managed attachments; empty for a text-only message. */
   attachments: ApiAttachment[];
+  /**
+   * #83: explicit mention ids derived from the final text. Server-validated;
+   * the client never invents recipients and E2EE rows never carry them.
+   */
+  mentions?: string[];
+  mentionAll?: boolean;
   createdAt: number;
   status: OutgoingStatus;
   error: ApiError | null;
@@ -308,6 +322,46 @@ export interface NotificationsState {
   readAllPending: boolean;
   readError: ApiError | null;
   lastLoadedAt: number | null;
+}
+
+/**
+ * #83: server-side message search. The query is applied by the server; the UI
+ * only debounces input and appends opaque cursor pages.
+ */
+export interface MessageSearchState {
+  /** Normalized query actually sent to the server (`''` = idle). */
+  query: string;
+  /** `chat_id` scope or `null` for the whole workspace. */
+  chatId: string | null;
+  status: LoadStatus;
+  items: MessageSearchHit[];
+  error: ApiError | null;
+  hasMore: boolean;
+  nextCursor: string | null;
+  loadMoreStatus: 'idle' | 'loading' | 'error';
+  loadMoreError: ApiError | null;
+  /** Monotonic request token; stale responses never overwrite a new query. */
+  seq: number;
+}
+
+/**
+ * #83: `GET /me/mentions` inbox. Metadata only (no message text); ids and the
+ * read marker come from the server, the badge is derived from `unread_count`.
+ */
+export interface MentionsState {
+  items: Mention[];
+  status: LoadStatus;
+  error: ApiError | null;
+  unreadCount: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  loadMoreStatus: 'idle' | 'loading' | 'error';
+  loadMoreError: ApiError | null;
+  /** Server `unread` filter applied to the current chain. */
+  unreadOnly: boolean;
+  readPendingIds: string[];
+  readAllPending: boolean;
+  readError: ApiError | null;
 }
 
 /** E6-F: `/notification-preferences` server state. */
@@ -807,6 +861,10 @@ export interface AppState {
   archivedChats: ArchivedChatsState;
   /** D1-FE5: `GET /devices` for the profile modal. */
   devices: DevicesState;
+  /** #83: server-side search results and cursor state. */
+  messageSearch: MessageSearchState;
+  /** #83: mention inbox and its unread badge. */
+  mentions: MentionsState;
 }
 
 export interface ChatStoreDeps {
@@ -860,6 +918,10 @@ const E2EE_COPY_RESTORE_CODES: ReadonlySet<string> = new Set([
 const RETRY_NOTIFICATION_MATCH_MS = 250;
 /** Contract default for GET /notifications; the panel loads one page at a time. */
 const NOTIFICATIONS_PAGE_SIZE = 30;
+/** #83: server search page size (contract max 50; keeps first paint small). */
+const SEARCH_PAGE_SIZE = 20;
+/** #83: mention inbox page size (contract default 30). */
+const MENTIONS_PAGE_SIZE = 30;
 /** Contract default (and cap-sane size) for the member picker. */
 const MEMBER_PAGE_SIZE = 50;
 /** Contract `query` maxLength for `GET /workspaces/{id}/members`. */
@@ -932,6 +994,38 @@ function upsertChatMember(items: ChatMember[], member: ChatMember): ChatMember[]
   const next = items.filter((item) => item.user_id !== member.user_id);
   next.push(member);
   return sortChatMembers(next);
+}
+
+export function createEmptyMessageSearchState(): MessageSearchState {
+  return {
+    query: '',
+    chatId: null,
+    status: 'idle',
+    items: [],
+    error: null,
+    hasMore: false,
+    nextCursor: null,
+    loadMoreStatus: 'idle',
+    loadMoreError: null,
+    seq: 0,
+  };
+}
+
+export function createEmptyMentionsState(): MentionsState {
+  return {
+    items: [],
+    status: 'idle',
+    error: null,
+    unreadCount: 0,
+    hasMore: false,
+    nextCursor: null,
+    loadMoreStatus: 'idle',
+    loadMoreError: null,
+    unreadOnly: false,
+    readPendingIds: [],
+    readAllPending: false,
+    readError: null,
+  };
 }
 
 export function createEmptyNotificationsState(): NotificationsState {
@@ -1090,6 +1184,8 @@ export class ChatStore {
   readonly security: SecurityStore;
   /** P0-4 (#82): profile avatar, TOTP setup and workspace settings/invites. */
   readonly profile: ProfileWorkspaceStore;
+  /** #84: workspace dashboard aggregates for the Overview page. */
+  readonly workspaceOverview: WorkspaceOverviewStore;
   /** Per-id chat/workspace avatar bytes (object URLs, cleared on change). */
   readonly avatars: AvatarStore;
 
@@ -1139,6 +1235,8 @@ export class ChatStore {
   private notificationReadGeneration = 0;
   /** Invalidates in-flight notification responses across logout/workspace switch. */
   private notificationEpoch = 0;
+  /** #83: invalidates in-flight mention inbox responses on workspace switch. */
+  private mentionEpoch = 0;
   /**
    * G4f P1-01: R-15 replacements that were hidden as duplicates and whose
    * unread contribution/notification must be suppressed. Keys are derived from
@@ -1202,6 +1300,8 @@ export class ChatStore {
       call: idleCallState(),
       notifications: createEmptyNotificationsState(),
       notificationPreferences: createEmptyNotificationPreferencesState(),
+      messageSearch: createEmptyMessageSearchState(),
+      mentions: createEmptyMentionsState(),
       e2ee: createE2eeState(this.e2eeEnabled && this.e2eeBridge !== null),
       chatLimits: null,
       chatLimitsStatus: 'idle',
@@ -1245,6 +1345,7 @@ export class ChatStore {
     });
 
     this.avatars = createAvatarStore({ api: deps.api });
+    this.workspaceOverview = createWorkspaceOverviewStore({ api: deps.api });
 
     this.files = createFilesStore({
       api: deps.api,
@@ -1254,7 +1355,14 @@ export class ChatStore {
     this.stickers = createStickersStore({ api: deps.api });
 
     this.plugins = createPluginsStore({ api: deps.api });
-    this.pluginActions = createPluginActionsStore({ api: deps.api });
+    this.pluginActions = createPluginActionsStore({
+      api: deps.api,
+      // #95: poll/task responses carry the new aggregate. The embedded
+      // projection in the feed message is replaced in place (never appended),
+      // so the card and the timeline stay one row.
+      onPollChanged: (chatId, poll) => this.applyEmbeddedPoll(chatId, poll),
+      onTaskChanged: (chatId, task) => this.applyEmbeddedTask(chatId, task),
+    });
 
     this.realtime =
       deps.config.realtimeEnabled && this.config.realtimeEnabled
@@ -1317,6 +1425,7 @@ export class ChatStore {
     this.security.dispose();
     this.profile.dispose();
     this.avatars.dispose();
+    this.workspaceOverview.dispose();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.listeners.clear();
@@ -1433,6 +1542,7 @@ export class ChatStore {
       await this.initializeE2ee(session.user.id);
       this.stickers.setOwner(session.user.id);
       this.files.setWorkspace(session.workspace.id, null);
+      this.workspaceOverview.setWorkspace(session.workspace.id);
       const chatList = await this.api.listChats(session.workspace.id);
       const chats = chatList.items;
       const activeChatId =
@@ -1457,6 +1567,8 @@ export class ChatStore {
       // with history so notifications never block the chat.
       void this.loadNotifications();
       void this.loadNotificationPreferences();
+      // #83: mention badge is part of the first paint; failures stay quiet.
+      void this.refreshMentions();
       void this.loadChatLimits();
 
       if (activeChatId) {
@@ -1596,6 +1708,7 @@ export class ChatStore {
     this.realtime?.stop();
     this.calls.stop();
     this.notificationEpoch += 1;
+    this.mentionEpoch += 1;
     this.chatMembersToken += 1;
     this.chatMembersInFlight = null;
     this.chatInvitesToken += 1;
@@ -1612,6 +1725,7 @@ export class ChatStore {
     this.inviteAcceptInFlight = null;
     writeDeviceWorkspaceId(workspace.id);
     this.files.setWorkspace(workspace.id, workspace.role ?? null);
+    this.workspaceOverview.setWorkspace(workspace.id);
     this.security.reset();
     this.profile.reset();
     this.avatars.reset();
@@ -1651,6 +1765,8 @@ export class ChatStore {
       call: idleCallState(),
       notifications: createEmptyNotificationsState(),
       notificationPreferences: createEmptyNotificationPreferencesState(),
+      messageSearch: createEmptyMessageSearchState(),
+      mentions: createEmptyMentionsState(),
       e2ee: { ...this.state.e2ee, chats: {} },
       chatLimits: null,
       chatLimitsStatus: 'loading',
@@ -1696,6 +1812,8 @@ export class ChatStore {
 
       void this.loadNotifications();
       void this.loadNotificationPreferences();
+      // #83: mention badge is part of the first paint; failures stay quiet.
+      void this.refreshMentions();
 
       if (activeChatId) {
         await this.loadChat(activeChatId);
@@ -4130,6 +4248,7 @@ export class ChatStore {
     this.realtime?.stop();
     this.calls.stop();
     this.notificationEpoch += 1;
+    this.mentionEpoch += 1;
     this.files.reset();
     this.stickers.reset();
     this.plugins.reset();
@@ -4138,6 +4257,7 @@ export class ChatStore {
     this.security.reset();
     this.profile.reset();
     this.avatars.reset();
+    this.workspaceOverview.reset();
     this.chatLimitsPromise = null;
     this.unreadWorkspaceRequests.clear();
     this.membersToken += 1;
@@ -4193,6 +4313,8 @@ export class ChatStore {
       call: idleCallState(),
       notifications: createEmptyNotificationsState(),
       notificationPreferences: createEmptyNotificationPreferencesState(),
+      messageSearch: createEmptyMessageSearchState(),
+      mentions: createEmptyMentionsState(),
       e2ee: createE2eeState(this.e2eeEnabled && this.e2eeBridge !== null),
       chatLimits: null,
       chatLimitsStatus: 'idle',
@@ -4297,6 +4419,22 @@ export class ChatStore {
       const apiError = toApiError(error);
       this.handleFailure(apiError);
       this.patchSlice(chatId, { status: 'error', error: apiError });
+    }
+  }
+
+  /**
+   * #95: fetch rows newer than the loaded tail without adding an optimistic
+   * row. Used after a poll/task create when the live WS frame has not arrived
+   * yet; `mergeMessages` dedupes by id, so a later WS copy is a no-op.
+   */
+  async refreshTail(chatId: string): Promise<void> {
+    const slice = this.state.slices[chatId];
+    if (!slice || slice.status !== 'ready') return;
+    try {
+      await this.catchUp(chatId, slice.lastSeq);
+    } catch {
+      // Keep the last known feed. WS/replay or the next history read retries;
+      // the created card is simply not focused if it cannot be fetched now.
     }
   }
 
@@ -4426,6 +4564,36 @@ export class ChatStore {
       changed = true;
     }
     return changed;
+  }
+
+  /**
+   * #95: replace the poll embedded in the timeline message that references it.
+   * The message id is not assumed: `poll_id` is the stable link and creation
+   * responses also carry `message_id`.
+   */
+  private applyEmbeddedPoll(chatId: string, poll: Poll): void {
+    const slice = this.state.slices[chatId];
+    if (!slice || slice.status !== 'ready') return;
+    const message = slice.messages.find(
+      (item) => item.poll_id === poll.id || (poll.message_id ? item.id === poll.message_id : false),
+    );
+    if (!message) return;
+    this.updateMessageInChat(chatId, message.id, (current) =>
+      current.type === 'POLL' ? { ...current, poll_id: poll.id, poll } : current,
+    );
+  }
+
+  /** #95: same in-place replacement for a task; never a second feed row. */
+  private applyEmbeddedTask(chatId: string, task: Task): void {
+    const slice = this.state.slices[chatId];
+    if (!slice || slice.status !== 'ready') return;
+    const message = slice.messages.find(
+      (item) => item.task_id === task.id || (task.message_id ? item.id === task.message_id : false),
+    );
+    if (!message) return;
+    this.updateMessageInChat(chatId, message.id, (current) =>
+      current.type === 'TASK' ? { ...current, task_id: task.id, task } : current,
+    );
   }
 
   /** Merges an authoritative server message (edit result or `message.updated`). */
@@ -4938,7 +5106,12 @@ export class ChatStore {
    * channel message. The row is rendered in the thread panel only; the server
    * assigns `seq`/`id` (no invented server fields).
    */
-  async sendThreadReply(chatId: string, rootId: string, text: string): Promise<boolean> {
+  async sendThreadReply(
+    chatId: string,
+    rootId: string,
+    text: string,
+    mentionPayload: { mentions: readonly string[]; mention_all: boolean } | null = null,
+  ): Promise<boolean> {
     const trimmed = text.trim();
     if (!trimmed || trimmed.length > MAX_TEXT_LENGTH) return false;
     if (!this.threadsAvailable(chatId)) return false;
@@ -4964,6 +5137,10 @@ export class ChatStore {
       sticker: null,
       replyToId: null,
       attachments: [],
+      ...(mentionPayload && mentionPayload.mentions.length > 0
+        ? { mentions: [...mentionPayload.mentions] }
+        : {}),
+      ...(mentionPayload?.mention_all ? { mentionAll: true } : {}),
       createdAt: this.now(),
       status: 'sending',
       error: null,
@@ -5085,6 +5262,7 @@ export class ChatStore {
     text: string,
     replyToId: string | null = null,
     attachments: readonly ApiAttachment[] = [],
+    mentionPayload: { mentions: readonly string[]; mention_all: boolean } | null = null,
   ): Promise<void> {
     const trimmed = text.trim();
     const readyAttachments = attachments.slice(0, 10);
@@ -5117,6 +5295,11 @@ export class ChatStore {
       sticker: null,
       replyToId,
       attachments: readyAttachments.map((attachment) => ({ ...attachment })),
+      // E2EE rejects plaintext mention fields; that branch returned above.
+      ...(mentionPayload && mentionPayload.mentions.length > 0
+        ? { mentions: [...mentionPayload.mentions] }
+        : {}),
+      ...(mentionPayload?.mention_all ? { mentionAll: true } : {}),
       createdAt: this.now(),
       status: 'sending',
       error: null,
@@ -6689,6 +6872,10 @@ export class ChatStore {
             ...(item.attachments.length > 0
               ? { attachment_ids: item.attachments.map((attachment) => attachment.id) }
               : {}),
+            // #83: explicit recipients only; the server re-validates chat
+            // membership, @all role and duplicates.
+            ...(item.mentions && item.mentions.length > 0 ? { mentions: item.mentions } : {}),
+            ...(item.mentionAll ? { mention_all: true } : {}),
           };
 
     try {
@@ -6817,6 +7004,318 @@ export class ChatStore {
       this.handleFailure(apiError);
       // Read receipts are best-effort: never block the chat with a toast.
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* #83: server-side message search                                      */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * New search chain. The server owns matching, visibility, ordering and the
+   * opaque cursor; a newer query invalidates in-flight responses by `seq`.
+   */
+  async searchMessages(rawQuery: string, chatId: string | null = null): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    const query = rawQuery.trim();
+    if (!workspaceId || query.length === 0) {
+      this.clearSearch();
+      return;
+    }
+
+    const seq = this.state.messageSearch.seq + 1;
+    this.patch({
+      messageSearch: {
+        ...createEmptyMessageSearchState(),
+        query,
+        chatId,
+        status: 'loading',
+        seq,
+      },
+    });
+
+    try {
+      const page = await this.api.searchMessages(workspaceId, {
+        q: query,
+        chatId: chatId ?? undefined,
+        limit: SEARCH_PAGE_SIZE,
+      });
+      if (this.state.messageSearch.seq !== seq || this.currentWorkspaceId() !== workspaceId) {
+        return;
+      }
+      this.patch({
+        messageSearch: {
+          ...this.state.messageSearch,
+          items: page.items,
+          status: 'ready',
+          error: null,
+          hasMore: page.page.has_more,
+          nextCursor: page.page.next_cursor ?? null,
+        },
+      });
+    } catch (error) {
+      if (this.state.messageSearch.seq !== seq) return;
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        messageSearch: {
+          ...this.state.messageSearch,
+          items: [],
+          status: 'error',
+          error: apiError,
+          hasMore: false,
+          nextCursor: null,
+        },
+      });
+    }
+  }
+
+  /** Append exactly one server cursor page of the current search chain. */
+  async loadMoreSearchResults(): Promise<void> {
+    const current = this.state.messageSearch;
+    if (current.status !== 'ready' || current.loadMoreStatus === 'loading') return;
+    if (!current.hasMore || current.nextCursor === null) return;
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId) return;
+
+    const seq = current.seq;
+    this.patch({
+      messageSearch: { ...current, loadMoreStatus: 'loading', loadMoreError: null },
+    });
+
+    try {
+      const page = await this.api.searchMessages(workspaceId, {
+        q: current.query,
+        chatId: current.chatId ?? undefined,
+        cursor: current.nextCursor,
+        limit: SEARCH_PAGE_SIZE,
+      });
+      const latest = this.state.messageSearch;
+      if (latest.seq !== seq) return;
+      const known = new Set(latest.items.map((item) => item.message_id));
+      const appended = page.items.filter((item) => !known.has(item.message_id));
+      this.patch({
+        messageSearch: {
+          ...latest,
+          items: [...latest.items, ...appended],
+          hasMore: page.page.has_more,
+          nextCursor: page.page.next_cursor ?? null,
+          loadMoreStatus: 'idle',
+          loadMoreError: null,
+        },
+      });
+    } catch (error) {
+      const latest = this.state.messageSearch;
+      if (latest.seq !== seq) return;
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        messageSearch: { ...latest, loadMoreStatus: 'error', loadMoreError: apiError },
+      });
+    }
+  }
+
+  /** Reset the search surface (empty query / closed panel). */
+  clearSearch(): void {
+    const next = createEmptyMessageSearchState();
+    this.patch({ messageSearch: { ...next, seq: this.state.messageSearch.seq + 1 } });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* #83: mention inbox (`/me/mentions`)                                  */
+  /* ------------------------------------------------------------------ */
+
+  /** Fresh `/me/mentions` chain; `unread_count` is workspace-wide. */
+  async refreshMentions(options: { unreadOnly?: boolean } = {}): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId || this.state.sessionStatus !== 'ready') return;
+    const unreadOnly = options.unreadOnly ?? this.state.mentions.unreadOnly;
+    const epoch = ++this.mentionEpoch;
+    this.patch({
+      mentions: {
+        ...createEmptyMentionsState(),
+        unreadOnly,
+        status: 'loading',
+        unreadCount: this.state.mentions.unreadCount,
+      },
+    });
+
+    try {
+      const page = await this.api.listMentions({
+        workspaceId,
+        unread: unreadOnly || undefined,
+        limit: MENTIONS_PAGE_SIZE,
+      });
+      if (epoch !== this.mentionEpoch) return;
+      this.patch({
+        mentions: {
+          ...this.state.mentions,
+          items: page.items,
+          unreadCount: page.unread_count,
+          status: 'ready',
+          error: null,
+          hasMore: page.page.has_more,
+          nextCursor: page.page.next_cursor ?? null,
+        },
+      });
+    } catch (error) {
+      if (epoch !== this.mentionEpoch) return;
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        mentions: {
+          ...this.state.mentions,
+          items: [],
+          status: 'error',
+          error: apiError,
+          hasMore: false,
+          nextCursor: null,
+        },
+      });
+    }
+  }
+
+  /** Switch the server `unread` filter; reloads the first page. */
+  setMentionsUnreadOnly(unreadOnly: boolean): Promise<void> {
+    return this.refreshMentions({ unreadOnly });
+  }
+
+  async loadMoreMentions(): Promise<void> {
+    const current = this.state.mentions;
+    if (current.status !== 'ready' || current.loadMoreStatus === 'loading') return;
+    if (!current.hasMore || current.nextCursor === null) return;
+
+    const epoch = this.mentionEpoch;
+    this.patch({ mentions: { ...current, loadMoreStatus: 'loading', loadMoreError: null } });
+
+    try {
+      const page = await this.api.listMentions({
+        cursor: current.nextCursor,
+        unread: current.unreadOnly || undefined,
+        limit: MENTIONS_PAGE_SIZE,
+      });
+      if (epoch !== this.mentionEpoch) return;
+      const latest = this.state.mentions;
+      const known = new Set(latest.items.map((item) => item.id));
+      this.patch({
+        mentions: {
+          ...latest,
+          items: [...latest.items, ...page.items.filter((item) => !known.has(item.id))],
+          unreadCount: page.unread_count,
+          hasMore: page.page.has_more,
+          nextCursor: page.page.next_cursor ?? null,
+          loadMoreStatus: 'idle',
+          loadMoreError: null,
+        },
+      });
+    } catch (error) {
+      if (epoch !== this.mentionEpoch) return;
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        mentions: { ...this.state.mentions, loadMoreStatus: 'error', loadMoreError: apiError },
+      });
+    }
+  }
+
+  /** Optimistic mark-one with an honest rollback (the server is idempotent). */
+  async markMentionRead(id: string): Promise<boolean> {
+    const current = this.state.mentions;
+    const item = current.items.find((entry) => entry.id === id);
+    if (!item || item.read_at !== null) return true;
+    if (current.readPendingIds.includes(id)) return true;
+
+    const epoch = this.mentionEpoch;
+    const readAt = new Date(this.now()).toISOString();
+    this.patch({
+      mentions: {
+        ...current,
+        items: current.items.map((entry) =>
+          entry.id === id ? { ...entry, read_at: readAt } : entry,
+        ),
+        unreadCount: Math.max(0, current.unreadCount - 1),
+        readPendingIds: [...current.readPendingIds, id],
+        readError: null,
+      },
+    });
+
+    try {
+      await this.api.markMentionsRead({ ids: [id] }, this.createId());
+      if (epoch !== this.mentionEpoch) return true;
+      this.patch({
+        mentions: {
+          ...this.state.mentions,
+          readPendingIds: this.state.mentions.readPendingIds.filter((entry) => entry !== id),
+        },
+      });
+      return true;
+    } catch (error) {
+      if (epoch !== this.mentionEpoch) return true;
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        mentions: {
+          ...this.state.mentions,
+          items: this.state.mentions.items.map((entry) =>
+            entry.id === id ? { ...entry, read_at: null } : entry,
+          ),
+          unreadCount: this.state.mentions.unreadCount + 1,
+          readPendingIds: this.state.mentions.readPendingIds.filter((entry) => entry !== id),
+          readError: apiError,
+        },
+      });
+      return false;
+    }
+  }
+
+  /** Mark every mention of the current workspace read in one idempotent call. */
+  async markAllMentionsRead(): Promise<boolean> {
+    const current = this.state.mentions;
+    if (current.readAllPending) return false;
+    if (current.unreadCount === 0 && current.items.every((item) => item.read_at !== null)) {
+      return true;
+    }
+
+    const epoch = this.mentionEpoch;
+    const readAt = new Date(this.now()).toISOString();
+    this.patch({
+      mentions: {
+        ...current,
+        items: current.items.map((entry) =>
+          entry.read_at === null ? { ...entry, read_at: readAt } : entry,
+        ),
+        unreadCount: 0,
+        readAllPending: true,
+        readError: null,
+      },
+    });
+
+    try {
+      await this.api.markMentionsRead({ all: true }, this.createId());
+      if (epoch !== this.mentionEpoch) return true;
+      this.patch({
+        mentions: { ...this.state.mentions, readAllPending: false },
+      });
+      return true;
+    } catch (error) {
+      if (epoch !== this.mentionEpoch) return false;
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        mentions: {
+          ...this.state.mentions,
+          items: current.items,
+          unreadCount: current.unreadCount,
+          readAllPending: false,
+          readError: apiError,
+        },
+      });
+      return false;
+    }
+  }
+
+  clearMentionReadError(): void {
+    if (!this.state.mentions.readError) return;
+    this.patch({ mentions: { ...this.state.mentions, readError: null } });
   }
 
   /* ------------------------------------------------------------------ */
@@ -7960,7 +8459,13 @@ function readApiMessage(value: unknown): ApiMessage | null {
   if (typeof candidate.seq !== 'number' || !Number.isFinite(candidate.seq)) return null;
   if (typeof candidate.created_at !== 'string') return null;
   if (typeof candidate.version !== 'number') return null;
-  if (candidate.type !== 'TEXT' && candidate.type !== 'STICKER' && candidate.type !== 'SYSTEM') {
+  if (
+    candidate.type !== 'TEXT' &&
+    candidate.type !== 'STICKER' &&
+    candidate.type !== 'SYSTEM' &&
+    candidate.type !== 'POLL' &&
+    candidate.type !== 'TASK'
+  ) {
     return null;
   }
   return value as ApiMessage;

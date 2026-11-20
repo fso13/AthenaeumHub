@@ -62,7 +62,14 @@
 | `call.signal`         | `payload`: `call_id`, `kind`, `video`, `sdp?`, `candidate?`, `conference?`, `recipients?`; кадр: `from_user_id`, `from_device_id` |
 | `call.unavailable`    | `call_id`, `kind`, `reason` (`PEER_OFFLINE`)                                              |
 
-`message.created` payload — `Message` из OpenAPI. Для E2EE-сообщения `payload.text=null`, а
+`message.created` payload — `Message` из OpenAPI. Для сообщений `type=POLL|TASK` (создаются
+только сервером вместе с опросом/задачей, отдельного клиентского POST сообщения нет)
+`payload.text=null`, а `payload.poll_id`/`payload.task_id` и встроенные `payload.poll`/
+`payload.task` несут актуальную проекцию (в `poll.my_option_id` — выбор зрителя). После
+голосования/закрытия опроса или выполнения задачи сервер не переписывает сообщение: клиент
+получает актуальное встроенное состояние при следующем REST-чтении/replay. Tombstone
+(`deleted_at != null`) не несёт `poll`/`task`, как и прочие content-поля. Для E2EE-сообщения
+`payload.text=null`, а
 `payload.crypto` — конверт **только для устройства соединения**; для отправителя на том же
 устройстве `crypto:null` (локальная копия уже есть). `client_message_id` присутствует всегда
 (nullable) и не является секретом. `thread_root_id` присутствует всегда (nullable): `null` —
@@ -83,6 +90,11 @@ deleted), поэтому live/повторная доставка дедупли
 остальные участники не должны его видеть; другие устройства пользователя
 синхронизируются через REST. Реакции на E2EE-чат и редактирование E2EE запрещены
 (`422 E2EE_METADATA_FORBIDDEN`), поэтому такие события для E2EE не возникают.
+
+`payload.poll`/`payload.task` — объекты `Poll`/`Task` из OpenAPI (не `message_id`); ids
+`payload.poll_id`/`payload.task_id` присутствуют всегда (nullable) и для остальных типов
+равны `null`. E2EE-чат не может включить серверный плагин, поэтому такие кадры в E2EE не
+возникают.
 
 `payload.attachments[]` — объекты `AttachmentRef` из OpenAPI; с D1-BE2 managed-вложение
 несёт `media` (или `null`) с теми же sanitized-полями, что и REST. Для E2EE `attachments`

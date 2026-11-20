@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import ru.krug.backend.message.application.event.MessageMentionNotification;
 import ru.krug.backend.notification.application.model.EmailNotification;
 import ru.krug.backend.notification.application.model.MessageCreatedSignal;
 import ru.krug.backend.notification.application.port.ChatDirectoryPort;
@@ -93,6 +94,68 @@ public class NotifyUseCase {
         log.info("notification.fanout message_id={} chat_id={} recipients={} created={}",
                 signal.messageId(), signal.chatId(), chat.activeMemberIds().size(), created);
         return created;
+    }
+
+    /**
+     * #83 MENTION fan-out: one row per mentioned recipient (explicit ids plus the materialised
+     * @all audience, sender already removed by the message layer). The notification body is
+     * always null — mention notifications carry no message content. Preferences are applied
+     * per recipient exactly like MESSAGE; MUTE suppresses the row, MENTIONS/ALL allow it.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int notifyMentioned(MessageMentionNotification event) {
+        if (event.recipientIds().isEmpty()) {
+            return 0;
+        }
+        Instant now = clock.now();
+        Set<UUID> seen = new HashSet<>();
+        int created = 0;
+        for (UUID recipient : event.recipientIds()) {
+            if (recipient == null || recipient.equals(event.senderId()) || !seen.add(recipient)) {
+                continue;
+            }
+            if (notifyMentionRecipient(event, recipient, now)) {
+                created++;
+            }
+        }
+        log.info("notification.mention message_id={} chat_id={} recipients={} created={}",
+                event.messageId(), event.chatId(), event.recipientIds().size(), created);
+        return created;
+    }
+
+    private boolean notifyMentionRecipient(MessageMentionNotification event, UUID recipient,
+                                           Instant now) {
+        tenantContext.activate(new Principal(recipient, null, event.workspaceId(),
+                "mention-fanout:" + event.messageId()));
+        List<NotificationPreference> recipientPreferences = preferences.findByUser(recipient);
+        Mode inApp = NotificationPreferencePolicy.resolve(recipientPreferences,
+                event.workspaceId(), event.chatId(), NotificationType.MENTION,
+                Channel.IN_APP);
+        if (!inApp.allows(NotificationType.MENTION)) {
+            return false;
+        }
+        Notification notification = Notification.create(UUID.randomUUID(), recipient,
+                event.workspaceId(), event.chatId(), NotificationType.MENTION,
+                Notification.MENTION_TITLE,
+                Notification.dedupeKey(recipient, event.chatId(), event.messageId(),
+                        NotificationType.MENTION),
+                now);
+        if (!notifications.saveIfAbsent(notification)) {
+            return false;
+        }
+        Mode email = NotificationPreferencePolicy.resolve(recipientPreferences,
+                event.workspaceId(), event.chatId(), NotificationType.MENTION,
+                Channel.EMAIL);
+        if (email.allows(NotificationType.MENTION)) {
+            try {
+                sender.send(new EmailNotification(notification.id(), recipient,
+                        event.chatId(), NotificationType.MENTION));
+            } catch (RuntimeException ex) {
+                log.warn("notification.email_failed notification_id={} user_id={}",
+                        notification.id(), recipient);
+            }
+        }
+        return true;
     }
 
     private boolean notifyRecipient(MessageCreatedSignal signal, UUID recipient, Instant now) {

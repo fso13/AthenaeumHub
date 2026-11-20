@@ -75,6 +75,28 @@ export function describeError(error: unknown, translator: Translator = t): Descr
     };
   }
 
+  if (error.code === 'MENTION_ALL_FORBIDDEN') {
+    return {
+      ...meta,
+      kind: 'no_access',
+      title: translate('errors.mentionAllForbidden.title'),
+      message: translate('errors.mentionAllForbidden.text'),
+      retryable: false,
+      canRestoreText: true,
+    };
+  }
+
+  if (error.code === 'MENTION_INVALID') {
+    return {
+      ...meta,
+      kind: 'validation',
+      title: translate('errors.mentionInvalid.title'),
+      message: translate('errors.mentionInvalid.text'),
+      retryable: false,
+      canRestoreText: true,
+    };
+  }
+
   if (error.code === 'E2EE_METADATA_FORBIDDEN') {
     return {
       ...meta,

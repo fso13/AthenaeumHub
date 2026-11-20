@@ -13,6 +13,7 @@ import ru.krug.backend.file.application.port.MalwareScanPort;
 import ru.krug.backend.file.application.port.ObjectStoragePort;
 import ru.krug.backend.file.application.port.WorkspaceQuotaPort;
 import ru.krug.backend.file.domain.model.Attachment;
+import ru.krug.backend.file.domain.model.AttachmentStatus;
 import ru.krug.backend.file.domain.model.ScanStatus;
 import ru.krug.backend.file.domain.model.Upload;
 import ru.krug.backend.file.domain.model.UploadStatus;
@@ -66,6 +67,14 @@ public class UploadScanHandler {
             quota.releaseCommitted(upload.workspaceId(), uploadId, clock.now());
             return;
         }
+        if (attachment.status() == AttachmentStatus.DELETED) {
+            // #83: the owner/admin deleted the global file while it was still scanning. Do
+            // not resurrect it to READY by writing an AV verdict; the object and quota were
+            // already released by the delete, so the session is simply closed.
+            log.info("file.scan.attachment_deleted upload_id={}", uploadId);
+            uploadRepository.save(upload.markFailed(clock.now()));
+            return;
+        }
         Instant now = clock.now();
         MalwareScanPort.ScanResult result;
         try {
@@ -78,13 +87,21 @@ public class UploadScanHandler {
             result = MalwareScanPort.ScanResult.failed("unknown");
         }
 
+        // Write only the verdict columns: a rename/delete that committed during the scan
+        // must not be clobbered, and a DELETED row must never be resurrected (0 rows).
         if (result.status() == ScanStatus.CLEAN) {
-            attachmentRepository.save(attachment.markClean(now));
+            if (!applyVerdict(attachment, AttachmentStatus.READY, ScanStatus.CLEAN, now)) {
+                uploadRepository.save(upload.markFailed(now));
+                return;
+            }
             uploadRepository.save(upload.markReady(now));
             return;
         }
         if (result.status() == ScanStatus.SKIPPED) {
-            attachmentRepository.save(attachment.markSkipped(now));
+            if (!applyVerdict(attachment, AttachmentStatus.READY, ScanStatus.SKIPPED, now)) {
+                uploadRepository.save(upload.markFailed(now));
+                return;
+            }
             uploadRepository.save(upload.markReady(now));
             return;
         }
@@ -92,11 +109,18 @@ public class UploadScanHandler {
         // INFECTED or FAILED: quarantine is fail-closed. Release the committed quota once
         // and remove the object; the attachment row remains for audit (download returns 423).
         if (result.status() == ScanStatus.INFECTED) {
-            attachmentRepository.save(attachment.markInfected(now));
+            if (!applyVerdict(attachment, AttachmentStatus.QUARANTINED, ScanStatus.INFECTED,
+                    now)) {
+                uploadRepository.save(upload.markFailed(now));
+                return;
+            }
             log.warn("file.scan.infected attachment_id={} engine={} signature={}",
                     attachment.id(), result.engine(), result.signature());
         } else {
-            attachmentRepository.save(attachment.markScanFailed(now));
+            if (!applyVerdict(attachment, AttachmentStatus.QUARANTINED, ScanStatus.FAILED, now)) {
+                uploadRepository.save(upload.markFailed(now));
+                return;
+            }
             log.warn("file.scan.failed attachment_id={} engine={}", attachment.id(),
                     result.engine());
         }
@@ -107,6 +131,12 @@ public class UploadScanHandler {
         } catch (RuntimeException ex) {
             log.warn("file.scan.delete_failed upload_id={}", uploadId);
         }
+    }
+
+    private boolean applyVerdict(Attachment attachment, AttachmentStatus status,
+                                 ScanStatus scanStatus, Instant now) {
+        return attachmentRepository.updateScanVerdict(attachment.id(), status, scanStatus,
+                now) > 0;
     }
 
     @Transactional(readOnly = true)

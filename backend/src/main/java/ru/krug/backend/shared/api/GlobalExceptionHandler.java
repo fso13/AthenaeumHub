@@ -87,7 +87,10 @@ public class GlobalExceptionHandler {
         // transport limit. The direct-image API documents FILE_TOO_LARGE, not the plugin
         // package code, so keep the error code route-specific.
         String path = request == null ? "" : request.getRequestURI();
-        String code = path != null && path.startsWith("/api/v1/media/images")
+        boolean fileUpload = path != null
+                && (path.startsWith("/api/v1/media/images")
+                    || path.matches("^/api/v1/workspaces/[^/]+/files$"));
+        String code = fileUpload
                 ? ErrorCode.FILE_TOO_LARGE : ErrorCode.PLUGIN_PACKAGE_TOO_LARGE;
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                 .body(error(code, "Uploaded file exceeds the size limit", Map.of(), request));

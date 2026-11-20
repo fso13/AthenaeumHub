@@ -102,6 +102,36 @@ public class AdminActionRepositoryAdapter implements AdminActionRepository {
                 instant(row[6]))).toList();
     }
 
+    @Override
+    public List<AdminAuditRow> findAuditEventsForExport(String action, int limit) {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT id, action, actor_id, actor_email, target_type, target_id,
+                               created_at
+                          FROM ops.admin_audit_export(CAST(?1 AS text), CAST(?2 AS integer),
+                                                      CAST(?3 AS uuid))
+                        """)
+                .setParameter(1, action)
+                .setParameter(2, limit)
+                .setParameter(3, currentUserId())
+                .getResultList();
+        return rows.stream().map(row -> new AdminAuditRow((UUID) row[0], (String) row[1],
+                (UUID) row[2], (String) row[3], (String) row[4], (UUID) row[5],
+                instant(row[6]))).toList();
+    }
+
+    /**
+     * The platform-admin guard sets {@code app.user_id} for the transaction; the V49
+     * export function re-checks it. Read it back so the SQL function does not need an
+     * untrusted parameter.
+     */
+    private UUID currentUserId() {
+        Object value = entityManager.createNativeQuery(
+                        "SELECT nullif(current_setting('app.user_id', true), '')::uuid")
+                .getSingleResult();
+        return (UUID) value;
+    }
+
     private static Timestamp timestamp(Instant value) {
         return value == null ? null : Timestamp.from(value);
     }

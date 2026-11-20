@@ -55,6 +55,8 @@ interface ComposerProps {
   /** Managed-only @mention directory and lazy loader. */
   mentionMembers?: readonly MentionMemberLike[];
   mentionsEnabled?: boolean;
+  /** #83: only chat OWNER/ADMIN get the `@all` broadcast candidate. */
+  allowMentionAll?: boolean;
   mentionDirectoryLoading?: boolean;
   onMentionDirectoryNeeded?: () => void;
 }
@@ -93,6 +95,7 @@ export function Composer({
   voiceBar,
   mentionMembers = NO_MENTION_MEMBERS,
   mentionsEnabled = false,
+  allowMentionAll = false,
   mentionDirectoryLoading = false,
   onMentionDirectoryNeeded,
 }: ComposerProps) {
@@ -110,6 +113,7 @@ export function Composer({
     textareaRef,
     members: mentionMembers,
     enabled: mentionsEnabled,
+    allowAll: allowMentionAll,
     onDirectoryNeeded: onMentionDirectoryNeeded,
   });
   const canSend =

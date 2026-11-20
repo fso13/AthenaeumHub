@@ -12,6 +12,7 @@ import {
   useChatStore,
   useFilesStore,
   usePluginActionsState,
+  usePluginActionsStore,
   usePluginsState,
   usePluginsStore,
 } from '../store/ChatProvider';
@@ -42,8 +43,8 @@ import {
   UserPlusIcon,
 } from './Icons';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
-import { PollPanel } from './plugins/PollPanel';
-import { TaskPanel } from './plugins/TaskPanel';
+import { embeddedPoll, embeddedTask } from '../plugins/messageCards';
+import { pluginActionErrorText } from '../plugins/errors';
 import { extensionOf, fileKind, pluralRu } from './pages/pageData';
 
 const ROLE_LABEL: Record<WorkspaceMemberRole, MessageKey> = {
@@ -68,8 +69,8 @@ interface ChatDetailsProps {
   onStartCall?: (video: boolean) => void;
   /** Honest reason the details call row is disabled, or null when available. */
   callDisabledReason?: string | null;
-  /** D1.1 (#76): open the poll/task accordion after a successful create. */
-  pluginPanelRequest?: { panel: 'polls' | 'tasks'; nonce: number } | null;
+  /** #95: scroll to a poll/task card in the feed (panel is an index only). */
+  onJumpToMessage?: (messageId: string) => void;
 }
 
 interface MediaItem {
@@ -188,7 +189,7 @@ export function ChatDetails({
   onSearch,
   onStartCall,
   callDisabledReason = null,
-  pluginPanelRequest = null,
+  onJumpToMessage,
 }: ChatDetailsProps) {
   const store = useChatStore();
   const state = useChatState();
@@ -200,6 +201,7 @@ export function ChatDetails({
   const pluginsStore = usePluginsStore();
   const pluginsState = usePluginsState();
   const pluginActions = usePluginActionsState();
+  const pluginActionsStore = usePluginActionsStore();
   const [expanded, setExpanded] = useState<
     'privacy' | 'members' | 'plugins' | 'pins' | 'media' | 'polls' | 'tasks' | null
   >('media');
@@ -288,6 +290,23 @@ export function ChatDetails({
     pluginActionsCurrent && pluginActions.tasksStatus === 'ready'
       ? pluginActions.tasks.filter((task) => !task.done).length
       : null;
+  /** #95: the feed owns the full card; the panel only offers a jump to it. */
+  const latestPollMessageId = useMemo(() => {
+    const messages = slice?.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message && embeddedPoll(message)) return message.id;
+    }
+    return null;
+  }, [slice?.messages]);
+  const latestTaskMessageId = useMemo(() => {
+    const messages = slice?.messages ?? [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message && embeddedTask(message)) return message.id;
+    }
+    return null;
+  }, [slice?.messages]);
   const fallbackCover = isDirect
     ? COVER_BY_MODE.direct
     : isE2ee
@@ -343,9 +362,12 @@ export function ChatDetails({
   }, [open, pluginChatId, pluginChatIsDirect, pluginsStore]);
 
   useEffect(() => {
-    if (!open || !pluginPanelRequest) return;
-    setExpanded(pluginPanelRequest.panel);
-  }, [open, pluginPanelRequest]);
+    // #95: counts/jump hints need the server list once; the feed itself comes
+    // from the loaded history and never from this panel.
+    if (!open || !pluginChatId) return;
+    if (pollsEnabled) void pluginActionsStore.ensurePolls(pluginChatId);
+    if (tasksEnabled) void pluginActionsStore.ensureTasks(pluginChatId);
+  }, [open, pluginChatId, pollsEnabled, tasksEnabled, pluginActionsStore]);
 
   useEffect(() => {
     // #80: pin metadata is readable by any ACTIVE GROUP participant; DIRECT
@@ -636,8 +658,46 @@ export function ChatDetails({
                 <ChevronDownIcon className="chev" aria-hidden="true" />
               </button>
               {expanded === 'polls' ? (
-                <div className="panel-expand panel-expand--plugin">
-                  {chat ? <PollPanel chatId={chat.id} /> : null}
+                <div className="panel-expand">
+                  {pluginActionsCurrent && pluginActions.pollsStatus === 'error' ? (
+                    <>
+                      <p role="alert">{t('pluginActions.pollsError')}</p>
+                      {pluginActions.pollsError ? (
+                        <p className="plugin-inline-error">
+                          {pluginActionErrorText(pluginActions.pollsError, 'poll')}
+                        </p>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn-sm"
+                        onClick={() =>
+                          chat ? void pluginActionsStore.loadPolls(chat.id, true) : undefined
+                        }
+                      >
+                        {t('pluginActions.pollsRetry')}
+                      </button>
+                    </>
+                  ) : pollCount === null ? (
+                    <p>{t('pluginActions.pollsLoading')}</p>
+                  ) : (
+                    <>
+                      <p>
+                        {pollCount === 0
+                          ? t('pluginActions.pollsEmpty')
+                          : t('pluginActions.pollsInFeed')}
+                      </p>
+                      {latestPollMessageId && onJumpToMessage ? (
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          onClick={() => onJumpToMessage(latestPollMessageId)}
+                        >
+                          <PollIcon aria-hidden="true" />
+                          {t('pluginActions.pollsJump')}
+                        </button>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               ) : null}
             </>
@@ -657,8 +717,46 @@ export function ChatDetails({
                 <ChevronDownIcon className="chev" aria-hidden="true" />
               </button>
               {expanded === 'tasks' ? (
-                <div className="panel-expand panel-expand--plugin">
-                  {chat ? <TaskPanel chatId={chat.id} /> : null}
+                <div className="panel-expand">
+                  {pluginActionsCurrent && pluginActions.tasksStatus === 'error' ? (
+                    <>
+                      <p role="alert">{t('pluginActions.tasksError')}</p>
+                      {pluginActions.tasksError ? (
+                        <p className="plugin-inline-error">
+                          {pluginActionErrorText(pluginActions.tasksError, 'task')}
+                        </p>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn-sm"
+                        onClick={() =>
+                          chat ? void pluginActionsStore.loadTasks(chat.id, true) : undefined
+                        }
+                      >
+                        {t('pluginActions.tasksRetry')}
+                      </button>
+                    </>
+                  ) : openTaskCount === null ? (
+                    <p>{t('pluginActions.tasksLoading')}</p>
+                  ) : (
+                    <>
+                      <p>
+                        {pluginActions.tasks.length === 0
+                          ? t('pluginActions.tasksEmptyOpen')
+                          : t('pluginActions.tasksInFeed')}
+                      </p>
+                      {latestTaskMessageId && onJumpToMessage ? (
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          onClick={() => onJumpToMessage(latestTaskMessageId)}
+                        >
+                          <TaskIcon aria-hidden="true" />
+                          {t('pluginActions.tasksJump')}
+                        </button>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               ) : null}
             </>

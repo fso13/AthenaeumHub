@@ -64,6 +64,15 @@ const operations = {
   'PATCH /admin/settings': spec.paths?.['/admin/settings']?.patch,
   'POST /admin/settings/test-email': spec.paths?.['/admin/settings/test-email']?.post,
   'GET /admin/overview': spec.paths?.['/admin/overview']?.get,
+  'GET /admin/audit/export': spec.paths?.['/admin/audit/export']?.get,
+  'GET /admin/sessions': spec.paths?.['/admin/sessions']?.get,
+  'DELETE /admin/sessions/{sessionId}': spec.paths?.['/admin/sessions/{sessionId}']?.delete,
+  'POST /admin/users/{userId}/revoke-sessions':
+    spec.paths?.['/admin/users/{userId}/revoke-sessions']?.post,
+  'GET /admin/plugins/translate': spec.paths?.['/admin/plugins/translate']?.get,
+  'PATCH /admin/plugins/translate': spec.paths?.['/admin/plugins/translate']?.patch,
+  'POST /admin/plugins/translate/test': spec.paths?.['/admin/plugins/translate/test']?.post,
+  'GET /workspaces/{workspaceId}/overview': spec.paths?.['/workspaces/{workspaceId}/overview']?.get,
   'GET /admin/users': spec.paths?.['/admin/users']?.get,
   'GET /admin/chats': spec.paths?.['/admin/chats']?.get,
   'GET /admin/storage': spec.paths?.['/admin/storage']?.get,
@@ -745,20 +754,128 @@ check(
   'GET /admin/audit must keep limit default 30 / max 100',
 );
 
+// --- 5c. #84 workspace overview / admin sessions / translation invariants --
+for (const field of [
+  'text',
+  'body',
+  'content',
+  'ciphertext',
+  'envelope',
+  'filename',
+  'ip',
+  'ip_address',
+  'username',
+  'email',
+  'access_token',
+  'refresh_token',
+]) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.WorkspaceOverview?.properties ?? {}, field),
+    `WorkspaceOverview must not expose ${field}`,
+  );
+}
+check(
+  schemas.WorkspaceOverview?.properties?.audit_recent?.maxItems === 5,
+  'WorkspaceOverview.audit_recent must stay bounded to 5 rows',
+);
+check(
+  ['members', 'chats', 'messages', 'files', 'dlp', 'storage', 'audit_recent', 'generated_at'].every(
+    (field) => schemas.WorkspaceOverview?.required?.includes(field),
+  ),
+  'WorkspaceOverview must document all aggregate sections',
+);
+check(
+  schemas.WorkspaceOverview?.properties?.messages?.properties?.total?.description?.includes(
+    'chat_counters',
+  ),
+  'WorkspaceOverview.messages.total must document the bounded chat_counters aggregate',
+);
+check(
+  schemas.AdminAuditExport?.properties?.exported_rows?.maximum === 10000,
+  'AdminAuditExport.exported_rows must stay bounded to 10000',
+);
+for (const field of ['metadata', 'request_id', 'prev_hash', 'hash']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.AdminAuditExport?.properties ?? {}, field),
+    `AdminAuditExport must not expose ${field}`,
+  );
+}
+for (const field of [
+  'ip',
+  'ip_address',
+  'username',
+  'email',
+  'access_token',
+  'refresh_token',
+  'token',
+  'secret',
+]) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.AdminSession?.properties ?? {}, field),
+    `AdminSession must not expose ${field}`,
+  );
+}
+check(
+  ['id', 'user_id', 'device', 'created_at', 'last_seen_at', 'current'].every((field) =>
+    schemas.AdminSession?.required?.includes(field),
+  ),
+  'AdminSession must expose exactly the documented metadata fields',
+);
+check(
+  spec.paths?.['/admin/sessions']?.get?.parameters?.some(
+    (parameter) => parameter?.name === 'user_id' && parameter?.required === true,
+  ),
+  'GET /admin/sessions must require user_id',
+);
+check(
+  Boolean(spec.paths?.['/admin/users/{userId}/revoke-sessions']?.post?.responses?.['503']),
+  'POST /admin/users/{userId}/revoke-sessions must document 503',
+);
+check(
+  schemas.TranslationProviderSettings?.properties?.url?.maxLength === 2048 &&
+    !Object.prototype.hasOwnProperty.call(
+      schemas.TranslationProviderSettings?.properties ?? {},
+      'api_key',
+    ) &&
+    !Object.prototype.hasOwnProperty.call(
+      schemas.TranslationProviderSettings?.properties ?? {},
+      'secret',
+    ),
+  'TranslationProviderSettings must be url-only (max 2048, no secret field)',
+);
+check(
+  schemas.TranslationProviderUpdate?.additionalProperties === false &&
+    schemas.TranslationProviderUpdate?.minProperties === 1,
+  'TranslationProviderUpdate must reject empty/extra fields',
+);
+check(
+  ['OK', 'DISABLED', 'UNAVAILABLE'].every((status) =>
+    schemas.TranslationProviderTest?.properties?.status?.enum?.includes(status),
+  ),
+  'TranslationProviderTest.status must expose OK/DISABLED/UNAVAILABLE',
+);
+check(
+  spec.paths?.['/admin/plugins/translate/test']?.post !== undefined &&
+    spec.paths?.['/admin/audit/export']?.get?.parameters?.some(
+      (parameter) => parameter?.name === 'format' && parameter?.required === true,
+    ),
+  'Translation test and bounded audit export must be documented',
+);
+
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 105,
-  'Contract must expose exactly 105 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy)',
+  Object.keys(spec.paths ?? {}).length === 117,
+  'Contract must expose exactly 117 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 136,
-  'Contract check must cover exactly 136 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy)',
+  Object.keys(operations).length === 144,
+  'Contract check must cover exactly 144 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
 );
 check(
-  Object.keys(schemas).length === 176,
-  'Contract must expose exactly 176 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy)',
+  Object.keys(schemas).length === 191,
+  'Contract must expose exactly 191 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
 );
 
 check(

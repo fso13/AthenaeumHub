@@ -67,6 +67,14 @@ public interface KeycloakAdminPort {
      */
     void revokeSession(UUID userId, String sessionId);
 
+    /**
+     * Revoke one session by its opaque session id without knowing the owner (Keycloak 26
+     * realm-level session endpoint). A session that is already gone is not an error.
+     *
+     * @throws ProviderUnavailableException on transport/5xx failures
+     */
+    void revokeSessionById(String sessionId);
+
     /** Best-effort delete used for rollback/cleanup; a missing user is not an error. */
     void deleteUser(UUID userId);
 }

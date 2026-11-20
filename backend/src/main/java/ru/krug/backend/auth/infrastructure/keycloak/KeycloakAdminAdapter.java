@@ -300,6 +300,27 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     }
 
     @Override
+    public void revokeSessionById(String sessionId) {
+        try {
+            http.restClient().delete()
+                    .uri(http.endpoints().adminSessionUrl(sessionId))
+                    .header(HttpHeaders.AUTHORIZATION, bearer())
+                    .exchange((request, response) -> {
+                        int status = response.getStatusCode().value();
+                        // 404: already revoked concurrently; DELETE stays idempotent.
+                        if (status != 204 && status != 200 && status != 404) {
+                            throw new ProviderUnavailableException();
+                        }
+                        return null;
+                    });
+        } catch (ProviderUnavailableException ex) {
+            throw ex;
+        } catch (RestClientException ex) {
+            throw new ProviderUnavailableException();
+        }
+    }
+
+    @Override
     public void deleteUser(UUID userId) {
         try {
             http.restClient().delete()

@@ -89,7 +89,7 @@ public final class FileApiMapper {
                 quota(view.quota()));
     }
 
-    private static FileItemResponse toResponse(FileItemView view) {
+    public static FileItemResponse toResponse(FileItemView view) {
         return new FileItemResponse(view.id(), view.filename(), view.sizeBytes(),
                 view.mimeType(), view.scanStatus(), media(view.media()), view.chatId(),
                 view.chatName(), view.messageId(), view.createdAt());

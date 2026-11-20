@@ -11,6 +11,7 @@ import type {
   ProfileWorkspaceState,
   ProfileWorkspaceStore,
 } from '../profile/profileWorkspaceStore';
+import type { WorkspaceOverviewState, WorkspaceOverviewStore } from '../workspace/overviewStore';
 import type { AvatarStore, AvatarsState } from '../avatars/avatarStore';
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
@@ -108,6 +109,16 @@ export function useAvatarsStore(): AvatarStore {
 
 export function useAvatarsState(): AvatarsState {
   const store = useAvatarsStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** #84: workspace overview aggregates for the dashboard page. */
+export function useWorkspaceOverviewStore(): WorkspaceOverviewStore {
+  return useChatStore().workspaceOverview;
+}
+
+export function useWorkspaceOverviewState(): WorkspaceOverviewState {
+  const store = useWorkspaceOverviewStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 

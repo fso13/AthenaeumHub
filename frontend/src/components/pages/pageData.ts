@@ -209,3 +209,37 @@ export function pluralRu(count: number, one: string, few: string, many: string):
   if (last >= 2 && last <= 4) return few;
   return many;
 }
+
+/**
+ * #84: labels for the content-free `audit_recent` preview on the dashboard.
+ * Unknown actions keep the raw server code instead of inventing a title.
+ */
+const OVERVIEW_ACTION_LABELS: Record<string, MessageKey> = {
+  'workspace.member.added': 'overview.action.workspace.member.added',
+  'workspace.member.removed': 'overview.action.workspace.member.removed',
+  'workspace.member.role_changed': 'overview.action.workspace.member.role_changed',
+  'workspace.invite.created': 'overview.action.workspace.invite.created',
+  'workspace.invite.revoked': 'overview.action.workspace.invite.revoked',
+  'workspace.invite.accepted': 'overview.action.workspace.invite.accepted',
+  'workspace.security.updated': 'overview.action.workspace.security.updated',
+  'workspace.dlp.policy.created': 'overview.action.workspace.dlp.policy.created',
+  'workspace.dlp.policy.updated': 'overview.action.workspace.dlp.policy.updated',
+  'workspace.dlp.policy.deleted': 'overview.action.workspace.dlp.policy.deleted',
+  'workspace.session.revoked': 'overview.action.workspace.session.revoked',
+  'workspace.sessions.revoked_all': 'overview.action.workspace.sessions.revoked_all',
+  'workspace.audit.exported': 'overview.action.workspace.audit.exported',
+  'workspace.created': 'overview.action.workspace.created',
+  'workspace.updated': 'overview.action.workspace.updated',
+  'workspace.logo.updated': 'overview.action.workspace.logo.updated',
+};
+
+export function overviewActionLabel(action: string): string {
+  const key = OVERVIEW_ACTION_LABELS[action];
+  return key ? t(key) : action;
+}
+
+/** Share of used bytes in the overview quota, clamped to 0..100. */
+export function overviewStoragePercent(used: number, quota: number): number {
+  if (!Number.isFinite(quota) || quota <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((Math.max(0, used) / quota) * 100)));
+}

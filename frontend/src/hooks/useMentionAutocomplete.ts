@@ -18,6 +18,12 @@ interface UseMentionAutocompleteOptions {
   readonly members: readonly MentionMemberLike[];
   /** Mentions are a managed-only feature; E2EE composers pass `false`. */
   readonly enabled: boolean;
+  /**
+   * #83: `@all` is a broadcast the server only allows to chat OWNER/ADMIN.
+   * When false the candidate is not offered at all (an honest UI instead of a
+   * guaranteed `403 MENTION_ALL_FORBIDDEN`).
+   */
+  readonly allowAll?: boolean;
   /** Lazily loads the active workspace member directory on first `@`. */
   readonly onDirectoryNeeded?: () => void;
 }
@@ -59,6 +65,7 @@ export function useMentionAutocomplete({
   textareaRef,
   members,
   enabled,
+  allowAll = true,
   onDirectoryNeeded,
 }: UseMentionAutocompleteOptions): MentionAutocomplete {
   const [trigger, setTrigger] = useState<MentionQuery | null>(null);
@@ -90,8 +97,9 @@ export function useMentionAutocomplete({
 
   const open = enabled && trigger !== null;
   const candidates = useMemo(
-    () => (trigger === null ? [] : matchMentionCandidates(trigger.query, members)),
-    [trigger, members],
+    () =>
+      trigger === null ? [] : matchMentionCandidates(trigger.query, members, undefined, allowAll),
+    [allowAll, trigger, members],
   );
   const safeIndex = candidates.length === 0 ? 0 : Math.min(activeIndex, candidates.length - 1);
   const activeOptionId = open && candidates.length > 0 ? `${listboxId}-option-${safeIndex}` : null;

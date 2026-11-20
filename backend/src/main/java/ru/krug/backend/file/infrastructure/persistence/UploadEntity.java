@@ -27,7 +27,8 @@ public class UploadEntity {
     @Column(name = "workspace_id", nullable = false)
     private UUID workspaceId;
 
-    @Column(name = "chat_id", nullable = false)
+    /** Null only for a workspace-scoped global file (#83). */
+    @Column(name = "chat_id")
     private UUID chatId;
 
     @Column(name = "user_id", nullable = false)

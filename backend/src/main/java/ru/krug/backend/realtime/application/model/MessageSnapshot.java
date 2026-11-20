@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import ru.krug.backend.message.application.model.MessagePluginContent;
 import ru.krug.backend.message.application.model.ReactionSummaryView;
 
 /**
@@ -32,7 +33,8 @@ public record MessageSnapshot(
         UUID stickerId,
         StickerSnapshot sticker,
         List<AttachmentSnapshot> attachments,
-        List<ReactionSummaryView> reactions) {
+        List<ReactionSummaryView> reactions,
+        MessagePluginContent pluginContent) {
 
     public MessageSnapshot {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
@@ -47,6 +49,6 @@ public record MessageSnapshot(
                            List<AttachmentSnapshot> attachments) {
         this(workspaceId, id, chatId, seq, type, senderId, senderDisplayName, text, replyToId,
                 null, createdAt, editedAt, deletedAt, version, null, null, stickerId, sticker,
-                attachments, List.of());
+                attachments, List.of(), null);
     }
 }

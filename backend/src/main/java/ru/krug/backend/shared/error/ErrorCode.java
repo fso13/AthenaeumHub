@@ -134,6 +134,10 @@ public final class ErrorCode {
     // bounded; the server never parses media bytes in this slice (D1.1).
     public static final String MEDIA_METADATA_INVALID = "MEDIA_METADATA_INVALID";
 
+    // #83: mentions. @all is a moderation right; ids must be active chat members.
+    public static final String MENTION_INVALID = "MENTION_INVALID";
+    public static final String MENTION_ALL_FORBIDDEN = "MENTION_ALL_FORBIDDEN";
+
     // D1-BE3: chat settings PATCH. E2EE exposes only a name label, not a description.
     public static final String CHAT_SETTINGS_E2EE_UNSUPPORTED = "CHAT_SETTINGS_E2EE_UNSUPPORTED";
 
@@ -167,6 +171,10 @@ public final class ErrorCode {
     public static final String TASK_ASSIGNEE_INVALID = "TASK_ASSIGNEE_INVALID";
     public static final String MESSAGE_NOT_TRANSLATABLE = "MESSAGE_NOT_TRANSLATABLE";
     public static final String TRANSLATION_UNAVAILABLE = "TRANSLATION_UNAVAILABLE";
+    /** #84: the configured translation URL must be an absolute https URL without secrets. */
+    public static final String TRANSLATION_URL_INVALID = "TRANSLATION_URL_INVALID";
+    /** #84: enabling the provider requires an explicit or environment URL. */
+    public static final String TRANSLATION_URL_REQUIRED = "TRANSLATION_URL_REQUIRED";
 
     // P0-2 (#80): channel settings — cover, read-only, join policy, rights, archive, pins.
     public static final String CHAT_READ_ONLY = "CHAT_READ_ONLY";

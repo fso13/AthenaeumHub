@@ -1,6 +1,7 @@
 package ru.krug.backend.message.infrastructure.persistence;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -59,6 +60,12 @@ public class MessageEntity {
     @Column(name = "sticker_id")
     private UUID stickerId;
 
+    @Column(name = "poll_id")
+    private UUID pollId;
+
+    @Column(name = "task_id")
+    private UUID taskId;
+
     @Column(name = "reply_to_id")
     private UUID replyToId;
 
@@ -80,15 +87,37 @@ public class MessageEntity {
     @Column(name = "version", nullable = false)
     private Integer version;
 
+    /** #83: explicit mentioned user ids, serialized as a jsonb array of uuid strings. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "mentions", columnDefinition = "jsonb", nullable = false)
+    private List<String> mentions;
+
+    /** #83: @all marker. Always false for E2EE. */
+    @Column(name = "mention_all", nullable = false)
+    private boolean mentionAll;
+
     protected MessageEntity() {
     }
 
     private MessageEntity(UUID id, UUID workspaceId, UUID chatId, Long seq, UUID senderId,
                           UUID senderDeviceId, String senderDisplayName, String type,
                           String cryptoScheme, byte[] bodyCiphertext, Map<String, Object> contentMeta,
-                          UUID clientMessageId, UUID stickerId, UUID replyToId,
-                          UUID threadRootId, Instant createdAt, Instant editedAt,
+                          UUID clientMessageId, UUID stickerId, UUID pollId, UUID taskId,
+                          UUID replyToId, UUID threadRootId, Instant createdAt, Instant editedAt,
                           Instant deletedAt, UUID deletedBy, Integer version) {
+        this(id, workspaceId, chatId, seq, senderId, senderDeviceId, senderDisplayName, type,
+                cryptoScheme, bodyCiphertext, contentMeta, clientMessageId, stickerId, pollId,
+                taskId, replyToId, threadRootId, createdAt, editedAt, deletedAt, deletedBy,
+                version, null, false);
+    }
+
+    private MessageEntity(UUID id, UUID workspaceId, UUID chatId, Long seq, UUID senderId,
+                          UUID senderDeviceId, String senderDisplayName, String type,
+                          String cryptoScheme, byte[] bodyCiphertext, Map<String, Object> contentMeta,
+                          UUID clientMessageId, UUID stickerId, UUID pollId, UUID taskId,
+                          UUID replyToId, UUID threadRootId, Instant createdAt, Instant editedAt,
+                          Instant deletedAt, UUID deletedBy, Integer version,
+                          List<String> mentions, boolean mentionAll) {
         this.id = id;
         this.workspaceId = workspaceId;
         this.chatId = chatId;
@@ -102,6 +131,8 @@ public class MessageEntity {
         this.contentMeta = contentMeta;
         this.clientMessageId = clientMessageId;
         this.stickerId = stickerId;
+        this.pollId = pollId;
+        this.taskId = taskId;
         this.replyToId = replyToId;
         this.threadRootId = threadRootId;
         this.createdAt = createdAt;
@@ -109,18 +140,35 @@ public class MessageEntity {
         this.deletedAt = deletedAt;
         this.deletedBy = deletedBy;
         this.version = version;
+        this.mentions = mentions == null ? List.of() : List.copyOf(mentions);
+        this.mentionAll = mentionAll;
     }
 
     public static MessageEntity create(UUID id, UUID workspaceId, UUID chatId, Long seq,
                                        UUID senderId, UUID senderDeviceId, String senderDisplayName,
                                        String type, String cryptoScheme, byte[] bodyCiphertext,
                                        Map<String, Object> contentMeta, UUID clientMessageId,
-                                       UUID stickerId, UUID replyToId, UUID threadRootId,
+                                       UUID stickerId, UUID pollId, UUID taskId, UUID replyToId,
+                                       UUID threadRootId, Instant createdAt, Integer version) {
+        return create(id, workspaceId, chatId, seq, senderId, senderDeviceId, senderDisplayName,
+                type, cryptoScheme, bodyCiphertext, contentMeta, clientMessageId, stickerId,
+                pollId, taskId, replyToId, threadRootId, List.of(), false, createdAt, version);
+    }
+
+    /** #83: create with mention metadata (explicit ids + @all marker). */
+    public static MessageEntity create(UUID id, UUID workspaceId, UUID chatId, Long seq,
+                                       UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                       String type, String cryptoScheme, byte[] bodyCiphertext,
+                                       Map<String, Object> contentMeta, UUID clientMessageId,
+                                       UUID stickerId, UUID pollId, UUID taskId, UUID replyToId,
+                                       UUID threadRootId, List<UUID> mentions, boolean mentionAll,
                                        Instant createdAt, Integer version) {
+        List<String> serialized = mentions == null ? List.of()
+                : mentions.stream().map(UUID::toString).toList();
         return new MessageEntity(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, type, cryptoScheme, bodyCiphertext, contentMeta,
-                clientMessageId, stickerId, replyToId, threadRootId, createdAt, null, null, null,
-                version);
+                clientMessageId, stickerId, pollId, taskId, replyToId, threadRootId, createdAt,
+                null, null, null, version, serialized, mentionAll);
     }
 
     public UUID getId() {
@@ -171,6 +219,14 @@ public class MessageEntity {
         return stickerId;
     }
 
+    public UUID getPollId() {
+        return pollId;
+    }
+
+    public UUID getTaskId() {
+        return taskId;
+    }
+
     public UUID getReplyToId() {
         return replyToId;
     }
@@ -193,5 +249,13 @@ public class MessageEntity {
 
     public Integer getVersion() {
         return version;
+    }
+
+    public List<String> getMentions() {
+        return mentions;
+    }
+
+    public boolean isMentionAll() {
+        return mentionAll;
     }
 }

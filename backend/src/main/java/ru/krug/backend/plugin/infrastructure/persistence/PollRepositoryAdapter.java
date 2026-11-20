@@ -4,6 +4,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,6 +49,24 @@ public class PollRepositoryAdapter implements PollRepository {
              GROUP BY s.id, s.workspace_id, s.chat_id, s.creator_id, s.question,
                       s.closed_at, s.created_at, o.id, o.text, o.position
              ORDER BY s.created_at DESC, s.id DESC, o.position
+            """;
+
+    private static final String SELECT_POLLS_BY_IDS = """
+            SELECT p.id, p.workspace_id, p.chat_id, p.creator_id, p.question,
+                   p.closed_at, p.created_at,
+                   o.id AS option_id, o.text, o.position,
+                   count(v.user_id) AS votes,
+                   bool_or(v.user_id = :viewerId) AS mine
+              FROM plugin.polls p
+              JOIN plugin.poll_options o
+                ON o.poll_id = p.id AND o.workspace_id = p.workspace_id
+              LEFT JOIN plugin.poll_votes v
+                ON v.poll_id = p.id AND v.option_id = o.id
+             WHERE p.workspace_id = :workspaceId AND p.chat_id = :chatId
+               AND p.id IN (:pollIds)
+             GROUP BY p.id, p.workspace_id, p.chat_id, p.creator_id, p.question,
+                      p.closed_at, p.created_at, o.id, o.text, o.position
+             ORDER BY p.created_at DESC, p.id DESC, o.position
             """;
 
     private static final String SELECT_POLL = """
@@ -114,6 +133,21 @@ public class PollRepositoryAdapter implements PollRepository {
                 .setParameter(4, viewerId)
                 .getResultList();
         return toPolls(rows).stream().findFirst();
+    }
+
+    @Override
+    public List<Poll> findByIds(UUID workspaceId, UUID chatId, Collection<UUID> pollIds,
+                                UUID viewerId) {
+        if (pollIds == null || pollIds.isEmpty()) {
+            return List.of();
+        }
+        List<?> rows = entityManager.createNativeQuery(SELECT_POLLS_BY_IDS)
+                .setParameter("workspaceId", workspaceId)
+                .setParameter("chatId", chatId)
+                .setParameter("viewerId", viewerId)
+                .setParameter("pollIds", pollIds)
+                .getResultList();
+        return toPolls(rows);
     }
 
     @Override

@@ -14,7 +14,8 @@ import ru.krug.backend.file.domain.model.WorkspaceLimits;
 import ru.krug.backend.file.domain.repository.WorkspaceQuotaRepository;
 
 /**
- * Quota persistence adapter. The FOR UPDATE lock is taken by WorkspaceUsageJpaRepository;
+ * Quota persistence adapter. The FOR UPDATE lock is a native SELECT (see
+ * {@link #lockUsage}), so a reserve+commit inside one transaction sees its own write;
  * lazily creating the usage/limits rows keeps workspaces created before/after V9 working
  * without a cross-module trigger.
  */
@@ -79,9 +80,24 @@ public class WorkspaceQuotaRepositoryAdapter implements WorkspaceQuotaRepository
                         """)
                 .setParameter(1, workspaceId)
                 .executeUpdate();
-        return usageJpaRepository.findForUpdate(workspaceId)
-                .map(WorkspaceUsageEntity::toDomain)
-                .orElseGet(QuotaUsage::empty);
+        // Native SELECT ... FOR UPDATE instead of the JPA findForUpdate: reserve+commit may
+        // legitimately run in one transaction (#83 global-file upload), and the JPA
+        // first-level cache would otherwise return the pre-reserve counters to commit().
+        // saveUsage() is a native UPDATE as well, so both reads and writes bypass the cache.
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = entityManager.createNativeQuery("""
+                        SELECT used_bytes, reserved_bytes
+                          FROM file.workspace_usage
+                         WHERE workspace_id = ?1
+                           FOR UPDATE
+                        """)
+                .setParameter(1, workspaceId)
+                .getResultList();
+        if (rows.isEmpty()) {
+            return QuotaUsage.empty();
+        }
+        Object[] row = rows.get(0);
+        return new QuotaUsage(((Number) row[0]).longValue(), ((Number) row[1]).longValue());
     }
 
     @Override
@@ -139,7 +155,9 @@ public class WorkspaceQuotaRepositoryAdapter implements WorkspaceQuotaRepository
                            AND deleted_at IS NULL
                            -- #92: direct images are bounded (5 MiB) and have no upload/quota
                            -- reservation; counting them here would create permanent drift.
-                           AND source = 'UPLOAD'
+                           -- #83: workspace files DO reserve/commit quota, so they are part of
+                           -- the reconciled usage (unlike direct images).
+                           AND source IN ('UPLOAD', 'WORKSPACE')
                         """)
                 .setParameter(1, workspaceId)
                 .getSingleResult();

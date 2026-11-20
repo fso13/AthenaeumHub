@@ -7,9 +7,10 @@ import {
   type DragEvent,
   type ReactNode,
 } from 'react';
-import type { ApiMessage, StickerRef } from '../api/types';
+import type { ApiMessage, MessageSearchHit, StickerRef } from '../api/types';
 import { describeError } from '../domain/errors';
 import { chatDisplayName } from '../domain/chatLabel';
+import { buildMentionPayload } from '../domain/mentions';
 import { useCountdown } from '../hooks/useCountdown';
 import { getVoiceSupport, useVoiceRecorder, type RecordedVoice } from '../hooks/useVoiceRecorder';
 import { t, type MessageKey } from '../i18n/ru';
@@ -23,7 +24,7 @@ import {
   useStickersState,
   useStickersStore,
 } from '../store/ChatProvider';
-import type { OutgoingMessage } from '../store/chatStore';
+import { isChatManagerRole, type OutgoingMessage } from '../store/chatStore';
 import { isActiveUpload } from '../store/filesStore';
 import { MAX_MESSAGE_ATTACHMENTS, effectiveMaxFileBytes, isStorageFull } from '../files/limits';
 import { formatBytes } from '../files/format';
@@ -38,6 +39,7 @@ import { RecordingBar } from './RecordingBar';
 import { SafetyNumberDialog } from './SafetyNumberDialog';
 import { ChatIcon, CloseIcon, LockIcon, PaperclipIcon, PinIcon, SearchIcon } from './Icons';
 import { MessageList } from './MessageList';
+import { MessageSearchPanel } from './MessageSearchPanel';
 import { PluginActionsBar } from './plugins/PluginActionsBar';
 import { PollCreateDialog } from './plugins/PollCreateDialog';
 import { TaskCreateDialog } from './plugins/TaskCreateDialog';
@@ -87,16 +89,17 @@ export function ChatScreen({
   const [pinIndex, setPinIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  /** #83: honest notice when a search hit is outside the loaded history. */
+  const [jumpNotice, setJumpNotice] = useState<string | null>(null);
+  const searchState = state.messageSearch;
   // D1.1 (#76): composer plugin actions and their modal/panel handoff.
   const [pollDialogOpen, setPollDialogOpen] = useState(false);
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
-  const [pluginPanelRequest, setPluginPanelRequest] = useState<{
-    panel: 'polls' | 'tasks';
-    nonce: number;
-  } | null>(null);
+  /** #95: the created POLL/TASK card is scrolled to/selected once it arrives. */
+  const [focusRequest, setFocusRequest] = useState<{ id: string; nonce: number } | null>(null);
   /** #77: GROUP calls first open the participant picker. */
   const [callPicker, setCallPicker] = useState<{ chatId: string; video: boolean } | null>(null);
-  const pluginPanelNonce = useRef(0);
+  const focusNonce = useRef(0);
 
   const filesStore = useFilesStore();
   const filesState = useFilesState();
@@ -127,17 +130,34 @@ export function ChatScreen({
     setSafetyOpen(false);
     setSearchOpen(false);
     setSearchQuery('');
+    setJumpNotice(null);
+    store.clearSearch();
     setPollDialogOpen(false);
     setTaskDialogOpen(false);
-    setPluginPanelRequest(null);
+    setFocusRequest(null);
     setCallPicker(null);
     lastTypingSentAt.current = 0;
-  }, [activeChatId]);
+  }, [activeChatId, store]);
 
   useEffect(() => {
     if (!searchOpen) return;
     searchInputRef.current?.focus();
   }, [searchOpen]);
+
+  // #83: the server owns search. Input is debounced; an empty query returns to
+  // the hint state instead of filtering already loaded history locally.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const query = searchQuery.trim();
+    const timer = window.setTimeout(() => {
+      if (query.length === 0) {
+        store.clearSearch();
+        return;
+      }
+      void store.searchMessages(query);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchOpen, searchQuery, store]);
 
   // D1 UX: Esc closes the details overlay on narrow viewports; the thread
   // panel owns its own Escape handling, so skip when a thread is open.
@@ -190,6 +210,17 @@ export function ChatScreen({
       void store.loadChatPins(activeChatId);
     }
   }, [activeChatId, isE2eeChat, pinsState.chatId, store]);
+
+  // #95: task cards label the assignee/completer by workspace directory name.
+  // Load the first directory page once when loaded history contains such ids.
+  useEffect(() => {
+    if (!slice) return;
+    const hasTaskPeople = slice.messages.some(
+      (message) => message.task?.assignee_id || message.task?.completed_by,
+    );
+    if (!hasTaskPeople || state.workspaceMembers.status !== 'idle') return;
+    void store.loadWorkspaceMembers({ query: '' });
+  }, [slice, state.workspaceMembers.status, store]);
 
   useEffect(() => {
     setPinIndex(0);
@@ -248,6 +279,35 @@ export function ChatScreen({
     () => state.workspaceMembers.items.map((member) => member.display_name),
     [state.workspaceMembers.items],
   );
+  /**
+   * #83: the autocomplete/send directory is the **chat** participant list when
+   * it is loaded (the server rejects non-participants with 422), with the
+   * workspace directory as the pre-load fallback so the picker never hangs.
+   */
+  const mentionMembers = useMemo(() => {
+    if (activeChatId && state.chatMembers.chatId === activeChatId) {
+      return state.chatMembers.items
+        .filter((member) => member.status === 'ACTIVE')
+        .map((member) => ({ user_id: member.user_id, display_name: member.display_name }));
+    }
+    return state.workspaceMembers.items.map((member) => ({
+      user_id: member.user_id,
+      display_name: member.display_name,
+    }));
+  }, [activeChatId, state.chatMembers, state.workspaceMembers.items]);
+  /**
+   * `@all` is a broadcast, so the candidate is only offered to chat
+   * OWNER/ADMIN. Unknown role (members still loading) hides it; the server
+   * remains the authority and would still answer an honest 403.
+   */
+  const mentionAllAllowed = isChatManagerRole(
+    activeChatId ? store.chatActorRole(activeChatId) : null,
+  );
+  const memberNames = useMemo(
+    () =>
+      new Map(state.workspaceMembers.items.map((member) => [member.user_id, member.display_name])),
+    [state.workspaceMembers.items],
+  );
   const mentionDirectoryLoading =
     state.workspaceMembers.status === 'idle' || state.workspaceMembers.status === 'loading';
   const ensureMentionDirectory = useCallback(() => {
@@ -260,15 +320,35 @@ export function ChatScreen({
   const replyE2eeText =
     isE2eeChat && replyTo !== null ? (slice?.e2ee[replyTo.id]?.text ?? null) : null;
 
-  const searchMatches = (() => {
-    const query = searchQuery.trim().toLocaleLowerCase('ru');
-    if (!slice || query.length === 0) return 0;
-    return slice.messages.filter((message) => {
-      if (message.thread_root_id) return false;
-      const decrypted = slice.e2ee[message.id]?.text ?? '';
-      return `${decrypted} ${message.text ?? ''}`.toLocaleLowerCase('ru').includes(query);
-    }).length;
-  })();
+  /**
+   * #83 jump: switch to the hit's chat, then page older history until the
+   * message is loaded (bounded). If it is still outside the window, say so
+   * instead of pretending to scroll somewhere.
+   */
+  const openSearchHit = async (hit: MessageSearchHit) => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setJumpNotice(null);
+    store.clearSearch();
+    if (hit.chat_id !== activeChatId) {
+      await store.setActiveChat(hit.chat_id);
+    }
+    for (let page = 0; page < 10; page += 1) {
+      const current = store.getSnapshot().slices[hit.chat_id];
+      if (!current) break;
+      if (current.messages.some((message) => message.id === hit.message_id)) {
+        focusNonce.current += 1;
+        setFocusRequest({ id: hit.message_id, nonce: focusNonce.current });
+        return;
+      }
+      if (!current.hasMore) break;
+      const before = current.messages.length;
+      await store.loadMore(hit.chat_id);
+      const after = store.getSnapshot().slices[hit.chat_id]?.messages.length ?? before;
+      if (after === before) break;
+    }
+    setJumpNotice(t('chat.searchJumpUnavailable'));
+  };
 
   const sessionError = state.sessionError ? describeError(state.sessionError) : null;
   const sliceError = slice?.error ? describeError(slice.error) : null;
@@ -278,6 +358,7 @@ export function ChatScreen({
   const uploadTasks = filesStore.tasksFor(activeChatId);
   const readyAttachments = filesStore.readyAttachments(activeChatId);
   const role = state.activeWorkspace?.role ?? null;
+  const canManageTasks = role === 'OWNER' || role === 'ADMIN';
   const maxAttachments = Math.min(
     MAX_MESSAGE_ATTACHMENTS,
     filesState.limits?.max_attachments ?? MAX_MESSAGE_ATTACHMENTS,
@@ -372,9 +453,15 @@ export function ChatScreen({
     const target = replyTo;
     const attachments = filesStore.readyAttachments(activeChatId);
     if (!text.trim() && attachments.length === 0) return;
+    // #83: mentions are derived from the exact text being sent. Unknown names
+    // stay literal, E2EE chats never reach this branch, and `@all` is only
+    // advertised when the viewer's chat role allows it.
+    const mentionPayload = isE2eeChat
+      ? null
+      : buildMentionPayload(text, mentionMembers, mentionAllAllowed);
     setDraft('');
     setReplyTo(null);
-    void store.send(activeChatId, text, target?.id ?? null, attachments);
+    void store.send(activeChatId, text, target?.id ?? null, attachments, mentionPayload);
   };
 
   const handleDraftChange = (value: string) => {
@@ -432,10 +519,52 @@ export function ChatScreen({
     textareaRef.current?.focus();
   };
 
-  const focusPluginPanel = (panel: 'polls' | 'tasks') => {
-    pluginPanelNonce.current += 1;
-    setPluginPanelRequest({ panel, nonce: pluginPanelNonce.current });
-    setDetailsOpen(true);
+  /**
+   * #95: the backend creates the timeline message in the same transaction and
+   * returns its id. The live WS frame may arrive before/after the `201`; if it
+   * is not in the loaded slice yet, one `after_seq` catch-up fetches it. The
+   * message is never appended locally, so it cannot be duplicated.
+   */
+  const focusCreatedPluginMessage = async (
+    chatId: string,
+    target: { messageId?: string | null; pollId?: string; taskId?: string },
+  ): Promise<void> => {
+    const findCreated = () => {
+      const messages = store.getSnapshot().slices[chatId]?.messages ?? [];
+      return (
+        messages.find(
+          (message) =>
+            (target.messageId ? message.id === target.messageId : false) ||
+            (target.pollId ? message.poll_id === target.pollId : false) ||
+            (target.taskId ? message.task_id === target.taskId : false),
+        ) ?? null
+      );
+    };
+    let created = findCreated();
+    if (!created) {
+      await store.refreshTail(chatId);
+      created = findCreated();
+    }
+    if (!created || activeChatIdRef.current !== chatId) return;
+    setSearchQuery('');
+    setSearchOpen(false);
+    focusNonce.current += 1;
+    setFocusRequest({ id: created.id, nonce: focusNonce.current });
+  };
+
+  const clearFocusRequest = useCallback(() => setFocusRequest(null), []);
+
+  const jumpToMessage = (messageId: string) => {
+    const element = document.getElementById(`message-${messageId}`);
+    if (!element) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    if (typeof element.scrollIntoView === 'function') {
+      element.scrollIntoView({
+        block: 'center',
+        behavior: reduceMotion ? 'auto' : 'smooth',
+      });
+    }
+    element.focus({ preventScroll: true });
   };
 
   const openTaskDialog = () => {
@@ -538,13 +667,18 @@ export function ChatScreen({
         viewerName={
           state.user?.display_name ?? state.session?.user.display_name ?? t('sidebar.user')
         }
-        searchQuery={searchQuery}
         readByOthersSeq={readByOthersSeq}
         retryDisabled={sendBlockedReason !== null}
         e2eeChat={isE2eeChat}
         threadsAvailable={threadsAvailable}
         threadDisabledReason={threadDisabledReason}
         mentionNames={mentionNames}
+        pollsEnabled={pollsEnabled}
+        tasksEnabled={tasksEnabled}
+        canManageTasks={canManageTasks}
+        memberNames={memberNames}
+        focusRequest={focusRequest}
+        onFocusHandled={clearFocusRequest}
         onLoadMore={() => void store.loadMore(activeChatId)}
         onRetry={(clientMessageId) => void store.retry(activeChatId, clientMessageId)}
         onRestore={handleRestore}
@@ -579,7 +713,10 @@ export function ChatScreen({
             onOpenSettings={onOpenChatSettings}
             searchOpen={searchOpen}
             onToggleSearch={() => {
-              setSearchQuery((query) => (searchOpen ? '' : query));
+              if (searchOpen) {
+                setSearchQuery('');
+                store.clearSearch();
+              }
               setSearchOpen((open) => !open);
             }}
             detailsOpen={detailsOpen}
@@ -625,9 +762,9 @@ export function ChatScreen({
                 placeholder={t('chat.searchPlaceholder')}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
-              {searchQuery.trim().length > 0 ? (
+              {searchQuery.trim().length > 0 && searchState.status === 'ready' ? (
                 <span className="search-count" aria-live="polite">
-                  {t('chat.searchCount', { count: searchMatches })}
+                  {t('chat.searchCount', { count: searchState.items.length })}
                 </span>
               ) : null}
               <button
@@ -638,11 +775,21 @@ export function ChatScreen({
                 onClick={() => {
                   setSearchOpen(false);
                   setSearchQuery('');
+                  store.clearSearch();
                 }}
               >
                 <CloseIcon aria-hidden="true" />
               </button>
             </div>
+          ) : null}
+
+          {searchOpen ? (
+            <MessageSearchPanel
+              state={searchState}
+              onSelect={(hit) => void openSearchHit(hit)}
+              onLoadMore={() => void store.loadMoreSearchResults()}
+              onRetry={() => void store.searchMessages(searchQuery)}
+            />
           ) : null}
 
           {activeChatId ? (
@@ -674,6 +821,21 @@ export function ChatScreen({
             status={state.realtimeStatus}
             onReconnect={() => store.reconnectRealtime()}
           />
+
+          {jumpNotice ? (
+            <div className="chat-notice" role="status">
+              <span>{jumpNotice}</span>
+              <button
+                type="button"
+                className="icon-button icon-button--small"
+                onClick={() => setJumpNotice(null)}
+                aria-label={t('files.uploadDismiss')}
+                title={t('files.uploadDismiss')}
+              >
+                <CloseIcon aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
 
           <div className="chat__body">{body}</div>
 
@@ -800,8 +962,9 @@ export function ChatScreen({
                     />
                   ) : undefined
                 }
-                mentionMembers={state.workspaceMembers.items}
+                mentionMembers={mentionMembers}
                 mentionsEnabled={!isE2eeChat}
+                allowMentionAll={mentionAllAllowed}
                 mentionDirectoryLoading={mentionDirectoryLoading}
                 onMentionDirectoryNeeded={ensureMentionDirectory}
               />
@@ -834,7 +997,7 @@ export function ChatScreen({
             setSearchQuery(value);
             setSearchOpen(true);
           }}
-          pluginPanelRequest={pluginPanelRequest}
+          onJumpToMessage={jumpToMessage}
           onStartCall={
             activeChatId && (chatSummary?.type === 'DIRECT' || chatSummary?.type === 'GROUP')
               ? (video) => startCall(activeChatId, video)
@@ -864,9 +1027,12 @@ export function ChatScreen({
         <PollCreateDialog
           chatId={activeChatId}
           onClose={() => setPollDialogOpen(false)}
-          onCreated={() => {
+          onCreated={(poll) => {
             setPollDialogOpen(false);
-            focusPluginPanel('polls');
+            void focusCreatedPluginMessage(activeChatId, {
+              messageId: poll.message_id ?? null,
+              pollId: poll.id,
+            });
           }}
         />
       ) : null}
@@ -878,9 +1044,12 @@ export function ChatScreen({
             state.workspaceMembers.status === 'loading' || state.workspaceMembers.status === 'idle'
           }
           onClose={() => setTaskDialogOpen(false)}
-          onCreated={() => {
+          onCreated={(task) => {
             setTaskDialogOpen(false);
-            focusPluginPanel('tasks');
+            void focusCreatedPluginMessage(activeChatId, {
+              messageId: task.message_id ?? null,
+              taskId: task.id,
+            });
           }}
         />
       ) : null}

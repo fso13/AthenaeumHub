@@ -14,6 +14,8 @@ import ru.krug.backend.sticker.application.model.StickerRefView;
  * OpenAPI {@code Message}); {@code crypto} is the envelope for the requesting device only.
  * {@code threadSummary} is attached to thread roots only and is never present for E2EE.
  * {@code reactions} is an aggregated, caller-relative projection of message_reactions.
+ * {@code mentions}/{@code mentionAll} are the #83 mention metadata: explicit ids and the @all
+ * marker, never present for E2EE or a delete-for-all tombstone.
  */
 public record MessageView(
         UUID id,
@@ -36,11 +38,22 @@ public record MessageView(
         UUID stickerId,
         MessageStickerView sticker,
         List<MessageAttachmentView> attachments,
-        List<ReactionSummaryView> reactions) {
+        List<ReactionSummaryView> reactions,
+        MessagePluginContent pluginContent,
+        List<UUID> mentions,
+        boolean mentionAll) {
 
     public MessageView {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
         reactions = reactions == null ? List.of() : List.copyOf(reactions);
+        // A tombstone and every E2EE message never carry mention metadata, even if a legacy
+        // row or a direct SQL writer left values behind.
+        if (deletedAt != null || "E2EE_PAIRWISE".equals(cryptoScheme)) {
+            mentions = List.of();
+            mentionAll = false;
+        } else {
+            mentions = mentions == null ? List.of() : List.copyOf(mentions);
+        }
     }
 
     public static MessageView from(Message message) {
@@ -50,7 +63,9 @@ public record MessageView(
                 message.body() == null ? null : message.body().value(), message.replyToId(),
                 message.threadRootId(), null, message.createdAt(), message.editedAt(),
                 message.deletedAt(), message.version(), message.clientMessageId(), null,
-                message.stickerId(), null, List.of(), List.of());
+                message.stickerId(), null, List.of(), List.of(),
+                MessagePluginContent.ids(message.pollId(), message.taskId()),
+                message.mentions(), message.mentionAll());
     }
 
     public boolean isE2ee() {
@@ -61,14 +76,16 @@ public record MessageView(
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
                 version, clientMessageId, crypto, stickerId, sticker,
-                values == null ? List.of() : values, reactions);
+                values == null ? List.of() : values, reactions, pluginContent, mentions,
+                mentionAll);
     }
 
     public MessageView withSticker(StickerRefView value) {
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
                 version, clientMessageId, crypto, stickerId,
-                value == null ? null : MessageStickerView.from(value), attachments, reactions);
+                value == null ? null : MessageStickerView.from(value), attachments, reactions,
+                pluginContent, mentions, mentionAll);
     }
 
     /** Attaches the envelope of the requesting device (E2EE) or clears it (managed). */
@@ -80,7 +97,8 @@ public record MessageView(
         }
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
-                version, clientMessageId, value, stickerId, sticker, attachments, reactions);
+                version, clientMessageId, value, stickerId, sticker, attachments, reactions,
+                pluginContent, mentions, mentionAll);
     }
 
     /** Server-computed summary for a thread root; null for replies and empty threads. */
@@ -88,7 +106,7 @@ public record MessageView(
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, value == null ? null : ThreadSummaryView.from(value),
                 createdAt, editedAt, deletedAt, version, clientMessageId, crypto, stickerId,
-                sticker, attachments, reactions);
+                sticker, attachments, reactions, pluginContent, mentions, mentionAll);
     }
 
     /** Aggregated reactions for this message, already caller-relative. */
@@ -96,7 +114,32 @@ public record MessageView(
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
                 version, clientMessageId, crypto, stickerId, sticker, attachments,
-                values == null ? List.of() : values);
+                values == null ? List.of() : values, pluginContent, mentions, mentionAll);
+    }
+
+    /**
+     * Attaches the viewer-relative embedded poll/task. A message without a plugin reference
+     * keeps {@code null} (the ids are still read from {@link #pluginContent()}), so TEXT,
+     * STICKER and SYSTEM responses never grow a plugin object.
+     */
+    public MessageView withPluginContent(EmbeddedPollView poll, EmbeddedTaskView task) {
+        if (pluginContent == null
+                || (pluginContent.pollId() == null && pluginContent.taskId() == null)) {
+            return this;
+        }
+        MessagePluginContent content = pluginContent;
+        return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
+                text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
+                version, clientMessageId, crypto, stickerId, sticker, attachments, reactions,
+                content.withPoll(poll).withTask(task), mentions, mentionAll);
+    }
+
+    /** #83 mention metadata, used by the create/replay response and by edit events. */
+    public MessageView withMentions(List<UUID> values, boolean all) {
+        return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
+                text, replyToId, threadRootId, threadSummary, createdAt, editedAt, deletedAt,
+                version, clientMessageId, crypto, stickerId, sticker, attachments, reactions,
+                pluginContent, values, all);
     }
 
     /**
@@ -110,6 +153,6 @@ public record MessageView(
         }
         return new MessageView(id, chatId, seq, type, cryptoScheme, senderId, senderDisplayName,
                 null, replyToId, threadRootId, null, createdAt, editedAt, deletedAt, version,
-                clientMessageId, null, null, null, List.of(), List.of());
+                clientMessageId, null, null, null, List.of(), List.of(), null, List.of(), false);
     }
 }

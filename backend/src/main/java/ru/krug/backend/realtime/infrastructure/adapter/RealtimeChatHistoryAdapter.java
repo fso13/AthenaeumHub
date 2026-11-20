@@ -8,10 +8,14 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import ru.krug.backend.message.application.model.EmbeddedPollView;
+import ru.krug.backend.message.application.model.EmbeddedTaskView;
 import ru.krug.backend.message.application.model.MessageAttachmentView;
+import ru.krug.backend.message.application.model.MessagePluginContent;
 import ru.krug.backend.message.application.model.ReactionSummaryView;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
 import ru.krug.backend.message.application.port.MessageDeviceDirectoryPort;
+import ru.krug.backend.message.application.port.MessagePluginContentPort;
 import ru.krug.backend.message.application.service.EnvelopeWireMapper;
 import ru.krug.backend.message.domain.model.Message;
 import ru.krug.backend.message.domain.model.MessageEnvelope;
@@ -46,6 +50,7 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
     private final TenantContext tenantContext;
     private final MessageDeviceDirectoryPort deviceDirectory;
     private final E2eeSettingsPort e2eeSettings;
+    private final MessagePluginContentPort pluginContent;
 
     public RealtimeChatHistoryAdapter(MessageRepository messageRepository,
                                       MessageEnvelopeRepository envelopeRepository,
@@ -54,7 +59,8 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                                       StickerCatalogPort stickerCatalog,
                                       TenantContext tenantContext,
                                       MessageDeviceDirectoryPort deviceDirectory,
-                                      E2eeSettingsPort e2eeSettings) {
+                                      E2eeSettingsPort e2eeSettings,
+                                      MessagePluginContentPort pluginContent) {
         this.messageRepository = messageRepository;
         this.envelopeRepository = envelopeRepository;
         this.reactionRepository = reactionRepository;
@@ -63,6 +69,7 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
         this.tenantContext = tenantContext;
         this.deviceDirectory = deviceDirectory;
         this.e2eeSettings = e2eeSettings;
+        this.pluginContent = pluginContent;
     }
 
     @Override
@@ -97,12 +104,31 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                         messages.stream().filter(Message::isE2ee).map(Message::id).toList(),
                         deviceId)
                 : Map.of();
+        // #95: one bounded query per kind for the whole replay window. Deleted messages keep
+        // their ids in the row but the frame is a tombstone, so their content is dropped.
+        List<UUID> pollIds = messages.stream().map(Message::pollId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        List<UUID> taskIds = messages.stream().map(Message::taskId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        Map<UUID, EmbeddedPollView> polls = pollIds.isEmpty() ? Map.of()
+                : pluginContent.findPolls(workspaceId, chatId, pollIds, userId);
+        Map<UUID, EmbeddedTaskView> tasks = taskIds.isEmpty() ? Map.of()
+                : pluginContent.findTasks(workspaceId, chatId, taskIds, userId);
         return messages.stream()
                 .map(message -> snapshot(message,
                         attachments.getOrDefault(message.id(), List.of()),
                         message.stickerId() == null ? null : stickers.get(message.stickerId()),
                         crypto.get(message.id()),
-                        reactions.getOrDefault(message.id(), List.of())))
+                        reactions.getOrDefault(message.id(), List.of()),
+                        (message.deletedAt() != null
+                                || (message.pollId() == null && message.taskId() == null))
+                                ? null
+                                : new MessagePluginContent(message.pollId(),
+                                        message.pollId() == null ? null
+                                                : polls.get(message.pollId()),
+                                        message.taskId(),
+                                        message.taskId() == null ? null
+                                                : tasks.get(message.taskId()))))
                 .toList();
     }
 
@@ -118,7 +144,8 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                                             List<MessageAttachmentView> attachments,
                                             StickerRefView sticker,
                                             MessageEnvelope envelope,
-                                            List<ReactionSummaryView> reactions) {
+                                            List<ReactionSummaryView> reactions,
+                                            MessagePluginContent pluginContent) {
         Object crypto = envelope == null || message.deletedAt() != null ? null
                 : EnvelopeWireMapper.toWire(envelope.envelope());
         boolean deleted = message.deletedAt() != null;
@@ -137,7 +164,7 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
                                 attachment.mimeType(), attachment.scanStatus(),
                                 media(attachment.media())))
                         .toList(),
-                deleted ? List.of() : reactions);
+                deleted ? List.of() : reactions, deleted ? null : pluginContent);
     }
 
     private static Map<UUID, List<ReactionSummaryView>> reactionView(

@@ -1,7 +1,14 @@
+import { useMemo } from 'react';
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
 import { formatDateTime, formatTime, replyPreview } from '../domain/messages';
 import { t } from '../i18n/ru';
+import {
+  embeddedPoll,
+  embeddedTask,
+  pluginMessageKind,
+  pluginTitleId,
+} from '../plugins/messageCards';
 import type { E2eeMessageView, OutgoingMessage } from '../store/chatStore';
 import { isStickerMessage, stickerAssetUrl, stickerOf } from '../stickers/model';
 import { AttachmentList } from './AttachmentCard';
@@ -10,15 +17,23 @@ import { ErrorDetails } from './ErrorDetails';
 import { AlertIcon, ClockIcon, RetryIcon } from './Icons';
 import { MentionText } from './MentionText';
 import { MessageActions, ReactionBar } from './MessageActions';
+import {
+  PluginMessageFallback,
+  PollMessageCard,
+  TaskMessageCard,
+} from './plugins/PluginMessageCards';
 import { TranslatedMessage } from './plugins/TranslatedMessage';
 import { RichText } from './RichText';
 import { ThreadLink } from './ThreadLink';
 
 const UNKNOWN_AUTHOR = () => t('chat.unknownAuthor');
+const NO_MEMBER_NAMES: ReadonlyMap<string, string> = new Map();
 
 interface MessageRowProps {
   message: ApiMessage;
   mine: boolean;
+  /** Viewer id for poll/task permissions (voting/close/toggle). */
+  viewerId?: string | null;
   readByOthers: boolean;
   replyTo: ApiMessage | null;
   /** E7-F5: decrypted text / unavailable / error state for an E2EE message. */
@@ -38,6 +53,15 @@ interface MessageRowProps {
   threadAuthorName?: string | null;
   /** Active workspace member names for @mention chips (managed only). */
   mentionNames?: readonly string[];
+  /** #95: server plugin gate for this chat; cards render read-only when false. */
+  pollsEnabled?: boolean;
+  tasksEnabled?: boolean;
+  /** Workspace OWNER/ADMIN may complete any task (server still re-checks). */
+  canManageTasks?: boolean;
+  /** `assignee_id`/`completed_by` display names for task cards. */
+  memberNames?: ReadonlyMap<string, string>;
+  /** Newly created poll/task card: brief focus highlight. */
+  highlighted?: boolean;
   onOpenThread?: (message: ApiMessage) => void;
   /** D1-FE3: replies inside a thread do not offer quote-reply. */
   allowReply?: boolean;
@@ -49,6 +73,10 @@ interface MessageRowProps {
 function messagePreview(message: ApiMessage | null): string {
   if (!message) return t('chat.replyUnavailable');
   if (message.deleted_at) return t('chat.deletedMessage');
+  const profilePoll = embeddedPoll(message);
+  if (profilePoll) return `${t('pluginActions.poll')}: ${profilePoll.question}`;
+  const profileTask = embeddedTask(message);
+  if (profileTask) return `${t('pluginActions.task')}: ${profileTask.title}`;
   const text = replyPreview(message.text);
   if (text) return text;
   const sticker = stickerOf(message);
@@ -92,6 +120,7 @@ export function MessageRow({
   message,
   mine,
   readByOthers,
+  viewerId = null,
   replyTo,
   e2ee,
   replyText,
@@ -100,11 +129,43 @@ export function MessageRow({
   threadDisabledReason = null,
   threadAuthorName = null,
   mentionNames = [],
+  pollsEnabled = false,
+  tasksEnabled = false,
+  canManageTasks = false,
+  memberNames = NO_MEMBER_NAMES,
+  highlighted = false,
   onOpenThread,
   allowReply = true,
   onReply,
   onJumpTo,
 }: MessageRowProps) {
+  /**
+   * #83: the server is authoritative about who was mentioned. When the message
+   * carries `mentions`, only those ids render as chips (a literal `@Name` typed
+   * by hand stays plain text); legacy rows without the field keep the
+   * text-based fallback. `@all` is matched by the parser and is only rendered
+   * for messages the server marked with `mention_all`.
+   */
+  const resolvedMentionNames = useMemo(() => {
+    if (message.mentions === undefined) return mentionNames;
+    if (message.mentions.length === 0) return [];
+    const names: string[] = [];
+    for (const id of message.mentions) {
+      const name = memberNames.get(id);
+      if (name) names.push(name);
+    }
+    return names;
+  }, [memberNames, mentionNames, message.mentions]);
+  const resolvedReplyMentionNames = useMemo(() => {
+    if (!replyTo || replyTo.mentions === undefined) return mentionNames;
+    if (replyTo.mentions.length === 0) return [];
+    const names: string[] = [];
+    for (const id of replyTo.mentions) {
+      const name = memberNames.get(id);
+      if (name) names.push(name);
+    }
+    return names;
+  }, [memberNames, mentionNames, replyTo]);
   if (message.type === 'SYSTEM') {
     return (
       <div className="system-message" role="note">
@@ -115,6 +176,11 @@ export function MessageRow({
 
   const author = message.sender_display_name?.trim() || UNKNOWN_AUTHOR();
   const deleted = Boolean(message.deleted_at);
+  // #95: E2EE chats never render server plugin projections (the server cannot
+  // enable the plugin there, but the guard is local and fail-closed).
+  const poll = !e2eeChat && !deleted ? embeddedPoll(message) : null;
+  const task = !e2eeChat && !deleted ? embeddedTask(message) : null;
+  const pluginKind = !e2eeChat && !deleted ? pluginMessageKind(message) : null;
   const e2eeFallback =
     e2ee?.status === 'unavailable'
       ? t('e2ee.unavailable')
@@ -139,6 +205,7 @@ export function MessageRow({
   const threadSummary = message.thread_summary ?? null;
   const threadReplyCount = threadSummary?.reply_count ?? 0;
   const threadLink =
+    pluginKind === null &&
     canThread &&
     threadsAvailable &&
     threadSummary !== null &&
@@ -162,13 +229,21 @@ export function MessageRow({
       >
         <span className="quote__author">{quoteAuthor}</span>
         <span className="quote__text">
-          {e2eeChat ? quoteText : <MentionText text={quoteText} mentions={mentionNames} />}
+          {e2eeChat ? (
+            quoteText
+          ) : (
+            <MentionText text={quoteText} mentions={resolvedReplyMentionNames} />
+          )}
         </span>
       </button>
     ) : (
       <div className="quote quote--missing">
         <span className="quote__text">
-          {e2eeChat ? quoteText : <MentionText text={quoteText} mentions={mentionNames} />}
+          {e2eeChat ? (
+            quoteText
+          ) : (
+            <MentionText text={quoteText} mentions={resolvedReplyMentionNames} />
+          )}
         </span>
       </div>
     )
@@ -236,9 +311,65 @@ export function MessageRow({
     );
   }
 
+  if (pluginKind !== null) {
+    const titleId = pluginTitleId(message.id);
+    return (
+      <article
+        className={`msg msg-row msg-row--plugin${mine ? ' msg-row--mine' : ''}${
+          highlighted ? ' is-focused' : ''
+        }`}
+        id={`message-${message.id}`}
+        aria-labelledby={titleId}
+        data-message-type={message.type}
+        tabIndex={-1}
+      >
+        <Avatar name={author} seed={message.sender_id} size="lg" />
+        <div className="msg-body">
+          {meta}
+          {quote}
+          {poll ? (
+            <PollMessageCard
+              messageId={message.id}
+              chatId={message.chat_id}
+              poll={poll}
+              viewerId={viewerId ?? null}
+              enabled={pollsEnabled}
+            />
+          ) : task ? (
+            <TaskMessageCard
+              messageId={message.id}
+              chatId={message.chat_id}
+              task={task}
+              viewerId={viewerId ?? null}
+              enabled={tasksEnabled}
+              canManage={canManageTasks}
+              memberNames={memberNames}
+            />
+          ) : (
+            <PluginMessageFallback messageId={message.id} kind={pluginKind} />
+          )}
+          <ReactionBar message={message} e2eeChat={e2eeChat} />
+          <MessageActions
+            message={message}
+            author={author}
+            mine={mine}
+            e2eeChat={e2eeChat}
+            allowReply={false}
+            allowThread={false}
+            structured
+            threadsAvailable={threadsAvailable}
+            threadDisabledReason={threadDisabledReason}
+            threadReplyCount={threadReplyCount}
+            onOpenThread={onOpenThread}
+          />
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article
-      className={`msg msg-row${mine ? ' msg-row--mine' : ''}`}
+      className={`msg msg-row${mine ? ' msg-row--mine' : ''}${highlighted ? ' is-focused' : ''}`}
       id={`message-${message.id}`}
       tabIndex={-1}
     >
@@ -253,7 +384,7 @@ export function MessageRow({
             // E2EE is plain text: no Markdown, no mention chips, no links.
             <p className="msg-text msg-text--plain">{text}</p>
           ) : (
-            <RichText text={text} mentions={mentionNames} className="msg-text" />
+            <RichText text={text} mentions={resolvedMentionNames} className="msg-text" />
           )
         ) : null}
         {!deleted && !e2eeChat ? (

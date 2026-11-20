@@ -15,6 +15,7 @@ import java.util.UUID;
 public final class Notification {
 
     public static final String NEW_MESSAGE_TITLE = "Новое сообщение";
+    public static final String MENTION_TITLE = "Вас упомянули";
     private static final int MAX_TITLE_LENGTH = 200;
     private static final int MAX_DEDUPE_KEY_LENGTH = 400;
 

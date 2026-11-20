@@ -43,7 +43,9 @@ public final class Upload {
                    Instant updatedAt, Instant completedAt) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
-        this.chatId = Objects.requireNonNull(chatId, "chatId");
+        // chatId is null only for a workspace-scoped global file (#83): the upload session,
+        // quota reservation and AV scan are identical, but the file has no chat yet.
+        this.chatId = chatId;
         this.userId = Objects.requireNonNull(userId, "userId");
         this.filename = requireFilename(filename);
         this.mimeType = mimeType;
@@ -73,6 +75,15 @@ public final class Upload {
                                 String filename, String mimeType, long sizeBytes, Sha256 sha256,
                                 Instant now, Instant expiresAt) {
         return create(id, workspaceId, chatId, userId, filename, mimeType, null, sizeBytes, sha256,
+                now, expiresAt);
+    }
+
+    /** Global workspace file (#83): a regular upload session with no chat binding. */
+    public static Upload createWorkspaceFile(UUID id, UUID workspaceId, UUID userId,
+                                             String filename, String mimeType,
+                                             MediaMetadata media, long sizeBytes,
+                                             Instant now, Instant expiresAt) {
+        return create(id, workspaceId, null, userId, filename, mimeType, media, sizeBytes, null,
                 now, expiresAt);
     }
 

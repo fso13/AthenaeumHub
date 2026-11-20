@@ -1,7 +1,10 @@
 import { useEffect, useId } from 'react';
+import type { AdminAuditExportFormat } from '../../api/types';
 import { t, type MessageKey } from '../../i18n/ru';
+import { downloadBlob } from '../../security/download';
 import { useAdminDirectoryState, useAdminDirectoryStore } from '../../store/ChatProvider';
 import { AdminEmptyState, AdminErrorState, AdminListCount, AdminSkeleton } from './AdminStates';
+import { ErrorDetails } from '../ErrorDetails';
 import { AdminCell, AdminRow, AdminRowsHead } from './AdminListParts';
 import {
   KNOWN_AUDIT_ACTIONS,
@@ -40,6 +43,13 @@ export function AdminAuditSection() {
   const showSkeleton = audit.status === 'loading' && audit.items.length === 0;
   const forbidden = audit.error?.status === 403;
   const hasFilter = audit.action.length > 0;
+  const exporting = audit.exportStatus === 'exporting';
+
+  const exportAudit = async (format: AdminAuditExportFormat) => {
+    const result = await store.exportAudit(format);
+    if (!result) return;
+    downloadBlob(result.blob, result.filename, format);
+  };
 
   return (
     <section className="admin-card admin-section" aria-labelledby="admin-audit-title">
@@ -98,6 +108,64 @@ export function AdminAuditSection() {
       </div>
 
       <p className="admin-card__hint">{t('admin.audit.metadataHint')}</p>
+
+      <div className="admin-toolbar admin-toolbar--audit">
+        <div>
+          <p className="admin-card__hint">{t('admin.audit.exportHint')}</p>
+        </div>
+        <div className="admin-toolbar__actions">
+          <button
+            type="button"
+            className="button button--secondary"
+            onClick={() => void exportAudit('csv')}
+            disabled={exporting}
+          >
+            {exporting && audit.exportFormat === 'csv'
+              ? t('admin.audit.exporting')
+              : t('admin.audit.exportCsv')}
+          </button>
+          <button
+            type="button"
+            className="button button--secondary"
+            onClick={() => void exportAudit('json')}
+            disabled={exporting}
+          >
+            {exporting && audit.exportFormat === 'json'
+              ? t('admin.audit.exporting')
+              : t('admin.audit.exportJson')}
+          </button>
+        </div>
+      </div>
+
+      {audit.exportStatus === 'done' ? (
+        <p className="admin-notice admin-notice--ok" role="status" aria-live="polite">
+          {audit.exportRows === null
+            ? t('admin.audit.exportDoneUnknown')
+            : t('admin.audit.exportDone', { count: audit.exportRows })}
+        </p>
+      ) : null}
+
+      {audit.exportStatus === 'done' && audit.exportTruncated ? (
+        <p className="admin-notice admin-notice--warning" role="alert">
+          {t('admin.audit.exportTruncated')}
+        </p>
+      ) : null}
+
+      {audit.exportStatus === 'error' && audit.exportError ? (
+        <div className="admin-state admin-state--error" role="alert">
+          <div className="admin-state__body">
+            <p>{t('admin.audit.exportError')}</p>
+            <ErrorDetails error={audit.exportError} />
+          </div>
+          <button
+            type="button"
+            className="button button--secondary"
+            onClick={() => void exportAudit(audit.exportFormat ?? 'csv')}
+          >
+            {t('admin.audit.exportRetry')}
+          </button>
+        </div>
+      ) : null}
 
       {showSkeleton ? <AdminSkeleton label={t('admin.audit.loading')} /> : null}
 

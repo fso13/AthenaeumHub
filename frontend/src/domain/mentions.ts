@@ -143,10 +143,11 @@ export function matchMentionCandidates(
   query: string,
   members: readonly MentionMemberLike[],
   limit = MENTION_MAX_CANDIDATES,
+  allowAll = true,
 ): MentionCandidate[] {
   const normalized = query.trim().toLocaleLowerCase('ru');
   const result: MentionCandidate[] = [];
-  if (normalized.length === 0 || MENTION_ALL.startsWith(normalized)) {
+  if (allowAll && (normalized.length === 0 || MENTION_ALL.startsWith(normalized))) {
     result.push({ key: 'all', all: true, name: MENTION_ALL });
   }
 
@@ -196,4 +197,60 @@ export function insertMention(
     value: nextValue,
     caret: trigger.start + insertion.length + spacer.length,
   };
+}
+
+/** The directory row needed to translate a rendered `@Name` back to a user id. */
+export interface MentionIdMember {
+  readonly user_id: string;
+  readonly display_name: string;
+}
+
+/** Contract payload for `MessageCreate.mentions`/`mention_all` (#83). */
+export interface MentionPayload {
+  readonly mentions: string[];
+  readonly mention_all: boolean;
+}
+
+const MENTION_MAX_IDS = 50;
+
+/**
+ * Derives the explicit mention payload from the **final** message text.
+ *
+ * The text stays the only storage of a mention, so the payload must follow the
+ * text the user is actually sending: deleting an inserted `@Name` removes the
+ * id, retyping it restores it. Only known directory members become ids — an
+ * unknown `@Name` silently stays literal text instead of producing a
+ * `422 MENTION_INVALID`. `@all` is only advertised when the caller's role
+ * allows it; the server still owns the final 403 check.
+ */
+export function buildMentionPayload(
+  text: string,
+  members: readonly MentionIdMember[],
+  allowAll = true,
+): MentionPayload {
+  const index = buildMentionIndex(members.map((member) => member.display_name));
+  const idByLowerName = new Map<string, string>();
+  for (const member of members) {
+    const name = member.display_name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('ru');
+    if (name.length === 0 || idByLowerName.has(name)) continue;
+    idByLowerName.set(name, member.user_id);
+  }
+
+  const mentions: string[] = [];
+  const seen = new Set<string>();
+  let mentionAll = false;
+  for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
+    const match = matchMentionAt(text, at, index);
+    if (match === null) continue;
+    if (match.all) {
+      mentionAll = true;
+      continue;
+    }
+    const id = idByLowerName.get(match.name.toLocaleLowerCase('ru'));
+    if (id === undefined || seen.has(id) || mentions.length >= MENTION_MAX_IDS) continue;
+    seen.add(id);
+    mentions.push(id);
+  }
+
+  return { mentions, mention_all: mentionAll && allowAll };
 }

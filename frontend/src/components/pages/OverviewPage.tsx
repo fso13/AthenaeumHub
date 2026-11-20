@@ -1,9 +1,14 @@
 import { useEffect, useMemo } from 'react';
-import type { ApiMessage } from '../../api/types';
+import type { WorkspaceAuditEvent } from '../../api/types';
 import { chatDisplayName } from '../../domain/chatLabel';
 import { formatBytes } from '../../files/format';
 import { t } from '../../i18n/ru';
-import { useChatState, useChatStore } from '../../store/ChatProvider';
+import {
+  useChatState,
+  useChatStore,
+  useWorkspaceOverviewState,
+  useWorkspaceOverviewStore,
+} from '../../store/ChatProvider';
 import type { AppView } from '../../router/views';
 import { Avatar } from '../Avatar';
 import {
@@ -13,6 +18,7 @@ import {
   LinkIcon,
   PeopleIcon,
   PlayIcon,
+  RefreshIcon,
   ShieldIcon,
   UserPlusIcon,
 } from '../Icons';
@@ -22,13 +28,11 @@ import {
   fileName,
   fileKind,
   fileKindLabel,
-  loadedMessageCount,
   onlineMemberCount,
+  overviewActionLabel,
+  overviewStoragePercent,
   pluralRu,
   securityModeLabel,
-  storageLimit,
-  storagePercent,
-  storageUsed,
   tariffLabel,
   todayLabel,
   totalUnread,
@@ -42,40 +46,29 @@ interface OverviewPageProps {
   onOpenMembers: () => void;
 }
 
-interface ActivityItem {
-  message: ApiMessage;
-  chatName: string;
-  text: string;
-}
-
 function shortName(name: string | null | undefined): string {
   return name?.trim().split(/\s+/)[0] ?? '';
 }
 
-function truncated(value: string): string {
-  const text = value.replace(/\s+/g, ' ').trim();
-  return text.length > 96 ? `${text.slice(0, 95)}…` : text;
+function count(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  return Math.max(0, Math.trunc(value)).toLocaleString('ru-RU');
 }
 
-function activityFromState(state: ReturnType<typeof useChatState>): ActivityItem[] {
-  const items: ActivityItem[] = [];
-  for (const chat of state.chats) {
-    const slice = state.slices[chat.id];
-    if (!slice) continue;
-    for (const message of slice.messages) {
-      if (message.deleted_at || message.type === 'SYSTEM') continue;
-      const text = (slice.e2ee[message.id]?.text ?? message.text ?? '').trim();
-      if (!text) continue;
-      items.push({
-        message,
-        chatName: chatDisplayName(chat, state.workspaceMembers.items),
-        text,
-      });
-    }
-  }
-  return items
-    .sort((left, right) => right.message.created_at.localeCompare(left.message.created_at))
-    .slice(0, 5);
+function metricHint(status: string, readyText: string | null): string | null {
+  if (readyText !== null) return readyText;
+  return status === 'error' ? t('overview.metric.noData') : t('common.loading');
+}
+
+function activityTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
 }
 
 function attachmentIcon(entry: FileEntry) {
@@ -86,10 +79,20 @@ function attachmentIcon(entry: FileEntry) {
   return <FolderIcon />;
 }
 
-/** D1 UX fidelity 2: workspace dashboard built only from already-loaded APIs. */
+/**
+ * #84 workspace dashboard.
+ *
+ * Metrics, activity, team and storage come from `GET /workspaces/{id}/overview`
+ * (counts/bytes plus at most five content-free audit rows). The page keeps the
+ * existing navigation, quick chats and recent files; it never renders message
+ * bodies, E2EE envelopes, filenames from the overview response, IPs or tokens.
+ */
 export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: OverviewPageProps) {
   const store = useChatStore();
   const state = useChatState();
+  const overviewStore = useWorkspaceOverviewStore();
+  const overviewState = useWorkspaceOverviewState();
+  const overview = overviewState.data;
   const user = state.user ?? state.session?.user ?? null;
   const workspaceName =
     state.activeWorkspace?.name ?? state.session?.workspace.name ?? t('app.tagline');
@@ -102,13 +105,25 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
   const membersReady = members.status === 'ready';
   const limits = state.chatLimits;
   const files = useMemo(() => collectFiles(state), [state]);
-  const messages = useMemo(() => loadedMessageCount(state), [state]);
-  const online = useMemo(() => {
-    const count = onlineMemberCount(state);
-    return membersReady ? Math.min(count, members.items.length) : count;
-  }, [members.items.length, membersReady, state]);
   const unread = totalUnread(state);
-  const percent = storagePercent(limits);
+  const workspaceId = state.activeWorkspaceId ?? state.session?.workspace.id ?? null;
+
+  const loading =
+    overviewState.status === 'loading' ||
+    (overview === null && overviewState.status === 'idle' && workspaceId !== null);
+  const failed = overviewState.status === 'error';
+  const overviewReady = overview !== null;
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    overviewStore.setWorkspace(workspaceId);
+    void overviewStore.load();
+  }, [overviewStore, workspaceId]);
+
+  useEffect(() => {
+    if (!state.activeWorkspaceId && !state.session) return;
+    if (members.status === 'idle') void store.loadWorkspaceMembers();
+  }, [members.status, state.activeWorkspaceId, state.session, store]);
 
   const quickChats = useMemo(
     () =>
@@ -119,19 +134,31 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
         .slice(0, 4),
     [state.chats],
   );
-  const activity = useMemo(() => activityFromState(state), [state]);
   const recentFiles = useMemo(() => files.slice(0, 4), [files]);
   const primaryChat = state.chats.find((chat) => chat.type === 'GROUP') ?? state.chats[0] ?? null;
   const primaryName = primaryChat
     ? chatDisplayName(primaryChat, members.items)
     : t('overview.allChats');
 
-  useEffect(() => {
-    if (!state.activeWorkspaceId && !state.session) return;
-    if (members.status === 'idle') void store.loadWorkspaceMembers();
-  }, [members.status, state.activeWorkspaceId, state.session, store]);
-
   const firstName = shortName(user?.display_name) || t('overview.greetingFallbackName');
+
+  const memberTotal = overview?.members.total ?? null;
+  const online = overview?.members.online ?? null;
+  const chatTotal = overview?.chats ?? null;
+  const messageTotal = overview?.messages.total ?? null;
+  const messages24 = overview?.messages.last_24h ?? null;
+  const fileTotal = overview?.files.total ?? null;
+  const dlpEvents = overview?.dlp.events_last_24h ?? null;
+  const storageUsed = overview?.storage.used_bytes ?? null;
+  const storageQuota = overview?.storage.quota_bytes ?? null;
+  const storagePercentValue =
+    overview === null ? 0 : overviewStoragePercent(overview.storage.used_bytes, storageQuota ?? 0);
+  const activity = overview?.audit_recent ?? [];
+
+  const localOnline = useMemo(() => {
+    const value = onlineMemberCount(state);
+    return membersReady ? Math.min(value, members.items.length) : value;
+  }, [members.items.length, membersReady, state]);
 
   return (
     <PageShell
@@ -140,6 +167,16 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
       onBack={onBack}
       actions={
         <>
+          <button
+            type="button"
+            className="btn"
+            aria-label={t('overview.refresh')}
+            onClick={() => void overviewStore.load(true)}
+            disabled={loading}
+          >
+            <RefreshIcon aria-hidden="true" />
+            <span>{loading ? t('common.loading') : t('overview.refresh')}</span>
+          </button>
           <button
             type="button"
             className="btn"
@@ -168,23 +205,32 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
           <p className="ov-sub">
             {t('overview.summaryParts', {
               workspace: workspaceName,
-              members: membersReady
-                ? `${members.items.length} ${pluralRu(
-                    members.items.length,
-                    'участник',
-                    'участника',
-                    'участников',
-                  )}`
-                : '—',
-              chats: `${state.chats.length} ${pluralRu(
-                state.chats.length,
-                'чат',
-                'чата',
-                'чатов',
-              )}`,
-              files: `${files.length} ${pluralRu(files.length, 'файл', 'файла', 'файлов')}`,
+              members:
+                memberTotal === null
+                  ? '—'
+                  : `${count(memberTotal)} ${pluralRu(
+                      memberTotal,
+                      'участник',
+                      'участника',
+                      'участников',
+                    )}`,
+              chats:
+                chatTotal === null
+                  ? '—'
+                  : `${count(chatTotal)} ${pluralRu(chatTotal, 'чат', 'чата', 'чатов')}`,
+              files:
+                fileTotal === null
+                  ? '—'
+                  : `${count(fileTotal)} ${pluralRu(fileTotal, 'файл', 'файла', 'файлов')}`,
             })}
           </p>
+          {overviewReady ? (
+            <p className="muted">
+              {t('overview.updatedAt', {
+                time: activityTime(overview.generated_at),
+              })}
+            </p>
+          ) : null}
         </div>
         <div className="ov-actions">
           <button
@@ -203,50 +249,104 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
         </div>
       </div>
 
+      {loading ? (
+        <p className="pg-footnote" role="status" aria-busy="true">
+          {t('overview.loading')}
+        </p>
+      ) : null}
+
+      {failed ? (
+        <div className="pg-inline-error" role="alert">
+          <div>
+            <p>{t('overview.loadError')}</p>
+            {overviewState.error ? (
+              <p className="pg-footnote">
+                {overviewState.error.status > 0
+                  ? `HTTP ${overviewState.error.status} · ${overviewState.error.code}`
+                  : overviewState.error.code}
+              </p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => void overviewStore.load(true)}
+          >
+            {t('overview.retry')}
+          </button>
+        </div>
+      ) : null}
+
       <section className="stat-grid" aria-label={t('overview.metrics')}>
         <article className="stat">
           <span className="stat-ic" aria-hidden="true">
             <HashIcon />
           </span>
           <div>
-            <b>{messages}</b>
+            <b>{count(messageTotal)}</b>
             <span>{t('overview.metric.messages')}</span>
           </div>
+          <small>
+            {metricHint(
+              overviewState.status,
+              overviewReady
+                ? t('overview.metric.messagesRecent', { count: messages24 ?? 0 })
+                : null,
+            )}
+          </small>
         </article>
         <article className="stat">
           <span className="stat-ic" aria-hidden="true">
             <FolderIcon />
           </span>
           <div>
-            <b>{files.length}</b>
+            <b>{count(fileTotal)}</b>
             <span>{t('overview.metric.files')}</span>
           </div>
+          <small>
+            {metricHint(
+              overviewState.status,
+              overviewReady && overview
+                ? t('overview.metric.filesUsed', {
+                    size: formatBytes(overview.files.used_bytes),
+                  })
+                : null,
+            )}
+          </small>
         </article>
         <article className="stat">
           <span className="stat-ic" aria-hidden="true">
             <PeopleIcon />
           </span>
           <div>
-            <b>{membersReady ? members.items.length : '—'}</b>
+            <b>{count(memberTotal)}</b>
             <span>
-              {membersReady
-                ? t('overview.metric.members', {
-                    noun: pluralRu(members.items.length, 'участник', 'участника', 'участников'),
-                    online,
-                  })
-                : t('overview.metric.membersLoading')}
+              {memberTotal === null
+                ? t('overview.metric.membersLoading')
+                : t('overview.metric.members', {
+                    noun: pluralRu(memberTotal, 'участник', 'участника', 'участников'),
+                    online: online ?? 0,
+                  })}
             </span>
           </div>
+          <small>
+            {metricHint(
+              overviewState.status,
+              overviewReady ? t('overview.metric.onlineNow', { count: online ?? 0 }) : null,
+            )}
+          </small>
         </article>
         <article className="stat">
           <span className="stat-ic" aria-hidden="true">
             <ShieldIcon />
           </span>
           <div>
-            <b>—</b>
+            <b>{count(dlpEvents)}</b>
             <span>{managed ? t('overview.metric.dlp') : t('overview.metric.keys')}</span>
           </div>
-          <small>{t('overview.metric.noData')}</small>
+          <small>
+            {metricHint(overviewState.status, overviewReady ? t('overview.metric.lastDay') : null)}
+          </small>
         </article>
       </section>
 
@@ -260,26 +360,29 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
               {t('overview.allEvents')}
             </button>
           </div>
-          {activity.length === 0 ? (
-            <p className="card-empty">{t('overview.noActivity')}</p>
+          {loading && !overviewReady ? (
+            <p className="card-empty">{t('common.loading')}</p>
+          ) : activity.length === 0 ? (
+            <p className="card-empty">
+              {failed ? t('overview.loadError') : t('overview.activityEmpty')}
+            </p>
           ) : (
             <div className="activity">
-              {activity.map((item) => (
-                <div className="activity-row" key={item.message.id}>
-                  <Avatar
-                    name={item.message.sender_display_name}
-                    seed={item.message.sender_id ?? item.message.id}
-                    size="xs"
-                  />
+              {activity.map((event: WorkspaceAuditEvent) => (
+                <div className="activity-row" key={event.id}>
+                  <span className="stat-ic" aria-hidden="true">
+                    <ShieldIcon />
+                  </span>
                   <div className="activity-text">
-                    <b>{item.message.sender_display_name?.trim() || t('chat.unknownAuthor')}</b>{' '}
-                    {truncated(item.text)}
+                    <b>{overviewActionLabel(event.action)}</b>
+                    <span className="muted">
+                      {event.actor_id
+                        ? t('overview.activityActor', { id: event.actor_id.slice(0, 8) })
+                        : t('overview.activitySystem')}
+                    </span>
                   </div>
-                  <time className="activity-time" dateTime={item.message.created_at}>
-                    {new Intl.DateTimeFormat('ru-RU', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    }).format(new Date(item.message.created_at))}
+                  <time className="activity-time" dateTime={event.created_at}>
+                    {activityTime(event.created_at)}
                   </time>
                 </div>
               ))}
@@ -341,49 +444,56 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
             </h2>
             <span className="chip">{limits ? tariffLabel(limits.tariff) : '—'}</span>
           </div>
-          {limits ? (
+          {overviewReady && storageUsed !== null && storageQuota !== null ? (
             <>
               <div
                 className="meter"
                 role="progressbar"
                 aria-valuemin={0}
                 aria-valuemax={100}
-                aria-valuenow={percent}
-                aria-label={t('overview.storageUsage', { percent })}
+                aria-valuenow={storagePercentValue}
+                aria-label={t('overview.storageUsage', { percent: storagePercentValue })}
               >
-                <i style={{ width: `${percent}%` }} />
+                <i style={{ width: `${storagePercentValue}%` }} />
               </div>
               <div className="meter-row">
                 <span>
-                  {t('limits.usage', {
-                    used: storageUsed(limits),
-                    limit: storageLimit(limits),
+                  {t('overview.storageMeter', {
+                    used: formatBytes(storageUsed),
+                    limit: formatBytes(storageQuota),
                   })}
                 </span>
-                <span>{t('limits.percent', { percent })}</span>
+                <span>{t('limits.percent', { percent: storagePercentValue })}</span>
               </div>
               <div className="limits">
-                <span className="limit">
-                  {t('overview.storageLimitGuest', {
-                    size: formatBytes(limits.guest_file_bytes),
-                  })}
-                </span>
                 <span className="limit is-current">
-                  {t('overview.storageLimitFile', { size: formatBytes(limits.max_file_bytes) })}
-                </span>
-                <span className="limit">
-                  {t('overview.storageLimitCount', { count: limits.max_attachments })}
-                </span>
-                <span className="limit">
-                  {t('overview.storageLimitChats', {
-                    used: limits.chats_used,
-                    limit: limits.max_chats_per_user,
+                  {t('overview.storageFiles', {
+                    total: count(fileTotal),
+                    used: formatBytes(overview?.files.used_bytes ?? 0),
+                    reserved: formatBytes(overview?.files.reserved_bytes ?? 0),
                   })}
                 </span>
+                {limits ? (
+                  <>
+                    <span className="limit">
+                      {t('overview.storageLimitGuest', {
+                        size: formatBytes(limits.guest_file_bytes),
+                      })}
+                    </span>
+                    <span className="limit">
+                      {t('overview.storageLimitFile', { size: formatBytes(limits.max_file_bytes) })}
+                    </span>
+                    <span className="limit">
+                      {t('overview.storageLimitCount', { count: limits.max_attachments })}
+                    </span>
+                  </>
+                ) : null}
               </div>
             </>
           ) : (
-            <p className="card-empty">{t('overview.limitsUnavailable')}</p>
+            <p className="card-empty">
+              {failed ? t('overview.metric.noData') : t('common.loading')}
+            </p>
           )}
         </section>
 
@@ -399,6 +509,9 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
           <p className="pane-sub">
             {managed ? t('overview.controlManagedText') : t('overview.controlE2eeText')}
           </p>
+          <p className="pane-sub">
+            {t('overview.metric.dlp')}: <b>{count(dlpEvents)}</b>
+          </p>
           <button type="button" className="btn btn--sm" onClick={() => onNavigate('security')}>
             <ShieldIcon aria-hidden="true" />
             {t('overview.securityMore')}
@@ -411,7 +524,11 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
               {t('overview.team')}
             </h2>
             <span className="muted">
-              {membersReady ? t('overview.teamOnline', { count: online }) : '—'}
+              {overviewReady
+                ? t('overview.teamOnlineLabel', { count: online ?? 0 })
+                : failed
+                  ? t('overview.metric.noData')
+                  : '—'}
             </span>
           </div>
           {membersReady && members.items.length > 0 ? (
@@ -439,6 +556,16 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
                   : t('overview.metric.membersLoading')}
             </p>
           )}
+          <p className="pane-sub">
+            {overviewReady
+              ? t('overview.teamTotal', { count: count(memberTotal) })
+              : failed
+                ? t('overview.loadError')
+                : t('common.loading')}
+            {!overviewReady && membersReady && localOnline > 0
+              ? ` · ${t('overview.teamOnline', { count: localOnline })}`
+              : ''}
+          </p>
           <p className="pane-sub">{t('overview.teamHint')}</p>
           <button type="button" className="btn btn--sm" onClick={onOpenMembers}>
             <LinkIcon aria-hidden="true" />

@@ -10,6 +10,7 @@ import {
   useChatState,
 } from '../../store/ChatProvider';
 import { AdminConfirmDialog } from './AdminConfirmDialog';
+import { AdminSessionsDialog } from './AdminSessionsDialog';
 import { AdminEmptyState, AdminErrorState, AdminListCount, AdminSkeleton } from './AdminStates';
 import { AdminCell, AdminRow, AdminRowsHead } from './AdminListParts';
 import { describeAdminActionError, type AdminActionErrorInfo } from './actionErrors';
@@ -93,6 +94,7 @@ export function AdminUsersSection() {
   const [actionError, setActionError] = useState<AdminActionErrorInfo | null>(null);
   const [actionErrorDetails, setActionErrorDetails] = useState<ApiError | null>(null);
   const [notice, setNotice] = useState<SectionNotice | null>(null);
+  const [sessionsUser, setSessionsUser] = useState<AdminUser | null>(null);
   const inputId = useId();
   const hintId = useId();
 
@@ -310,6 +312,15 @@ export function AdminUsersSection() {
                         <>
                           <button
                             type="button"
+                            className="button button--secondary button--small"
+                            onClick={() => setSessionsUser(user)}
+                            disabled={busy || user.status === 'DELETED'}
+                            title={t('admin.sessions.open')}
+                          >
+                            {t('admin.sessions.open')}
+                          </button>
+                          <button
+                            type="button"
                             className={`button button--small ${
                               action === 'suspend' ? 'button--danger-ghost' : 'button--secondary'
                             }`}
@@ -405,6 +416,16 @@ export function AdminUsersSection() {
           errorDetails={actionErrorDetails}
           onConfirm={() => void confirmAction()}
           onClose={closeDialog}
+        />
+      ) : null}
+
+      {sessionsUser ? (
+        <AdminSessionsDialog
+          user={sessionsUser}
+          onClose={() => {
+            store.closeSessions();
+            setSessionsUser(null);
+          }}
         />
       ) : null}
     </section>

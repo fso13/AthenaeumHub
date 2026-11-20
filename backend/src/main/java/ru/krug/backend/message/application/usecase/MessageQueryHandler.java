@@ -15,8 +15,11 @@ import ru.krug.backend.message.application.model.MessagePageCursor;
 import ru.krug.backend.message.application.model.MessagePageView;
 import ru.krug.backend.message.application.model.ReactionSummaryView;
 import ru.krug.backend.message.application.model.MessageView;
+import ru.krug.backend.message.application.model.EmbeddedPollView;
+import ru.krug.backend.message.application.model.EmbeddedTaskView;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
 import ru.krug.backend.message.application.port.MessageDeviceDirectoryPort;
+import ru.krug.backend.message.application.port.MessagePluginContentPort;
 import ru.krug.backend.message.application.service.EnvelopeWireMapper;
 import ru.krug.backend.message.domain.model.Message;
 import ru.krug.backend.message.domain.model.MessageEnvelope;
@@ -58,6 +61,7 @@ public class MessageQueryHandler {
     private final StickerCatalogPort stickerCatalog;
     private final E2eeSettingsPort e2eeSettings;
     private final MessageDeviceDirectoryPort deviceDirectory;
+    private final MessagePluginContentPort pluginContent;
 
     public MessageQueryHandler(TenantContext tenantContext, ChatAccessPort chatAccess,
                                MessageRepository messageRepository,
@@ -67,7 +71,8 @@ public class MessageQueryHandler {
                                MessageAttachmentPort attachmentPort,
                                StickerCatalogPort stickerCatalog,
                                E2eeSettingsPort e2eeSettings,
-                               MessageDeviceDirectoryPort deviceDirectory) {
+                               MessageDeviceDirectoryPort deviceDirectory,
+                               MessagePluginContentPort pluginContent) {
         this.tenantContext = tenantContext;
         this.chatAccess = chatAccess;
         this.messageRepository = messageRepository;
@@ -78,6 +83,7 @@ public class MessageQueryHandler {
         this.stickerCatalog = stickerCatalog;
         this.e2eeSettings = e2eeSettings;
         this.deviceDirectory = deviceDirectory;
+        this.pluginContent = pluginContent;
     }
 
     @Transactional(readOnly = true)
@@ -248,6 +254,25 @@ public class MessageQueryHandler {
                 .map(MessageView::id).toList();
         Map<UUID, List<ReactionSummaryView>> reactions = managedIds.isEmpty() ? Map.of()
                 : reactionView(reactionRepository.summarize(workspaceId, managedIds, viewerId));
+        // #95: current poll/task projections are resolved in one bounded query per kind and
+        // are viewer-relative (my_option_id is the caller's choice). Tombstones get them
+        // dropped below, exactly like sticker/attachment metadata.
+        List<UUID> pollIds = views.stream()
+                .filter(view -> view.pluginContent() != null)
+                .map(view -> view.pluginContent().pollId())
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        List<UUID> taskIds = views.stream()
+                .filter(view -> view.pluginContent() != null)
+                .map(view -> view.pluginContent().taskId())
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<UUID, EmbeddedPollView> polls = pollIds.isEmpty() ? Map.of()
+                : pluginContent.findPolls(workspaceId, views.get(0).chatId(), pollIds, viewerId);
+        Map<UUID, EmbeddedTaskView> tasks = taskIds.isEmpty() ? Map.of()
+                : pluginContent.findTasks(workspaceId, views.get(0).chatId(), taskIds, viewerId);
         return views.stream()
                 // D1-BE2 defense-in-depth: an E2EE message must never expose a managed
                 // attachment (and therefore its plaintext media metadata), even if a row
@@ -257,8 +282,16 @@ public class MessageQueryHandler {
                         .withSticker(view.stickerId() == null ? null
                                 : stickers.get(view.stickerId()))
                         .withReactions(reactions.getOrDefault(view.id(), List.of()))
+                        .withPluginContent(
+                                view.pluginContent() == null
+                                        || view.pluginContent().pollId() == null ? null
+                                        : polls.get(view.pluginContent().pollId()),
+                                view.pluginContent() == null
+                                        || view.pluginContent().taskId() == null ? null
+                                        : tasks.get(view.pluginContent().taskId()))
                         // A deleted-for-all row keeps its seq but never leaks text, sticker,
-                        // attachment metadata or reactions even if legacy SQL left them.
+                        // attachment, poll/task or reaction metadata even if legacy SQL
+                        // left them.
                         .asTombstone())
                 .toList();
     }

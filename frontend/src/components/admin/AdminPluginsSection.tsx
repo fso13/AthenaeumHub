@@ -9,6 +9,7 @@ import { packageClientErrorText, packageInstallErrorText } from '../../plugins/p
 import { useChatState, usePluginsState, usePluginsStore } from '../../store/ChatProvider';
 import { LockIcon, PlugIcon, RefreshIcon, TrashIcon } from '../Icons';
 import { AdminConfirmDialog } from './AdminConfirmDialog';
+import { AdminTranslationProvider } from './AdminTranslationProvider';
 import { AdminCell, AdminRow, AdminRowsHead } from './AdminListParts';
 import { AdminEmptyState, AdminErrorState, AdminSkeleton } from './AdminStates';
 import { formatCount, formatDateTime } from './format';
@@ -174,6 +175,8 @@ export function AdminPluginsSection() {
         </a>{' '}
         — {t('admin.plugins.docsHint')}
       </p>
+
+      <AdminTranslationProvider />
 
       <div className="admin-plugins__upload">
         <h3 className="admin-plugins__subtitle">{t('admin.plugins.uploadTitle')}</h3>

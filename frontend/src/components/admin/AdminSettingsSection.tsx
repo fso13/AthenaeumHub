@@ -8,7 +8,11 @@ import { formatDateTime } from './format';
  * The SMTP password never enters the store — it lives only in the form state
  * until `PATCH /admin/settings` completes.
  */
-export function AdminSettingsSection() {
+export function AdminSettingsSection({
+  onOpenTranslation,
+}: {
+  onOpenTranslation?: () => void;
+} = {}) {
   const store = useOpsStore();
   const ops = useOpsState();
   const chat = useChatState();
@@ -67,6 +71,15 @@ export function AdminSettingsSection() {
           onSave={handleSave}
           onTestEmail={(to) => store.sendTestEmail(to)}
         />
+      ) : null}
+
+      {onOpenTranslation ? (
+        <div className="admin-settings__crosslink">
+          <p className="admin-card__hint">{t('admin.settings.translationHint')}</p>
+          <button type="button" className="button button--secondary" onClick={onOpenTranslation}>
+            {t('admin.settings.translationLink')}
+          </button>
+        </div>
       ) : null}
 
       <aside className="admin-audit" aria-label={t('admin.auditTitle')}>

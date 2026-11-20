@@ -8,23 +8,29 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import ru.krug.backend.ops.api.dto.AdminSessionRevokeAllResponse;
+import ru.krug.backend.ops.api.mapper.AdminSessionApiMapper;
+import ru.krug.backend.ops.application.usecase.AdminSessionService;
 import ru.krug.backend.ops.application.usecase.ChangeUserStatusService;
 import ru.krug.backend.shared.application.model.Principal;
 
 /**
- * {@code POST /admin/users/{userId}/suspend|activate} (FR-ADM-15). Controllers stay thin:
- * the platform-admin guard, self/last-admin checks, Keycloak changes and audit live in
- * {@link ChangeUserStatusService}. Both actions answer {@code 204 No Content}; the response
- * deliberately carries no user data.
+ * {@code POST /admin/users/{userId}/suspend|activate|revoke-sessions} (FR-ADM-15, #84).
+ * Controllers stay thin: the platform-admin guard, self/last-admin checks, Keycloak
+ * changes and audit live in the use cases. Suspend/activate answer {@code 204} with no
+ * body; revoke-sessions returns counts only.
  */
 @RestController
 @RequestMapping("/api/v1/admin/users")
 public class AdminUserActionsController {
 
     private final ChangeUserStatusService statusService;
+    private final AdminSessionService sessionService;
 
-    public AdminUserActionsController(ChangeUserStatusService statusService) {
+    public AdminUserActionsController(ChangeUserStatusService statusService,
+                                      AdminSessionService sessionService) {
         this.statusService = statusService;
+        this.sessionService = sessionService;
     }
 
     @PostMapping("/{userId}/suspend")
@@ -39,5 +45,11 @@ public class AdminUserActionsController {
                                          Principal principal) {
         statusService.activate(principal, userId);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{userId}/revoke-sessions")
+    public AdminSessionRevokeAllResponse revokeSessions(@PathVariable("userId") UUID userId,
+                                                        Principal principal) {
+        return AdminSessionApiMapper.toResponse(sessionService.revokeAll(principal, userId));
     }
 }

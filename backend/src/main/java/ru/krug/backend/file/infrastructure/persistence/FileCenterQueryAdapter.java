@@ -28,7 +28,9 @@ import ru.krug.backend.file.domain.model.MediaMetadata;
  *   <li>{@code chats.security_mode = 'MANAGED'} — E2EE chats never surface here;</li>
  *   <li>{@code EXISTS message} with {@code crypto_scheme = 'MANAGED'} and
  *       {@code deleted_at IS NULL} — E2EE or delete-for-all messages never surface;</li>
- *   <li>{@code message_deletions} — delete-for-me hides the file for that caller only.</li>
+ *   <li>{@code message_deletions} — delete-for-me hides the file for that caller only;</li>
+ *   <li>#83 — an unbound {@code source='WORKSPACE'} global file is listed for its uploader
+ *       only; once bound it follows the regular chat-membership branch above.</li>
  * </ul>
  *
  * <p>RLS still applies to every joined table; the caller has already activated the tenant
@@ -42,27 +44,48 @@ public class FileCenterQueryAdapter implements FileCenterQueryPort {
                    a.mime_type, a.size_bytes, a.scan_status, a.created_at,
                    CAST(a.media AS text) AS media_json
               FROM file.attachments a
-              JOIN chat.chats c
+              LEFT JOIN chat.chats c
                 ON c.id = a.chat_id AND c.workspace_id = a.workspace_id
-              JOIN chat.chat_members cm
-                ON cm.chat_id = a.chat_id AND cm.workspace_id = a.workspace_id
-               AND cm.user_id = :userId AND cm.status = 'ACTIVE'
              WHERE a.workspace_id = :workspaceId
-               AND a.message_id IS NOT NULL
                AND a.status IN ('READY', 'BOUND', 'QUARANTINED')
-               AND c.deleted_at IS NULL
-               AND c.security_mode = 'MANAGED'
-               AND EXISTS (
-                     SELECT 1 FROM message.messages m
-                      WHERE m.id = a.message_id
-                        AND m.workspace_id = a.workspace_id
-                        AND m.chat_id = a.chat_id
-                        AND m.deleted_at IS NULL
-                        AND m.crypto_scheme = 'MANAGED'
-                   )
-               AND NOT EXISTS (
-                     SELECT 1 FROM message.message_deletions d
-                      WHERE d.message_id = a.message_id AND d.user_id = :userId
+               AND a.deleted_at IS NULL
+               AND (
+                     (
+                       -- Chat-bound provenance: the caller must be an ACTIVE member of the
+                       -- chat, the chat and its message must be live MANAGED rows, and the
+                       -- caller must not have hidden the message for themselves.
+                       a.message_id IS NOT NULL
+                       AND a.chat_id IS NOT NULL
+                       AND c.deleted_at IS NULL
+                       AND c.security_mode = 'MANAGED'
+                       AND EXISTS (
+                             SELECT 1 FROM chat.chat_members cm
+                              WHERE cm.chat_id = a.chat_id
+                                AND cm.workspace_id = a.workspace_id
+                                AND cm.user_id = :userId
+                                AND cm.status = 'ACTIVE'
+                          )
+                       AND EXISTS (
+                             SELECT 1 FROM message.messages m
+                              WHERE m.id = a.message_id
+                                AND m.workspace_id = a.workspace_id
+                                AND m.chat_id = a.chat_id
+                                AND m.deleted_at IS NULL
+                                AND m.crypto_scheme = 'MANAGED'
+                          )
+                       AND NOT EXISTS (
+                             SELECT 1 FROM message.message_deletions d
+                              WHERE d.message_id = a.message_id AND d.user_id = :userId
+                          )
+                     )
+                     OR
+                     (
+                       -- #83 global workspace file: no chat yet, visible only to its
+                       -- uploader. Once bound, the chat-bound branch above applies instead.
+                       a.message_id IS NULL
+                       AND a.source = 'WORKSPACE'
+                       AND a.user_id = :userId
+                     )
                    )
             """;
 

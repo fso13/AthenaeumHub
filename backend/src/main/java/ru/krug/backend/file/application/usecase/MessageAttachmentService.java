@@ -72,7 +72,9 @@ public class MessageAttachmentService implements MessageAttachmentPort {
             if (!attachment.isOwnedBy(principal.userId())) {
                 throw DomainException.forbidden("Attachment belongs to another user");
             }
-            if (!attachment.belongsToChat(chatId)) {
+            boolean unboundWorkspaceFile = attachment.isWorkspaceFile()
+                    && attachment.chatId() == null;
+            if (!attachment.belongsToChat(chatId) && !unboundWorkspaceFile) {
                 // Hide a foreign chat's attachment rather than disclosing its existence.
                 throw new UploadNotFoundException();
             }
@@ -85,7 +87,11 @@ public class MessageAttachmentService implements MessageAttachmentPort {
                                 "reason", "direct_image_not_bindable"));
             }
             attachment.assertBindable();
-            Attachment stored = attachment.bindTo(messageId, now);
+            // #83: a global workspace file joins the message's chat at bind time; a regular
+            // chat attachment keeps its (already matching) chat id.
+            Attachment stored = unboundWorkspaceFile
+                    ? attachment.bindTo(messageId, chatId, now)
+                    : attachment.bindTo(messageId, now);
             attachmentRepository.save(stored);
             uploadRepository.findForUpdate(workspaceId, attachment.uploadId())
                     .map(upload -> upload.markBound(now))

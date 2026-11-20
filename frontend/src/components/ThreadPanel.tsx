@@ -4,7 +4,8 @@ import { formatShortDate, replyPreview, sortBySeq } from '../domain/messages';
 import { useCountdown } from '../hooks/useCountdown';
 import { t } from '../i18n/ru';
 import { useChatState, useChatStore } from '../store/ChatProvider';
-import { threadKey, type OutgoingMessage } from '../store/chatStore';
+import { buildMentionPayload } from '../domain/mentions';
+import { isChatManagerRole, threadKey, type OutgoingMessage } from '../store/chatStore';
 import type { SendBlockedReason } from './Composer';
 import { ErrorDetails } from './ErrorDetails';
 import { ChevronUpIcon, CloseIcon, ThreadIcon } from './Icons';
@@ -114,6 +115,12 @@ export function ThreadPanel() {
     () => state.workspaceMembers.items.map((member) => member.display_name),
     [state.workspaceMembers.items],
   );
+  /** #83: resolve server `mentions` ids to display names for chips. */
+  const memberNames = useMemo(
+    () =>
+      new Map(state.workspaceMembers.items.map((member) => [member.user_id, member.display_name])),
+    [state.workspaceMembers.items],
+  );
   const mentionDirectoryLoading =
     state.workspaceMembers.status === 'idle' || state.workspaceMembers.status === 'loading';
   const ensureMentionDirectory = useCallback(() => {
@@ -163,10 +170,19 @@ export function ThreadPanel() {
   const handleSend = () => {
     const text = draft;
     if (!text.trim()) return;
+    // #83: mentions follow the exact text; the directory is the chat/workspace
+    // member list and `@all` is only offered to a manager role.
+    const mentionPayload = buildMentionPayload(
+      text,
+      state.workspaceMembers.items,
+      isChatManagerRole(store.chatActorRole(active.chatId)),
+    );
     setDraft('');
-    void store.sendThreadReply(active.chatId, active.rootId, text).then((accepted) => {
-      if (!accepted) setDraft(text);
-    });
+    void store
+      .sendThreadReply(active.chatId, active.rootId, text, mentionPayload)
+      .then((accepted) => {
+        if (!accepted) setDraft(text);
+      });
   };
 
   const handleRestore = (item: OutgoingMessage) => {
@@ -298,6 +314,7 @@ export function ThreadPanel() {
             threadsAvailable={false}
             allowReply={false}
             mentionNames={mentionNames}
+            memberNames={memberNames}
             onJumpTo={jumpTo}
           />
         ))}
@@ -394,6 +411,7 @@ export function ThreadPanel() {
         textareaRef={textareaRef}
         mentionMembers={state.workspaceMembers.items}
         mentionsEnabled={threadsAvailable}
+        allowMentionAll={isChatManagerRole(store.chatActorRole(active.chatId))}
         mentionDirectoryLoading={mentionDirectoryLoading}
         onMentionDirectoryNeeded={ensureMentionDirectory}
       />

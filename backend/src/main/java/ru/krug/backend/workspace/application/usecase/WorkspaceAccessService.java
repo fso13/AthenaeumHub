@@ -36,6 +36,19 @@ public class WorkspaceAccessService implements WorkspaceAccessPort {
 
     @Override
     @Transactional(readOnly = true)
+    public boolean isAdmin(UUID workspaceId, UUID userId) {
+        if (workspaceId == null || userId == null) {
+            return false;
+        }
+        return workspaceRepository.findMembership(workspaceId, userId)
+                .filter(Membership::isActive)
+                .map(membership -> membership.role() == Membership.Role.OWNER
+                        || membership.role() == Membership.Role.ADMIN)
+                .orElse(false);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public boolean isGuest(UUID workspaceId, UUID userId) {
         if (workspaceId == null || userId == null) {
             return false;

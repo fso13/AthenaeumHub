@@ -26,6 +26,7 @@ tags:
   - name: stickers
   - name: plugins
   - name: notifications
+  - name: mentions
   - name: setup
   - name: security
   - name: admin
@@ -661,6 +662,237 @@ paths:
                 $ref: "#/components/schemas/AdminAuditPage"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/audit/export:
+    get:
+      tags: [admin]
+      operationId: exportAdminAudit
+      summary: Ограниченный экспорт audit-лога установки (CSV/JSON)
+      description: >
+        platform_admin. Читает append-only `audit.audit_events` через отдельную
+        SECURITY DEFINER функцию, которая повторно проверяет platform_admin. Те же
+        колонки, что у страницы (`id`, `action`, `actor_id`, `actor_email`,
+        `target_type`, `target_id`, `created_at`); metadata JSONB, хэши hash-chain и
+        request id не покидают БД. Экспорт ограничен 10 000 строк: при большем совпадении
+        возвращаются первые 10 000 и `X-Export-Truncated: true`. `format=csv` — RFC 4180
+        (`text/csv; charset=UTF-8`), `format=json` — объект `AdminAuditExport`. Сам экспорт
+        аудируется (`admin.audit.exported`, только format/returned/truncated).
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema: { type: string, enum: [csv, json] }
+        - name: action
+          in: query
+          required: false
+          description: Точное имя действия
+          schema: { type: string, maxLength: 120 }
+      responses:
+        "200":
+          description: Экспорт audit-лога
+          headers:
+            X-Export-Rows:
+              schema: { type: integer }
+            X-Export-Truncated:
+              schema: { type: boolean }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAuditExport"
+            text/csv:
+              schema: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /admin/sessions:
+    get:
+      tags: [admin]
+      operationId: listAdminSessions
+      summary: Сессии выбранного пользователя (platform_admin)
+      description: >
+        `user_id` обязателен. Локальный пользователь разрешается в непрозрачный Keycloak
+        subject через SECURITY DEFINER функцию, повторно проверяющую platform_admin;
+        неизвестный пользователь/identity — `404 USER_NOT_FOUND`. Возвращаются только id,
+        client-derived device label и timestamps; IP-адрес, username, email и токены не
+        пересекают границу. Порядок `last_seen_at DESC, id DESC`, cursor привязан к
+        `user_id`. `current` отмечает сессию вызывающего по claim `sid`, если выбран он
+        сам. Keycloak недоступен — `503 AUTH_UNAVAILABLE`. Чтение аудируется
+        (`admin.sessions.viewed`, только счётчики).
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Страница сессий
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSessionPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /admin/sessions/{sessionId}:
+    delete:
+      tags: [admin]
+      operationId: revokeAdminSession
+      summary: Отозвать сессию по id (platform_admin)
+      description: >
+        Отзывает одну сессию Keycloak по её id без необходимости знать владельца
+        (realm-level endpoint Keycloak 26). Идемпотентно: уже отозванная/неизвестная
+        сессия — `204`, без побочных эффектов. Keycloak недоступен — `503
+        AUTH_UNAVAILABLE`. Аудит хранит target id (если это uuid) и не хранит IP,
+        username, токены или содержимое.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        "204":
+          description: Сессия отозвана (идемпотентно)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /admin/users/{userId}/revoke-sessions:
+    post:
+      tags: [admin]
+      operationId: revokeAdminUserSessions
+      summary: Отозвать все сессии пользователя (platform_admin)
+      description: >
+        Отзывает все активные Keycloak-сессии выбранного пользователя (`POST
+        .../users/{id}/logout`). Локальный пользователь разрешается в Keycloak subject
+        через SECURITY DEFINER функцию, повторно проверяющую platform_admin; неизвестный
+        пользователь/identity — `404 USER_NOT_FOUND`. Возвращает только счётчики
+        `revoked_sessions`/`affected_users`; session id, IP, username и токены не
+        возвращаются. Действие аудируется (`admin.sessions.revoked_all`, только счётчики).
+        Keycloak недоступен — `503 AUTH_UNAVAILABLE`; операция best-effort.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Сессии отозваны
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSessionRevokeAll"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /admin/plugins/translate:
+    get:
+      tags: [admin, plugins]
+      operationId: getAdminTranslationProvider
+      summary: Настройки translation-провайдера (platform_admin)
+      description: >
+        Возвращает действующую конфигурацию `{enabled, url}`. Явная настройка
+        администратора имеет приоритет; пока строки нет, действует fallback
+        `KRUG_PLUGINS_TRANSLATE_URL`. Секретов/API-ключей в конфигурации нет, URL не
+        логируется.
+      responses:
+        "200":
+          description: Действующие настройки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranslationProviderSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags: [admin, plugins]
+      operationId: updateAdminTranslationProvider
+      summary: Изменить translation-провайдера (platform_admin)
+      description: >
+        Частичное обновление; минимум одно поле. `url` — только абсолютный `https` URL с
+        опциональным path; credentials/userinfo, query и fragment запрещены, длина
+        ≤ 2048 (`422 TRANSLATION_URL_INVALID`). Включение без сохранённого и без
+        environment URL — `422 TRANSLATION_URL_REQUIRED`. Повтор с теми же значениями
+        идемпотентен и не создаёт второй audit-события. Аудит содержит `enabled` и
+        `url_changed`, но не сам URL. Секреты не хранятся.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TranslationProviderUpdate"
+      responses:
+        "200":
+          description: Настройки сохранены
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranslationProviderSettings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /admin/plugins/translate/test:
+    post:
+      tags: [admin, plugins]
+      operationId: testAdminTranslationProvider
+      summary: Проверить доступность translation-провайдера (platform_admin)
+      description: >
+        Один ограниченный по timeouts/size probe с константным текстом; ответ провайдера
+        не возвращается и не логируется. `status` — `OK`, `DISABLED` (провайдер выключен,
+        сетевого вызова нет) или `UNAVAILABLE` (ошибка/таймаут/непригодный ответ).
+        `latency_ms` — измеренная длительность (0 для DISABLED). Тест аудируется
+        (`admin.plugin.translate.tested`, только status/latency).
+      responses:
+        "200":
+          description: Результат проверки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranslationProviderTest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1531,6 +1763,37 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /workspaces/{workspaceId}/overview:
+    get:
+      tags: [workspaces]
+      operationId: getWorkspaceOverview
+      summary: Агрегаты дашборда воркспейса (для любого ACTIVE-участника)
+      description: >
+        Доступно любому ACTIVE-участнику ACTIVE-воркспейса; чужая/неизвестная workspace —
+        `403` без раскрытия существования. Возвращаются только счётчики и байты:
+        участники (`total`/`online`), чаты, сообщения (`total` — сумма выделенных
+        последовательностей `chat_counters`, `last_24h` — реальные неудалённые строки за
+        24 часа), файлы (`total`, `used_bytes`, `reserved_bytes`), DLP-события за 24 часа,
+        квота хранилища и до пяти последних audit-действий. `audit_recent` заполняется
+        только для OWNER/ADMIN; остальные участники получают пустой список. `online` —
+        live-сигнал single-node realtime (различные пользователи с открытым WS), не
+        персистентный и ограничен `members.total`. Тексты сообщений, E2EE-конверты, имена
+        файлов, IP и токены не возвращаются; SQL-функция повторно проверяет членство.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Агрегаты воркспейса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceOverview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /workspaces/{workspaceId}/dlp/policies:
     get:
       tags: [security]
@@ -2329,6 +2592,271 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /files/{fileId}:
+    patch:
+      tags: [files]
+      operationId: renameFile
+      summary: Переименовать глобальный файл (владелец)
+      description: >
+        #83: меняет только отображаемое имя вложения (`PATCH /files/{fileId}`); object key,
+        sha256, scan_status и привязка к чату/сообщению не меняются. Доступно только
+        загрузившему файл. Имя валидируется как безопасное display-имя (1..255, без
+        `/`, `\`, control/bidi символов) → 400 `VALIDATION_FAILED`. Привязанный к сообщению
+        файл переименовать можно (имя — presentation-слой).
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FileRename" }
+      responses:
+        "200":
+          description: Файл переименован
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileItem" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+    delete:
+      tags: [files]
+      operationId: deleteFile
+      summary: Мягко удалить глобальный файл (владелец или админ воркспейса)
+      description: >
+        #83: soft delete (`status=DELETED`), объект удаляется из приватного бакета, а
+        зарезервированная квота освобождается. Разрешено владельцу файла или OWNER/ADMIN
+        воркспейса. Файл, привязанный к сообщению, отдельно не удаляется (409 `CONFLICT`):
+        его жизненным циклом владеет сообщение. Trusted direct-image (аватар/обложка/лого)
+        удаляется своим endpoint'ом (422 `IMAGE_INVALID`). Повторный DELETE идемпотентен.
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204":
+          description: Удалено (или уже удалено)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /workspaces/{workspaceId}/files:
+    post:
+      tags: [files]
+      operationId: uploadWorkspaceFile
+      summary: Глобальный файл воркспейса (multipart, managed-пайплайн)
+      description: >
+        #83: загрузка файла любого разрешённого типа из устройства. Используется тот же
+        managed-пайплайн, что и для чата: active workspace membership, tariff/guest лимит
+        размера, установленный `FileTypePolicy` (dangerous block + allowlist расширений и
+        MIME), атомарный reserve квоты и AV-скан. Файл создаётся без чата
+        (`source=WORKSPACE`, `scan_status=PENDING`); после чистого вердикта — `CLEAN` и
+        доступен для скачивания, при INFECTED/FAILED — `QUARANTINED` (объект и квота
+        освобождаются). Обходного «доверенного» пути нет: SKIPPED для этого endpoint'а
+        невозможен. Файл виден владельцу в `GET /files`; привязать его к сообщению можно
+        через `attachment_ids` при отправке. Object key строится только из серверных UUID,
+        имя файла — валидируемое display-имя; содержимое/ключ/hash/URL не возвращаются.
+        Транспортный лимит multipart — 512 MiB; большие файлы — через resumable `/uploads`.
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Файл сохранён и поставлен в AV-скан
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileItem" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /workspaces/{workspaceId}/search/messages:
+    get:
+      tags: [messages]
+      operationId: searchMessages
+      summary: Серверный поиск managed-сообщений воркспейса
+      description: >
+        #83: literal-поиск без учёта регистра по plaintext managed-сообщений. Вызывающий
+        должен быть ACTIVE-участником воркспейса; для каждого результата SQL дополнительно
+        требует ACTIVE-участие в чате, поэтому поиск никогда не раскрывает содержимое
+        чужого/приватного чата. Исключены: E2EE-чаты и сообщения (`crypto_scheme=E2EE_*`),
+        удалённые чаты/сообщения (delete-for-all) и сообщения, скрытые вызывающим
+        (delete-for-me). `q` — обычная подстрока (без regex/wildcard), 1..200 символов.
+        Тело сообщения хранится в AES-GCM, поэтому сервер сканирует ограниченное окно
+        кандидатов и фильтрует совпадения в памяти; `cursor` (непрозрачный, привязан к
+        воркспейсу, `chat_id` и запросу) двигается по последнему просканированному
+        кандидату, так что пустая страница не зацикливает пагинацию. `snippet` — plain
+        text с диапазонами `highlights`; HTML не возвращается.
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 200 }
+        - name: chat_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Страница результатов поиска
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MessageSearchPage" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /me/mentions:
+    get:
+      tags: [mentions]
+      operationId: listMentions
+      summary: Mention-инбокс вызывающего
+      description: >
+        #83: упоминания пользователя в текущем воркспейсе (workspace claim, иначе первый
+        ACTIVE воркспейс; `workspace_id` переопределяет оба). Только ACTIVE-участник.
+        Возвращаются только метаданные и состояние прочтения, без текста сообщения,
+        отсортированные `created_at DESC, id DESC`. `unread=true` — только непрочитанные;
+        `unread_count` — счётчик непрочитанных во всём воркспейсе (не только на странице).
+        Инбокс не зависит от notification preferences: MUTE гасит уведомление, но не
+        запись упоминания.
+      parameters:
+        - name: workspace_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: unread
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Страница упоминаний и unread_count
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MentionPage" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /me/mentions/read:
+    post:
+      tags: [mentions]
+      operationId: markMentionsRead
+      summary: Отметить упоминания прочитанными
+      description: >
+        #83: `ids` (до 200, только свои строки) или `all=true` (весь инбокс текущего
+        воркспейса). Идемпотентно: `read_at` выставляется один раз. `Idempotency-Key`
+        обязателен, как у остальных мутаций.
+      parameters:
+        - name: workspace_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/DeviceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReadMentionsRequest" }
+      responses:
+        "204":
+          description: Отмечено
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
   /chats/{chatId}:
     patch:
       tags: [chats]
@@ -2891,6 +3419,8 @@ paths:
       tags: [plugins]
       operationId: createPoll
       summary: Создать опрос (плагин `polls`)
+      parameters:
+        - $ref: "#/components/parameters/OptionalIdempotencyKey"
       description: >
         Создавать опрос может ACTIVE-участник чата при включённом плагине `polls` и
         праве `create_polls` (по умолчанию OWNER/ADMIN/MODERATOR/MEMBER; GUEST — нет).
@@ -2907,7 +3437,11 @@ paths:
               $ref: "#/components/schemas/PollCreate"
       responses:
         "201":
-          description: Опрос создан
+          description: >
+            Опрос создан; в той же транзакции создано сообщение `POLL` в ленте чата.
+            `message_id` — id этого сообщения (его `type=POLL`, `poll_id` указывает на
+            опрос). Повтор с тем же `Idempotency-Key` возвращает `Idempotent-Replay: true`
+            и исходные `id`/`message_id`, не создавая второе сообщение.
           content:
             application/json:
               schema:
@@ -3034,6 +3568,8 @@ paths:
       tags: [plugins]
       operationId: createTask
       summary: Создать задачу (плагин `tasks`)
+      parameters:
+        - $ref: "#/components/parameters/OptionalIdempotencyKey"
       description: >
         Создавать задачу может любой ACTIVE-участник чата при включённом плагине
         `tasks`. Заголовок — plain text 1..500 символов без HTML/control. `assignee_id`
@@ -3048,7 +3584,11 @@ paths:
               $ref: "#/components/schemas/TaskCreate"
       responses:
         "201":
-          description: Задача создана
+          description: >
+            Задача создана; в той же транзакции создано сообщение `TASK` в ленте чата.
+            `message_id` — id этого сообщения (его `type=TASK`, `task_id` указывает на
+            задачу). Повтор с тем же `Idempotency-Key` возвращает `Idempotent-Replay: true`
+            и исходные `id`/`message_id`, не создавая второе сообщение.
           content:
             application/json:
               schema:
@@ -4594,6 +5134,16 @@ components:
       in: header
       required: true
       schema: { type: string, format: uuid }
+    OptionalIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >
+        #95: recommended for poll/task creation. With the header, a retry with the same key
+        and body returns the original poll/task and its timeline message id instead of
+        creating a second entity/message. Without it the server generates a fresh key, so
+        every request is a new create.
+      schema: { type: string, format: uuid }
     ChatId:
       name: chatId
       in: path
@@ -5316,6 +5866,86 @@ components:
         next_cursor: { type: [string, "null"] }
         has_more: { type: boolean }
 
+    AdminAuditExport:
+      type: object
+      required: [items, exported_rows, truncated]
+      description: >
+        JSON-представление ограниченного экспорта platform-audit. `exported_rows` ≤ 10 000;
+        `truncated=true` означает, что совпадений больше и фильтр `action` нужно сузить.
+        Колонки те же, что у `AdminAuditEvent`; metadata/hashes/request id отсутствуют.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminAuditEvent"
+        exported_rows: { type: integer, minimum: 0, maximum: 10000 }
+        truncated: { type: boolean }
+
+    AdminSession:
+      type: object
+      required: [id, user_id, device, created_at, last_seen_at, current]
+      description: >
+        Сессия Keycloak выбранного пользователя без IP-адреса, username, email и токенов.
+        `device` — метка клиента; `current` — сессия вызывающего по claim `sid`, если
+        выбран он сам.
+      properties:
+        id: { type: string, minLength: 1, maxLength: 128 }
+        user_id: { type: string, format: uuid }
+        device: { type: string, maxLength: 120 }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        current: { type: boolean }
+
+    AdminSessionPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AdminSession" }
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    AdminSessionRevokeAll:
+      type: object
+      required: [revoked_sessions, affected_users]
+      properties:
+        revoked_sessions: { type: integer, minimum: 0 }
+        affected_users: { type: integer, minimum: 0 }
+
+    TranslationProviderSettings:
+      type: object
+      required: [enabled, url]
+      description: >
+        Действующая конфигурация translation-провайдера. Секретов нет; `url` — абсолютный
+        https URL или пустая строка.
+      properties:
+        enabled: { type: boolean }
+        url: { type: string, maxLength: 2048 }
+
+    TranslationProviderUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        enabled: { type: boolean }
+        url:
+          type: string
+          maxLength: 2048
+          description: >
+            Пустая строка очищает URL. Непустое значение — только абсолютный https URL с
+            опциональным path; userinfo/query/fragment запрещены.
+
+    TranslationProviderTest:
+      type: object
+      required: [status, latency_ms]
+      description: >
+        Результат health-check без содержимого провайдера. `status` — OK, DISABLED или
+        UNAVAILABLE; `latency_ms` — длительность probe (0 для DISABLED).
+      properties:
+        status: { type: string, enum: [OK, DISABLED, UNAVAILABLE] }
+        latency_ms: { type: integer, format: int64, minimum: 0, maximum: 60000 }
+
     TestEmailRequest:
       type: object
       additionalProperties: false
@@ -6029,6 +6659,13 @@ components:
           type: integer
           minimum: 0
           description: Число уникальных проголосовавших (один голос на пользователя).
+        message_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            #95: id сообщения `POLL` в ленте чата. Присутствует в ответе `POST
+            /chats/{chatId}/polls` (создано в той же транзакции); list/vote/close его не
+            возвращают.
 
     PollList:
       type: object
@@ -6107,6 +6744,12 @@ components:
           type: [string, "null"]
           format: date-time
         created_at: { type: string, format: date-time }
+        message_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            #95: id сообщения `TASK` в ленте чата. Присутствует в ответе `POST
+            /chats/{chatId}/tasks`; list/update его не возвращают.
 
     TaskList:
       type: object
@@ -6171,6 +6814,72 @@ components:
           minLength: 1
           maxLength: 8000
           description: Plain text без HTML/control-символов; сервер не логирует его.
+
+    WorkspaceOverview:
+      type: object
+      required:
+        [members, chats, messages, files, dlp, storage, audit_recent, generated_at]
+      description: >
+        Агрегаты дашборда воркспейса. Только счётчики/байты и до пяти последних
+        audit-действий (для OWNER/ADMIN; остальные получают пустой `audit_recent`).
+        Содержимое сообщений, E2EE-конверты, имена файлов, IP и токены отсутствуют.
+      properties:
+        members:
+          type: object
+          required: [total, online]
+          properties:
+            total: { type: integer, format: int64, minimum: 0 }
+            online:
+              type: integer
+              format: int64
+              minimum: 0
+              description: >
+                Live single-node realtime-сигнал: различные пользователи с открытым WS
+                в этом воркспейсе; не персистентный, ограничен `members.total`.
+        chats: { type: integer, format: int64, minimum: 0 }
+        messages:
+          type: object
+          required: [total, last_24h]
+          properties:
+            total:
+              type: integer
+              format: int64
+              minimum: 0
+              description: >
+                Сумма выделенных последовательностей `chat_counters` (включая удалённые
+                сообщения), без сканирования партиционированной ленты.
+            last_24h:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Неудалённые строки `message.messages` за последние 24 часа.
+        files:
+          type: object
+          required: [total, used_bytes, reserved_bytes]
+          properties:
+            total:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Вложения со статусом READY/BOUND (объекты ещё хранятся).
+            used_bytes: { type: integer, format: int64, minimum: 0 }
+            reserved_bytes: { type: integer, format: int64, minimum: 0 }
+        dlp:
+          type: object
+          required: [events_last_24h]
+          properties:
+            events_last_24h: { type: integer, format: int64, minimum: 0 }
+        storage:
+          type: object
+          required: [used_bytes, quota_bytes]
+          properties:
+            used_bytes: { type: integer, format: int64, minimum: 0 }
+            quota_bytes: { type: integer, format: int64, minimum: 0 }
+        audit_recent:
+          type: array
+          maxItems: 5
+          items: { $ref: "#/components/schemas/WorkspaceAuditEvent" }
+        generated_at: { type: string, format: date-time }
 
     WorkspaceLimits:
       type: object
@@ -6408,19 +7117,20 @@ components:
 
     FileItem:
       description: >
-        File-center element (#73): `AttachmentRef` metadata plus chat/message provenance.
+        File-center element (#73/#83): `AttachmentRef` metadata plus chat/message provenance.
         Never contains the object key, content, sha256 or a presigned URL; download goes
         through `attachmentDownloadUrl`. `chat_name` is null for DIRECT chats (the client
-        derives the peer name, D-S4-02). `message_id` is always present: unbound uploads
-        are not part of the file center.
+        derives the peer name, D-S4-02). `chat_id`/`message_id` are null for a global
+        workspace file (#83) that has not been attached to a message yet; such a file is
+        visible only to its uploader (and to workspace OWNER/ADMIN for moderation).
       allOf:
         - $ref: "#/components/schemas/AttachmentRef"
         - type: object
           required: [chat_id, message_id, created_at]
           properties:
-            chat_id: { type: string, format: uuid }
+            chat_id: { type: [string, "null"], format: uuid }
             chat_name: { type: [string, "null"] }
-            message_id: { type: string, format: uuid }
+            message_id: { type: [string, "null"], format: uuid }
             created_at: { type: string, format: date-time }
 
     FileQuotaSummary:
@@ -6454,6 +7164,110 @@ components:
           oneOf:
             - $ref: "#/components/schemas/FileQuotaSummary"
             - type: "null"
+
+    FileRename:
+      type: object
+      description: #83: новое отображаемое имя глобального файла (object key не меняется).
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+
+    SearchHighlight:
+      type: object
+      description: >
+        #83: диапазон подсветки внутри `snippet` (start включительно, end исключительно).
+        Смещения — в символах строки, как в JSON/JavaScript (UTF-16 code units).
+      required: [start, end]
+      properties:
+        start: { type: integer, minimum: 0 }
+        end: { type: integer, minimum: 0 }
+
+    MessageSearchHit:
+      type: object
+      description: >
+        #83: одно попадание серверного поиска. `snippet` — plain text managed-сообщения
+        (не HTML); клиент обязан рендерить его как текст и подсвечивать диапазоны
+        `highlights`. E2EE-сообщения в выдачу не попадают.
+      required: [message_id, chat_id, seq, snippet, highlights, created_at]
+      properties:
+        message_id: { type: string, format: uuid }
+        chat_id: { type: string, format: uuid }
+        chat_name: { type: [string, "null"] }
+        seq: { type: integer, format: int64, minimum: 1 }
+        sender_id: { type: [string, "null"], format: uuid }
+        sender_display_name: { type: [string, "null"] }
+        snippet: { type: string, maxLength: 240 }
+        highlights:
+          type: array
+          items: { $ref: "#/components/schemas/SearchHighlight" }
+        created_at: { type: string, format: date-time }
+
+    MessageSearchPage:
+      type: object
+      description: >
+        #83: страница серверного поиска. `next_cursor` непрозрачен, привязан к воркспейсу,
+        фильтру `chat_id` и нормализованному запросу; `has_more` — в окне сканирования
+        остались кандидаты.
+      required: [items, page, query]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/MessageSearchHit" }
+        page:
+          type: object
+          required: [has_more]
+          properties:
+            next_cursor: { type: [string, "null"] }
+            has_more: { type: boolean }
+        query: { type: string, maxLength: 200 }
+
+    Mention:
+      type: object
+      description: >
+        #83: запись mention-инбокса. Содержит только метаданные (без текста сообщения):
+        чат, сообщение, автор и состояние прочтения.
+      required: [id, chat_id, message_id, mention_all, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        chat_id: { type: string, format: uuid }
+        chat_name: { type: [string, "null"] }
+        message_id: { type: string, format: uuid }
+        sender_id: { type: [string, "null"], format: uuid }
+        sender_display_name: { type: [string, "null"] }
+        mention_all: { type: boolean }
+        read_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+
+    MentionPage:
+      type: object
+      description: >
+        #83: страница mention-инбокса и счётчик непрочитанных в текущем воркспейсе.
+        Сортировка `created_at DESC, id DESC`; `next_cursor` непрозрачен и привязан к
+        воркспейсу и фильтру `unread`.
+      required: [items, page, unread_count]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Mention" }
+        page:
+          type: object
+          required: [has_more]
+          properties:
+            next_cursor: { type: [string, "null"] }
+            has_more: { type: boolean }
+        unread_count: { type: integer, format: int64, minimum: 0 }
+
+    ReadMentionsRequest:
+      type: object
+      description: >
+        #83: отметить упоминания прочитанными. Нужен `ids` (до 200) или `all=true`.
+        Идемпотентно: уже прочитанные строки не меняются.
+      properties:
+        ids:
+          type: array
+          maxItems: 200
+          items: { type: string, format: uuid }
+        all: { type: boolean }
 
     RealtimeTicket:
       type: object
@@ -6570,7 +7384,7 @@ components:
         id: { type: string, format: uuid }
         chat_id: { type: string, format: uuid }
         seq: { type: integer, format: int64, minimum: 1 }
-        type: { type: string, enum: [TEXT, STICKER, SYSTEM] }
+        type: { type: string, enum: [TEXT, STICKER, SYSTEM, POLL, TASK] }
         sender_id: { type: [string, "null"], format: uuid }
         sender_display_name: { type: [string, "null"] }
         text: { type: [string, "null"] }
@@ -6601,6 +7415,34 @@ components:
           type: [object, "null"]
           allOf:
             - $ref: "#/components/schemas/StickerRef"
+        poll_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            #95: id опроса; не null только при `type=POLL`. Сервер создаёт такое сообщение
+            вместе с опросом, клиентского POST сообщения с `type=POLL` нет.
+        poll:
+          oneOf:
+            - $ref: "#/components/schemas/Poll"
+            - type: "null"
+          description: >
+            #95: встроенный опрос с актуальными голосами и `my_option_id` вызывающего.
+            `null` для не-POLL сообщений и tombstone (delete-for-all). Не E2EE: серверные
+            плагины в E2EE-чате недоступны.
+        task_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            #95: id задачи; не null только при `type=TASK`. Сообщение создаётся сервером
+            вместе с задачей.
+        task:
+          oneOf:
+            - $ref: "#/components/schemas/Task"
+            - type: "null"
+          description: >
+            #95: встроенная задача с актуальным `done`/`completed_by`/`completed_at`
+            (изменение задачи отражается при следующем history/replay чтении). `null` для
+            не-TASK сообщений и tombstone.
         attachments:
           type: array
           items:
@@ -6618,6 +7460,18 @@ components:
           oneOf:
             - $ref: "#/components/schemas/CryptoEnvelope"
             - type: "null"
+        mentions:
+          type: array
+          description: >
+            #83: явно упомянутые пользователи (id), в порядке запроса. Для E2EE, tombstone
+            и сообщений без упоминаний — пустой массив. Клиент рисует @-упоминания по id;
+            текст сообщения сохраняется как есть и не переписывается сервером.
+          items: { type: string, format: uuid }
+        mention_all:
+          type: boolean
+          description: >
+            #83: сообщение содержит `@all`. Для E2EE и tombstone всегда false. Рассылку
+            получают активные участники чата на момент отправки, кроме автора.
 
     MessageCreate:
       type: object
@@ -6645,6 +7499,22 @@ components:
           type: array
           maxItems: 10
           items: { type: string, format: uuid }
+        mentions:
+          type: array
+          maxItems: 50
+          uniqueItems: true
+          description: >
+            #83: id активных участников чата. Не участник/неизвестный id → 422
+            `MENTION_INVALID` (без раскрытия существования). Дубликаты схлопываются.
+            Для E2EE запрещено (422 `E2EE_PLAINTEXT_FORBIDDEN`), для STICKER — 422.
+          items: { type: string, format: uuid }
+        mention_all:
+          type: boolean
+          default: false
+          description: >
+            #83: `@all`. Разрешён только OWNER/ADMIN чата (403 `MENTION_ALL_FORBIDDEN`),
+            в E2EE запрещён. Рассылается активным участникам чата на момент отправки,
+            автор уведомление не получает.
         envelopes:
           type: array
           minItems: 1

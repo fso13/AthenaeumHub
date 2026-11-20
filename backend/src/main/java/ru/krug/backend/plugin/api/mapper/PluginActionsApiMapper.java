@@ -25,12 +25,21 @@ public final class PluginActionsApiMapper {
     }
 
     public static PollResponse toPollResponse(PollView poll) {
+        return toPollResponse(poll, null);
+    }
+
+    /** Create response: carries the id of the POLL timeline message (#95). */
+    public static PollResponse toPollCreatedResponse(PollView poll, java.util.UUID messageId) {
+        return toPollResponse(poll, messageId);
+    }
+
+    private static PollResponse toPollResponse(PollView poll, java.util.UUID messageId) {
         List<PollOptionResponse> options = poll.options().stream()
                 .map(PluginActionsApiMapper::toResponse)
                 .toList();
         return new PollResponse(poll.id(), poll.question(), options, poll.creatorId(),
                 poll.closed(), poll.closedAt(), poll.createdAt(), poll.myOptionId(),
-                poll.totalVotes());
+                poll.totalVotes(), messageId);
     }
 
     private static PollOptionResponse toResponse(PollOptionView option) {
@@ -44,9 +53,18 @@ public final class PluginActionsApiMapper {
     }
 
     public static TaskResponse toTaskResponse(TaskView task) {
+        return toTaskResponse(task, null);
+    }
+
+    /** Create response: carries the id of the TASK timeline message (#95). */
+    public static TaskResponse toTaskCreatedResponse(TaskView task, java.util.UUID messageId) {
+        return toTaskResponse(task, messageId);
+    }
+
+    private static TaskResponse toTaskResponse(TaskView task, java.util.UUID messageId) {
         return new TaskResponse(task.id(), task.title(), task.creatorId(), task.assigneeId(),
                 task.dueAt(), task.done(), task.completedBy(), task.completedAt(),
-                task.createdAt());
+                task.createdAt(), messageId);
     }
 
     public static TranslationResponse toTranslationResponse(TranslationView translation) {

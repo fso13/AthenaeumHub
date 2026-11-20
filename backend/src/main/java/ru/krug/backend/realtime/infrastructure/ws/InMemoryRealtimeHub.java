@@ -285,6 +285,22 @@ public class InMemoryRealtimeHub
         return connections.size();
     }
 
+    /**
+     * Distinct users with a live connection bound to the workspace (#84 overview). This is
+     * a single-node in-process signal; no user id or connection detail is returned.
+     */
+    public int onlineMemberCount(UUID workspaceId) {
+        if (workspaceId == null) {
+            return 0;
+        }
+        return (int) connections.values().stream()
+                .map(connection -> connection.session())
+                .filter(session -> workspaceId.equals(session.workspaceId()))
+                .map(session -> session.userId())
+                .distinct()
+                .count();
+    }
+
     public int subscriptionCount() {
         return subscribers.values().stream().mapToInt(Set::size).sum();
     }

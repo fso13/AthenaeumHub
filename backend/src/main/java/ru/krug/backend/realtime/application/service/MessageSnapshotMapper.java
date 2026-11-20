@@ -33,7 +33,7 @@ public final class MessageSnapshotMapper {
                                 attachment.mimeType(), attachment.scanStatus(),
                                 media(attachment.media())))
                         .toList(),
-                view.reactions());
+                view.reactions(), view.pluginContent());
     }
 
     private static AttachmentMediaSnapshot media(AttachmentMediaView media) {

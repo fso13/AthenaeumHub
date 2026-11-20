@@ -72,4 +72,24 @@ public class AttachmentRepositoryAdapter implements AttachmentRepository {
     public Optional<Attachment> findByIdForResolve(UUID attachmentId) {
         return jpaRepository.findById(attachmentId).map(AttachmentEntity::toDomain);
     }
+
+    @Override
+    public int updateScanVerdict(UUID attachmentId,
+                                 ru.krug.backend.file.domain.model.AttachmentStatus status,
+                                 ru.krug.backend.file.domain.model.ScanStatus scanStatus,
+                                 Instant now) {
+        return entityManager.createNativeQuery("""
+                        UPDATE file.attachments
+                           SET status = ?1,
+                               scan_status = ?2,
+                               updated_at = ?3
+                         WHERE id = ?4
+                           AND status <> 'DELETED'
+                        """)
+                .setParameter(1, status.name())
+                .setParameter(2, scanStatus.name())
+                .setParameter(3, java.sql.Timestamp.from(now))
+                .setParameter(4, attachmentId)
+                .executeUpdate();
+    }
 }

@@ -56,6 +56,12 @@ export interface PluginActionsStoreDeps {
     | 'updateTask'
     | 'translateMessage'
   >;
+  /**
+   * #95: push the fresh server projection into the chat message that embeds
+   * it. Optional so API-only tests can construct the store without a chat.
+   */
+  onPollChanged?: (chatId: string, poll: Poll) => void;
+  onTaskChanged?: (chatId: string, task: Task) => void;
 }
 
 export const EMPTY_PLUGIN_ACTIONS_STATE: PluginActionsState = {
@@ -121,6 +127,8 @@ function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
 
 export class PluginActionsStore {
   private readonly api: PluginActionsStoreDeps['api'];
+  private readonly onPollChanged: PluginActionsStoreDeps['onPollChanged'];
+  private readonly onTaskChanged: PluginActionsStoreDeps['onTaskChanged'];
   private state: PluginActionsState = { ...EMPTY_PLUGIN_ACTIONS_STATE };
   private readonly listeners = new Set<() => void>();
   private pollsPromise: Promise<void> | null = null;
@@ -134,6 +142,8 @@ export class PluginActionsStore {
 
   constructor(deps: PluginActionsStoreDeps) {
     this.api = deps.api;
+    this.onPollChanged = deps.onPollChanged;
+    this.onTaskChanged = deps.onTaskChanged;
   }
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -250,6 +260,7 @@ export class PluginActionsStore {
           polls: upsertPoll(this.state.polls, poll),
           createPollError: null,
         });
+        this.onPollChanged?.(chatId, poll);
       }
       return poll;
     } catch (error) {
@@ -276,6 +287,7 @@ export class PluginActionsStore {
           pendingPollIds: this.state.pendingPollIds.filter((id) => id !== pollId),
           polls: upsertPoll(this.state.polls, poll),
         });
+        this.onPollChanged?.(chatId, poll);
       }
       return true;
     } catch (error) {
@@ -306,6 +318,7 @@ export class PluginActionsStore {
           closingPollIds: this.state.closingPollIds.filter((id) => id !== pollId),
           polls: upsertPoll(this.state.polls, poll),
         });
+        this.onPollChanged?.(chatId, poll);
       }
       return true;
     } catch (error) {
@@ -343,6 +356,7 @@ export class PluginActionsStore {
           tasks: upsertTask(this.state.tasks, task),
           createTaskError: null,
         });
+        this.onTaskChanged?.(chatId, task);
       }
       return task;
     } catch (error) {
@@ -369,6 +383,7 @@ export class PluginActionsStore {
           pendingTaskIds: this.state.pendingTaskIds.filter((id) => id !== taskId),
           tasks: upsertTask(this.state.tasks, task),
         });
+        this.onTaskChanged?.(chatId, task);
       }
       return true;
     } catch (error) {

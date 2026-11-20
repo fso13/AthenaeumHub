@@ -17,7 +17,14 @@ export type ReactionSummary = components['schemas']['ReactionSummary'];
 export type MessageEdit = components['schemas']['MessageEdit'];
 /** #63: delete scope; `me` is the default, `all` is author-only. */
 export type MessageDeleteScope = 'me' | 'all';
-export type MessageCreateBody = components['schemas']['MessageCreate'];
+/**
+ * The generated schema marks `mention_all` as required because the contract has
+ * `default: false`; the API contract still allows omitting it (and E2EE forbids
+ * the field entirely). The client sends it only when the composer enables @all.
+ */
+export type MessageCreateBody = Omit<components['schemas']['MessageCreate'], 'mention_all'> & {
+  mention_all?: boolean;
+};
 export type MessagePage = components['schemas']['MessagePage'];
 export type MessagePageMeta = MessagePage['page'];
 export type ReadRequestBody = components['schemas']['ReadRequest'];
@@ -118,6 +125,27 @@ export type ChatPermissionKey =
  */
 export type AdminAuditEvent = components['schemas']['AdminAuditEvent'];
 export type AdminAuditPage = components['schemas']['AdminAuditPage'];
+
+/* ------------------------------------------------------------------------- */
+/* #84: workspace overview, bounded admin audit export, admin sessions and   */
+/* installation translation-provider configuration.                          */
+/* ------------------------------------------------------------------------- */
+
+/** Counts/bytes only; never message bodies, filenames, IPs or tokens. */
+export type WorkspaceOverview = components['schemas']['WorkspaceOverview'];
+/** Bounded JSON export (`exported_rows` ≤ 10 000) with the same columns as the page. */
+export type AdminAuditExport = components['schemas']['AdminAuditExport'];
+export type AdminAuditExportFormat = 'csv' | 'json';
+/** One Keycloak session without IP, username, email or tokens. */
+export type AdminSession = components['schemas']['AdminSession'];
+export type AdminSessionPage = components['schemas']['AdminSessionPage'];
+export type AdminSessionRevokeAll = components['schemas']['AdminSessionRevokeAll'];
+/** Effective `{enabled, url}`; there is no credential/API-key field. */
+export type TranslationProviderSettings = components['schemas']['TranslationProviderSettings'];
+/** Partial update: omitted fields stay unchanged; `url=''` clears the URL. */
+export type TranslationProviderUpdate = components['schemas']['TranslationProviderUpdate'];
+export type TranslationProviderTest = components['schemas']['TranslationProviderTest'];
+export type TranslationProviderTestStatus = TranslationProviderTest['status'];
 
 /* ------------------------------------------------------------------------- */
 /* Auth BFF (docs/TASKS-AUTH-BFF.md)                                         */
@@ -314,6 +342,28 @@ export type FileKindFilter = NonNullable<operations['listFiles']['parameters']['
 export type FileScanStatusFilter = NonNullable<
   operations['listFiles']['parameters']['query']
 >['scan_status'];
+/** #83: `PATCH /files/{fileId}` — display name only (object key stays). */
+export type FileRename = components['schemas']['FileRename'];
+
+/* ------------------------------------------------------------------------- */
+/* #83: server-side message search                                           */
+/* ------------------------------------------------------------------------- */
+
+/** One highlight range `[start,end)` in `snippet` (UTF-16 code units). */
+export type SearchHighlight = components['schemas']['SearchHighlight'];
+/** One managed plaintext hit; `snippet` is text, never HTML. */
+export type MessageSearchHit = components['schemas']['MessageSearchHit'];
+export type MessageSearchPage = components['schemas']['MessageSearchPage'];
+
+/* ------------------------------------------------------------------------- */
+/* #83: mention inbox (`/me/mentions`)                                       */
+/* ------------------------------------------------------------------------- */
+
+/** Content-free mention row: chat/message/author/read state only. */
+export type Mention = components['schemas']['Mention'];
+export type MentionPage = components['schemas']['MentionPage'];
+/** `ids[]` (≤200) or `all=true`; the server owns idempotency. */
+export type ReadMentionsRequest = components['schemas']['ReadMentionsRequest'];
 
 /* ------------------------------------------------------------------------- */
 /* E5-F: built-in stickers                                                   */

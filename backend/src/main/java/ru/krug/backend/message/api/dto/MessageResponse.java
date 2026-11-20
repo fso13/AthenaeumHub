@@ -32,5 +32,13 @@ public record MessageResponse(
         List<AttachmentRefResponse> attachments,
         List<ReactionSummaryResponse> reactions,
         ThreadSummaryResponse threadSummary,
-        @JsonInclude(JsonInclude.Include.NON_NULL) EnvelopeCoverageResponse envelopeCoverage) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) EnvelopeCoverageResponse envelopeCoverage,
+        @JsonInclude(JsonInclude.Include.NON_NULL) UUID pollId,
+        @JsonInclude(JsonInclude.Include.NON_NULL) MessagePollResponse poll,
+        @JsonInclude(JsonInclude.Include.NON_NULL) UUID taskId,
+        @JsonInclude(JsonInclude.Include.NON_NULL) MessageTaskResponse task,
+        /** #83: explicit mentioned user ids; empty for E2EE, tombstones and no mentions. */
+        List<UUID> mentions,
+        /** #83: @all marker; always false for E2EE and tombstones. */
+        boolean mentionAll) {
 }

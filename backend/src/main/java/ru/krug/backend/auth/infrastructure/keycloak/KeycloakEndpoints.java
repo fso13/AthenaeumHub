@@ -74,6 +74,11 @@ public class KeycloakEndpoints {
         return adminUserSessionsUrl(userId) + "/" + sessionId;
     }
 
+    /** Revoke one session by id without the owner (Keycloak 26 realm-level endpoint). */
+    public String adminSessionUrl(String sessionId) {
+        return baseUrl + "/admin/realms/" + realm + "/sessions/" + sessionId;
+    }
+
     private static String resolveBase(String configured, String issuer) {
         String candidate = configured == null ? "" : configured.strip();
         if (candidate.isEmpty() && issuer != null && !issuer.isBlank()) {

@@ -15,4 +15,10 @@ public interface WorkspaceAccessPort {
 
     /** GUEST members have a lower per-file limit but share the workspace storage quota. */
     boolean isGuest(UUID workspaceId, UUID userId);
+
+    /**
+     * Workspace OWNER/ADMIN. Used for narrow moderation actions such as deleting another
+     * member's global file; it never replaces {@link #requireActiveMember}.
+     */
+    boolean isAdmin(UUID workspaceId, UUID userId);
 }

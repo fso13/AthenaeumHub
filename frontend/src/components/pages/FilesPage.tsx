@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ListFilesQuery } from '../../api/endpoints';
 import { toApiError } from '../../api/problem';
 import type { ApiError } from '../../api/problem';
+import type { AdminActionErrorInfo } from '../admin/actionErrors';
+import { AdminConfirmDialog } from '../admin/AdminConfirmDialog';
 import type { FileItem, FileKindFilter, FileScanStatusFilter } from '../../api/types';
 import { describeError } from '../../domain/errors';
 import { formatBytes, isSafePreviewImage, safeHttpUrl } from '../../files/format';
@@ -10,12 +12,16 @@ import { useChatState, useFilesState, useFilesStore } from '../../store/ChatProv
 import type { AppState } from '../../store/chatStore';
 import {
   ChatIcon,
+  CheckIcon,
+  CloseIcon,
   DownloadIcon,
+  EditIcon,
   FolderIcon,
   PlusIcon,
   RefreshIcon,
   SearchIcon,
   ShieldIcon,
+  TrashIcon,
 } from '../Icons';
 import { PageShell } from './PageShell';
 import {
@@ -113,25 +119,77 @@ function openExternal(url: string): void {
   anchor.remove();
 }
 
+type FileAction = 'upload' | 'rename' | 'delete';
+
+/**
+ * #83 error copy. The server is the source of truth: the contract codes are
+ * mapped to the exact cause instead of a generic "something failed".
+ */
+function fileErrorText(error: ApiError, action: FileAction): string {
+  switch (error.status) {
+    case 403:
+      return action === 'upload'
+        ? t('files.uploadForbidden')
+        : action === 'rename'
+          ? t('files.renameForbidden')
+          : t('files.deleteForbidden');
+    case 404:
+      // The server hides existence from non-owners; rename is owner-only.
+      return action === 'rename' ? t('files.renameForbidden') : describeError(error).message;
+    case 409:
+      return t('files.deleteAttached');
+    case 413:
+      return t('files.uploadTooLarge');
+    case 415:
+      return t('files.uploadUnsupported');
+    case 422:
+      return action === 'upload' ? t('files.uploadDangerous') : t('files.uploadInvalid');
+    case 503:
+      return action === 'delete' ? t('files.deleteUnavailable') : t('files.uploadUnavailable');
+    default:
+      return describeError(error).message;
+  }
+}
+
+/** Confirm-dialog projection: 404 is reconciled state, not a scary failure. */
+function deleteErrorInfo(error: ApiError): AdminActionErrorInfo {
+  return {
+    text: fileErrorText(error, 'delete'),
+    tone: error.status === 404 ? 'warning' : 'error',
+    retryable: error.source === 'network' || error.status === 503 || (error.status ?? 0) >= 500,
+    closeOnError: error.status === 404,
+  };
+}
+
 function FileRow({
   item,
   chatName,
+  canModerate,
   onOpenChat,
+  onRequestDelete,
 }: {
   item: FileItem;
   chatName: string;
+  /** Workspace OWNER/ADMIN may delete any file; the server re-checks. */
+  canModerate: boolean;
   onOpenChat: (chatId: string) => void;
+  onRequestDelete: (item: FileItem) => void;
 }) {
   const filesStore = useFilesStore();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(fileName(item));
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
   const preview = useThumbnail(item);
   const thumb = previewFailed ? null : preview;
   const kind = fileKind(item.mime_type, item.filename);
   const ext = extensionOf(item.filename);
   const scan = item.scan_status;
   const scanBlocked = scan === 'INFECTED' || scan === 'FAILED';
+  const name = fileName(item);
 
   const handleDownload = async () => {
     if (busy || scanBlocked) return;
@@ -146,6 +204,42 @@ function FileRow({
     } finally {
       setBusy(false);
     }
+  };
+
+  const startRename = () => {
+    setEditValue(name);
+    setRenameError(null);
+    setEditing(true);
+  };
+
+  const cancelRename = () => {
+    setEditing(false);
+    setRenameError(null);
+  };
+
+  const submitRename = async () => {
+    const next = editValue.trim();
+    if (next.length === 0) {
+      setRenameError(t('files.renameEmpty'));
+      return;
+    }
+    if (next.length > 255) {
+      setRenameError(t('files.renameTooLong'));
+      return;
+    }
+    if (next === name) {
+      cancelRename();
+      return;
+    }
+    setRenaming(true);
+    setRenameError(null);
+    const result = await filesStore.renameFile(item.id, next);
+    setRenaming(false);
+    if (!result.ok) {
+      setRenameError(fileErrorText(result.error, 'rename'));
+      return;
+    }
+    setEditing(false);
   };
 
   return (
@@ -168,10 +262,64 @@ function FileRow({
         )}
       </span>
       <span className="file-name">
-        <b title={fileName(item)}>{fileName(item)}</b>
+        {editing ? (
+          <form
+            className="file-rename-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitRename();
+            }}
+          >
+            <label className="visually-hidden" htmlFor={`rename-${item.id}`}>
+              {t('files.rename')}
+            </label>
+            <input
+              id={`rename-${item.id}`}
+              value={editValue}
+              maxLength={255}
+              autoFocus
+              disabled={renaming}
+              aria-invalid={renameError !== null}
+              aria-describedby={renameError ? `rename-error-${item.id}` : undefined}
+              onChange={(event) => setEditValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  cancelRename();
+                }
+              }}
+            />
+            <button
+              type="submit"
+              className="file-dl"
+              disabled={renaming}
+              aria-label={t('files.renameSave')}
+              title={t('files.renameSave')}
+            >
+              <CheckIcon aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="file-dl"
+              disabled={renaming}
+              onClick={cancelRename}
+              aria-label={t('files.renameCancel')}
+              title={t('files.renameCancel')}
+            >
+              <CloseIcon aria-hidden="true" />
+            </button>
+          </form>
+        ) : (
+          <b title={name}>{name}</b>
+        )}
         <small>
           {fileKindLabel(kind)} · {shortDate(item.created_at)}
         </small>
+        {renameError ? (
+          <small className="file-error" id={`rename-error-${item.id}`} role="alert">
+            {renameError}
+          </small>
+        ) : null}
         {error ? (
           <small className="file-error" role="alert">
             {describeError(error).message}
@@ -188,13 +336,13 @@ function FileRow({
           {t(SCAN_LABEL[scan] ?? 'files.scanStatus.SKIPPED')}
         </span>
       </span>
-      <span className="file-actions">
+      <span className="file-actions files-row-actions">
         <button
           type="button"
           className="file-dl"
           onClick={() => void handleDownload()}
           disabled={busy || scanBlocked}
-          aria-label={`${t('files.download')}: ${fileName(item)}`}
+          aria-label={`${t('files.download')}: ${name}`}
           title={
             scanBlocked
               ? t('files.downloadBlocked')
@@ -208,11 +356,34 @@ function FileRow({
         <button
           type="button"
           className="file-dl"
-          onClick={() => onOpenChat(item.chat_id)}
+          onClick={() => {
+            if (item.chat_id) onOpenChat(item.chat_id);
+          }}
+          disabled={!item.chat_id}
           aria-label={`${t('files.toChat')}: ${chatName}`}
           title={t('files.toChat')}
         >
           <ChatIcon aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="file-dl"
+          onClick={startRename}
+          disabled={renaming || editing}
+          aria-label={`${t('files.rename')}: ${name}`}
+          title={t('files.rename')}
+        >
+          <EditIcon aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="file-dl"
+          onClick={() => onRequestDelete(item)}
+          disabled={editing}
+          aria-label={`${t('files.delete')}: ${name}`}
+          title={canModerate ? t('files.delete') : t('files.actionsHint')}
+        >
+          <TrashIcon aria-hidden="true" />
         </button>
       </span>
     </div>
@@ -234,6 +405,11 @@ export function FilesPage({ onBack, onOpenChat }: FilesPageProps) {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [filter, setFilter] = useState<KindFilter>('all');
   const [scan, setScan] = useState<ScanFilter>('ALL');
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const [lastUpload, setLastUpload] = useState<File | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<FileItem | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<ApiError | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
@@ -241,6 +417,9 @@ export function FilesPage({ onBack, onOpenChat }: FilesPageProps) {
   }, [query]);
 
   const workspaceId = state.activeWorkspaceId ?? state.session?.workspace.id ?? null;
+  const role = state.activeWorkspace?.role ?? null;
+  const canModerate = role === 'OWNER' || role === 'ADMIN';
+  const upload = filesState.fileCenterUpload;
 
   const appliedQuery = useMemo<ListFilesQuery>(
     () => ({
@@ -289,6 +468,36 @@ export function FilesPage({ onBack, onOpenChat }: FilesPageProps) {
     void filesStore.refreshLimits();
   };
 
+  const startUpload = (file: File | null) => {
+    if (!file || !workspaceId) return;
+    setLastUpload(file);
+    void filesStore.uploadFile(file);
+  };
+
+  const retryUpload = () => {
+    if (!lastUpload || upload.status === 'uploading') return;
+    void filesStore.uploadFile(lastUpload);
+  };
+
+  const closeDelete = () => {
+    if (deleteBusy) return;
+    setDeleteTarget(null);
+    setDeleteError(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    const result = await filesStore.deleteFile(deleteTarget.id);
+    setDeleteBusy(false);
+    if (result.ok) {
+      setDeleteTarget(null);
+      return;
+    }
+    setDeleteError(result.error);
+  };
+
   const resetFilters = () => {
     setQuery('');
     setFilter('all');
@@ -315,10 +524,23 @@ export function FilesPage({ onBack, onOpenChat }: FilesPageProps) {
       onBack={onBack}
       actions={
         <>
+          <input
+            ref={uploadInputRef}
+            className="visually-hidden"
+            type="file"
+            tabIndex={-1}
+            aria-label={t('files.uploadChoose')}
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              event.target.value = '';
+              startUpload(file);
+            }}
+          />
           <button
             type="button"
             className="btn btn--accent"
-            disabled
+            onClick={() => uploadInputRef.current?.click()}
+            disabled={!workspaceId || upload.status === 'uploading'}
             aria-label={t('files.upload')}
             title={t('files.uploadHint')}
           >
@@ -338,6 +560,86 @@ export function FilesPage({ onBack, onOpenChat }: FilesPageProps) {
         </>
       }
     >
+      {upload.status !== 'idle' ? (
+        <section
+          className={`files-upload${upload.status === 'error' ? ' files-upload--error' : ''}`}
+          aria-live="polite"
+          role={upload.status === 'error' ? 'alert' : 'status'}
+        >
+          <span className="stat-ic" aria-hidden="true">
+            {upload.status === 'error' ? (
+              <ShieldIcon />
+            ) : upload.status === 'done' ? (
+              <CheckIcon />
+            ) : (
+              <PlusIcon />
+            )}
+          </span>
+          <div className="files-upload__body">
+            <span className="files-upload__name">
+              {upload.status === 'uploading'
+                ? t('files.uploadProgress', {
+                    name: upload.filename ?? '',
+                    percent: upload.progress,
+                  })
+                : upload.status === 'done'
+                  ? t('files.uploadDone', { name: upload.filename ?? '' })
+                  : t('files.uploadErrorTitle')}
+            </span>
+            {upload.status === 'uploading' ? (
+              <div
+                className="files-upload__meter"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={upload.progress}
+                aria-label={t('files.uploadProgress', {
+                  name: upload.filename ?? '',
+                  percent: upload.progress,
+                })}
+              >
+                <i style={{ width: `${upload.progress}%` }} />
+              </div>
+            ) : (
+              <span className="files-upload__hint">
+                {upload.status === 'done'
+                  ? t('files.uploadDoneHint')
+                  : upload.error
+                    ? fileErrorText(upload.error, 'upload')
+                    : ''}
+              </span>
+            )}
+          </div>
+          {upload.status === 'uploading' ? (
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() => filesStore.cancelFileUpload()}
+            >
+              {t('files.uploadCancel')}
+            </button>
+          ) : (
+            <>
+              {upload.status === 'error' && lastUpload ? (
+                <button type="button" className="btn btn--sm" onClick={retryUpload}>
+                  <RefreshIcon aria-hidden="true" />
+                  {t('files.uploadRetry')}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="icon-button icon-button--small"
+                onClick={() => filesStore.clearFileUpload()}
+                aria-label={t('files.uploadDismiss')}
+                title={t('files.uploadDismiss')}
+              >
+                <CloseIcon aria-hidden="true" />
+              </button>
+            </>
+          )}
+        </section>
+      ) : null}
+
       {limitsMessage ? (
         <section className="card pg-error" role="alert">
           <div>
@@ -488,7 +790,12 @@ export function FilesPage({ onBack, onOpenChat }: FilesPageProps) {
                 key={item.id}
                 item={item}
                 chatName={chatNameFor(item, state)}
+                canModerate={canModerate}
                 onOpenChat={onOpenChat}
+                onRequestDelete={(target) => {
+                  setDeleteError(null);
+                  setDeleteTarget(target);
+                }}
               />
             ))
           )}
@@ -600,6 +907,29 @@ export function FilesPage({ onBack, onOpenChat }: FilesPageProps) {
           <p className="pg-footnote">{t('files.uploadHint')}</p>
         </section>
       </div>
+
+      {deleteTarget ? (
+        <AdminConfirmDialog
+          title={t('files.deleteTitle')}
+          description={
+            <>
+              <p className="admin-confirm__lead">
+                {t('files.deleteLead', { name: fileName(deleteTarget) })}
+              </p>
+              <p className="admin-confirm__effect">{t('files.deleteEffect')}</p>
+            </>
+          }
+          confirmLabel={t('files.deleteConfirm')}
+          busyLabel={t('files.deleting')}
+          cancelLabel={t('files.deleteCancel')}
+          destructive
+          busy={deleteBusy}
+          error={deleteError ? deleteErrorInfo(deleteError) : null}
+          errorDetails={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onClose={closeDelete}
+        />
+      ) : null}
     </PageShell>
   );
 }

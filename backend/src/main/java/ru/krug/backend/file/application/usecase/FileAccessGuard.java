@@ -123,8 +123,11 @@ public class FileAccessGuard {
             tenantContext.activate(scoped);
             return scoped;
         }
-        if (attachment.messageId() == null && !attachment.isDirectImage()) {
-            // Unbound regular uploads are visible only to the uploader.
+        if (attachment.messageId() == null && !attachment.isDirectImage()
+                && !attachment.isWorkspaceFile()) {
+            // Unbound regular uploads are visible only to the uploader. A global workspace
+            // file is visible to its workspace members (owner/admin moderation) and still
+            // requires an ACTIVE membership below.
             throw new UploadNotFoundException();
         }
         tenantContext.activate(scoped);
