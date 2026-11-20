@@ -95,8 +95,21 @@ export class ApiClient {
       );
     }
 
+    const raw = await response.blob();
+    // `fetch` may return a Blob from another realm (Node/undici in tests, a
+    // service worker in the browser). Re-wrap the bytes in the current realm so
+    // FileReader/ObjectURL consumers always receive a native Blob.
+    let blob = raw;
+    if (typeof raw.arrayBuffer === 'function') {
+      try {
+        blob = new Blob([await raw.arrayBuffer()], { type: raw.type });
+      } catch {
+        // Keep the original bytes if the realm cannot re-wrap them.
+      }
+    }
+
     return {
-      blob: await response.blob(),
+      blob,
       status: response.status,
       headers: response.headers,
     };
