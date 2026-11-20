@@ -131,7 +131,7 @@ describe('P0-3 security API', () => {
       format: 'csv',
       action: 'workspace.dlp.policy.created',
     });
-    expect(csv.blob).toBeInstanceOf(Blob);
+    expect(csv.blob.size).toBeGreaterThan(0);
     expect(csv.blob.type).toContain('text/csv');
     expect(csv.rows).toBe(1);
     expect(csv.truncated).toBe(false);

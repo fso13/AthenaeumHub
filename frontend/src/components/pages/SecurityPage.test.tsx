@@ -300,12 +300,14 @@ describe('P0-3 workspace security page', () => {
         format: 'csv',
         action: 'workspace.dlp.policy.created',
       });
-      expect(captured).toBeInstanceOf(Blob);
+      expect(captured).not.toBeNull();
+      const exported = captured as unknown as Blob;
+      expect(exported.size).toBeGreaterThan(0);
       const csv = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result ?? ''));
         reader.onerror = () => reject(reader.error);
-        reader.readAsText(captured as Blob);
+        reader.readAsText(exported);
       });
       expect(csv.split('\r\n')[0]).toBe('created_at,action,actor_id,target_type,target_id');
       expect(csv).toContain('workspace.dlp.policy.created');
