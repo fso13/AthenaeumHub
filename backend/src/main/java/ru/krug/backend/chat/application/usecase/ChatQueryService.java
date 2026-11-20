@@ -59,8 +59,9 @@ public class ChatQueryService {
 
     private static ChatSummaryView toView(ChatSummary summary) {
         return new ChatSummaryView(summary.id(), summary.name(), summary.description(),
-                summary.type().name(), summary.securityMode().name(), summary.lastMessageAt(),
-                summary.unreadCount(), summary.lastSeq(), summary.peerId(),
-                summary.peerHasE2eeCapableDevices(), summary.createdAt());
+                summary.type().name(), summary.securityMode().name(),
+                summary.visibility() == null ? null : summary.visibility().name(),
+                summary.lastMessageAt(), summary.unreadCount(), summary.lastSeq(),
+                summary.peerId(), summary.peerHasE2eeCapableDevices(), summary.createdAt());
     }
 }

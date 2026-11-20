@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import ru.krug.backend.audit.application.model.AuditRecord;
 import ru.krug.backend.audit.application.port.AuditPort;
+import ru.krug.backend.chat.application.port.ChatChannelMembershipPort;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
 import ru.krug.backend.shared.application.port.TenantContext;
@@ -38,14 +39,17 @@ public class AddWorkspaceMemberService {
 
     private final TenantContext tenantContext;
     private final WorkspaceMemberManagementRepository members;
+    private final ChatChannelMembershipPort channelMembership;
     private final AuditPort audit;
     private final ClockPort clock;
 
     public AddWorkspaceMemberService(TenantContext tenantContext,
                                      WorkspaceMemberManagementRepository members,
+                                     ChatChannelMembershipPort channelMembership,
                                      AuditPort audit, ClockPort clock) {
         this.tenantContext = tenantContext;
         this.members = members;
+        this.channelMembership = channelMembership;
         this.audit = audit;
         this.clock = clock;
     }
@@ -60,6 +64,9 @@ public class AddWorkspaceMemberService {
         WorkspaceMemberMutation result = members.addMember(workspaceId, principal.userId(),
                 email, role.name());
         WorkspaceMemberErrors.throwIfFailed(result);
+        // PUBLIC channels are workspace-wide: a new ACTIVE member joins immediately.
+        // PRIVATE channels are untouched (no invite links exist yet).
+        channelMembership.joinPublicChannels(workspaceId, result.userId());
 
         audit.append(new AuditRecord(workspaceId, principal.userId(), ACTION, "user",
                 result.userId(), principal.requestId(),

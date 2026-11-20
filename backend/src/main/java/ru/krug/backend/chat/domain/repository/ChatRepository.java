@@ -1,10 +1,12 @@
 package ru.krug.backend.chat.domain.repository;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import ru.krug.backend.chat.domain.model.ChannelVisibility;
 import ru.krug.backend.chat.domain.model.Chat;
 import ru.krug.backend.chat.domain.model.ChatCounter;
 import ru.krug.backend.chat.domain.model.ChatMember;
@@ -47,8 +49,38 @@ public interface ChatRepository {
     /** Idempotent upsert used by dev bootstrap and workspace onboarding. */
     void saveChat(Chat chat, ChatMember owner, ChatCounter counter);
 
-    /** Adds every ACTIVE workspace member to a new GROUP channel (idempotent). */
-    void addActiveWorkspaceMembers(UUID workspaceId, UUID chatId);
+    /**
+     * GROUP-only visibility row for a chat (V39). Empty for DIRECT chats and for legacy
+     * rows without channel settings.
+     */
+    Optional<ChannelVisibility> findChannelVisibility(UUID workspaceId, UUID chatId);
+
+    /** Idempotent settings upsert for a freshly created GROUP channel. */
+    void saveChannelSettings(UUID workspaceId, UUID chatId, ChannelVisibility visibility);
+
+    /**
+     * Adds every ACTIVE workspace member to a new PUBLIC GROUP channel (idempotent).
+     *
+     * @return number of participant rows inserted
+     */
+    int addActiveWorkspaceMembers(UUID workspaceId, UUID chatId);
+
+    /**
+     * Adds the selected users as ACTIVE MEMBER to a PRIVATE GROUP channel. Each insert is
+     * guarded by an ACTIVE workspace membership, so a concurrent removal cannot create a
+     * foreign participant.
+     *
+     * @return number of participant rows inserted
+     */
+    int addChatMembers(UUID workspaceId, UUID chatId, Collection<UUID> userIds);
+
+    /**
+     * Adds a newly joined ACTIVE workspace member to every live PUBLIC GROUP channel.
+     * PRIVATE channels are never touched.
+     *
+     * @return number of participant rows inserted
+     */
+    int addMemberToPublicChannels(UUID workspaceId, UUID userId);
 
     /**
      * Creates a DIRECT chat with both participant rows and its counter.
@@ -86,6 +118,13 @@ public interface ChatRepository {
      * cannot both pass the counter check (FR-CHAT-15).
      */
     void lockChatCreation(UUID workspaceId);
+
+    /**
+     * Serializes public-channel membership changes with chat creation in the same workspace.
+     * A member added concurrently with a PUBLIC channel create must end up in that channel:
+     * one transaction holds this lock while it writes the channel and its participants.
+     */
+    void lockChannelMembership(UUID workspaceId);
 
     /** ACTIVE, non-deleted chat memberships of the user in the workspace. */
     long countActiveChatsForUser(UUID workspaceId, UUID userId);

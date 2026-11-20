@@ -249,6 +249,7 @@ function addWorkspaceChat(
       last_seq: 0,
     },
     workspaceId,
+    memberIds: [],
     messages: [],
     clientMessageIds: new Map(),
     hiddenMessageIds: new Set(),
@@ -2369,6 +2370,12 @@ export function createHandlers(db: MockDb) {
       return HttpResponse.json({
         items: Object.values(db.chats)
           .filter((chat) => chat.workspaceId === workspace.id)
+          // #78: a PRIVATE channel appears only for the creator and the
+          // selected members (single-user mock RLS).
+          .filter(
+            (chat) =>
+              chat.summary.visibility !== 'PRIVATE' || chat.memberIds.includes(db.me.user.id),
+          )
           .map((chat) => chat.summary),
       });
     }),
@@ -2768,6 +2775,78 @@ export function createHandlers(db: MockDb) {
         });
       }
 
+      // #78 channel visibility. The mock mirrors the contract guards:
+      // GROUP defaults to PUBLIC, PRIVATE needs 1..100 distinct ACTIVE
+      // workspace members and never the creator. DIRECT stays unchanged and
+      // rejects any visibility/member_ids field.
+      const rawVisibility = body.visibility;
+      if (
+        rawVisibility !== undefined &&
+        rawVisibility !== null &&
+        rawVisibility !== 'PUBLIC' &&
+        rawVisibility !== 'PRIVATE'
+      ) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'visibility must be PUBLIC or PRIVATE', {
+          details: { field: 'visibility' },
+        });
+      }
+      if (
+        body.member_ids !== undefined &&
+        body.member_ids !== null &&
+        !Array.isArray(body.member_ids)
+      ) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'member_ids must be an array', {
+          details: { field: 'member_ids' },
+        });
+      }
+      const requestedMemberIds = Array.isArray(body.member_ids) ? body.member_ids : [];
+      if (type === 'DIRECT') {
+        const hasVisibility = rawVisibility !== undefined && rawVisibility !== null;
+        if (hasVisibility || requestedMemberIds.length > 0) {
+          return errorResponse(
+            422,
+            'VALIDATION_FAILED',
+            'visibility and member_ids are GROUP-only',
+            { details: { field: hasVisibility ? 'visibility' : 'member_ids' } },
+          );
+        }
+      }
+      const visibility: 'PUBLIC' | 'PRIVATE' | null =
+        type === 'GROUP' ? (rawVisibility === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC') : null;
+      let privateMemberIds: string[] = [];
+      if (visibility === 'PUBLIC' && requestedMemberIds.length > 0) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'PUBLIC cannot list member_ids', {
+          details: { field: 'member_ids' },
+        });
+      }
+      if (visibility === 'PRIVATE') {
+        if (requestedMemberIds.length < 1 || requestedMemberIds.length > 100) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'member_ids must contain 1..100 ids', {
+            details: { field: 'member_ids', min_items: 1, max_items: 100 },
+          });
+        }
+        const unique = new Set<string>();
+        for (const memberId of requestedMemberIds) {
+          if (typeof memberId !== 'string' || unique.has(memberId)) {
+            return errorResponse(422, 'VALIDATION_FAILED', 'member_ids must be distinct ids', {
+              details: { field: 'member_ids' },
+            });
+          }
+          if (memberId === db.me.user.id) {
+            return errorResponse(422, 'VALIDATION_FAILED', 'creator must not be listed', {
+              details: { field: 'member_ids' },
+            });
+          }
+          if (!db.workspaceMembers.some((member) => member.user_id === memberId)) {
+            return errorResponse(422, 'VALIDATION_FAILED', 'unknown workspace member', {
+              details: { field: 'member_ids' },
+            });
+          }
+          unique.add(memberId);
+        }
+        privateMemberIds = [...unique];
+      }
+
       if (type === 'DIRECT') {
         const peerId = typeof body.peer_id === 'string' ? body.peer_id : null;
         if (!peerId) {
@@ -2836,6 +2915,7 @@ export function createHandlers(db: MockDb) {
         id: chatId,
         type,
         security_mode: workspace.security_mode,
+        visibility,
         peer_id: type === 'DIRECT' ? String(body.peer_id) : null,
         peer_has_e2ee_capable_devices: false,
         name: type === 'GROUP' ? name : null,
@@ -2864,6 +2944,7 @@ export function createHandlers(db: MockDb) {
           name: chat.name ?? null,
           type: chat.type,
           security_mode: chat.security_mode,
+          visibility,
           peer_id: chat.peer_id ?? null,
           peer_has_e2ee_capable_devices: false,
           last_message_at: now,
@@ -2871,6 +2952,8 @@ export function createHandlers(db: MockDb) {
           last_seq: 1,
         },
         workspaceId: workspace.id,
+        /** #78: PRIVATE chats are listed only for the creator/selected members. */
+        memberIds: visibility === 'PRIVATE' ? [db.me.user.id, ...privateMemberIds] : [],
         messages: [systemMessage],
         clientMessageIds: new Map(),
         hiddenMessageIds: new Set(),

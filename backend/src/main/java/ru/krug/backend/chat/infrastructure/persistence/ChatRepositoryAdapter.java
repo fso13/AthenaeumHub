@@ -10,6 +10,7 @@ import jakarta.persistence.EntityManager;
 
 import org.springframework.stereotype.Repository;
 
+import ru.krug.backend.chat.domain.model.ChannelVisibility;
 import ru.krug.backend.chat.domain.model.Chat;
 import ru.krug.backend.chat.domain.model.ChatCounter;
 import ru.krug.backend.chat.domain.model.ChatMember;
@@ -124,13 +125,15 @@ public class ChatRepositoryAdapter implements ChatRepository {
                                               d.identity_dh_key,
                                               d.identity_binding_signature, d.fingerprint)
                                ) ELSE false END AS peer_capable,
-                               c.created_at
+                               c.created_at,
+                               CASE WHEN c.type = 'GROUP' THEN cs.visibility END AS visibility
                           FROM chat.chats c
                           JOIN chat.chat_members cm
                             ON cm.chat_id = c.id
                            AND cm.user_id = ?2
                            AND cm.status = 'ACTIVE'
                           LEFT JOIN chat.chat_counters cc ON cc.chat_id = c.id
+                          LEFT JOIN chat.channel_settings cs ON cs.chat_id = c.id
                           LEFT JOIN chat.read_receipts rr
                             ON rr.chat_id = c.id AND rr.user_id = ?2
                          WHERE c.workspace_id = ?1
@@ -146,6 +149,7 @@ public class ChatRepositoryAdapter implements ChatRepository {
                 (String) row[2],
                 Chat.Type.valueOf((String) row[3]),
                 Chat.SecurityMode.valueOf((String) row[4]),
+                row[11] == null ? null : ChannelVisibility.valueOf((String) row[11]),
                 instant(row[5]),
                 ((Number) row[7]).longValue(),
                 ((Number) row[6]).longValue(),
@@ -428,6 +432,14 @@ public class ChatRepositoryAdapter implements ChatRepository {
     }
 
     @Override
+    public void lockChannelMembership(UUID workspaceId) {
+        // Same advisory key as lockChatCreation: public-channel joins and channel creation
+        // must not interleave, otherwise a member committing between addActiveWorkspaceMembers
+        // and the creator's commit could miss the new PUBLIC channel.
+        lockChatCreation(workspaceId);
+    }
+
+    @Override
     public long countActiveChatsForUser(UUID workspaceId, UUID userId) {
         Number count = (Number) entityManager.createNativeQuery("""
                         SELECT count(*)
@@ -475,8 +487,8 @@ public class ChatRepositoryAdapter implements ChatRepository {
     }
 
     @Override
-    public void addActiveWorkspaceMembers(java.util.UUID workspaceId, java.util.UUID chatId) {
-        entityManager.createNativeQuery("""
+    public int addActiveWorkspaceMembers(UUID workspaceId, UUID chatId) {
+        return entityManager.createNativeQuery("""
                         INSERT INTO chat.chat_members
                             (chat_id, workspace_id, user_id, role, status, joined_at, updated_at)
                         SELECT ?2, ?1, wm.user_id, 'MEMBER', 'ACTIVE', now(), now()
@@ -487,6 +499,85 @@ public class ChatRepositoryAdapter implements ChatRepository {
                         """)
                 .setParameter(1, workspaceId)
                 .setParameter(2, chatId)
+                .executeUpdate();
+    }
+
+    @Override
+    public Optional<ChannelVisibility> findChannelVisibility(UUID workspaceId, UUID chatId) {
+        @SuppressWarnings("unchecked")
+        List<String> rows = entityManager.createNativeQuery("""
+                        SELECT cs.visibility
+                          FROM chat.channel_settings cs
+                          JOIN chat.chats c ON c.id = cs.chat_id
+                         WHERE cs.chat_id = ?1
+                           AND c.workspace_id = ?2
+                           AND c.deleted_at IS NULL
+                        """)
+                .setParameter(1, chatId)
+                .setParameter(2, workspaceId)
+                .getResultList();
+        return rows.stream().findFirst().map(ChannelVisibility::valueOf);
+    }
+
+    @Override
+    public void saveChannelSettings(UUID workspaceId, UUID chatId, ChannelVisibility visibility) {
+        entityManager.createNativeQuery("""
+                        INSERT INTO chat.channel_settings (chat_id, visibility, created_at)
+                        SELECT c.id, ?2, now()
+                          FROM chat.chats c
+                         WHERE c.id = ?1
+                           AND c.workspace_id = ?3
+                        ON CONFLICT (chat_id) DO NOTHING
+                        """)
+                .setParameter(1, chatId)
+                .setParameter(2, visibility.name())
+                .setParameter(3, workspaceId)
+                .executeUpdate();
+    }
+
+    @Override
+    public int addChatMembers(UUID workspaceId, UUID chatId, java.util.Collection<UUID> userIds) {
+        int inserted = 0;
+        for (UUID userId : userIds) {
+            inserted += entityManager.createNativeQuery("""
+                            INSERT INTO chat.chat_members
+                                (chat_id, workspace_id, user_id, role, status, joined_at,
+                                 updated_at)
+                            SELECT ?2, ?1, wm.user_id, 'MEMBER', 'ACTIVE', now(), now()
+                              FROM workspace.memberships wm
+                             WHERE wm.workspace_id = ?1
+                               AND wm.user_id = ?3
+                               AND wm.status = 'ACTIVE'
+                            ON CONFLICT (chat_id, user_id) DO NOTHING
+                            """)
+                    .setParameter(1, workspaceId)
+                    .setParameter(2, chatId)
+                    .setParameter(3, userId)
+                    .executeUpdate();
+        }
+        return inserted;
+    }
+
+    @Override
+    public int addMemberToPublicChannels(UUID workspaceId, UUID userId) {
+        return entityManager.createNativeQuery("""
+                        INSERT INTO chat.chat_members
+                            (chat_id, workspace_id, user_id, role, status, joined_at, updated_at)
+                        SELECT c.id, c.workspace_id, wm.user_id, 'MEMBER', 'ACTIVE', now(), now()
+                          FROM workspace.memberships wm
+                          JOIN chat.chats c ON c.workspace_id = wm.workspace_id
+                          JOIN chat.channel_settings cs
+                            ON cs.chat_id = c.id
+                           AND cs.visibility = 'PUBLIC'
+                         WHERE wm.workspace_id = ?1
+                           AND wm.user_id = ?2
+                           AND wm.status = 'ACTIVE'
+                           AND c.type = 'GROUP'
+                           AND c.deleted_at IS NULL
+                        ON CONFLICT (chat_id, user_id) DO NOTHING
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, userId)
                 .executeUpdate();
     }
 }

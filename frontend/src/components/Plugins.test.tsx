@@ -57,6 +57,7 @@ function addSecondGroupChat(): void {
       security_mode: 'MANAGED',
     },
     workspaceId: group.workspaceId,
+    memberIds: [],
     messages: [],
     clientMessageIds: new Map(),
     hiddenMessageIds: new Set(),

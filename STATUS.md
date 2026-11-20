@@ -17,7 +17,7 @@
 ## Тесты и контракт
 
 - Backend: **498 tests**, ArchUnit 10/10.
-- Frontend: **1046 tests**, KAT 27/27, Chromium/Firefox F7B 2/2.
+- Frontend: **1053 tests**, KAT 27/27, Chromium/Firefox F7B 2/2.
 - Contract: **48 paths / 56 operations / 88 schemas**.
 
 ## CI и релиз

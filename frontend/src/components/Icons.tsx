@@ -548,6 +548,17 @@ export function EyeIcon(props: IconProps) {
   );
 }
 
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m3 3 18 18" />
+      <path d="M10.6 6.1A9.7 9.7 0 0 1 12 5.6c5.9 0 9.4 6.4 9.4 6.4a15.4 15.4 0 0 1-3.2 3.7" />
+      <path d="M6.4 6.7C3.9 8.3 2.6 12 2.6 12s3.5 6.4 9.4 6.4c1.8 0 3.3-.6 4.6-1.4" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </IconBase>
+  );
+}
+
 export function MonitorIcon(props: IconProps) {
   return (
     <IconBase {...props}>

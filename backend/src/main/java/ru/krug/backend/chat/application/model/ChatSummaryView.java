@@ -9,6 +9,7 @@ public record ChatSummaryView(
         String description,
         String type,
         String securityMode,
+        String visibility,
         Instant lastMessageAt,
         long unreadCount,
         long lastSeq,

@@ -12,6 +12,7 @@ import ru.krug.backend.audit.application.model.AuditRecord;
 import ru.krug.backend.audit.application.port.AuditPort;
 import ru.krug.backend.chat.application.command.ChatUpdateCommand;
 import ru.krug.backend.chat.application.model.ChatView;
+import ru.krug.backend.chat.domain.model.ChannelVisibility;
 import ru.krug.backend.chat.domain.model.Chat;
 import ru.krug.backend.chat.domain.model.ChatSettingsScope;
 import ru.krug.backend.chat.domain.model.ChatSummary;
@@ -117,15 +118,21 @@ public class ChatUpdateService {
                 .orElse(null);
         if (summary != null) {
             return new ChatView(summary.id(), summary.type().name(),
-                    summary.securityMode().name(), summary.peerId(),
-                    summary.peerHasE2eeCapableDevices(), summary.name(),
+                    summary.securityMode().name(),
+                    summary.visibility() == null ? null : summary.visibility().name(),
+                    summary.peerId(), summary.peerHasE2eeCapableDevices(), summary.name(),
                     summary.description(), null, summary.lastSeq(), summary.unreadCount(),
                     summary.createdAt());
         }
         // A workspace OWNER/ADMIN who is not a chat member can still manage settings; the
         // response then has no personal unread counter, but remains a valid full Chat.
-        return new ChatView(chat.id(), chat.type().name(), chat.securityMode().name(), null,
-                false, chat.name(), chat.description(), null,
-                chatRepository.lastSeq(chat.id()), 0, chat.createdAt());
+        ChannelVisibility visibility = chat.type() == Chat.Type.GROUP
+                ? chatRepository.findChannelVisibility(chat.workspaceId(), chat.id())
+                        .orElse(null)
+                : null;
+        return new ChatView(chat.id(), chat.type().name(), chat.securityMode().name(),
+                visibility == null ? null : visibility.name(), null, false, chat.name(),
+                chat.description(), null, chatRepository.lastSeq(chat.id()), 0,
+                chat.createdAt());
     }
 }

@@ -27,6 +27,8 @@ export type SyncChat = SyncResponse['chats'][number];
 export type MessageType = ApiMessage['type'];
 export type ChatType = ChatSummary['type'];
 export type SecurityMode = ChatSummary['security_mode'];
+/** #78: GROUP channel audience; `null` for DIRECT and legacy rows. */
+export type ChatVisibility = NonNullable<ChatSummary['visibility']>;
 export type MeResponse = components['schemas']['MeResponse'];
 export type MeUser = MeResponse['user'];
 /** #72: `AuthUser` is the `GET/PATCH /me` profile projection (`bio`/`phone` nullable). */

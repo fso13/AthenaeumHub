@@ -14,6 +14,7 @@ public record ChatSummary(
         String description,
         Chat.Type type,
         Chat.SecurityMode securityMode,
+        ChannelVisibility visibility,
         Instant lastMessageAt,
         long unreadCount,
         long lastSeq,

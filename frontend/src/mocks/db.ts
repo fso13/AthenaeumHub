@@ -71,6 +71,8 @@ export interface MockTaskRecord {
 export interface ChatRecord {
   summary: ChatSummary;
   workspaceId: string;
+  /** #78: creator + selected members for a PRIVATE channel (RLS simulation). */
+  memberIds: string[];
   messages: ApiMessage[];
   /** Server-side client_message_id dedupe (not exposed by the contract). */
   clientMessageIds: Map<string, string>;
@@ -589,6 +591,7 @@ function buildChats(): Record<string, ChatRecord> {
     [IDS.groupChat]: {
       summary: clone(group),
       workspaceId: IDS.workspace,
+      memberIds: [],
       messages: buildGroupMessages(),
       clientMessageIds: new Map(),
       hiddenMessageIds: new Set(),
@@ -596,6 +599,7 @@ function buildChats(): Record<string, ChatRecord> {
     [IDS.directChat]: {
       summary: clone(direct),
       workspaceId: IDS.workspace,
+      memberIds: [],
       messages: buildDirectMessages(),
       clientMessageIds: new Map(),
       hiddenMessageIds: new Set(),

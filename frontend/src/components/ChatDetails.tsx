@@ -367,6 +367,13 @@ export function ChatDetails({
                   {isE2ee ? t('chat.e2eeChip') : t('chat.managedChip')}
                 </span>
                 <span className="chip">{t('chat.group')}</span>
+                {chat?.visibility ? (
+                  <span className="chip">
+                    {chat.visibility === 'PRIVATE'
+                      ? t('chat.visibilityPrivate')
+                      : t('chat.visibilityPublic')}
+                  </span>
+                ) : null}
               </>
             )}
           </div>

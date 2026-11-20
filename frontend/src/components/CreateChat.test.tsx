@@ -78,7 +78,11 @@ describe('E8/R-01 + E10-F chat creation', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: CREATE_BUTTON })).toHaveFocus());
     expect(mockDb.chatCreateRequests).toHaveLength(1);
-    expect(mockDb.chatCreateRequests[0]?.body).toEqual({ type: 'GROUP', name: 'Проект «Новый»' });
+    expect(mockDb.chatCreateRequests[0]?.body).toEqual({
+      type: 'GROUP',
+      name: 'Проект «Новый»',
+      visibility: 'PUBLIC',
+    });
     expect(mockDb.chatCreateRequests[0]?.idempotencyKey).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
@@ -317,7 +321,7 @@ describe('E8/R-01 + E10-F chat creation', () => {
     expect(within(dialog).getByRole('radio', { name: /Анна Петрова/ })).toBeInTheDocument();
   });
 
-  it('allows DIRECT creation for a MEMBER while disabling GROUP', async () => {
+  it('allows GROUP creation for a MEMBER and keeps DIRECT available', async () => {
     setMockWorkspaces(mockDb, [{ ...mockWorkspace, role: 'MEMBER' }]);
 
     const { user } = renderPasswordApp();
@@ -326,12 +330,114 @@ describe('E8/R-01 + E10-F chat creation', () => {
     await user.click(screen.getByRole('button', { name: 'Войти' }));
     await screen.findByRole('heading', { name: 'Команда «Восход»' });
 
-    await user.click(await screen.findByRole('button', { name: CREATE_BUTTON }));
-    const dialog = await screen.findByRole('dialog');
-    expect(await screen.findByRole('heading', { name: 'Новый личный чат' })).toBeInTheDocument();
-    expect(within(dialog).getByRole('radio', { name: /Групповой чат/ })).toBeDisabled();
-    expect(within(dialog).getByRole('radio', { name: /Личный чат/ })).toBeChecked();
-    expect(await within(dialog).findByRole('radio', { name: /Анна Петрова/ })).toBeInTheDocument();
+    const dialog = await openDialog(user);
+    expect(within(dialog).getByRole('radio', { name: /Групповой чат/ })).toBeChecked();
+    expect(within(dialog).getByRole('radio', { name: /Групповой чат/ })).toBeEnabled();
+    expect(within(dialog).getByRole('radio', { name: /Личный чат/ })).toBeEnabled();
+
+    await user.type(within(dialog).getByLabelText('Название чата'), 'Канал участника');
+    await user.click(within(dialog).getByRole('button', { name: CREATE_BUTTON }));
+    expect(await screen.findByRole('heading', { name: 'Канал участника' })).toBeInTheDocument();
+    expect(mockDb.chatCreateRequests).toHaveLength(1);
+    expect(mockDb.chatCreateRequests[0]?.body).toEqual({
+      type: 'GROUP',
+      name: 'Канал участника',
+      visibility: 'PUBLIC',
+    });
+  });
+
+  it('creates a PRIVATE channel for selected members only', async () => {
+    const { user, store } = renderApp();
+    await screen.findByRole('heading', { name: 'Команда «Восход»' });
+
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('Название чата'), 'Только для своих');
+    await user.click(within(dialog).getByRole('radio', { name: 'Выбранные участники' }));
+
+    const anna = await within(dialog).findByRole('checkbox', { name: /Анна Петрова/ });
+    const mark = within(dialog).getByRole('checkbox', { name: /Марк Соколов/ });
+    expect(
+      within(dialog).queryByRole('checkbox', { name: new RegExp(MOCK_DISPLAY_NAME) }),
+    ).toBeNull();
+
+    await user.click(anna);
+    await user.click(mark);
+    expect(within(dialog).getByText('Выбрано: 2')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: CREATE_BUTTON }));
+
+    expect(await screen.findByRole('heading', { name: 'Только для своих' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    const body = mockDb.chatCreateRequests[0]?.body;
+    expect(body).toEqual({
+      type: 'GROUP',
+      name: 'Только для своих',
+      visibility: 'PRIVATE',
+      member_ids: [IDS.anna, IDS.mark],
+    });
+    const created = Object.values(mockDb.chats).find(
+      (chat) => chat.summary.name === 'Только для своих',
+    );
+    expect(created?.summary.visibility).toBe('PRIVATE');
+    // The creator is added automatically; only selected members are stored.
+    expect(created?.memberIds).toContain(IDS.user);
+    expect(created?.memberIds).toContain(IDS.anna);
+    expect(created?.memberIds).toContain(IDS.mark);
+    expect(created?.memberIds).not.toContain(IDS.lena);
+    const activeSummary = store
+      .getSnapshot()
+      .chats.find((chat) => chat.name === 'Только для своих');
+    expect(activeSummary?.visibility).toBe('PRIVATE');
+    expect((await screen.findAllByText('Приватный канал')).length).toBeGreaterThan(0);
+  });
+
+  it('requires at least one selected member for a PRIVATE channel', async () => {
+    const { user } = renderApp();
+    await screen.findByRole('heading', { name: 'Команда «Восход»' });
+
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('Название чата'), 'Пустой приватный');
+    await user.click(within(dialog).getByRole('radio', { name: 'Выбранные участники' }));
+
+    expect(
+      await within(dialog).findByText(/Для приватного канала выберите хотя бы одного/),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: CREATE_BUTTON })).toBeDisabled();
+    expect(mockDb.chatCreateRequests).toHaveLength(0);
+  });
+
+  it('selects all visible members and clears the PRIVATE selection', async () => {
+    const { user } = renderApp();
+    await screen.findByRole('heading', { name: 'Команда «Восход»' });
+
+    const dialog = await openDialog(user);
+    await user.click(within(dialog).getByRole('radio', { name: 'Выбранные участники' }));
+    await within(dialog).findByRole('checkbox', { name: /Анна Петрова/ });
+
+    await user.click(within(dialog).getByRole('button', { name: 'Выбрать всех' }));
+    expect(within(dialog).getByText('Выбрано: 3')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Снять выбор' }));
+    expect(within(dialog).getByText('Выбрано: 0')).toBeInTheDocument();
+  });
+
+  it('searches the PRIVATE member checklist server-side', async () => {
+    const { user } = renderApp();
+    await screen.findByRole('heading', { name: 'Команда «Восход»' });
+
+    const dialog = await openDialog(user);
+    await user.click(within(dialog).getByRole('radio', { name: 'Выбранные участники' }));
+    await within(dialog).findByRole('checkbox', { name: /Анна Петрова/ });
+    await user.type(within(dialog).getByLabelText('Найти участника'), 'Марк');
+
+    await waitFor(() =>
+      expect(mockDb.memberDirectoryRequests.some((request) => request.query === 'Марк')).toBe(true),
+    );
+    expect(
+      await within(dialog).findByRole('checkbox', { name: /Марк Соколов/ }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(dialog).queryByRole('checkbox', { name: /Анна Петрова/ })).toBeNull(),
+    );
   });
 
   it('disables creation at the user limit and shows used/limit in Settings', async () => {
@@ -461,6 +567,34 @@ describe('E8/R-01 + E10-F chat creation', () => {
     const { user } = renderApp();
     await screen.findByRole('heading', { name: 'Команда «Восход»' });
     await openDirect(user);
+
+    const canvas = HTMLCanvasElement.prototype as unknown as {
+      getContext: (...args: unknown[]) => unknown;
+    };
+    const originalGetContext = canvas.getContext;
+    canvas.getContext = () => null;
+    let results;
+    try {
+      results = await axe.run(document.body, {
+        rules: { 'color-contrast': { enabled: false } },
+      });
+    } finally {
+      canvas.getContext = originalGetContext;
+    }
+    const serious = results.violations.filter(
+      (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+    );
+    expect(serious).toEqual([]);
+  });
+
+  it('passes an axe audit for the PRIVATE visibility and member checklist', async () => {
+    const { user } = renderApp();
+    await screen.findByRole('heading', { name: 'Команда «Восход»' });
+
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('Название чата'), 'Приватный аудит');
+    await user.click(within(dialog).getByRole('radio', { name: 'Выбранные участники' }));
+    await within(dialog).findByRole('checkbox', { name: /Анна Петрова/ });
 
     const canvas = HTMLCanvasElement.prototype as unknown as {
       getContext: (...args: unknown[]) => unknown;

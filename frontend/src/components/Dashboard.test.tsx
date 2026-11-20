@@ -57,6 +57,7 @@ function addSecondWorkspaceWithUnread(unread: number): void {
       last_seq: 0,
     },
     workspaceId: SECOND_WORKSPACE.id,
+    memberIds: [],
     messages: [],
     clientMessageIds: new Map(),
     hiddenMessageIds: new Set(),

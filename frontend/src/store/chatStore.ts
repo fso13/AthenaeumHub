@@ -11,6 +11,7 @@ import type {
   ChatCreateRequest,
   ChatSummary,
   ChatUpdateRequest,
+  ChatVisibility,
   Device,
   MeResponse,
   MeUser,
@@ -572,6 +573,7 @@ export function toChatSummary(chat: Chat): ChatSummary {
     description: chat.description ?? null,
     type: chat.type,
     security_mode: chat.security_mode,
+    visibility: chat.visibility ?? null,
     peer_id: chat.peer_id ?? null,
     peer_has_e2ee_capable_devices: chat.peer_has_e2ee_capable_devices ?? false,
     last_message_at: null,
@@ -593,6 +595,7 @@ function chatSummaryFromChat(chat: Chat, previous: ChatSummary | undefined): Cha
     description: chat.description ?? null,
     type: chat.type,
     security_mode: chat.security_mode,
+    visibility: chat.visibility ?? previous?.visibility ?? null,
     peer_has_e2ee_capable_devices:
       chat.peer_has_e2ee_capable_devices ?? previous?.peer_has_e2ee_capable_devices ?? false,
     last_message_at: previous?.last_message_at ?? null,
@@ -601,8 +604,24 @@ function chatSummaryFromChat(chat: Chat, previous: ChatSummary | undefined): Cha
   };
 }
 
-/** E10-F: logical payload for `POST /workspaces/{id}/chats`. */
-export type ChatCreateInput = { type: 'GROUP'; name: string } | { type: 'DIRECT'; peerId: string };
+/**
+ * #78: logical payload for `POST /workspaces/{id}/chats`.
+ *
+ * GROUP defaults to PUBLIC (all current and future workspace members); PRIVATE
+ * requires 1..100 selected ACTIVE workspace member ids, the creator is added by
+ * the server and must not be listed. DIRECT is unchanged and never carries
+ * visibility or members.
+ */
+export type ChatCreateInput =
+  | {
+      type: 'GROUP';
+      name: string;
+      visibility?: ChatVisibility;
+      memberIds?: string[];
+    }
+  | { type: 'DIRECT'; peerId: string };
+
+const MAX_CHAT_MEMBERS = 100;
 
 export class ChatStore {
   private readonly api: ChatApi;
@@ -1866,8 +1885,47 @@ export class ChatStore {
         });
         return false;
       }
-      // Contract `additionalProperties: false`: GROUP sends name, never peer_id.
-      body = { type: 'GROUP', name: trimmed };
+      const visibility: ChatVisibility = request.visibility ?? 'PUBLIC';
+      if (visibility !== 'PUBLIC' && visibility !== 'PRIVATE') {
+        this.patch({
+          chatCreateStatus: 'error',
+          chatCreateError: ApiError.client(
+            'VALIDATION_FAILED',
+            'visibility must be PUBLIC or PRIVATE',
+            422,
+            { field: 'visibility' },
+          ),
+        });
+        return false;
+      }
+      // The creator is added as OWNER by the server and must not be listed.
+      // Sorting keeps the serialized body stable for the same logical set, so
+      // an idempotent retry hashes identically regardless of click order.
+      const viewerId = this.viewerId();
+      const memberIds = [...new Set(request.memberIds ?? [])]
+        .filter((memberId) => memberId !== viewerId)
+        .sort();
+      if (
+        visibility === 'PRIVATE' &&
+        (memberIds.length === 0 || memberIds.length > MAX_CHAT_MEMBERS)
+      ) {
+        this.patch({
+          chatCreateStatus: 'error',
+          chatCreateError: ApiError.client(
+            'VALIDATION_FAILED',
+            `member_ids must contain 1..${MAX_CHAT_MEMBERS} selected workspace members`,
+            422,
+            { field: 'member_ids', min_items: 1, max_items: MAX_CHAT_MEMBERS },
+          ),
+        });
+        return false;
+      }
+      // Contract `additionalProperties: false`: GROUP sends name/visibility and
+      // `member_ids` only for PRIVATE. PUBLIC never lists members.
+      body =
+        visibility === 'PRIVATE'
+          ? { type: 'GROUP', name: trimmed, visibility, member_ids: memberIds }
+          : { type: 'GROUP', name: trimmed, visibility };
     } else {
       const peerId = request.peerId.trim();
       if (peerId.length === 0 || peerId === this.viewerId()) {

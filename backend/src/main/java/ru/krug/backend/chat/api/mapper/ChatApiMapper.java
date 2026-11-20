@@ -28,14 +28,16 @@ public final class ChatApiMapper {
 
     public static ChatSummaryResponse toResponse(ChatSummaryView view) {
         return new ChatSummaryResponse(view.id(), view.name(), view.description(), view.type(),
-                view.securityMode(), view.peerId(), view.peerHasE2eeCapableDevices(),
-                view.lastMessageAt(), view.unreadCount(), view.lastSeq());
+                view.securityMode(), view.visibility(), view.peerId(),
+                view.peerHasE2eeCapableDevices(), view.lastMessageAt(), view.unreadCount(),
+                view.lastSeq());
     }
 
     public static ChatResponse toResponse(ChatView view) {
-        return new ChatResponse(view.id(), view.type(), view.securityMode(), view.peerId(),
-                view.peerHasE2eeCapableDevices(), view.name(), view.description(),
-                view.keyEpoch(), view.lastSeq(), view.unreadCount(), view.createdAt());
+        return new ChatResponse(view.id(), view.type(), view.securityMode(), view.visibility(),
+                view.peerId(), view.peerHasE2eeCapableDevices(), view.name(),
+                view.description(), view.keyEpoch(), view.lastSeq(), view.unreadCount(),
+                view.createdAt());
     }
 
     public static SyncResponse toResponse(SyncView view) {

@@ -226,6 +226,11 @@ export function ChatHeader({
       <span className={`mode-chip mode-chip--${securityMode.toLowerCase()} chat-head__mode`}>
         {securityMode === 'MANAGED' ? t('chat.managedChip') : t('chat.e2eeChip')}
       </span>
+      {chat?.visibility ? (
+        <span className="mode-chip chat-head__visibility" title={t('chat.visibilityLabel')}>
+          {chat.visibility === 'PRIVATE' ? t('chat.visibilityPrivate') : t('chat.visibilityPublic')}
+        </span>
+      ) : null}
     </header>
   );
 }

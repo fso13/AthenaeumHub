@@ -9,6 +9,7 @@ public record ChatSummaryResponse(
         String description,
         String type,
         String securityMode,
+        String visibility,
         UUID peerId,
         boolean peerHasE2eeCapableDevices,
         Instant lastMessageAt,

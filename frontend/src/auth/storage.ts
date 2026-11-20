@@ -17,6 +17,7 @@ const PENDING_DEVICE_KEY = 'krug.device.pending-key';
 const PENDING_WORKSPACE_KEY = 'krug.workspace.pending-key';
 const AUTH_SESSION_KEY = 'krug.auth.session';
 const AUTH_PENDING_KEY = 'krug.auth.pending';
+const REMEMBERED_EMAIL_KEY = 'krug.auth.remembered-email';
 
 let fallbackStorage: Storage | null = null;
 
@@ -115,6 +116,22 @@ export function readAuthSession(): StoredAuthSession | null {
 
 export function clearAuthSession(): void {
   removeStored(AUTH_SESSION_KEY);
+}
+
+/** Non-secret login convenience: only the email, only sessionStorage. */
+export function readRememberedEmail(): string | null {
+  const email = readStored(REMEMBERED_EMAIL_KEY)?.trim() ?? '';
+  return email.length > 0 && email.length <= 254 ? email : null;
+}
+
+export function writeRememberedEmail(email: string): void {
+  const normalized = email.trim();
+  if (normalized.length === 0 || normalized.length > 254) return;
+  writeStored(REMEMBERED_EMAIL_KEY, normalized);
+}
+
+export function clearRememberedEmail(): void {
+  removeStored(REMEMBERED_EMAIL_KEY);
 }
 
 function isStoredPendingVerification(value: unknown): value is StoredPendingVerification {

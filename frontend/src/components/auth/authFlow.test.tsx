@@ -7,6 +7,7 @@ import { getAccessToken } from '../../auth/session';
 import {
   readAuthSession,
   readPendingVerification,
+  readRememberedEmail,
   readStored,
   writeAuthSession,
   writePendingVerification,
@@ -24,7 +25,7 @@ import { resetRouterForTests } from '../../router/router';
 import { mockDb, server } from '../../test/server';
 import { renderPasswordApp } from '../../test/renderApp';
 
-const LOGIN_HEADING = 'Вход в Pickle';
+const LOGIN_HEADING = 'Вход';
 const REGISTER_HEADING = 'Регистрация в Pickle';
 const VERIFY_HEADING = 'Подтвердите email';
 const CHAT_HEADING = 'Команда «Восход»';
@@ -49,7 +50,7 @@ async function register(
   email = REGISTER_EMAIL,
   password = REGISTER_PASSWORD,
 ): Promise<void> {
-  await user.click(await screen.findByRole('button', { name: 'Регистрация' }));
+  await user.click(await screen.findByRole('button', { name: 'Создать аккаунт' }));
   await screen.findByRole('heading', { name: REGISTER_HEADING });
   await user.type(screen.getByLabelText('Имя'), 'Новый пользователь');
   await user.type(screen.getByLabelText('Email'), email);
@@ -75,6 +76,33 @@ function requestUrls(requests: Request[]): string[] {
 }
 
 describe('Auth BFF password flow', () => {
+  it('toggles password visibility with the eye button', async () => {
+    const { user } = renderPasswordApp();
+    await screen.findByRole('heading', { name: LOGIN_HEADING });
+
+    const password = screen.getByLabelText('Пароль');
+    expect(password).toHaveAttribute('type', 'password');
+
+    await user.click(screen.getByRole('button', { name: 'Показать пароль' }));
+    expect(password).toHaveAttribute('type', 'text');
+
+    await user.click(screen.getByRole('button', { name: 'Скрыть пароль' }));
+    expect(password).toHaveAttribute('type', 'password');
+  });
+
+  it('remembers the email after a successful login when asked', async () => {
+    const { user } = renderPasswordApp();
+    await screen.findByRole('heading', { name: LOGIN_HEADING });
+
+    await user.type(screen.getByLabelText('Email'), MOCK_DEMO_EMAIL);
+    await user.type(screen.getByLabelText('Пароль'), MOCK_DEMO_PASSWORD);
+    await user.click(screen.getByLabelText('Запомнить меня'));
+    await user.click(screen.getByRole('button', { name: 'Войти' }));
+
+    await screen.findByRole('heading', { name: CHAT_HEADING });
+    expect(readRememberedEmail()).toBe(MOCK_DEMO_EMAIL);
+  });
+
   it('guards an anonymous visitor with the login form and never contacts Keycloak', async () => {
     const requests: Request[] = [];
     server.events.on('request:start', ({ request }) => requests.push(request));
@@ -85,8 +113,7 @@ describe('Auth BFF password flow', () => {
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
     expect(screen.getByLabelText('Пароль')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Войти' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Регистрация' })).toBeInTheDocument();
-    expect(screen.getByText(/браузер обращается только к защищённому BFF/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Создать аккаунт' })).toBeInTheDocument();
 
     await waitFor(() => expect(window.location.pathname).toBe('/login'));
     expect(screen.queryByLabelText('Текст сообщения')).not.toBeInTheDocument();
@@ -144,7 +171,7 @@ describe('Auth BFF password flow', () => {
 
   it('validates registration fields on the client and does not call the API', async () => {
     const { user } = renderPasswordApp();
-    await user.click(await screen.findByRole('button', { name: 'Регистрация' }));
+    await user.click(await screen.findByRole('button', { name: 'Создать аккаунт' }));
     await screen.findByRole('heading', { name: REGISTER_HEADING });
 
     await user.click(screen.getByRole('button', { name: 'Создать аккаунт' }));

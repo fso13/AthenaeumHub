@@ -2071,6 +2071,11 @@ export interface components {
             type: "DIRECT" | "GROUP";
             /** @enum {string} */
             security_mode: "MANAGED" | "E2EE";
+            /**
+             * @description GROUP channel visibility (additive). `PUBLIC` — every ACTIVE workspace member and every future member; `PRIVATE` — only the creator and the selected members. `null` for DIRECT chats and for rows without channel settings.
+             * @enum {string|null}
+             */
+            visibility?: "PUBLIC" | "PRIVATE" | null;
             /** Format: uuid */
             peer_id?: string | null;
             peer_has_e2ee_capable_devices?: boolean;
@@ -2355,12 +2360,20 @@ export interface components {
         MessageCreateResult: components["schemas"]["Message"] & {
             envelope_coverage?: components["schemas"]["EnvelopeCoverage"];
         };
+        /** @description `POST /workspaces/{workspaceId}/chats` (additive channel visibility). GROUP channels are PUBLIC by default: every ACTIVE workspace member joins immediately and every future member joins automatically. PRIVATE GROUP channels require `member_ids` (1..100); the creator is added as OWNER and the selected ACTIVE workspace members as MEMBER. `member_ids` is rejected for DIRECT and for PUBLIC. DIRECT chats always have no visibility. Any ACTIVE workspace member may create a GROUP channel, subject to the installation chat limits. */
         ChatCreateRequest: {
             /** @enum {string} */
             type: "DIRECT" | "GROUP";
             /** Format: uuid */
             peer_id?: string | null;
             name?: string | null;
+            /**
+             * @description GROUP only; optional, defaults to `PUBLIC` when absent or null. `PUBLIC` adds all ACTIVE workspace members and future joins; `PRIVATE` requires `member_ids`. Must be absent or null for DIRECT.
+             * @enum {string|null}
+             */
+            visibility?: "PUBLIC" | "PRIVATE" | null;
+            /** @description PRIVATE GROUP only: 1..100 distinct ACTIVE workspace member ids. The creator may not be listed and is added automatically. Must be absent, null or empty for PUBLIC and DIRECT. No private-channel invite links exist yet. */
+            member_ids?: string[] | null;
         };
         /** @description `PATCH /chats/{chatId}` (D1-BE3). Both fields are optional, but at least one must be present and non-null. `name` is trimmed and internal whitespace is collapsed; it must be 1..120 characters. `description` is trimmed, must be at most 500 characters, and `""` clears it to `null`. Names/descriptions are plain text: `<`, `>` and control characters (except `\n`/`\t` in description) are rejected. In an E2EE chat `description` is rejected with `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`; `name` is allowed. `security_mode` is immutable and is never accepted in the body. */
         ChatUpdateRequest: {
@@ -2376,6 +2389,11 @@ export interface components {
             type: "DIRECT" | "GROUP";
             /** @enum {string} */
             readonly security_mode: "MANAGED" | "E2EE";
+            /**
+             * @description GROUP channel visibility (additive). `PUBLIC` — every ACTIVE workspace member and every future member; `PRIVATE` — only the creator and the selected members. `null` for DIRECT chats. Membership visibility is unchanged: a chat appears in a user's list only through an ACTIVE chat_members row.
+             * @enum {string|null}
+             */
+            visibility?: "PUBLIC" | "PRIVATE" | null;
             /** Format: uuid */
             peer_id?: string | null;
             peer_has_e2ee_capable_devices?: boolean;

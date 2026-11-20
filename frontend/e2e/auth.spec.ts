@@ -19,8 +19,8 @@ function uniqueEmail(): string {
 }
 
 async function registerThroughUi(page: Page, email: string, password: string): Promise<void> {
-  await page.getByRole('button', { name: 'Регистрация' }).click();
-  await expect(page.getByRole('heading', { name: 'Регистрация в Сове' })).toBeVisible();
+  await page.getByRole('button', { name: 'Создать аккаунт' }).click();
+  await expect(page.getByRole('heading', { name: 'Регистрация в Сову' })).toBeVisible();
   await page.getByLabel('Имя').fill('E2E Пользователь');
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Пароль', { exact: true }).fill(password);
@@ -36,13 +36,13 @@ test('password auth: guard → register → verify → chat → logout', async (
   await page.goto('/');
 
   await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole('heading', { name: 'Вход в Сову' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Вход' })).toBeVisible();
   await expect(page.getByLabel('Email')).toBeVisible();
   await expect(page.getByLabel('Пароль', { exact: true })).toBeVisible();
   await expectNoA11yViolations(page);
 
-  await page.getByRole('button', { name: 'Регистрация' }).click();
-  await expect(page.getByRole('heading', { name: 'Регистрация в Сове' })).toBeVisible();
+  await page.getByRole('button', { name: 'Создать аккаунт' }).click();
+  await expect(page.getByRole('heading', { name: 'Регистрация в Сову' })).toBeVisible();
   await expectNoA11yViolations(page);
 
   await page.getByLabel('Имя').fill('E2E Пользователь');
@@ -65,7 +65,7 @@ test('password auth: guard → register → verify → chat → logout', async (
 
   await page.getByRole('button', { name: 'Выйти' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Вход в Сову' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Вход' })).toBeVisible();
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByText('Вы вышли из аккаунта.')).toBeVisible();
 });
@@ -90,7 +90,7 @@ test('password auth: unverified login returns to verify, wrong code shows attemp
   await registerThroughUi(page, email, password);
 
   await page.getByRole('button', { name: 'Вернуться ко входу' }).click();
-  await expect(page.getByRole('heading', { name: 'Вход в Сову' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Вход' })).toBeVisible();
 
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Пароль', { exact: true }).fill(password);

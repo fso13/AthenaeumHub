@@ -61,7 +61,7 @@ public class ChatController {
     public ResponseEntity<ChatResponse> createChat(
             @PathVariable UUID workspaceId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody(required = false) ChatCreateRequest request,
+            @Valid @RequestBody(required = false) ChatCreateRequest request,
             Principal principal) {
         java.util.UUID key = RequestHeaders.requireUuid(idempotencyKey, "Idempotency-Key");
         if (request == null) {
@@ -71,7 +71,7 @@ public class ChatController {
         }
         CreateChatResult result = chatCreateService.create(principal, workspaceId,
                 new ChatCreateService.ChatCreateCommand(request.type(), request.peerId(),
-                        request.name()), key);
+                        request.name(), request.visibility(), request.memberIds()), key);
         return ResponseEntity.status(result.status())
                 .body(ChatApiMapper.toResponse(result.chat()));
     }
