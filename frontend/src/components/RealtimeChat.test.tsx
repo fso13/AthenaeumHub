@@ -79,7 +79,7 @@ describe('realtime chat UI', () => {
     act(() => publishMockMessageCreated(mockDb, message));
 
     const image = await screen.findByRole('img', { name: 'Кот: привет' });
-    expect(image).toHaveAttribute('src', '/stickers/cats/01.png');
+    expect(image).toHaveAttribute('src', '/stickers/cats/01.png?v=2');
     expect(image.closest('.bubble')).toBeNull();
     expect(container.querySelectorAll('.msg-row')).toHaveLength(31);
   });

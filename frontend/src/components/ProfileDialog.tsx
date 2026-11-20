@@ -480,14 +480,26 @@ export function ProfileDialog({
               </p>
             </div>
             {!editing ? (
-              <button
-                ref={editButtonRef}
-                type="button"
-                className="btn btn--sm"
-                onClick={startEditing}
-              >
-                {t('profile.edit')}
-              </button>
+              <div className="profile-hero__actions">
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => {
+                    startEditing();
+                    setAvatarPickerOpen(true);
+                  }}
+                >
+                  {t('profile.avatar.hero')}
+                </button>
+                <button
+                  ref={editButtonRef}
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={startEditing}
+                >
+                  {t('profile.edit')}
+                </button>
+              </div>
             ) : null}
           </div>
 

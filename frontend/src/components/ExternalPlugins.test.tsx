@@ -54,9 +54,8 @@ describe('D1.2 external plugin cards and sandboxed runner', () => {
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
     expect(frame.getAttribute('sandbox')).not.toContain('allow-same-origin');
     expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
-    expect(frame.getAttribute('srcdoc')).toBeTruthy();
-    expect(frame.getAttribute('srcdoc')).toContain('Hello panel');
-    expect(frame.getAttribute('src')).toBeNull();
+    expect(frame.getAttribute('src')).toContain('data:text/html;base64,');
+    expect(frame.getAttribute('src')).toBeTruthy();
     expect(within(dialog).getByText(/Изолированная песочница/)).toBeVisible();
 
     await user.click(within(dialog).getByRole('button', { name: 'Закрыть плагин' }));

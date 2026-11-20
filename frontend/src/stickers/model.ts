@@ -80,3 +80,8 @@ export function findSticker(packs: readonly StickerPack[], stickerId: string): S
   }
   return null;
 }
+
+/** Cache-busting query for built-in sticker art replaced in the owl pack. */
+export function stickerAssetUrl(url: string): string {
+  return url.startsWith('/stickers/') && !url.includes('?') ? `${url}?v=2` : url;
+}

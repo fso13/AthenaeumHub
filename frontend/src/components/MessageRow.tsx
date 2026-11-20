@@ -3,7 +3,7 @@ import { describeError } from '../domain/errors';
 import { formatDateTime, formatTime, replyPreview } from '../domain/messages';
 import { t } from '../i18n/ru';
 import type { E2eeMessageView, OutgoingMessage } from '../store/chatStore';
-import { isStickerMessage, stickerOf } from '../stickers/model';
+import { isStickerMessage, stickerAssetUrl, stickerOf } from '../stickers/model';
 import { AttachmentList } from './AttachmentCard';
 import { Avatar } from './Avatar';
 import { ErrorDetails } from './ErrorDetails';
@@ -203,7 +203,7 @@ export function MessageRow({
             ) : sticker?.url ? (
               <img
                 className="sticker-message__image"
-                src={sticker.url}
+                src={stickerAssetUrl(sticker.url)}
                 alt={alt}
                 width={512}
                 height={512}
@@ -366,7 +366,7 @@ export function OutgoingRow({
           <div className="sticker-message sticker-message--outgoing">
             <img
               className="sticker-message__image"
-              src={sticker.url}
+              src={stickerAssetUrl(sticker.url)}
               alt={alt}
               width={512}
               height={512}

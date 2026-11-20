@@ -2729,6 +2729,7 @@ export const ru = {
   'profile.avatar.hint': 'Аватар видят участники пространств.',
   'profile.avatar.current': 'Текущий аватар',
   'profile.avatar.none': 'Аватар не установлен',
+  'profile.avatar.hero': 'Аватар',
   'profile.avatar.change': 'Сменить аватар',
   'profile.avatar.remove': 'Удалить аватар',
   'profile.avatar.removing': 'Удаляем…',

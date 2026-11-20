@@ -10,7 +10,12 @@ import {
 import type { StickerRef } from '../api/types';
 import { describeError } from '../domain/errors';
 import { t } from '../i18n/ru';
-import { favoriteStickers, filterStickers, recentStickers } from '../stickers/model';
+import {
+  favoriteStickers,
+  filterStickers,
+  recentStickers,
+  stickerAssetUrl,
+} from '../stickers/model';
 import type { StickersState } from '../stickers/store';
 import { CloseIcon, StickerIcon } from './Icons';
 
@@ -319,12 +324,12 @@ export function StickerPicker({
                     >
                       <img
                         className="sticker-image"
-                        src={sticker.url}
+                        src={stickerAssetUrl(sticker.url)}
                         alt=""
                         aria-hidden="true"
                         width={512}
                         height={512}
-                        loading="lazy"
+                        loading="eager"
                         decoding="async"
                         draggable={false}
                       />

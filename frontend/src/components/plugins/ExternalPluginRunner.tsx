@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Plugin } from '../../api/types';
 import { t } from '../../i18n/ru';
 import { parsePluginAssetUrl } from '../../plugins/assets';
@@ -71,6 +71,10 @@ export function ExternalPluginRunner({
   const rateWindow = useRef({ startedAt: 0, count: 0 });
   const [phase, setPhase] = useState<RunnerPhase>('loading');
   const [html, setHtml] = useState<string>('');
+  const frameUrl = useMemo(() => {
+    if (!html) return '';
+    return `data:text/html;base64,${btoa(unescape(encodeURIComponent(html)))}`;
+  }, [html]);
   const [errorText, setErrorText] = useState<string>('');
   const [pluginReady, setPluginReady] = useState(false);
   const [logCount, setLogCount] = useState(0);
@@ -306,7 +310,7 @@ export function ExternalPluginRunner({
             sandbox={PLUGIN_FRAME_SANDBOX}
             referrerPolicy="no-referrer"
             allow="clipboard-write"
-            srcDoc={html}
+            src={frameUrl}
             onLoad={sendInit}
           />
         ) : null}

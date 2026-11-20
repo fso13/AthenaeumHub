@@ -48,7 +48,7 @@ describe('built-in stickers in managed chat', () => {
     await renderStickers();
 
     const image = await screen.findByRole('img', { name: 'Сова: готово' });
-    expect(image).toHaveAttribute('src', '/stickers/krug/03.png');
+    expect(image).toHaveAttribute('src', '/stickers/krug/03.png?v=2');
     expect(image).toHaveAttribute('width', '512');
     expect(image).toHaveAttribute('height', '512');
     expect(image.closest('.bubble')).toBeNull();

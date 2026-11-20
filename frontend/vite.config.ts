@@ -30,7 +30,7 @@ function contentSecurityPolicy(apiBaseUrl: string, wsUrl: string, mediaOrigins: 
     `media-src ${imageSources}`,
     "font-src 'self'",
     `connect-src ${connectSources}`,
-    "frame-src 'self'",
+    "frame-src 'self' data: blob:",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",
