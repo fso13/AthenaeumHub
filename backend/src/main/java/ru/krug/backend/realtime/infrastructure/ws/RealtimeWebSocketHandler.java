@@ -15,7 +15,6 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import ru.krug.backend.realtime.application.model.CallSignal;
-import ru.krug.backend.realtime.application.model.CallSignalOutcome;
 import ru.krug.backend.realtime.application.model.ChatSubscription;
 import ru.krug.backend.realtime.application.model.PresenceStatus;
 import ru.krug.backend.realtime.application.model.RealtimeSession;
@@ -225,12 +224,9 @@ public class RealtimeWebSocketHandler extends TextWebSocketHandler {
             }
             CallSignal signal = callSignalParser.parse(frame.get("payload"),
                     settings.callSdpMaxBytes(), settings.callCandidateMaxBytes());
-            CallSignalOutcome outcome = callSignaling.signal(session, chatId, signal);
-            if (outcome == CallSignalOutcome.UNAVAILABLE) {
-                connection.enqueue(OutboundFrame.text(codec.callUnavailable(
-                        session.workspaceId(), chatId, signal.callId(), signal.kind(),
-                        "PEER_OFFLINE", java.time.Instant.now()), true, chatId, null));
-            }
+            callSignaling.signal(session, chatId, signal);
+            // Offline peers are not an error: the call stays in the ringing state.
+            // Presence ONLINE triggers an offer retry; the conference remains open.
         } catch (CallSignalRejectedException ex) {
             log.debug("ws.call_signal_rejected session_id={} code={}", session.sessionId(),
                     ex.code());

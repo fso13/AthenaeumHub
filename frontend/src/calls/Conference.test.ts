@@ -298,24 +298,39 @@ describe('CallController GROUP mesh (#77)', () => {
     expect(media.peers).toHaveLength(2);
   });
 
-  it('attributes a GROUP call.unavailable to the unanswered offer and keeps the rest', async () => {
+  it('keeps every offline invitee pending when call.unavailable is received', async () => {
     const { controller, media } = setup();
     controller.startConference(CHAT, [ANNA, LENA, MARK], false);
     await vi.waitFor(() => expect(media.peers).toHaveLength(3));
 
     controller.handleUnavailable(CALL);
-    expect(controller.getState().participants.map((item) => item.userId)).toEqual([LENA, MARK]);
+    expect(controller.getState().participants.map((item) => item.userId)).toEqual([
+      ANNA,
+      LENA,
+      MARK,
+    ]);
     expect(controller.getState().phase).toBe('outgoing');
 
-    // An answer takes that peer out of the unanswered FIFO.
     controller.handleSignal(groupFrame(LENA, 'answer', { sdp: 'v=0\r\no=- lena' }));
     await vi.waitFor(() => expect(media.peers[1]?.remoteDescription?.type).toBe('answer'));
     controller.handleUnavailable(CALL);
-    expect(controller.getState().participants.map((item) => item.userId)).toEqual([LENA]);
+    expect(controller.getState().participants.map((item) => item.userId)).toContain(ANNA);
+  });
 
-    controller.handleUnavailable(CALL);
-    await vi.waitFor(() => expect(controller.getState().phase).toBe('idle'));
-    expect(controller.getState().notice?.code).toBe('peer_offline');
+  it('retries an offline invitee when presence turns online without dropping others', async () => {
+    const { controller, sent, media } = setup();
+    controller.startConference(CHAT, [ANNA, LENA, MARK], false);
+    await vi.waitFor(() => expect(media.peers).toHaveLength(3));
+    const before = sent.filter((item) => item.payload.kind === 'offer').length;
+
+    controller.handlePresence(ANNA, true);
+    await vi.waitFor(() =>
+      expect(sent.filter((item) => item.payload.kind === 'offer')).toHaveLength(before + 1),
+    );
+    expect(controller.getState().participants).toHaveLength(3);
+    const retried = sent.filter((item) => item.payload.kind === 'offer').at(-1);
+    expect(retried?.payload.recipients).toEqual([ANNA]);
+    expect(controller.getState().phase).toBe('outgoing');
   });
 
   it('keeps 1:1 payloads free of the conference extension', async () => {

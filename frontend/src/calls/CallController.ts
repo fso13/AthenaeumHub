@@ -70,6 +70,9 @@ interface ConferencePeer {
   pendingOffer: PendingOffer | null;
   pendingCandidates: CallIceCandidate[];
   remoteDescriptionSet: boolean;
+  /** Last local offer/ICE kept for a late join / presence retry. */
+  offerSdp: string | null;
+  sentCandidates: CallIceCandidate[];
 }
 
 export class CallController {
@@ -88,6 +91,10 @@ export class CallController {
    * caller drop the peer whose frame nobody received without touching the rest.
    */
   private pendingOfferRecipients: string[] = [];
+  /** 1:1 offer/ICE kept so an offline peer can still receive the call later. */
+  private directOfferSdp: string | null = null;
+  private directCandidates: CallIceCandidate[] = [];
+  private retryTimer: number | null = null;
   private disposed = false;
 
   constructor(options: CallControllerOptions) {
@@ -112,6 +119,9 @@ export class CallController {
     this.pendingOffer = null;
     this.pendingOfferRecipients = [];
     this.remoteDescriptionSet = false;
+    this.directOfferSdp = null;
+    this.directCandidates = [];
+    this.startRetryLoop();
     this.update({
       ...idleCallState(),
       phase: 'outgoing',
@@ -142,6 +152,9 @@ export class CallController {
     this.pendingOffer = null;
     this.pendingOfferRecipients = [];
     this.remoteDescriptionSet = false;
+    this.directOfferSdp = null;
+    this.directCandidates = [];
+    this.startRetryLoop();
     this.update({
       ...idleCallState(),
       phase: 'outgoing',
@@ -208,11 +221,10 @@ export class CallController {
           this.removeConferencePeer(peerUserId);
           continue;
         }
-        const sent = this.dispatchConference('offer', video, { sdp }, peerUserId);
-        if (!sent) {
-          // One unreachable peer must not tear down the rest of the mesh.
-          this.removeConferencePeer(peerUserId);
-        }
+        peer.offerSdp = sdp;
+        // A send failure means the socket is down, not that this peer is gone.
+        // Keep the leg pending so a reconnect/presence retry can deliver it.
+        this.dispatchConference('offer', video, { sdp }, peerUserId);
       } catch {
         this.removeConferencePeer(peerUserId);
       }
@@ -313,6 +325,7 @@ export class CallController {
         this.fail('signaling_failed', callId);
         return;
       }
+      this.directOfferSdp = sdp;
       this.dispatch(chatId, 'offer', video, { sdp });
     } catch {
       if (callId === this.state.callId) this.fail('connection_failed', callId, true);
@@ -723,31 +736,11 @@ export class CallController {
     }
   }
 
-  /** `call.unavailable` from the server (peer has no live session). */
-  handleUnavailable(callId: string, fromUserId: string | null = null): void {
+  /** Legacy `call.unavailable`: no longer ends a call; the peer may join later. */
+  handleUnavailable(callId: string, _fromUserId: string | null = null): void {
     if (this.state.callId !== callId) return;
-    if (this.state.conference) {
-      // §9.5.3 has no recipient id in this frame. The FIFO of unanswered
-      // offers attributes it to the peer whose frame nobody received, so one
-      // offline invitee does not kill the rest of the mesh. Explicit
-      // `from_user_id` (forward-compatible server) wins when present.
-      const queued = this.pendingOfferRecipients[0] ?? null;
-      const target =
-        fromUserId ??
-        queued ??
-        [...this.conferencePeers.values()].find((peer) => peer.connectionState !== 'connected')
-          ?.userId ??
-        null;
-      if (!target) {
-        // Every visible leg is already connected; leave it to connectionState
-        // instead of ending a healthy conference on an unattributed event.
-        return;
-      }
-      this.removeConferencePeer(target);
-      if (this.conferencePeers.size === 0) this.finish({ code: 'peer_offline' });
-      return;
-    }
-    this.finish({ code: 'peer_offline' });
+    // Keep ringing. Presence and the retry loop resend the offer when the peer
+    // appears; a conference stays open even if every invitee is offline.
   }
 
   /** A recoverable server `error` for a call frame; end the attempt clearly. */
@@ -833,6 +826,7 @@ export class CallController {
   }
 
   private finish(notice: CallNotice | null): void {
+    this.stopRetryLoop();
     this.resetResources();
     this.update({ ...idleCallState(), notice });
   }
@@ -865,6 +859,7 @@ export class CallController {
       if (!raw) return;
       const candidate = toIceCandidate(raw);
       if (!candidate || candidate.candidate.length === 0) return;
+      this.directCandidates.push(candidate);
       const chatId = this.state.chatId;
       if (chatId) this.dispatch(chatId, 'ice', this.state.video, { candidate });
     };
@@ -899,6 +894,8 @@ export class CallController {
       pendingOffer: null,
       pendingCandidates: [],
       remoteDescriptionSet: false,
+      offerSdp: null,
+      sentCandidates: [],
     };
   }
 
@@ -926,6 +923,7 @@ export class CallController {
       if (!raw) return;
       const candidate = toIceCandidate(raw);
       if (!candidate || candidate.candidate.length === 0) return;
+      peer.sentCandidates.push(candidate);
       this.sendConferenceSignal('ice', peer.userId, this.state.video, { candidate });
     };
 
@@ -1075,6 +1073,74 @@ export class CallController {
     extra: Pick<CallSignalPayload, 'sdp' | 'candidate'> = {},
   ): boolean {
     return this.dispatchConference(kind, video, extra, peerUserId);
+  }
+
+  private startRetryLoop(): void {
+    this.stopRetryLoop();
+    this.retryTimer = window.setInterval(() => this.retryPending(), 8_000);
+  }
+
+  private stopRetryLoop(): void {
+    if (this.retryTimer !== null) {
+      window.clearInterval(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  /** Re-deliver offers to peers that have not answered yet (late join). */
+  private retryPending(): void {
+    if (this.disposed || this.state.phase === 'idle' || this.state.phase === 'incoming') {
+      this.stopRetryLoop();
+      return;
+    }
+    const chatId = this.state.chatId;
+    const callId = this.state.callId;
+    if (!chatId || !callId) return;
+    if (this.state.conference) {
+      for (const peer of this.conferencePeers.values()) {
+        if (peer.connectionState === 'connected' || !peer.offerSdp || !peer.pc) continue;
+        if (peer.pc.connectionState === 'connected') continue;
+        this.dispatchConference('offer', this.state.video, { sdp: peer.offerSdp }, peer.userId);
+        for (const candidate of peer.sentCandidates) {
+          this.dispatchConference('ice', this.state.video, { candidate }, peer.userId);
+        }
+      }
+      return;
+    }
+    if (this.state.phase === 'outgoing' && this.directOfferSdp && this.pc) {
+      if (this.pc.connectionState === 'connected') return;
+      this.directOfferSdp = this.pc.localDescription?.sdp ?? this.directOfferSdp;
+      this.dispatch(chatId, 'offer', this.state.video, { sdp: this.directOfferSdp });
+      for (const candidate of this.directCandidates) {
+        this.dispatch(chatId, 'ice', this.state.video, { candidate });
+      }
+    }
+  }
+
+  /** Presence ONLINE from the realtime channel: retry a pending invite now. */
+  handlePresence(userId: string, online: boolean): void {
+    if (!online || this.state.phase === 'idle' || this.state.phase === 'incoming') return;
+    if (this.state.conference) {
+      const peer = this.conferencePeers.get(userId);
+      if (!peer || peer.connectionState === 'connected' || !peer.offerSdp) return;
+      this.dispatchConference('offer', this.state.video, { sdp: peer.offerSdp }, userId);
+      for (const candidate of peer.sentCandidates) {
+        this.dispatchConference('ice', this.state.video, { candidate }, userId);
+      }
+      return;
+    }
+    if (
+      this.state.peerUserId === userId &&
+      this.state.phase === 'outgoing' &&
+      this.directOfferSdp
+    ) {
+      this.dispatch(this.state.chatId ?? '', 'offer', this.state.video, {
+        sdp: this.directOfferSdp,
+      });
+      for (const candidate of this.directCandidates) {
+        this.dispatch(this.state.chatId ?? '', 'ice', this.state.video, { candidate });
+      }
+    }
   }
 
   private async openMedia(video: boolean): Promise<MediaStream> {

@@ -191,7 +191,7 @@ describe('CallController', () => {
     expect(sent).toHaveLength(0);
   });
 
-  it('ends the attempt on call.unavailable and ignores stale call ids', async () => {
+  it('keeps ringing when call.unavailable arrives (peer may join later)', async () => {
     const { controller, media } = setup();
     controller.start(CHAT, PEER, false);
     await vi.waitFor(() => expect(media.peers).toHaveLength(1));
@@ -200,11 +200,23 @@ describe('CallController', () => {
     expect(controller.getState().phase).toBe('outgoing');
 
     controller.handleUnavailable(CALL);
-    expect(controller.getState()).toMatchObject({
-      phase: 'idle',
-      notice: { code: 'peer_offline' },
-    });
-    expect(media.streams[0]?.fakeTracks.every((track) => track.stopped)).toBe(true);
+    expect(controller.getState().phase).toBe('outgoing');
+    expect(media.streams[0]?.fakeTracks.every((track) => track.stopped)).toBe(false);
+  });
+
+  it('retries the offer when presence turns online (late answer)', async () => {
+    const { controller, sent } = setup();
+    controller.start(CHAT, PEER, false);
+    await vi.waitFor(() =>
+      expect(sent.filter((item) => item.payload.kind === 'offer')).toHaveLength(1),
+    );
+
+    controller.handlePresence(PEER, true);
+    await vi.waitFor(() =>
+      expect(sent.filter((item) => item.payload.kind === 'offer')).toHaveLength(2),
+    );
+    expect(sent.filter((item) => item.payload.kind === 'offer')[1]?.chatId).toBe(CHAT);
+    expect(controller.getState().phase).toBe('outgoing');
   });
 
   it('sets remote video from ontrack and reports a failed connection', async () => {

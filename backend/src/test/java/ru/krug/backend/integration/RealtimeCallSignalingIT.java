@@ -136,7 +136,7 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
     }
 
     @Test
-    void offlinePeerProducesCallUnavailableToCallerOnly() throws Exception {
+    void offlinePeerKeepsTheCallRingingWithoutCallUnavailable() throws Exception {
         SessionResponse alice = devSession();
         SessionResponse bob = devSession();
         Room room = directRoom(alice, bob);
@@ -147,15 +147,10 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
         aliceWs.send(signalFrame(room.chatId(), callId, "offer", true,
                 "v=0\r\na=offline\r\n", null));
 
-        JsonNode unavailable = aliceWs.awaitEvent("call.unavailable", TIMEOUT);
-        assertThat(unavailable.has("seq")).isFalse();
-        assertThat(unavailable.has("event_id")).isFalse();
-        assertThat(unavailable.get("chat_id").asText()).isEqualTo(room.chatId().toString());
-        JsonNode payload = unavailable.get("payload");
-        assertThat(payload.get("call_id").asText()).isEqualTo(callId.toString());
-        assertThat(payload.get("kind").asText()).isEqualTo("offer");
-        assertThat(payload.get("reason").asText()).isEqualTo("PEER_OFFLINE");
-        assertThat(aliceWs.awaitEventWithin("call.signal", Duration.ofMillis(300))).isNull();
+        // The live peer is absent; the server keeps no call state and produces no
+        // terminal event. The client retries the offer when presence turns ONLINE.
+        assertThat(aliceWs.awaitEventWithin("call.unavailable", Duration.ofMillis(500))).isNull();
+        assertThat(aliceWs.awaitEventWithin("call.signal", Duration.ofMillis(200))).isNull();
         aliceWs.close();
     }
 
@@ -455,16 +450,12 @@ class RealtimeCallSignalingIT extends WebSocketIntegrationTestBase {
         // At least one recipient is online => no call.unavailable to the caller.
         assertThat(aliceWs.awaitEventWithin("call.unavailable", Duration.ofMillis(400))).isNull();
 
-        // All named recipients offline => caller-only call.unavailable.
+        // All named recipients offline: still no terminal event; the conference
+        // remains open so they can join later.
         UUID offlineCall = UUID.randomUUID();
         aliceWs.send(groupSignalFrame(group.chatId(), offlineCall, "offer", true,
                 "v=0\r\na=all-offline\r\n", null, carol.user().id()));
-        JsonNode unavailable = aliceWs.awaitEvent("call.unavailable", TIMEOUT);
-        assertThat(unavailable.get("payload").get("call_id").asText())
-                .isEqualTo(offlineCall.toString());
-        assertThat(unavailable.get("payload").get("reason").asText()).isEqualTo("PEER_OFFLINE");
-        assertThat(unavailable.has("seq")).isFalse();
-        assertThat(unavailable.has("event_id")).isFalse();
+        assertThat(aliceWs.awaitEventWithin("call.unavailable", Duration.ofMillis(500))).isNull();
 
         aliceWs.close();
         bobWs.close();

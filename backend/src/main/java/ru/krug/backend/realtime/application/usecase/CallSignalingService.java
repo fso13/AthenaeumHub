@@ -97,7 +97,10 @@ public class CallSignalingService {
                     session.sessionId(), chatId, signal.callId(), signal.kind(),
                     access.chatType(), signal.conference(), recipients.size(), delivered);
         }
-        return delivered == 0 ? CallSignalOutcome.UNAVAILABLE : CallSignalOutcome.RELAYED;
+        // A conference (and a 1:1 call) must keep ringing when the peer is offline;
+        // the client retries the offer when presence turns ONLINE. Zero deliveries
+        // is not an error and must not tear the call down.
+        return CallSignalOutcome.RELAYED;
     }
 
     private static CallSignalRejectedException rejectionFor(String reason) {

@@ -5748,6 +5748,7 @@ export class ChatStore {
 
   private handlePresence(frame: PresenceFrame): void {
     if (frame.user_id === this.viewerId()) return;
+    this.calls.handlePresence(frame.user_id, frame.status === 'ONLINE');
     this.patch({
       presence: {
         ...this.state.presence,

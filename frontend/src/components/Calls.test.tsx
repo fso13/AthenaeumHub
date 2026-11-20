@@ -460,18 +460,16 @@ describe('1:1 calls', () => {
     expect(store.getSnapshot().call.phase).toBe('idle');
   });
 
-  it('ends the attempt when the peer has no live session', async () => {
+  it('keeps ringing when the peer has no live session', async () => {
     const { user, container, store, media } = renderCalls();
     await waitForOnline(store);
     await openDirect(user);
     const { callId } = await startOutgoing(user, container, media);
 
     act(() => publishMockCallUnavailable({ chat_id: IDS.directChat, call_id: callId }));
-    await vi.waitFor(() =>
-      expect(document.querySelector('.call-notice')).toHaveTextContent('Абонент не в сети'),
-    );
-    expect(store.getSnapshot().call.phase).toBe('idle');
-    expect(media.streams[0]?.fakeTracks.every((track) => track.stopped)).toBe(true);
+    await waitFor(() => expect(store.getSnapshot().call.phase).toBe('outgoing'));
+    expect(document.querySelector('.call-notice')).toBeNull();
+    expect(media.streams[0]?.fakeTracks.every((track) => track.stopped)).toBe(false);
   });
 
   it('reports a failed peer connection and cleans up', async () => {
