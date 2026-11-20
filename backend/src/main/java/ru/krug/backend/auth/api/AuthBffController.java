@@ -18,17 +18,21 @@ import ru.krug.backend.auth.api.dto.AuthRegisterResponse;
 import ru.krug.backend.auth.api.dto.AuthResendEmailCodeRequest;
 import ru.krug.backend.auth.api.dto.AuthResendEmailCodeResponse;
 import ru.krug.backend.auth.api.dto.AuthSessionResponse;
+import ru.krug.backend.auth.api.dto.AuthTwoFactorChallengeResponse;
+import ru.krug.backend.auth.api.dto.AuthTwoFactorVerifyRequest;
 import ru.krug.backend.auth.api.dto.AuthVerifyEmailRequest;
 import ru.krug.backend.auth.api.mapper.AuthBffApiMapper;
 import ru.krug.backend.auth.application.command.LoginCommand;
 import ru.krug.backend.auth.application.command.RegisterCommand;
 import ru.krug.backend.auth.application.command.VerifyEmailCommand;
+import ru.krug.backend.auth.application.model.LoginOutcome;
 import ru.krug.backend.auth.application.port.AuthBffSettings;
 import ru.krug.backend.auth.application.usecase.LoginService;
 import ru.krug.backend.auth.application.usecase.LogoutService;
 import ru.krug.backend.auth.application.usecase.RefreshSessionService;
 import ru.krug.backend.auth.application.usecase.RegisterUserService;
 import ru.krug.backend.auth.application.usecase.ResendEmailCodeService;
+import ru.krug.backend.auth.application.usecase.TwoFactorService;
 import ru.krug.backend.auth.application.usecase.VerifyEmailService;
 import ru.krug.backend.shared.api.RequestIdFilter;
 
@@ -46,6 +50,7 @@ public class AuthBffController {
     private final LoginService loginService;
     private final RefreshSessionService refreshSessionService;
     private final LogoutService logoutService;
+    private final TwoFactorService twoFactor;
     private final AuthBffSettings settings;
 
     public AuthBffController(RegisterUserService registerUserService,
@@ -54,6 +59,7 @@ public class AuthBffController {
                              LoginService loginService,
                              RefreshSessionService refreshSessionService,
                              LogoutService logoutService,
+                             TwoFactorService twoFactor,
                              AuthBffSettings settings) {
         this.registerUserService = registerUserService;
         this.verifyEmailService = verifyEmailService;
@@ -61,6 +67,7 @@ public class AuthBffController {
         this.loginService = loginService;
         this.refreshSessionService = refreshSessionService;
         this.logoutService = logoutService;
+        this.twoFactor = twoFactor;
         this.settings = settings;
     }
 
@@ -90,11 +97,24 @@ public class AuthBffController {
     }
 
     @PostMapping("/login")
-    public AuthSessionResponse login(@Valid @RequestBody AuthLoginRequest request,
-                                     HttpServletRequest http) {
-        return AuthBffApiMapper.toResponse(loginService.login(
+    public ResponseEntity<Object> login(@Valid @RequestBody AuthLoginRequest request,
+                                        HttpServletRequest http) {
+        LoginOutcome outcome = loginService.loginOutcome(
                 new LoginCommand(request.email(), request.password()), clientIp(http),
-                RequestIdFilter.requestId(http)));
+                RequestIdFilter.requestId(http));
+        if (outcome.requiresSecondFactor()) {
+            AuthTwoFactorChallengeResponse challenge =
+                    AuthBffApiMapper.toResponse(outcome.challenge());
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(challenge);
+        }
+        return ResponseEntity.ok(AuthBffApiMapper.toResponse(outcome.session()));
+    }
+
+    @PostMapping("/2fa/verify")
+    public AuthSessionResponse verifyTwoFactor(
+            @Valid @RequestBody AuthTwoFactorVerifyRequest request, HttpServletRequest http) {
+        return AuthBffApiMapper.toResponse(twoFactor.verifyChallenge(request.challengeId(),
+                request.code(), clientIp(http), RequestIdFilter.requestId(http)));
     }
 
     @PostMapping("/refresh")

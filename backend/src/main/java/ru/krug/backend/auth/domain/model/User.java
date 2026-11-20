@@ -17,23 +17,25 @@ public final class User {
     private final DisplayName displayName;
     private final Bio bio;
     private final Phone phone;
+    private final UUID avatarFileId;
     private final Status status;
     private final boolean platformAdmin;
 
     private User(UUID id, String email, DisplayName displayName, Bio bio, Phone phone,
-                 Status status, boolean platformAdmin) {
+                 UUID avatarFileId, Status status, boolean platformAdmin) {
         this.id = Objects.requireNonNull(id, "id");
         this.email = Objects.requireNonNull(email, "email");
         this.displayName = Objects.requireNonNull(displayName, "displayName");
         this.bio = bio == null ? Bio.empty() : bio;
         this.phone = phone == null ? Phone.empty() : phone;
+        this.avatarFileId = avatarFileId;
         this.status = Objects.requireNonNull(status, "status");
         this.platformAdmin = platformAdmin;
     }
 
     private User(UUID id, String email, DisplayName displayName, Status status,
                  boolean platformAdmin) {
-        this(id, email, displayName, Bio.empty(), Phone.empty(), status, platformAdmin);
+        this(id, email, displayName, Bio.empty(), Phone.empty(), null, status, platformAdmin);
     }
 
     public static User createDev(UUID id, String email, DisplayName displayName) {
@@ -42,13 +44,13 @@ public final class User {
 
     public static User createDev(UUID id, String email, DisplayName displayName,
                                  boolean platformAdmin) {
-        return new User(id, email, displayName, Bio.empty(), Phone.empty(), Status.ACTIVE,
+        return new User(id, email, displayName, Bio.empty(), Phone.empty(), null, Status.ACTIVE,
                 platformAdmin);
     }
 
     public static User createDev(UUID id, String email, DisplayName displayName, Bio bio,
                                  Phone phone) {
-        return new User(id, email, displayName, bio, phone, Status.ACTIVE, false);
+        return new User(id, email, displayName, bio, phone, null, Status.ACTIVE, false);
     }
 
     /**
@@ -64,7 +66,7 @@ public final class User {
         if (email == null || email.isBlank()) {
             throw new IllegalArgumentException("Provisioned user email must not be blank");
         }
-        return new User(id, email.strip(), displayName, Bio.empty(), Phone.empty(),
+        return new User(id, email.strip(), displayName, Bio.empty(), Phone.empty(), null,
                 Status.ACTIVE, platformAdmin);
     }
 
@@ -73,7 +75,7 @@ public final class User {
         if (email == null || email.isBlank()) {
             throw new IllegalArgumentException("Provisioned user email must not be blank");
         }
-        return new User(id, email.strip(), displayName, bio, phone, Status.ACTIVE, false);
+        return new User(id, email.strip(), displayName, bio, phone, null, Status.ACTIVE, false);
     }
 
     public static User reconstitute(UUID id, String email, DisplayName displayName, Status status) {
@@ -82,13 +84,20 @@ public final class User {
 
     public static User reconstitute(UUID id, String email, DisplayName displayName, Status status,
                                     boolean platformAdmin) {
-        return new User(id, email, displayName, Bio.empty(), Phone.empty(), status,
+        return new User(id, email, displayName, Bio.empty(), Phone.empty(), null, status,
                 platformAdmin);
     }
 
     public static User reconstitute(UUID id, String email, DisplayName displayName, Bio bio,
                                     Phone phone, Status status, boolean platformAdmin) {
-        return new User(id, email, displayName, bio, phone, status, platformAdmin);
+        return reconstitute(id, email, displayName, bio, phone, null, status, platformAdmin);
+    }
+
+    public static User reconstitute(UUID id, String email, DisplayName displayName, Bio bio,
+                                    Phone phone, UUID avatarFileId, Status status,
+                                    boolean platformAdmin) {
+        return new User(id, email, displayName, bio, phone, avatarFileId, status,
+                platformAdmin);
     }
 
     public UUID id() {
@@ -111,6 +120,11 @@ public final class User {
         return phone;
     }
 
+    /** Existing CLEAN image attachment id, or {@code null}. */
+    public UUID avatarFileId() {
+        return avatarFileId;
+    }
+
     public Status status() {
         return status;
     }
@@ -129,6 +143,12 @@ public final class User {
      * deliberately absent here; E2EE keys live on devices, not on this aggregate.
      */
     public User withProfile(DisplayName newDisplayName, Bio newBio, Phone newPhone) {
-        return new User(id, email, newDisplayName, newBio, newPhone, status, platformAdmin);
+        return new User(id, email, newDisplayName, newBio, newPhone, avatarFileId, status,
+                platformAdmin);
+    }
+
+    /** Sets (or clears, when {@code fileId} is null) the avatar attachment reference. */
+    public User withAvatar(UUID fileId) {
+        return new User(id, email, displayName, bio, phone, fileId, status, platformAdmin);
     }
 }

@@ -33,6 +33,12 @@ krug:
     # Dedicated tests call the cleanup service directly; no background scheduler.
     cleanup:
       enabled: false
+    # P0-4: keep the challenge window generous for the shared integration suite.
+    two-factor:
+      challenge-ttl: 10m
+      max-attempts: 5
+      window: 1
+      issuer: Krug Test
     # Generous defaults: AuthBffIT lowers specific windows to assert 429.
     rate-limit:
       enabled: true
@@ -42,6 +48,8 @@ krug:
       login-per-ip: 1000
       resend-per-email: 100
       resend-per-ip: 1000
+      two-factor-per-user: 1000
+      two-factor-per-ip: 10000
   files:
     # No MinIO container in unit/integration tests: same multipart contract in memory.
     storage: memory

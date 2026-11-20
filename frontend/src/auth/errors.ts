@@ -12,6 +12,8 @@ export type AuthErrorCode =
   | 'ACCOUNT_SUSPENDED'
   | 'CODE_INVALID'
   | 'CODE_EXPIRED'
+  | 'TWO_FACTOR_CODE_INVALID'
+  | 'TWO_FACTOR_CHALLENGE_INVALID'
   | 'EMAIL_TAKEN'
   | 'RATE_LIMITED'
   | 'REGISTRATION_CLOSED'
@@ -39,6 +41,8 @@ const CONTRACT_CODES = new Set<AuthErrorCode>([
   'ACCOUNT_SUSPENDED',
   'CODE_INVALID',
   'CODE_EXPIRED',
+  'TWO_FACTOR_CODE_INVALID',
+  'TWO_FACTOR_CHALLENGE_INVALID',
   'EMAIL_TAKEN',
   'RATE_LIMITED',
   'REGISTRATION_CLOSED',
@@ -111,6 +115,10 @@ export function authErrorMessage(error: AuthErrorInfo, translator: Translator = 
         : translates('auth.error.codeInvalid');
     case 'CODE_EXPIRED':
       return translates('auth.error.codeExpired');
+    case 'TWO_FACTOR_CODE_INVALID':
+      return translates('auth.error.twoFactorCodeInvalid');
+    case 'TWO_FACTOR_CHALLENGE_INVALID':
+      return translates('auth.error.twoFactorChallengeInvalid');
     case 'EMAIL_TAKEN':
       return translates('auth.error.emailTaken');
     case 'RATE_LIMITED':

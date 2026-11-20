@@ -65,8 +65,8 @@ public class WorkspaceRepositoryAdapter implements WorkspaceRepository {
     public List<WorkspaceMembership> listActiveMemberships(UUID userId) {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
-                        SELECT w.id, w.name, w.slug::text, w.security_mode, w.status, w.created_by,
-                               m.role, m.status
+                        SELECT w.id, w.name, w.slug::text, w.description, w.logo_file_id,
+                               w.security_mode, w.status, w.created_by, m.role, m.status
                           FROM workspace.workspaces w
                           JOIN workspace.memberships m
                             ON m.workspace_id = w.id
@@ -79,11 +79,12 @@ public class WorkspaceRepositoryAdapter implements WorkspaceRepository {
                 .getResultList();
         return rows.stream().map(row -> {
             Workspace workspace = Workspace.reconstitute((UUID) row[0], (String) row[1],
-                    (String) row[2], Workspace.SecurityMode.valueOf((String) row[3]),
-                    Workspace.Status.valueOf((String) row[4]), (UUID) row[5]);
+                    (String) row[2], (String) row[3], (UUID) row[4],
+                    Workspace.SecurityMode.valueOf((String) row[5]),
+                    Workspace.Status.valueOf((String) row[6]), (UUID) row[7]);
             Membership membership = Membership.reconstitute((UUID) row[0], userId,
-                    Membership.Role.valueOf((String) row[6]),
-                    Membership.Status.valueOf((String) row[7]));
+                    Membership.Role.valueOf((String) row[8]),
+                    Membership.Status.valueOf((String) row[9]));
             return new WorkspaceMembership(workspace, membership);
         }).toList();
     }
@@ -108,6 +109,70 @@ public class WorkspaceRepositoryAdapter implements WorkspaceRepository {
                 .setParameter(5, workspace.status().name())
                 .setParameter(6, workspace.createdBy())
                 .executeUpdate();
+        // P0-3: every workspace has a security-settings row from creation. The insert is
+        // idempotent so an onboarding upsert of an existing workspace leaves the values
+        // untouched. The tenant GUC matches the new workspace in both call paths.
+        entityManager.createNativeQuery("""
+                        INSERT INTO workspace.security_settings (workspace_id)
+                        VALUES (?1)
+                        ON CONFLICT (workspace_id) DO NOTHING
+                        """)
+                .setParameter(1, workspace.id())
+                .executeUpdate();
+        seedRolePermissionDefaults(workspace.id());
+    }
+
+    /** P0-4: the effective matrix exists from workspace creation; OWNER rows are true. */
+    private void seedRolePermissionDefaults(UUID workspaceId) {
+        entityManager.createNativeQuery("""
+                        INSERT INTO workspace.role_permissions
+                               (workspace_id, role, permission, allowed)
+                        SELECT ?1, d.role, d.permission, d.allowed
+                          FROM (VALUES
+                                ('OWNER',  'manage_workspace',   true),
+                                ('OWNER',  'manage_members',     true),
+                                ('OWNER',  'manage_invites',     true),
+                                ('OWNER',  'manage_permissions', true),
+                                ('OWNER',  'view_audit',         true),
+                                ('OWNER',  'manage_security',    true),
+                                ('ADMIN',  'manage_workspace',   true),
+                                ('ADMIN',  'manage_members',     true),
+                                ('ADMIN',  'manage_invites',     true),
+                                ('ADMIN',  'manage_permissions', true),
+                                ('ADMIN',  'view_audit',         true),
+                                ('ADMIN',  'manage_security',    true),
+                                ('MEMBER', 'manage_workspace',   false),
+                                ('MEMBER', 'manage_members',     false),
+                                ('MEMBER', 'manage_invites',     false),
+                                ('MEMBER', 'manage_permissions', false),
+                                ('MEMBER', 'view_audit',         false),
+                                ('MEMBER', 'manage_security',    false)
+                          ) AS d(role, permission, allowed)
+                        ON CONFLICT (workspace_id, role, permission) DO NOTHING
+                        """)
+                .setParameter(1, workspaceId)
+                .executeUpdate();
+    }
+
+    @Override
+    public void updateDetails(UUID workspaceId, String name, String description,
+                              UUID logoFileId) {
+        int updated = entityManager.createNativeQuery("""
+                        UPDATE workspace.workspaces
+                           SET name = ?2,
+                               description = ?3,
+                               logo_file_id = ?4,
+                               updated_at = now()
+                         WHERE id = ?1
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, name)
+                .setParameter(3, description)
+                .setParameter(4, logoFileId)
+                .executeUpdate();
+        if (updated == 0) {
+            throw ru.krug.backend.shared.error.DomainException.notFound("Workspace not found");
+        }
     }
 
     @Override

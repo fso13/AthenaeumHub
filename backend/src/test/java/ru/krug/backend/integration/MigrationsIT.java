@@ -213,6 +213,85 @@ class MigrationsIT extends IntegrationTestBase {
     }
 
     @Test
+    void createsWorkspaceSecurityDlpAuditAndSessionStructures() {
+        for (String table : List.of("workspace.security_settings",
+                "workspace.dlp_policies", "workspace.dlp_events")) {
+            Map<String, Object> flags = jdbc.queryForMap("""
+                    SELECT relrowsecurity, relforcerowsecurity
+                      FROM pg_class WHERE oid = ?::regclass
+                    """, table);
+            assertThat(flags.get("relrowsecurity")).as(table).isEqualTo(true);
+            assertThat(flags.get("relforcerowsecurity")).as(table).isEqualTo(true);
+        }
+
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'workspace' AND table_name = 'security_settings'
+                   AND column_name IN ('workspace_id', 'require_2fa',
+                                       'session_timeout_minutes', 'dlp_enabled',
+                                       'retention_days', 'updated_at', 'updated_by')
+                """, Integer.class)).isEqualTo(7);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'workspace' AND table_name = 'dlp_policies'
+                   AND column_name IN ('id', 'workspace_id', 'name', 'action', 'pattern_type',
+                                       'pattern', 'enabled', 'created_by', 'created_at',
+                                       'updated_at')
+                """, Integer.class)).isEqualTo(10);
+
+        // DLP events are content-free: ids/rule name/action/timestamps only.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'workspace' AND table_name = 'dlp_events'
+                """, Integer.class)).isEqualTo(8);
+        for (String forbidden : List.of("text", "content", "ciphertext", "filename",
+                "email", "ip_address")) {
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM information_schema.columns
+                     WHERE table_schema = 'workspace' AND table_name = 'dlp_events'
+                       AND column_name = ?
+                    """, Integer.class, forbidden)).as(forbidden).isZero();
+        }
+
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'workspace'
+                   AND indexname IN ('ux_dlp_policies_ws_name', 'ix_dlp_policies_ws_created',
+                                     'ix_dlp_policies_ws_enabled', 'ix_dlp_events_ws_created',
+                                     'ix_dlp_events_ws_policy_created',
+                                     'ix_dlp_events_ws_action_created')
+                """, Integer.class)).isEqualTo(6);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT has_table_privilege('krug_app', 'workspace.dlp_events', 'INSERT')",
+                Boolean.class)).isTrue();
+        assertThat(jdbc.queryForObject(
+                "SELECT has_table_privilege('krug_app', 'workspace.dlp_events', 'UPDATE')",
+                Boolean.class)).isFalse();
+        assertThat(jdbc.queryForObject(
+                "SELECT has_table_privilege('krug_app', 'workspace.dlp_events', 'DELETE')",
+                Boolean.class)).isFalse();
+        assertThat(jdbc.queryForObject(
+                "SELECT has_table_privilege('krug_app', 'workspace.dlp_policies', 'DELETE')",
+                Boolean.class)).isTrue();
+
+        for (String function : List.of("workspace.audit_page", "workspace.security_member_subjects")) {
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM pg_proc p
+                      JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'workspace' AND p.proname = ?
+                       AND p.prosecdef
+                    """, Integer.class, function.split("\\.")[1])).as(function).isEqualTo(1);
+            assertThat(jdbc.queryForObject("""
+                    SELECT has_function_privilege('krug_app', p.oid, 'EXECUTE')
+                      FROM pg_proc p
+                      JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'workspace' AND p.proname = ?
+                    """, Boolean.class, function.split("\\.")[1])).as(function).isTrue();
+        }
+    }
+
+    @Test
     void createsAppAndMigratorRolesAndPartitionFunction() {
         Integer roles = jdbc.queryForObject("""
                 SELECT count(*) FROM pg_roles WHERE rolname IN ('krug_migrator', 'krug_app')

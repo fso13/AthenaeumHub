@@ -35,6 +35,7 @@ public class WorkspaceQueryService {
                 .filter(Membership::isActive)
                 .orElseThrow(() -> DomainException.notFound("Workspace not found"));
         return new WorkspaceSummaryView(workspace.id(), workspace.name(), workspace.slug(),
-                membership.role().name(), workspace.securityMode().name());
+                membership.role().name(), workspace.securityMode().name(),
+                workspace.description(), workspace.logoFileId());
     }
 }

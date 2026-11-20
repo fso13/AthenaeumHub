@@ -18,6 +18,8 @@ import type {
   ChatPin,
   ChatSummary,
   Device,
+  DlpEventRow,
+  DlpPolicy,
   FileItem,
   MeResponse,
   Notification,
@@ -35,9 +37,14 @@ import type {
   UploadCompleteRequest,
   UploadInitRequest,
   UploadSessionStatus,
+  WorkspaceAuditEvent,
+  WorkspaceInvite,
   WorkspaceLimits,
   WorkspaceMember,
   WorkspaceMemberRole,
+  WorkspacePermissionMatrix,
+  WorkspaceSecurity,
+  WorkspaceSession,
   WorkspaceSummary,
 } from '../api/types';
 import { newUuid } from '../lib/ids';
@@ -98,6 +105,217 @@ export interface DeviceRequestRecord {
 export interface WorkspaceRequestRecord {
   bodyHash: string;
   workspace: WorkspaceSummary;
+}
+
+/**
+ * P0-3 (#81) mock-only workspace security state. Rows are contract-shaped and
+ * content-free by construction; request logs let the UI suites assert headers,
+ * filters, cursors and device ids without inspecting private data.
+ */
+export interface MockSecurityState {
+  dlpPolicies: DlpPolicy[];
+  dlpEvents: DlpEventRow[];
+  auditEvents: WorkspaceAuditEvent[];
+  sessions: WorkspaceSession[];
+  settings: WorkspaceSecurity;
+  /** Export cap (10 000 in the real backend); suites lower it to test truncation. */
+  auditExportLimit: number;
+  policyRequests: Array<{
+    action: 'list' | 'create' | 'update' | 'delete';
+    policyId?: string;
+    body?: Record<string, unknown>;
+    deviceId: string | null;
+  }>;
+  eventRequests: Array<{
+    policyId: string | null;
+    action: string | null;
+    cursor: string | null;
+    limit: number;
+  }>;
+  auditRequests: Array<{
+    action: string | null;
+    actorId: string | null;
+    from: string | null;
+    to: string | null;
+    cursor: string | null;
+    limit: number;
+  }>;
+  exportRequests: Array<{
+    format: string;
+    action: string | null;
+    actorId: string | null;
+    from: string | null;
+    to: string | null;
+  }>;
+  sessionRequests: Array<{ cursor: string | null; limit: number }>;
+  sessionRevokeRequests: string[];
+  revokeAllRequests: number;
+  settingsRequests: number;
+  settingsPatches: Array<Record<string, unknown>>;
+  forcePolicyListError: ForcedSendError | null;
+  forcePolicyMutationError: ForcedSendError | null;
+  forceEventError: ForcedSendError | null;
+  forceAuditError: ForcedSendError | null;
+  forceExportError: ForcedSendError | null;
+  forceSessionsError: ForcedSendError | null;
+  forceSessionRevokeError: ForcedSendError | null;
+  forceRevokeAllError: ForcedSendError | null;
+  forceSettingsError: ForcedSendError | null;
+  forceSettingsSaveError: ForcedSendError | null;
+}
+
+/** Deterministic P0-3 seeds: two rules, content-free events, audit, sessions. */
+export function createMockSecurityState(): MockSecurityState {
+  const policySecrets = 'c0000000-0000-4000-8000-000000000001';
+  const policyDomains = 'c0000000-0000-4000-8000-000000000002';
+  return {
+    dlpPolicies: [
+      {
+        id: policySecrets,
+        name: 'Секреты и ключи',
+        action: 'BLOCK',
+        pattern_type: 'KEYWORD',
+        pattern: 'пароль',
+        enabled: true,
+        created_at: '2026-11-10T09:00:00.000Z',
+        updated_at: '2026-11-10T09:00:00.000Z',
+      },
+      {
+        id: policyDomains,
+        name: 'Внешние адреса',
+        action: 'WARN',
+        pattern_type: 'PATTERN',
+        pattern: '*@external.*',
+        enabled: true,
+        created_at: '2026-11-11T09:00:00.000Z',
+        updated_at: '2026-11-11T09:00:00.000Z',
+      },
+    ],
+    dlpEvents: [
+      {
+        id: 'd0000000-0000-4000-8000-000000000001',
+        policy_id: policySecrets,
+        policy_name: 'Секреты и ключи',
+        action: 'BLOCK',
+        actor_id: IDS.anna,
+        chat_id: IDS.groupChat,
+        created_at: '2026-11-19T10:15:00.000Z',
+      },
+      {
+        id: 'd0000000-0000-4000-8000-000000000002',
+        policy_id: policyDomains,
+        policy_name: 'Внешние адреса',
+        action: 'WARN',
+        actor_id: IDS.user,
+        chat_id: IDS.directChat,
+        created_at: '2026-11-18T16:40:00.000Z',
+      },
+      {
+        id: 'd0000000-0000-4000-8000-000000000003',
+        policy_id: null,
+        policy_name: 'Удалённое правило',
+        action: 'WARN',
+        actor_id: IDS.mark,
+        chat_id: IDS.groupChat,
+        created_at: '2026-11-17T08:05:00.000Z',
+      },
+    ],
+    auditEvents: [
+      {
+        id: 'e0000000-0000-4000-8000-000000000001',
+        action: 'workspace.security.updated',
+        actor_id: IDS.user,
+        target_type: 'workspace_security',
+        target_id: IDS.workspace,
+        created_at: '2026-11-19T12:10:00.000Z',
+      },
+      {
+        id: 'e0000000-0000-4000-8000-000000000002',
+        action: 'workspace.dlp.policy.created',
+        actor_id: IDS.anna,
+        target_type: 'dlp_policy',
+        target_id: policySecrets,
+        created_at: '2026-11-18T12:00:00.000Z',
+      },
+      {
+        id: 'e0000000-0000-4000-8000-000000000003',
+        action: 'workspace.session.revoked',
+        actor_id: IDS.user,
+        target_type: 'user',
+        target_id: IDS.mark,
+        created_at: '2026-11-17T18:30:00.000Z',
+      },
+      {
+        id: 'e0000000-0000-4000-8000-000000000004',
+        action: 'workspace.audit.exported',
+        actor_id: null,
+        target_type: null,
+        target_id: null,
+        created_at: '2026-11-16T09:45:00.000Z',
+      },
+    ],
+    sessions: [
+      {
+        id: 'f0000000-0000-4000-8000-000000000001',
+        user_id: IDS.user,
+        device: 'krug-web · Chrome',
+        created_at: '2026-11-18T18:05:00.000Z',
+        last_seen_at: '2026-11-19T14:55:00.000Z',
+        current: true,
+      },
+      {
+        id: 'f0000000-0000-4000-8000-000000000002',
+        user_id: IDS.user,
+        device: 'krug-web · Safari',
+        created_at: '2026-11-01T09:12:00.000Z',
+        last_seen_at: '2026-11-19T12:40:00.000Z',
+        current: false,
+      },
+      {
+        id: 'f0000000-0000-4000-8000-000000000003',
+        user_id: IDS.anna,
+        device: 'krug-web · Firefox',
+        created_at: '2026-11-12T11:20:00.000Z',
+        last_seen_at: '2026-11-19T11:05:00.000Z',
+        current: false,
+      },
+      {
+        id: 'f0000000-0000-4000-8000-000000000004',
+        user_id: IDS.anna,
+        device: 'krug-mobile · Android',
+        created_at: '2026-11-14T08:00:00.000Z',
+        last_seen_at: '2026-11-18T20:30:00.000Z',
+        current: false,
+      },
+    ],
+    settings: {
+      require_2fa: false,
+      session_timeout_minutes: 60,
+      dlp_enabled: true,
+      retention_days: 30,
+      updated_at: '2026-11-19T12:10:00.000Z',
+    },
+    auditExportLimit: 10_000,
+    policyRequests: [],
+    eventRequests: [],
+    auditRequests: [],
+    exportRequests: [],
+    sessionRequests: [],
+    sessionRevokeRequests: [],
+    revokeAllRequests: 0,
+    settingsRequests: 0,
+    settingsPatches: [],
+    forcePolicyListError: null,
+    forcePolicyMutationError: null,
+    forceEventError: null,
+    forceAuditError: null,
+    forceExportError: null,
+    forceSessionsError: null,
+    forceSessionRevokeError: null,
+    forceRevokeAllError: null,
+    forceSettingsError: null,
+    forceSettingsSaveError: null,
+  };
 }
 
 /** E8 mock-only server state; the raw SMTP password is never retained. */
@@ -435,6 +653,32 @@ export interface MockAuthTokenRecord {
   expiresAt: number;
 }
 
+/** P0-4 : dev-only authenticator stand-in (the real secret is AES-GCM at rest). */
+export interface MockTwoFactorRecord {
+  enabled: boolean;
+  enabledAt: string | null;
+  secret: string | null;
+  /** Secret from `POST /me/2fa/setup`, confirmed by the next verify. */
+  pendingSecret: string | null;
+  /** Recovery codes with their used flag; the real backend keeps only hashes. */
+  recoveryCodes: Map<string, boolean>;
+  /** Last accepted TOTP time step (replay protection). */
+  lastStep: number | null;
+}
+
+/** P0-4 in-memory `202` login challenge (single-use, TTL, attempts). */
+export interface MockTwoFactorChallengeRecord {
+  id: string;
+  userId: string;
+  expiresAt: number;
+  attempts: number;
+}
+
+/** P0-4 workspace invite; `token` exists only in the mock to resolve accepts. */
+export interface MockWorkspaceInviteRecord extends WorkspaceInvite {
+  token: string;
+}
+
 export interface MockDb {
   session: Session;
   me: MeResponse;
@@ -621,6 +865,47 @@ export interface MockDb {
   fileCenterDelayMs: number;
   forceFileCenterError: ForcedSendError | null;
 
+  /* P0-4 (#82): own avatar, TOTP authenticator, workspace settings/invites */
+  profileAvatarFileId: string | null;
+  avatarRequests: Array<{ action: 'SET' | 'DELETE' | 'GET'; fileId: string | null }>;
+  twoFactor: MockTwoFactorRecord;
+  twoFactorRequests: Array<{
+    action: 'STATUS' | 'SETUP' | 'VERIFY' | 'DISABLE' | 'RECOVERY' | 'CHALLENGE';
+    password: string | null;
+    code: string | null;
+    deviceId: string | null;
+  }>;
+  twoFactorChallenge: MockTwoFactorChallengeRecord | null;
+  twoFactorLoginRequests: Array<{ challengeId: string; code: string }>;
+  workspaceAvatarRequests: Array<{
+    workspaceId: string;
+    action: 'SET' | 'DELETE';
+    fileId: string | null;
+  }>;
+  workspaceSettingsRequests: Array<{
+    workspaceId: string;
+    body: Record<string, unknown>;
+    deviceId: string | null;
+  }>;
+  workspaceInvites: MockWorkspaceInviteRecord[];
+  workspaceInviteRequests: Array<{
+    workspaceId: string;
+    action: 'LIST' | 'CREATE' | 'REVOKE' | 'ACCEPT';
+    role?: string;
+    inviteId?: string;
+  }>;
+  workspacePermissions: Record<string, WorkspacePermissionMatrix>;
+  workspacePermissionRequests: Array<{
+    workspaceId: string;
+    body: Record<string, unknown> | null;
+    deviceId: string | null;
+  }>;
+  forceAvatarError: ForcedSendError | null;
+  forceTwoFactorError: ForcedSendError | null;
+  forceWorkspaceSettingsError: ForcedSendError | null;
+  forceWorkspaceInviteError: ForcedSendError | null;
+  forceWorkspacePermissionError: ForcedSendError | null;
+
   /* #72 profile edit + Keycloak sessions */
   profileUpdateRequests: Array<{ body: Record<string, unknown>; deviceId: string | null }>;
   forceProfileUpdateError: ForcedSendError | null;
@@ -654,6 +939,8 @@ export interface MockDb {
   forceTestEmailError: ForcedSendError | null;
   /** E9-F admin directory (users/chats/storage) mock knobs. */
   adminDirectory: MockAdminDirectoryState;
+  /** P0-3 (#81) workspace DLP/audit/sessions/settings mock state. */
+  security: MockSecurityState;
 
   /* Auth BFF (docs/TASKS-AUTH-BFF.md) */
   authUsers: MockAuthUserRecord[];
@@ -805,6 +1092,56 @@ export function createMockAdminState(): MockAdminState {
     registrationOpen: true,
     updatedAt: now,
     updatedBy: null,
+  };
+}
+
+/** P0-4 (#82): effective workspace permission defaults (OWNER/ADMIN all true). */
+export function createDefaultWorkspacePermissions(
+  workspaceId: string = IDS.workspace,
+): WorkspacePermissionMatrix {
+  return {
+    workspace_id: workspaceId,
+    roles: [
+      {
+        role: 'OWNER',
+        manage_workspace: true,
+        manage_members: true,
+        manage_invites: true,
+        manage_permissions: true,
+        view_audit: true,
+        manage_security: true,
+      },
+      {
+        role: 'ADMIN',
+        manage_workspace: true,
+        manage_members: true,
+        manage_invites: true,
+        manage_permissions: true,
+        view_audit: true,
+        manage_security: true,
+      },
+      {
+        role: 'MEMBER',
+        manage_workspace: false,
+        manage_members: false,
+        manage_invites: false,
+        manage_permissions: false,
+        view_audit: false,
+        manage_security: false,
+      },
+    ],
+  };
+}
+
+/** P0-4 (#82): fresh authenticator state (disabled, no pending secret). */
+export function createMockTwoFactor(): MockTwoFactorRecord {
+  return {
+    enabled: false,
+    enabledAt: null,
+    secret: null,
+    pendingSecret: null,
+    recoveryCodes: new Map(),
+    lastStep: null,
   };
 }
 
@@ -966,6 +1303,24 @@ export function createMockDb(): MockDb {
     fileCenterDelayMs: 0,
     forceFileCenterError: null,
 
+    profileAvatarFileId: null,
+    avatarRequests: [],
+    twoFactor: createMockTwoFactor(),
+    twoFactorRequests: [],
+    twoFactorChallenge: null,
+    twoFactorLoginRequests: [],
+    workspaceAvatarRequests: [],
+    workspaceSettingsRequests: [],
+    workspaceInvites: [],
+    workspaceInviteRequests: [],
+    workspacePermissions: { [IDS.workspace]: createDefaultWorkspacePermissions() },
+    workspacePermissionRequests: [],
+    forceAvatarError: null,
+    forceTwoFactorError: null,
+    forceWorkspaceSettingsError: null,
+    forceWorkspaceInviteError: null,
+    forceWorkspacePermissionError: null,
+
     profileUpdateRequests: [],
     forceProfileUpdateError: null,
     profileSessions: createMockProfileSessions(),
@@ -1003,6 +1358,7 @@ export function createMockDb(): MockDb {
     adminTestEmails: [],
     forceTestEmailError: null,
     adminDirectory: createMockAdminDirectoryState(),
+    security: createMockSecurityState(),
 
     authUsers: [
       {
@@ -1154,6 +1510,25 @@ export function resetMockDb(db: MockDb): void {
   db.fileCenterDelayMs = 0;
   db.forceFileCenterError = null;
 
+  db.profileAvatarFileId = null;
+  db.avatarRequests = [];
+  db.twoFactor = createMockTwoFactor();
+  db.twoFactorRequests = [];
+  db.twoFactorChallenge = null;
+  db.twoFactorLoginRequests = [];
+  db.workspaceAvatarRequests = [];
+  db.workspaceSettingsRequests = [];
+  db.workspaceInvites = [];
+  db.workspaceInviteRequests = [];
+  db.workspacePermissions = { [IDS.workspace]: createDefaultWorkspacePermissions() };
+  db.workspacePermissionRequests = [];
+  db.forceAvatarError = null;
+  db.forceTwoFactorError = null;
+  db.forceWorkspaceSettingsError = null;
+  db.forceWorkspaceInviteError = null;
+  db.forceWorkspacePermissionError = null;
+  db.me = { ...db.me, user: { ...db.me.user, avatar_url: null } };
+
   db.profileUpdateRequests = [];
   db.forceProfileUpdateError = null;
   db.profileSessions = fresh.profileSessions;
@@ -1188,6 +1563,7 @@ export function resetMockDb(db: MockDb): void {
   db.adminTestEmails = [];
   db.forceTestEmailError = null;
   db.adminDirectory = fresh.adminDirectory;
+  db.security = fresh.security;
 
   db.authUsers = fresh.authUsers;
   db.authVerifications.clear();

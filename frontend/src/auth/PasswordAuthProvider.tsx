@@ -26,12 +26,19 @@ import {
   writeAuthSession,
   writePendingVerification,
 } from './storage';
-import { toAuthUser, type AuthUser, type StoredAuthSession } from './types';
+import {
+  toAuthUser,
+  type AuthUser,
+  type PendingTwoFactorChallenge,
+  type StoredAuthSession,
+} from './types';
 
 interface AuthState {
   status: AuthStatus;
   user: AuthUser | null;
   pending: PendingVerification | null;
+  /** P0-4: in-memory `202` login challenge (never persisted). */
+  challenge: PendingTwoFactorChallenge | null;
   busy: boolean;
   error: AuthErrorInfo | null;
   notice: MessageKey | null;
@@ -43,6 +50,7 @@ function storedSessionState(): AuthState {
     status: session ? 'authenticated' : 'anonymous',
     user: session ? toAuthUser(session) : null,
     pending: readPendingVerification(),
+    challenge: null,
     busy: false,
     error: null,
     notice: null,
@@ -81,6 +89,14 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
   const navigate = useNavigate();
   const [state, setState] = useState<AuthState>(storedSessionState);
   const refreshPromise = useRef<Promise<boolean> | null>(null);
+  /**
+   * P0-4: credentials of the password step that produced a `202` challenge.
+   * They are kept in memory only (never storage) and cleared on verify,
+   * cancel, logout or an invalidated challenge. They are used solely to
+   * request a fresh challenge ("resend") because the contract has no separate
+   * resend endpoint.
+   */
+  const challengeCredentials = useRef<{ email: string; password: string } | null>(null);
 
   const api = useMemo<AuthApi>(
     () =>
@@ -110,10 +126,12 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
     writeAuthSession(stored);
     clearPendingVerification();
     setRuntimeAccessToken(stored.accessToken);
+    challengeCredentials.current = null;
     setState({
       status: 'authenticated',
       user: toAuthUser(stored),
       pending: null,
+      challenge: null,
       busy: false,
       error: null,
       notice: null,
@@ -123,10 +141,12 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
   const clearAll = useCallback(async (userId: string | null) => {
     await clearRuntimeAuth({ userId });
     clearSession();
+    challengeCredentials.current = null;
     setState({
       status: 'anonymous',
       user: null,
       pending: null,
+      challenge: null,
       busy: false,
       error: null,
       notice: null,
@@ -148,10 +168,12 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
         // logout. The next successful login reuses the same device.
         setRuntimeAccessToken(null);
         clearAuthSession();
+        challengeCredentials.current = null;
         setState({
           status: 'anonymous',
           user: null,
           pending: readPendingVerification(),
+          challenge: null,
           busy: false,
           error: null,
           notice: null,
@@ -173,8 +195,31 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
     async (email: string, password: string): Promise<boolean> => {
       setState((current) => ({ ...current, busy: true, error: null, notice: null }));
       try {
-        const session = await api.login({ email: email.trim(), password });
-        applySession(session);
+        const result = await api.login({ email: email.trim(), password });
+        if (result.kind === 'challenge') {
+          // P0-4: the password is valid but the account has TOTP. No session
+          // is issued; hold the challenge in memory and ask for the code.
+          challengeCredentials.current = { email: email.trim(), password };
+          const now = Date.now();
+          const challenge: PendingTwoFactorChallenge = {
+            id: result.challenge.challenge_id,
+            expiresAt: now + Math.max(1, result.challenge.expires_in) * 1000,
+            methods: result.challenge.methods,
+          };
+          setState((current) => ({
+            ...current,
+            status: 'anonymous',
+            user: null,
+            pending: null,
+            challenge,
+            busy: false,
+            error: null,
+            notice: null,
+          }));
+          navigate('/2fa');
+          return true;
+        }
+        applySession(result.session);
         return true;
       } catch (error) {
         const info = toAuthError(error);
@@ -190,6 +235,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
             status: 'anonymous',
             user: null,
             pending,
+            challenge: null,
             busy: false,
             error: null,
             notice: 'auth.verify.sent',
@@ -203,6 +249,85 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
     },
     [api, applySession, navigate],
   );
+
+  const verifyTwoFactor = useCallback(
+    async (code: string): Promise<boolean> => {
+      const challenge = state.challenge;
+      if (!challenge) {
+        setState((current) => ({ ...current, error: { code: 'NOT_FOUND', status: 0 } }));
+        return false;
+      }
+      setState((current) => ({ ...current, busy: true, error: null, notice: null }));
+      try {
+        const session = await api.verifyTwoFactor({
+          challenge_id: challenge.id,
+          code: code.trim(),
+        });
+        applySession(session);
+        return true;
+      } catch (error) {
+        const info = toAuthError(error);
+        // An invalid/expired/consumed challenge is no longer usable: drop it so
+        // the guard returns to the credentials form, keeping the error visible.
+        const invalidChallenge =
+          info.code === 'TWO_FACTOR_CHALLENGE_INVALID' || info.status === 401;
+        challengeCredentials.current = invalidChallenge ? null : challengeCredentials.current;
+        setState((current) => ({
+          ...current,
+          challenge: invalidChallenge ? null : current.challenge,
+          busy: false,
+          error: info,
+        }));
+        return false;
+      }
+    },
+    [api, applySession, state.challenge],
+  );
+
+  const resendChallenge = useCallback(async (): Promise<boolean> => {
+    const credentials = challengeCredentials.current;
+    if (!credentials) {
+      setState((current) => ({ ...current, error: { code: 'NOT_FOUND', status: 0 } }));
+      return false;
+    }
+    setState((current) => ({ ...current, busy: true, error: null, notice: null }));
+    try {
+      const result = await api.login(credentials);
+      if (result.kind === 'session') {
+        applySession(result.session);
+        return true;
+      }
+      const challenge: PendingTwoFactorChallenge = {
+        id: result.challenge.challenge_id,
+        expiresAt: Date.now() + Math.max(1, result.challenge.expires_in) * 1000,
+        methods: result.challenge.methods,
+      };
+      setState((current) => ({
+        ...current,
+        challenge,
+        busy: false,
+        error: null,
+        notice: 'auth.twoFactor.challengeRenewed',
+      }));
+      return true;
+    } catch (error) {
+      const info = toAuthError(error);
+      setState((current) => ({ ...current, busy: false, error: info }));
+      return false;
+    }
+  }, [api, applySession]);
+
+  const cancelChallenge = useCallback(() => {
+    challengeCredentials.current = null;
+    setState((current) => ({
+      ...current,
+      challenge: null,
+      busy: false,
+      error: null,
+      notice: null,
+    }));
+    navigate('/login', { replace: true });
+  }, [navigate]);
 
   const register = useCallback(
     async (input: RegisterInput): Promise<boolean> => {
@@ -225,6 +350,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
           status: 'anonymous',
           user: null,
           pending,
+          challenge: null,
           busy: false,
           error: null,
           notice: null,
@@ -333,6 +459,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       status: state.status,
       user: state.user,
       pending: state.pending,
+      challenge: state.challenge,
       busy: state.busy,
       error: state.error,
       notice: state.notice,
@@ -340,6 +467,9 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       register,
       verify,
       resendCode,
+      verifyTwoFactor,
+      resendChallenge,
+      cancelChallenge,
       signOut,
       refresh,
       openLogin,
@@ -350,6 +480,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       state.status,
       state.user,
       state.pending,
+      state.challenge,
       state.busy,
       state.error,
       state.notice,
@@ -357,6 +488,9 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       register,
       verify,
       resendCode,
+      verifyTwoFactor,
+      resendChallenge,
+      cancelChallenge,
       signOut,
       refresh,
       openLogin,

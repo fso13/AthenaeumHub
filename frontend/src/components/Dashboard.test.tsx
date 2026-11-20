@@ -297,8 +297,12 @@ describe('D1-FE1 shell, pages and routing', () => {
 
     await user.click(screen.getByRole('button', { name: 'Защита' }));
     await screen.findByRole('heading', { name: 'Защита' });
-    expect(screen.getByText('DLP и журнал аудита пока недоступны')).toBeInTheDocument();
-    expect(screen.getAllByText('Недоступно')).toHaveLength(2);
+    // The dev session has no workspace role projection, so the manager
+    // surface stays hidden rather than guessing OWNER: only the honest access
+    // notice and the caller's own devices are shown.
+    expect(screen.getByText('Управление доступно владельцу и администраторам')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Ключи и устройства' })).toBeInTheDocument();
+    expect(screen.queryByText('DLP и журнал аудита пока недоступны')).not.toBeInTheDocument();
   });
 
   it('switches light/dark theme in Settings and opens existing notification settings', async () => {

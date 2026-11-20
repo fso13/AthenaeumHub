@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import ru.krug.backend.audit.application.model.AuditRecord;
 import ru.krug.backend.audit.application.port.AuditPort;
 import ru.krug.backend.auth.application.command.UpdateProfileCommand;
+import ru.krug.backend.auth.application.model.ProfileAvatars;
 import ru.krug.backend.auth.application.model.UserProfileView;
 import ru.krug.backend.auth.application.port.KeycloakAdminPort;
 import ru.krug.backend.auth.application.port.ProviderUnavailableException;
@@ -105,7 +106,8 @@ public class UpdateProfileService {
         }
 
         return new UserProfileView(user.id().toString(), displayName.value(), user.email(),
-                user.isPlatformAdmin(), bio.value(), phone.value());
+                user.isPlatformAdmin(), bio.value(), phone.value(),
+                ProfileAvatars.url(user.avatarFileId()));
     }
 
     /**

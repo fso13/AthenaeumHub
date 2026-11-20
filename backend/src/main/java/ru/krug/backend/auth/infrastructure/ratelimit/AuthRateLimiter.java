@@ -31,6 +31,8 @@ public class AuthRateLimiter implements AuthRateLimitPort {
     private final Limit loginPerIp;
     private final Limit resendPerEmail;
     private final Limit resendPerIp;
+    private final Limit twoFactorPerUser;
+    private final Limit twoFactorPerIp;
     private final ConcurrentHashMap<String, Window> windows = new ConcurrentHashMap<>();
 
     public AuthRateLimiter(AuthBffProperties properties) {
@@ -42,6 +44,8 @@ public class AuthRateLimiter implements AuthRateLimitPort {
         this.loginPerIp = limit(config.loginPerIp(), config.loginIpWindow());
         this.resendPerEmail = limit(config.resendPerEmail(), config.resendEmailWindow());
         this.resendPerIp = limit(config.resendPerIp(), config.resendIpWindow());
+        this.twoFactorPerUser = limit(config.twoFactorPerUser(), config.twoFactorUserWindow());
+        this.twoFactorPerIp = limit(config.twoFactorPerIp(), config.twoFactorIpWindow());
     }
 
     @Override
@@ -69,6 +73,15 @@ public class AuthRateLimiter implements AuthRateLimitPort {
         }
         enforce("resend:email:" + normalize(email), resendPerEmail, "email");
         enforce("resend:ip:" + normalize(clientIp), resendPerIp, "ip");
+    }
+
+    @Override
+    public void checkTwoFactor(String userId, String clientIp) {
+        if (!enabled) {
+            return;
+        }
+        enforce("2fa:user:" + normalize(userId), twoFactorPerUser, "user");
+        enforce("2fa:ip:" + normalize(clientIp), twoFactorPerIp, "ip");
     }
 
     private static Limit limit(int count, Duration window) {

@@ -41,19 +41,29 @@ public final class TotpCode {
 
     public static boolean matches(String base64Secret, String code, long epochSecond,
                                   int window) {
+        return matchedStep(base64Secret, code, epochSecond, window) >= 0;
+    }
+
+    /**
+     * Time step of the accepted code, or {@code -1}. The caller persists the step so the
+     * same TOTP code cannot be replayed inside its validity window (RFC 6238 §5.2).
+     */
+    public static long matchedStep(String base64Secret, String code, long epochSecond,
+                                   int window) {
         if (code == null || !code.matches("[0-9]{6}")) {
-            return false;
+            return -1L;
         }
         long counter = epochSecond / STEP_SECONDS;
         byte[] expected = code.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         for (int offset = -window; offset <= window; offset++) {
-            String candidate = generate(base64Secret, (counter + offset) * STEP_SECONDS);
+            long candidateStep = counter + offset;
+            String candidate = generate(base64Secret, candidateStep * STEP_SECONDS);
             if (MessageDigest.isEqual(expected,
                     candidate.getBytes(java.nio.charset.StandardCharsets.US_ASCII))) {
-                return true;
+                return candidateStep;
             }
         }
-        return false;
+        return -1L;
     }
 
     public static boolean isWellFormed(String code) {

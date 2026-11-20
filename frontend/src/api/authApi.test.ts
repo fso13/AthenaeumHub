@@ -166,10 +166,12 @@ describe('Auth BFF client', () => {
 
   it('rotates refresh tokens and revokes the refresh token on logout', async () => {
     const api = makeAuth();
-    const session = await api.login({
+    const login = await api.login({
       email: MOCK_DEMO_EMAIL,
       password: MOCK_DEMO_PASSWORD,
     });
+    if (login.kind !== 'session') throw new Error('Expected a session login result');
+    const session = login.session;
 
     const refreshed = await api.refresh(session.refresh_token);
     expect(refreshed.access_token).not.toBe(session.access_token);

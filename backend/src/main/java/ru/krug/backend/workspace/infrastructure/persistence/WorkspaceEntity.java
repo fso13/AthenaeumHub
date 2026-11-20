@@ -21,6 +21,12 @@ public class WorkspaceEntity {
     @Column(name = "slug", nullable = false)
     private String slug;
 
+    @Column(name = "description")
+    private String description;
+
+    @Column(name = "logo_file_id")
+    private UUID logoFileId;
+
     @Column(name = "security_mode", nullable = false)
     private String securityMode;
 
@@ -46,6 +52,14 @@ public class WorkspaceEntity {
 
     public String getSlug() {
         return slug;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public UUID getLogoFileId() {
+        return logoFileId;
     }
 
     public String getSecurityMode() {

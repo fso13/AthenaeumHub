@@ -30,10 +30,12 @@ public final class AuthBffTestData {
                 new AuthBffProperties.Mail(MAIL_FROM),
                 new AuthBffProperties.Code(Duration.ofMinutes(10), Duration.ofSeconds(60), 5, 5,
                         EMAIL_SECRET_KEY),
+                new AuthBffProperties.TwoFactor(Duration.ofMinutes(5), 5, 1, "Krug"),
                 new AuthBffProperties.RateLimit(true, 5, Duration.ofHours(1), 20,
                         Duration.ofHours(1), 10, Duration.ofMinutes(1), 30,
                         Duration.ofMinutes(1), 5, Duration.ofMinutes(10), 10,
-                        Duration.ofMinutes(10)),
+                        Duration.ofMinutes(10), 20, Duration.ofMinutes(5), 60,
+                        Duration.ofMinutes(5)),
                 new AuthBffProperties.Cleanup(true, Duration.ofMinutes(10),
                         Duration.ofMinutes(2), 200, Duration.ofHours(24)));
     }
@@ -46,6 +48,7 @@ public final class AuthBffTestData {
         AuthBffProperties base = properties();
         return new AuthBffProperties(base.registrationEnabled(), base.trustForwardedFor(),
                 base.pendingSessionTtl(), base.keycloak(), base.mail(), base.code(),
+                base.twoFactor(),
                 new AuthBffProperties.RateLimit(enabled,
                         base.rateLimit().registerPerEmail(),
                         base.rateLimit().registerEmailWindow(),
@@ -58,7 +61,11 @@ public final class AuthBffTestData {
                         base.rateLimit().resendPerEmail(),
                         base.rateLimit().resendEmailWindow(),
                         base.rateLimit().resendPerIp(),
-                        base.rateLimit().resendIpWindow()),
+                        base.rateLimit().resendIpWindow(),
+                        base.rateLimit().twoFactorPerUser(),
+                        base.rateLimit().twoFactorUserWindow(),
+                        base.rateLimit().twoFactorPerIp(),
+                        base.rateLimit().twoFactorIpWindow()),
                 base.cleanup());
     }
 }

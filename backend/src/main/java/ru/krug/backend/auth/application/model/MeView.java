@@ -13,17 +13,19 @@ public record MeView(
         boolean platformAdmin,
         String bio,
         String phone,
+        String avatarUrl,
         List<WorkspaceMembershipView> workspaces,
         UUID defaultWorkspaceId) {
 
     public MeView(UUID userId, String displayName, String email,
                   List<WorkspaceMembershipView> workspaces, UUID defaultWorkspaceId) {
-        this(userId, displayName, email, false, null, null, workspaces, defaultWorkspaceId);
+        this(userId, displayName, email, false, null, null, null, workspaces,
+                defaultWorkspaceId);
     }
 
     public MeView(UUID userId, String displayName, String email, boolean platformAdmin,
                   List<WorkspaceMembershipView> workspaces, UUID defaultWorkspaceId) {
-        this(userId, displayName, email, platformAdmin, null, null, workspaces,
+        this(userId, displayName, email, platformAdmin, null, null, null, workspaces,
                 defaultWorkspaceId);
     }
 }

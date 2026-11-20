@@ -10,14 +10,19 @@ public record MeResponse(User user, List<Workspace> workspaces, UUID defaultWork
 
     public record User(UUID id, String displayName, String email,
                        @JsonProperty("is_platform_admin") boolean platformAdmin,
-                       String bio, String phone) {
+                       String bio, String phone, @JsonProperty("avatar_url") String avatarUrl) {
 
         public User(UUID id, String displayName, String email) {
-            this(id, displayName, email, false, null, null);
+            this(id, displayName, email, false, null, null, null);
         }
 
         public User(UUID id, String displayName, String email, boolean platformAdmin) {
-            this(id, displayName, email, platformAdmin, null, null);
+            this(id, displayName, email, platformAdmin, null, null, null);
+        }
+
+        public User(UUID id, String displayName, String email, boolean platformAdmin,
+                    String bio, String phone) {
+            this(id, displayName, email, platformAdmin, bio, phone, null);
         }
     }
 

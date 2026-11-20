@@ -49,11 +49,8 @@ describe('D1-FE5 profile modal', () => {
     const { dialog } = await openProfile(user);
 
     expect(within(dialog).getByText('Двухфакторная аутентификация')).toBeInTheDocument();
-    expect(
-      within(dialog).getByText('В этом срезе нет API 2FA — переключатель не показывается.'),
-    ).toBeInTheDocument();
+    expect(within(dialog).getAllByText('Выключена').length).toBeGreaterThan(0);
     expect(within(dialog).getAllByText('Активные сессии').length).toBeGreaterThan(0);
-    expect(within(dialog).getAllByText('Недоступно')).toHaveLength(1);
     expect(within(dialog).queryByRole('checkbox')).toBeNull();
 
     // Contract fields only: client label, timestamps, current flag. No IP,

@@ -3,7 +3,12 @@ import type { ApiError } from '../api/problem';
 import type { Device, ProfileSession, ProfileUpdate } from '../api/types';
 import { describeError } from '../domain/errors';
 import { t, type MessageKey } from '../i18n/ru';
-import { useChatState, useChatStore } from '../store/ChatProvider';
+import {
+  useChatState,
+  useChatStore,
+  useProfileWorkspaceState,
+  useProfileWorkspaceStore,
+} from '../store/ChatProvider';
 import type { Theme } from '../theme/themePreference';
 import { formatDateTime } from './admin/format';
 import { AdminConfirmDialog } from './admin/AdminConfirmDialog';
@@ -11,7 +16,9 @@ import type { AdminActionErrorInfo } from './admin/actionErrors';
 import { Avatar } from './Avatar';
 import { BlockedUsersCard } from './BlockedUsersCard';
 import { BellIcon, CloseIcon, LogoutIcon, MoonIcon, RefreshIcon, SunIcon } from './Icons';
+import { ImageFilePicker } from './ImageFilePicker';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
+import { TwoFactorCard } from './profile/TwoFactorCard';
 import { roleLabel } from './pages/pageData';
 
 const FOCUSABLE =
@@ -89,6 +96,16 @@ function revokeErrorInfo(error: ApiError): AdminActionErrorInfo {
   };
 }
 
+function avatarErrorText(error: ApiError): string {
+  if (error.status === 403) return t('profile.avatar.forbidden');
+  if (error.status === 404) return t('profile.avatar.notFound');
+  if (error.status === 409) return t('profile.avatar.notReady');
+  if (error.status === 422) return t('profile.avatar.invalid');
+  if (error.status === 423) return t('profile.avatar.quarantined');
+  if (error.status === 503 || error.isNetwork) return t('profile.avatar.unavailable');
+  return t('profile.avatar.error');
+}
+
 export interface ProfileDialogProps {
   open: boolean;
   theme: Theme;
@@ -117,8 +134,11 @@ export function ProfileDialog({
   onLogout,
 }: ProfileDialogProps) {
   const store = useChatStore();
+  const profileStore = useProfileWorkspaceStore();
+  const profileState = useProfileWorkspaceState();
   const state = useChatState();
   const devices = state.devices;
+  const avatar = profileState.avatar;
   const dialogRef = useRef<HTMLDivElement>(null);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -131,6 +151,8 @@ export function ProfileDialog({
   const bioId = useId();
   const phoneId = useId();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
+  const [avatarNotice, setAvatarNotice] = useState<string | null>(null);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -188,7 +210,8 @@ export function ProfileDialog({
     if (!open) return;
     void store.loadProfile();
     void store.loadDevices();
-  }, [open, store]);
+    void profileStore.loadMyAvatarPreview();
+  }, [open, profileStore, store]);
 
   // #72: one sessions read per open/retry; the component owns list state.
   useEffect(() => {
@@ -215,6 +238,10 @@ export function ProfileDialog({
   useEffect(() => {
     if (!open) {
       setNotificationsOpen(false);
+      setAvatarPickerOpen(false);
+      setAvatarNotice(null);
+      profileStore.clearTwoFactorDraft();
+      profileStore.clearAvatarPreview();
       setConfirmLogout(false);
       setLoggingOut(false);
       setEditing(false);
@@ -240,7 +267,7 @@ export function ProfileDialog({
       document.body.style.overflow = previousOverflow;
       if (previouslyFocused?.isConnected) previouslyFocused.focus();
     };
-  }, [open]);
+  }, [open, profileStore]);
 
   // Return focus to the edit trigger after save/cancel, never on first render.
   useEffect(() => {
@@ -257,7 +284,7 @@ export function ProfileDialog({
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       // Nested dialogs own focus/Escape while they are mounted.
-      if (notificationsOpen || confirmLogout || revokeTarget) return;
+      if (notificationsOpen || confirmLogout || revokeTarget || avatarPickerOpen) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         if (editing) {
@@ -292,6 +319,7 @@ export function ProfileDialog({
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [
+    avatarPickerOpen,
     cancelEditing,
     confirmLogout,
     editing,
@@ -437,7 +465,12 @@ export function ProfileDialog({
 
         <div className="modal-body">
           <div className="profile-hero">
-            <Avatar name={user?.display_name} seed={user?.id ?? 'me'} size="profile" />
+            <Avatar
+              name={user?.display_name}
+              seed={user?.id ?? 'me'}
+              size="profile"
+              src={avatar.previewUrl}
+            />
             <div>
               <h3>{user?.display_name ?? '—'}</h3>
               <p id={leadId}>
@@ -646,11 +679,6 @@ export function ProfileDialog({
               <section className="mini-card" aria-labelledby="profile-security">
                 <h4 id="profile-security">{t('profile.security')}</h4>
                 <div className="mini-row">
-                  <span>{t('profile.twoFactor')}</span>
-                  <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
-                </div>
-                <p className="mini-card__note">{t('profile.twoFactorUnavailable')}</p>
-                <div className="mini-row">
                   <span>{t('profile.securityKeys')}</span>
                   <span>
                     {devices.status === 'ready'
@@ -667,6 +695,84 @@ export function ProfileDialog({
               <BlockedUsersCard />
             </div>
           )}
+
+          {!editing ? (
+            <section className="mini-card" aria-labelledby="profile-avatar-card">
+              <div className="profile-sessions__head">
+                <h4 id="profile-avatar-card">{t('profile.avatarSection')}</h4>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  disabled={avatar.actionStatus !== 'idle'}
+                  aria-expanded={avatarPickerOpen}
+                  onClick={() => {
+                    setAvatarNotice(null);
+                    setAvatarPickerOpen((current) => !current);
+                  }}
+                >
+                  {t('profile.avatar.change')}
+                </button>
+              </div>
+              <div className="profile-avatar-row">
+                <Avatar
+                  name={user?.display_name}
+                  seed={user?.id ?? 'me'}
+                  size="profile"
+                  src={avatar.previewUrl}
+                />
+                <div>
+                  <p className="mini-card__text">
+                    {profileUser?.avatar_url
+                      ? t('profile.avatar.current')
+                      : t('profile.avatar.none')}
+                  </p>
+                  <p className="mini-card__note">{t('profile.avatar.hint')}</p>
+                  {profileUser?.avatar_url ? (
+                    <button
+                      type="button"
+                      className="btn btn--sm"
+                      disabled={avatar.actionStatus !== 'idle'}
+                      onClick={() => {
+                        setAvatarNotice(null);
+                        void profileStore.removeAvatar('PROFILE').then((ok) => {
+                          if (ok) setAvatarNotice(t('profile.avatar.removed'));
+                        });
+                      }}
+                    >
+                      {avatar.actionStatus === 'removing'
+                        ? t('profile.avatar.removing')
+                        : t('profile.avatar.remove')}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              {avatar.actionError ? (
+                <p className="profile-form__error" role="alert">
+                  {avatarErrorText(avatar.actionError)}
+                </p>
+              ) : null}
+              {avatarNotice ? (
+                <p className="mini-card__note" role="status">
+                  {avatarNotice}
+                </p>
+              ) : null}
+              {avatarPickerOpen ? (
+                <ImageFilePicker
+                  target="PROFILE"
+                  pending={avatar.actionStatus !== 'idle'}
+                  onSelect={(fileId) => {
+                    void profileStore.setAvatar('PROFILE', fileId).then((ok) => {
+                      if (!ok) return;
+                      setAvatarPickerOpen(false);
+                      setAvatarNotice(t('profile.avatar.updated'));
+                    });
+                  }}
+                />
+              ) : null}
+            </section>
+          ) : null}
+
+          <TwoFactorCard />
 
           <section className="mini-card profile-sessions" aria-labelledby="profile-sessions-card">
             <div className="profile-sessions__head">

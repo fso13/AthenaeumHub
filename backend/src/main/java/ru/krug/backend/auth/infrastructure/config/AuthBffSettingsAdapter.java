@@ -71,4 +71,24 @@ public class AuthBffSettingsAdapter implements AuthBffSettings {
     public Duration cleanupConsumedRetention() {
         return properties.cleanup().consumedRetention();
     }
+
+    @Override
+    public Duration twoFactorChallengeTtl() {
+        return properties.twoFactor().challengeTtl();
+    }
+
+    @Override
+    public int twoFactorMaxAttempts() {
+        return properties.twoFactor().maxAttempts();
+    }
+
+    @Override
+    public int twoFactorWindow() {
+        return properties.twoFactor().window();
+    }
+
+    @Override
+    public String twoFactorIssuer() {
+        return properties.twoFactor().issuer();
+    }
 }

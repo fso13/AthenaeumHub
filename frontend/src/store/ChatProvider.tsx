@@ -6,6 +6,11 @@ import type { OpsState, OpsStore } from '../ops/store';
 import type { PluginsState, PluginsStore } from '../plugins/store';
 import type { PluginActionsState, PluginActionsStore } from '../plugins/actionsStore';
 import type { StickersState, StickersStore } from '../stickers/store';
+import type { SecurityState, SecurityStore } from '../security/securityStore';
+import type {
+  ProfileWorkspaceState,
+  ProfileWorkspaceStore,
+} from '../profile/profileWorkspaceStore';
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
 
@@ -73,6 +78,26 @@ export function useOpsState(): OpsState {
 
 export function useAdminDirectoryStore(): AdminDirectoryStore {
   return useOpsStore().directory;
+}
+
+/** P0-3 (#81): workspace security has its own subscription surface. */
+export function useSecurityStore(): SecurityStore {
+  return useChatStore().security;
+}
+
+export function useSecurityState(): SecurityState {
+  const store = useSecurityStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** P0-4 (#82): avatar/TOTP and workspace settings/invites/permissions. */
+export function useProfileWorkspaceStore(): ProfileWorkspaceStore {
+  return useChatStore().profile;
+}
+
+export function useProfileWorkspaceState(): ProfileWorkspaceState {
+  const store = useProfileWorkspaceStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 
 /** E9-F: users/chats/storage slices have their own subscription surface. */

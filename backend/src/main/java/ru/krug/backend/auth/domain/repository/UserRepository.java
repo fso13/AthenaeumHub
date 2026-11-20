@@ -33,4 +33,10 @@ public interface UserRepository {
      * The caller's RLS context must be active.
      */
     void updateProfile(UUID userId, DisplayName displayName, Bio bio, Phone phone);
+
+    /**
+     * Avatar reference only; the caller has already validated that the attachment is a
+     * CLEAN image owned by this user. {@code null} clears the avatar idempotently.
+     */
+    void updateAvatar(UUID userId, UUID avatarFileId);
 }

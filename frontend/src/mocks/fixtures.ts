@@ -53,6 +53,25 @@ export const MOCK_EMAIL = MOCK_AUTH_EMAIL;
  * 6-digit email TOTP; the real code is generated and emailed by the backend.
  */
 export const MOCK_EMAIL_CODE = '123456';
+/**
+ * P0-4 (#82) dev-only TOTP code/secret. The real backend derives a per-user
+ * secret and never returns it after setup; the mock accepts this fixed code so
+ * the setup/login flows are testable without a live authenticator.
+ */
+export const MOCK_TOTP_CODE = '654321';
+export const MOCK_TOTP_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+export const MOCK_RECOVERY_CODES = [
+  'AAAA-BBBB-CCCC',
+  'DDDD-EEEE-FFFF',
+  'GGGG-HHHH-IIII',
+  'JJJJ-KKKK-LLLL',
+  'MMMM-NNNN-OOOO',
+  'PPPP-QQQQ-RRRR',
+  'SSSS-TTTT-UUUU',
+  'VVVV-WWWW-XXXX',
+  'YYYY-ZZZZ-2222',
+  '3333-4444-5555',
+] as const;
 export const MOCK_DEMO_EMAIL = 'demo@krug.test';
 export const MOCK_DEMO_PASSWORD = 'Pickle-demo-2026';
 

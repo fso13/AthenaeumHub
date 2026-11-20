@@ -27,6 +27,7 @@ tags:
   - name: plugins
   - name: notifications
   - name: setup
+  - name: security
   - name: admin
 
 paths:
@@ -816,11 +817,19 @@ paths:
               $ref: "#/components/schemas/AuthLoginRequest"
       responses:
         "200":
-          description: Сессия выдана
+          description: Сессия выдана (2FA не включена)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthSession"
+        "202":
+          description: >
+            Пароль верен, но у аккаунта включён TOTP: вместо сессии выдан одноразовый
+            login challenge. Токены Keycloak до второго фактора не возвращаются.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTwoFactorChallenge"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1360,6 +1369,442 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /workspaces/{workspaceId}/dlp/policies:
+    get:
+      tags: [security]
+      operationId: listWorkspaceDlpPolicies
+      summary: DLP-правила воркспейса (OWNER/ADMIN)
+      description: >
+        Только ACTIVE OWNER/ADMIN активного воркспейса; чужая/неизвестная workspace —
+        `403` без раскрытия существования. Список ограничен 100 правилами на воркспейс
+        и упорядочен `created_at DESC, id DESC`. Правила доступны только в MANAGED
+        воркспейсе: E2EE-контент непрозрачен для сервера, поэтому список отдаётся пустым
+        без ошибки, а создание/изменение/удаление в E2EE — `422 DLP_E2EE_UNSUPPORTED`.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Правила воркспейса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DlpPolicyList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [security]
+      operationId: createWorkspaceDlpPolicy
+      summary: Создать DLP-правило
+      description: >
+        OWNER/ADMIN; только MANAGED. `pattern_type=KEYWORD` — литерал, поиск без учёта
+        регистра; `PATTERN` — тот же литерал с wildcard `*` (не более 20). Регулярные
+        выражения не компилируются ни приложением, ни БД, поэтому ReDoS невозможен.
+        `name` уникально в воркспейсе без учёта регистра (`409
+        DLP_POLICY_NAME_TAKEN`), `pattern` — 1..200 печатных символов без control
+        characters. Лимит 100 правил — `409 DLP_POLICY_LIMIT`. Аудит содержит id,
+        action, pattern_type и enabled, но не текст pattern.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DlpPolicyCreateRequest"
+      responses:
+        "201":
+          description: Правило создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DlpPolicy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /workspaces/{workspaceId}/dlp/policies/{policyId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/PolicyId"
+      - $ref: "#/components/parameters/DeviceId"
+    patch:
+      tags: [security]
+      operationId: updateWorkspaceDlpPolicy
+      summary: Изменить DLP-правило
+      description: >
+        OWNER/ADMIN; только MANAGED. Частичное обновление: хотя бы одно поле. Повтор
+        тех же значений идемпотентен (`200`, без нового audit-события). Неизвестное или
+        чужое правило — `404`. Дубликат name — `409 DLP_POLICY_NAME_TAKEN`. Смена
+        pattern_type повторно проверяет wildcard-лимит. Аудит перечисляет изменённые
+        поля, без текста pattern.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DlpPolicyUpdateRequest"
+      responses:
+        "200":
+          description: Правило изменено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DlpPolicy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+    delete:
+      tags: [security]
+      operationId: deleteWorkspaceDlpPolicy
+      summary: Удалить DLP-правило
+      description: >
+        OWNER/ADMIN; только MANAGED. Неизвестное/чужое правило — `404`. Исторические
+        DLP-события сохраняются: `policy_id` становится `null`, а name snapshot остаётся.
+      responses:
+        "204":
+          description: Правило удалено
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /workspaces/{workspaceId}/dlp/events:
+    get:
+      tags: [security]
+      operationId: listWorkspaceDlpEvents
+      summary: Content-free журнал DLP-событий (OWNER/ADMIN)
+      description: >
+        OWNER/ADMIN. Стабильный порядок `created_at DESC, id DESC`, непрозрачный
+        workspace-bound cursor, `has_more` по `limit + 1`. Опциональные точные фильтры
+        `policy_id` и `action` (`WARN`/`BLOCK`). Строка содержит только id, policy_id,
+        name snapshot, action, actor_id, chat_id и created_at: текста сообщения,
+        ciphertext, имени файла, email и IP-адреса в таблице и ответе нет.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+        - name: policy_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, enum: [WARN, BLOCK] }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Страница DLP-событий
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DlpEventPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /workspaces/{workspaceId}/audit:
+    get:
+      tags: [security]
+      operationId: listWorkspaceAudit
+      summary: Audit-лог воркспейса (OWNER/ADMIN)
+      description: >
+        Только ACTIVE OWNER/ADMIN. Читается существующий append-only
+        `audit.audit_events`; SQL-функция повторно проверяет роль и явно фильтрует
+        `workspace_id`, поэтому события актора из другого воркспейса не утекают.
+        Возвращаются только `id`, `action`, `actor_id`, `target_type`, `target_id`,
+        `created_at`: metadata JSONB, хэши hash-chain, request id, actor email и
+        содержимое сообщений/файлов не покидают БД. Фильтры `action` (точное имя) и
+        `actor_id` (точный uuid), `from`/`to` включительно; `from > to` — `400`.
+        Порядок `created_at DESC, id DESC`, cursor непрозрачен и привязан к воркспейсу.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, maxLength: 120 }
+        - name: actor_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      responses:
+        "200":
+          description: Страница audit-лога
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceAuditPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /workspaces/{workspaceId}/audit/export:
+    get:
+      tags: [security]
+      operationId: exportWorkspaceAudit
+      summary: Ограниченный экспорт audit-лога (CSV/JSON)
+      description: >
+        OWNER/ADMIN. Те же фильтры, что у страницы, без cursor/limit. Экспорт ограничен
+        10 000 строк: при большем совпадении возвращаются первые 10 000 и
+        `X-Export-Truncated: true`, вызвавшему нужно сузить `from`/`to`. `format`
+        обязателен. CSV — RFC 4180 (кавычки только при `,`, `"`, CR/LF; внутренняя
+        кавычка удваивается), JSON — объект `WorkspaceAuditExport`. Экспорт сам
+        аудируется событием `workspace.audit.exported` (format, returned, truncated —
+        только счётчики, без содержимого).
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+        - name: format
+          in: query
+          required: true
+          schema: { type: string, enum: [csv, json] }
+        - name: action
+          in: query
+          required: false
+          schema: { type: string, maxLength: 120 }
+        - name: actor_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Экспорт (не более 10 000 строк)
+          headers:
+            X-Export-Rows:
+              description: Число строк в ответе
+              schema: { type: integer }
+            X-Export-Truncated:
+              description: true, если совпадений больше лимита
+              schema: { type: boolean }
+          content:
+            text/csv:
+              schema: { type: string }
+              example: |
+                created_at,action,actor_id,target_type,target_id
+                2026-01-01T00:00:00Z,workspace.security.updated,00000000-0000-0000-0000-000000000000,workspace_security,
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceAuditExport"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /workspaces/{workspaceId}/sessions:
+    get:
+      tags: [security]
+      operationId: listWorkspaceSessions
+      summary: Активные сессии участников воркспейса (OWNER/ADMIN)
+      description: >
+        OWNER/ADMIN. Живые сессии Keycloak всех ACTIVE-участников, у которых есть
+        Keycloak identity, в порядке `last_seen_at DESC, id DESC`; cursor непрозрачен и
+        привязан к воркспейсу. В строке только `id`, `user_id`, device-метка клиента,
+        `created_at`, `last_seen_at`, `current`; IP-адрес, username и токены Keycloak
+        не возвращаются. `current=true` — сессия вызывающего по claim `sid`.
+        Недоступный Keycloak — `503 AUTH_UNAVAILABLE`.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Страница сессий
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSessionPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /workspaces/{workspaceId}/sessions/revoke-all:
+    post:
+      tags: [security]
+      operationId: revokeAllWorkspaceSessions
+      summary: Отозвать все сессии участников воркспейса
+      description: >
+        OWNER/ADMIN. Отзывает сессии всех ACTIVE-участников через Keycloak Admin API;
+        текущая сессия вызывающего сохраняется, чтобы администратор не разлогинил сам
+        себя. Возвращает число отозванных сессий и затронутых пользователей. Недоступный
+        Keycloak — `503 AUTH_UNAVAILABLE`; операция best-effort и может успеть отозвать
+        часть сессий до сбоя. Событие аудита содержит только счётчики.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Сессии отозваны (счётчики)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSessionRevokeAll"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /workspaces/{workspaceId}/sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/DeviceId"
+    delete:
+      tags: [security]
+      operationId: revokeWorkspaceSession
+      summary: Отозвать одну сессию участника воркспейса
+      description: >
+        OWNER/ADMIN. Сессия должна принадлежать ACTIVE-участнику этого воркспейса:
+        чужая и уже отозванная неотличимы и дают `404 NOT_FOUND` без побочных эффектов.
+        Недоступный Keycloak — `503 AUTH_UNAVAILABLE`. Аудит содержит id участника, без
+        session id/IP/username.
+      responses:
+        "204":
+          description: Сессия отозвана
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /workspaces/{workspaceId}/security:
+    get:
+      tags: [security]
+      operationId: getWorkspaceSecurity
+      summary: Настройки безопасности воркспейса (OWNER/ADMIN)
+      description: >
+        OWNER/ADMIN. Политика воркспейса: `require_2fa`, `session_timeout_minutes`
+        (15..10080), `dlp_enabled`, `retention_days` (1..3650). `security_mode`
+        намеренно отсутствует: режим immutable (V16 trigger) и не меняется этим API.
+        Значения хранятся для security-UI и последующего применения политик; в этом
+        срезе они не добавляют новую точку enforcement в логин/message pipeline.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Настройки безопасности
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSecurity"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      tags: [security]
+      operationId: updateWorkspaceSecurity
+      summary: Изменить настройки безопасности воркспейса
+      description: >
+        OWNER/ADMIN. Частичное обновление: хотя бы одно поле. Повтор тех же значений
+        идемпотентен (`200`, без audit-события). Явный `security_mode` в теле — `422
+        MODE_CHANGE_FORBIDDEN` (режим нельзя переключить, в том числе E2EE → MANAGED).
+        `dlp_enabled=true` в E2EE — `422 DLP_E2EE_UNSUPPORTED`. Аудит содержит только
+        список изменённых полей, без значений.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspaceSecurityUpdateRequest"
+      responses:
+        "200":
+          description: Настройки обновлены
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSecurity"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
 
   /uploads/preflight:
     post:
@@ -2498,7 +2943,11 @@ paths:
         CHAT_READ_ONLY`); право `post_messages` из матрицы канала проверяется отдельно
         (`403 CHAT_PERMISSION_DENIED`). Идемпотентный replay сохранённого
         `Idempotency-Key` возвращается до этих проверок и не ломается включением
-        read-only.
+        read-only. P0-3: в MANAGED-воркспейсе с включённым DLP текстовое сообщение
+        проверяется по литеральным правилам до выделения `seq`; совпадение с `BLOCK`
+        даёт `422 DLP_BLOCKED` и откатывает отправку, а content-free событие (id правила,
+        name snapshot, action) сохраняется независимо; `WARN` сохраняет событие и
+        пропускает сообщение. E2EE не проверяется: plaintext на сервере отсутствует.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -3088,6 +3537,609 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /me/avatar:
+    post:
+      tags: [auth]
+      operationId: setMyAvatar
+      summary: Установить аватар из существующего CLEAN-изображения
+      description: >
+        Нового upload-пайплайна нет: тело ссылается на уже загруженное managed-вложение,
+        которое принадлежит вызывающему, является изображением и прошло AV-проверку
+        (`READY`/`BOUND` + `CLEAN`/`SKIPPED`). Чужое/отсутствующее вложение — скрытый `404`;
+        не изображение — `422 AVATAR_INVALID`; `PENDING` — `409 ATTACHMENT_NOT_READY`;
+        заражённое — `423 ATTACHMENT_QUARANTINED`. `avatar_url` в профиле — стабильный
+        относительный URL, а не ключ хранения.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AvatarUpdate"
+      responses:
+        "200":
+          description: Обновлённый профиль
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "423":
+          description: Вложение помещено в карантин (`ATTACHMENT_QUARANTINED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [auth]
+      operationId: deleteMyAvatar
+      summary: Удалить аватар (идемпотентно)
+      responses:
+        "204":
+          description: Аватар удалён (или уже отсутствовал)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    get:
+      tags: [auth]
+      operationId: getMyAvatar
+      summary: Получить аватар (302 на короткоживущий presigned URL)
+      description: >
+        Требуется аутентификация; ответ — `302` с `Location` на presigned object URL
+        (TTL 5 минут). В теле дополнительно возвращаются URL и срок жизни. Аватар
+        отсутствует — `404`.
+      responses:
+        "302":
+          description: Временный redirect на presigned URL
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileAvatar"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /me/2fa:
+    get:
+      tags: [auth]
+      operationId: getMyTwoFactor
+      summary: Состояние TOTP-аутентификатора
+      description: >
+        Секрет, код и recovery-коды никогда не возвращаются. `enabled=false` означает,
+        что настройка не начата или не подтверждена.
+      responses:
+        "200":
+          description: Состояние 2FA
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactorStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [auth]
+      operationId: disableMyTwoFactor
+      summary: Отключить 2FA
+      description: >
+        Требует пароль текущего аккаунта (re-auth в Keycloak) и действующий TOTP-код или
+        одноразовый recovery-код. Только possession access token недостаточно. Все
+        recovery-коды удаляются. Событие аудита не содержит секретов/кодов.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorDisableRequest"
+      responses:
+        "204":
+          description: 2FA отключена
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Пароль не подтверждён (`REAUTH_FAILED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 2FA не включена (`TWO_FACTOR_NOT_ENABLED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Неверный TOTP/recovery-код
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /me/2fa/setup:
+    post:
+      tags: [auth]
+      operationId: setupMyTwoFactor
+      summary: Начать настройку TOTP
+      description: >
+        Требует пароль (re-auth в Keycloak, привязанный к subject вызывающего). Возвращает
+        секрет, `otpauth://` URI и `qr_payload` (тот же URI для QR) ровно один раз; в БД
+        секрет хранится только как AES-256-GCM ciphertext. Повторный setup до подтверждения
+        ротирует секрет; после включения — `409 TWO_FACTOR_ALREADY_ENABLED`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorSetupRequest"
+      responses:
+        "200":
+          description: Параметры настройки (показываются один раз)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactorSetup"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Пароль не подтверждён (`REAUTH_FAILED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 2FA уже включена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /me/2fa/verify:
+    post:
+      tags: [auth]
+      operationId: verifyMyTwoFactor
+      summary: Подтвердить настройку TOTP шестизначным кодом
+      description: >
+        Принятый time step сохраняется, поэтому повторное использование того же кода
+        отклоняется. Неверный код — `422 TWO_FACTOR_CODE_INVALID`; setup не начат —
+        `409 TWO_FACTOR_NOT_SETUP`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorVerifyRequest"
+      responses:
+        "200":
+          description: 2FA включена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactorStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Setup не начат или уже включён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Неверный код (`TWO_FACTOR_CODE_INVALID`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /me/2fa/recovery-codes:
+    post:
+      tags: [auth]
+      operationId: regenerateMyRecoveryCodes
+      summary: Перевыпустить одноразовые recovery-коды
+      description: >
+        Требует пароль. Предыдущий набор перестаёт действовать целиком. В ответе — 10
+        plaintext-кодов один раз; в БД лежат только SHA-256 digest'ы, при использовании
+        код помечается использованным.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorRecoveryCodesRequest"
+      responses:
+        "200":
+          description: Новые одноразовые коды
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TwoFactorRecoveryCodes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Пароль не подтверждён (`REAUTH_FAILED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 2FA не включена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /auth/2fa/verify:
+    post:
+      tags: [auth]
+      operationId: authVerifyTwoFactor
+      summary: Завершить login challenge вторым фактором
+      description: >
+        `challenge_id` получен из `202` ответа `POST /auth/login`. Код — TOTP (6 цифр) или
+        одноразовый recovery-код. Токены Keycloak до этого момента хранятся только
+        server-side; challenge одноразовый, ограничен TTL и числом попыток. Неверный/
+        истёкший challenge — `401 TWO_FACTOR_CHALLENGE_INVALID`, неверный код — `422`,
+        исчерпанные попытки — `429`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthTwoFactorVerifyRequest"
+      responses:
+        "200":
+          description: Второй фактор принят, сессия выдана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Challenge недействителен/истёк
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 2FA больше не включена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Неверный TOTP/recovery-код
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /workspaces/{workspaceId}:
+    patch:
+      tags: [workspaces]
+      operationId: updateWorkspace
+      summary: Обновить name/description/logo_file_id
+      description: >
+        Частичное обновление; отсутствующее поле не меняется, `null`/пустая строка для
+        `description` очищает его, `logo_file_id: null` убирает логотип. Требуется
+        `manage_workspace` (OWNER всегда, ADMIN по умолчанию). `logo_file_id` ссылается на
+        существующее CLEAN-изображение этого воркспейса. Security mode неизменяем и в теле
+        не принимается. Audit хранит только имена изменённых полей.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspaceUpdate"
+      responses:
+        "200":
+          description: Обновлённый воркспейс
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "423":
+          description: Логотип помещён в карантин (`ATTACHMENT_QUARANTINED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /workspaces/{workspaceId}/avatar:
+    post:
+      tags: [workspaces]
+      operationId: setWorkspaceAvatar
+      summary: Установить логотип воркспейса из CLEAN-изображения
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspaceAvatarRequest"
+      responses:
+        "200":
+          description: Обновлённый воркспейс
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: Не изображение (`WORKSPACE_LOGO_INVALID`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "423":
+          description: Вложение помещено в карантин
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      tags: [workspaces]
+      operationId: deleteWorkspaceAvatar
+      summary: Удалить логотип (идемпотентно)
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "204":
+          description: Логотип удалён (или уже отсутствовал)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /workspaces/{workspaceId}/invites:
+    get:
+      tags: [workspaces]
+      operationId: listWorkspaceInvites
+      summary: Метаданные invite-ссылок (без токенов)
+      description: Требуется `manage_invites` (OWNER/ADMIN по умолчанию).
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Список ссылок
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceInviteList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [workspaces]
+      operationId: createWorkspaceInvite
+      summary: Создать invite-ссылку (email-токен, письмо не отправляется)
+      description: >
+        Возвращает `token` и `accept_url` ровно один раз; в БД хранится только SHA-256
+        hash. OWNER может приглашать ADMIN/MEMBER/GUEST, ADMIN — MEMBER/GUEST; OWNER через
+        ссылку не выдаётся. `expires_in_seconds` 300..2592000 (по умолчанию 7 дней),
+        `max_uses` 1..1000 или unlimited. Письмо backend не отправляет.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspaceInviteCreateRequest"
+      responses:
+        "201":
+          description: Ссылка создана; токен показывается один раз
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceInviteCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Роль запрещена (`WORKSPACE_INVITE_ROLE_FORBIDDEN`) или нет прав
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /workspaces/{workspaceId}/invites/{inviteId}:
+    delete:
+      tags: [workspaces]
+      operationId: revokeWorkspaceInvite
+      summary: Отозвать invite-ссылку
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - name: inviteId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Ссылка отозвана (идемпотентно)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Ссылка не найдена (`WORKSPACE_INVITE_NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /workspace-invites/{token}/accept:
+    post:
+      tags: [workspaces]
+      operationId: acceptWorkspaceInvite
+      summary: Принять invite-ссылку и войти в воркспейс
+      description: >
+        Вызывающий должен быть аутентифицированным активным пользователем. SECURITY
+        DEFINER функция блокирует строку приглашения, поэтому `max_uses` соблюдается
+        атомарно. Повторный accept действующим участником идемпотентен
+        (`already_member=true`) и не расходует использование. Отозванная/истёкшая/
+        исчерпанная ссылка — `410` с отдельным кодом; неизвестный токен — `404`.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, minLength: 20, maxLength: 128 }
+      responses:
+        "200":
+          description: Участие выдано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceInviteAcceptance"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Ссылка не найдена (`WORKSPACE_INVITE_NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "410":
+          description: Ссылка отозвана/истекла/исчерпана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /workspaces/{workspaceId}/permissions:
+    get:
+      tags: [workspaces]
+      operationId: getWorkspacePermissions
+      summary: Матрица прав OWNER/ADMIN/MEMBER
+      description: >
+        Доступна любому активному участнику (описывает его собственные эффективные
+        права). OWNER всегда `true` и неизменяем.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Эффективная матрица
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspacePermissionMatrix"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [workspaces]
+      operationId: updateWorkspacePermissions
+      summary: Изменить матрицу прав
+      description: >
+        Требуется `manage_permissions`. OWNER-ячейки неизменяемы (`422
+        OWNER_PERMISSIONS_IMMUTABLE`); ADMIN может менять только MEMBER-ячейки, OWNER —
+        ADMIN и MEMBER (`403 PERMISSION_CHANGE_FORBIDDEN`). Изменения атомарны; audit
+        хранит только role/permission/allowed.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspacePermissionUpdate"
+      responses:
+        "200":
+          description: Обновлённая матрица
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspacePermissionMatrix"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+
 components:
   securitySchemes:
     bearerAuth:
@@ -3117,6 +4169,19 @@ components:
       required: true
       description: Идентификатор пользователя (участника воркспейса/канала).
       schema: { type: string, format: uuid }
+    PolicyId:
+      name: policyId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      description: >
+        Идентификатор сессии Keycloak (opaque, обычно uuid). Не логируется и не
+        возвращается повторно.
+      schema: { type: string, minLength: 1, maxLength: 128 }
     InviteId:
       name: inviteId
       in: path
@@ -3458,6 +4523,13 @@ components:
           type: [string, "null"]
           maxLength: 32
           description: Plain-text контактный телефон; `null` — не заполнено
+        avatar_url:
+          type: [string, "null"]
+          maxLength: 512
+          description: >
+            Стабильный относительный URL аватара (`/api/v1/me/avatar`, 302 на presigned
+            object URL); `null` — аватар не установлен. Ключ хранения и attachment id не
+            раскрываются.
 
     ProfileUpdate:
       type: object
@@ -3903,6 +4975,16 @@ components:
         slug: { type: string }
         role: { type: string, enum: [OWNER, ADMIN, MEMBER, GUEST] }
         security_mode: { type: string, enum: [MANAGED, E2EE] }
+        description:
+          type: [string, "null"]
+          maxLength: 500
+          description: Plain-text описание; `null` — не заполнено (P0-4)
+        logo_file_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            Ссылка на CLEAN image attachment этого воркспейса; `null` — логотип не
+            установлен. Сам файл скачивается обычным file flow.
 
     WorkspaceMember:
       type: object
@@ -3928,6 +5010,187 @@ components:
             $ref: "#/components/schemas/WorkspaceMember"
         next_cursor: { type: [string, "null"] }
         has_more: { type: boolean }
+
+    DlpPolicy:
+      type: object
+      required: [id, name, action, pattern_type, pattern, enabled, created_at, updated_at]
+      description: >
+        DLP-правило. `pattern` — литерал (KEYWORD) или литерал с wildcard `*`
+        (PATTERN), максимум 200 символов и 20 wildcard-сегментов. Регулярным
+        выражением значение не является и не компилируется.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        action: { type: string, enum: [WARN, BLOCK] }
+        pattern_type: { type: string, enum: [KEYWORD, PATTERN] }
+        pattern: { type: string, minLength: 1, maxLength: 200 }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DlpPolicyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DlpPolicy" }
+
+    DlpPolicyCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, action, pattern_type, pattern]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        action: { type: string, enum: [WARN, BLOCK] }
+        pattern_type: { type: string, enum: [KEYWORD, PATTERN] }
+        pattern:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Literal без control characters. Для PATTERN допустим `*`, не более 20.
+            Это не regex: ReDoS исключён по построению.
+        enabled: { type: boolean, default: true }
+
+    DlpPolicyUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        action: { type: string, enum: [WARN, BLOCK] }
+        pattern_type: { type: string, enum: [KEYWORD, PATTERN] }
+        pattern: { type: string, minLength: 1, maxLength: 200 }
+        enabled: { type: boolean }
+
+    DlpEvent:
+      type: object
+      required: [id, policy_id, policy_name, action, actor_id, chat_id, created_at]
+      description: >
+        Content-free DLP-событие: только ids, name snapshot, action и время. Текста
+        сообщения, ciphertext, имени файла, email и IP-адреса нет ни в таблице, ни в
+        ответе. `policy_id` становится `null`, если правило удалено (name snapshot
+        сохраняется).
+      properties:
+        id: { type: string, format: uuid }
+        policy_id: { type: [string, "null"], format: uuid }
+        policy_name: { type: string, minLength: 1, maxLength: 120 }
+        action: { type: string, enum: [WARN, BLOCK] }
+        actor_id: { type: [string, "null"], format: uuid }
+        chat_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+
+    DlpEventPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DlpEvent" }
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    WorkspaceAuditEvent:
+      type: object
+      required: [id, action, actor_id, target_type, target_id, created_at]
+      description: >
+        Строка audit-лога воркспейса: только действие, актор, цель и время. Metadata
+        JSONB, хэши hash-chain, request id и actor email не возвращаются, поэтому тела
+        сообщений/файлов и секреты не могут утечь через этот ответ.
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string, maxLength: 120 }
+        actor_id: { type: [string, "null"], format: uuid }
+        target_type: { type: [string, "null"], maxLength: 40 }
+        target_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+
+    WorkspaceAuditPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/WorkspaceAuditEvent" }
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    WorkspaceAuditExport:
+      type: object
+      required: [items, exported_rows, truncated]
+      description: >
+        JSON-представление экспорта. `exported_rows` ≤ 10 000; `truncated=true`
+        означает, что совпадений больше и фильтры нужно сузить.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/WorkspaceAuditEvent" }
+        exported_rows: { type: integer, minimum: 0, maximum: 10000 }
+        truncated: { type: boolean }
+
+    WorkspaceSession:
+      type: object
+      required: [id, user_id, device, created_at, last_seen_at, current]
+      description: >
+        Сессия Keycloak участника воркспейса без IP-адреса, username и токенов.
+        `device` — метка клиента из Keycloak; `current` — сессия вызывающего по claim
+        `sid`.
+      properties:
+        id: { type: string, minLength: 1, maxLength: 128 }
+        user_id: { type: string, format: uuid }
+        device: { type: string, maxLength: 120 }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        current: { type: boolean }
+
+    WorkspaceSessionPage:
+      type: object
+      required: [items, has_more]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/WorkspaceSession" }
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    WorkspaceSessionRevokeAll:
+      type: object
+      required: [revoked_sessions, affected_users]
+      properties:
+        revoked_sessions: { type: integer, minimum: 0 }
+        affected_users: { type: integer, minimum: 0 }
+
+    WorkspaceSecurity:
+      type: object
+      required:
+        [require_2fa, session_timeout_minutes, dlp_enabled, retention_days, updated_at]
+      description: >
+        Политика безопасности воркспейса. `security_mode` отсутствует намеренно: режим
+        immutable и не меняется этим API.
+      properties:
+        require_2fa: { type: boolean }
+        session_timeout_minutes: { type: integer, minimum: 15, maximum: 10080 }
+        dlp_enabled: { type: boolean }
+        retention_days: { type: integer, minimum: 1, maximum: 3650 }
+        updated_at: { type: string, format: date-time }
+
+    WorkspaceSecurityUpdateRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        require_2fa: { type: boolean }
+        session_timeout_minutes: { type: integer, minimum: 15, maximum: 10080 }
+        dlp_enabled: { type: boolean }
+        retention_days: { type: integer, minimum: 1, maximum: 3650 }
+        security_mode:
+          type: string
+          enum: [MANAGED, E2EE]
+          description: >
+            Не изменяется: любое значение отклоняется `422 MODE_CHANGE_FORBIDDEN`.
+            Поле документировано, чтобы клиент видел явный отказ, а не молчаливое
+            игнорирование.
 
     AddWorkspaceMemberRequest:
       type: object
@@ -5474,6 +6737,230 @@ components:
               chat_id: { type: string, format: uuid }
               last_seq: { type: integer, format: int64, minimum: 0 }
               unread_count: { type: integer, minimum: 0 }
+
+    AvatarUpdate:
+      type: object
+      required: [file_id]
+      properties:
+        file_id:
+          type: string
+          format: uuid
+          description: Существующее CLEAN-изображение, загруженное вызывающим.
+
+    ProfileAvatar:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url: { type: string, format: uri }
+        expires_at: { type: string, format: date-time }
+
+    TwoFactorSetupRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, minLength: 1, maxLength: 128 }
+
+    TwoFactorSetup:
+      type: object
+      required: [secret, otpauth_uri, qr_payload]
+      description: >
+        Секрет и URI показываются один раз при setup. `qr_payload` — тот же otpauth URI,
+        который клиент кодирует в QR. Ни одно из значений не логируется и не возвращается
+        повторно.
+      properties:
+        secret: { type: string, description: Base64url TOTP secret (показывается один раз) }
+        otpauth_uri: { type: string, description: "otpauth://totp/..." }
+        qr_payload: { type: string, description: Данные для QR (тот же otpauth URI) }
+
+    TwoFactorVerifyRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$' }
+
+    TwoFactorDisableRequest:
+      type: object
+      required: [password, code]
+      properties:
+        password: { type: string, minLength: 1, maxLength: 128 }
+        code:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: TOTP (6 цифр) или одноразовый recovery-код.
+
+    TwoFactorRecoveryCodesRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, minLength: 1, maxLength: 128 }
+
+    TwoFactorStatus:
+      type: object
+      required: [enabled, recovery_codes_remaining]
+      properties:
+        enabled: { type: boolean }
+        enabled_at: { type: [string, "null"], format: date-time }
+        recovery_codes_remaining: { type: integer, minimum: 0 }
+
+    TwoFactorRecoveryCodes:
+      type: object
+      required: [codes, remaining]
+      properties:
+        codes:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { type: string, pattern: '^[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$' }
+        remaining: { type: integer, minimum: 0 }
+
+    AuthTwoFactorChallenge:
+      type: object
+      required: [challenge_id, expires_in, methods]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        expires_in: { type: integer, minimum: 1 }
+        methods:
+          type: array
+          items: { type: string, enum: [TOTP, RECOVERY_CODE] }
+
+    AuthTwoFactorVerifyRequest:
+      type: object
+      required: [challenge_id, code]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        code:
+          type: string
+          minLength: 1
+          maxLength: 20
+          description: TOTP (6 цифр) или одноразовый recovery-код.
+
+    WorkspaceUpdate:
+      type: object
+      description: >
+        Все поля опциональны. Отсутствие — «не менять»; `description: null`/пустая строка и
+        `logo_file_id: null` очищают поле. Пустой объект — `400 VALIDATION_FAILED`.
+        `security_mode` здесь не принимается.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: [string, "null"], maxLength: 500 }
+        logo_file_id: { type: [string, "null"], format: uuid }
+
+    WorkspaceAvatarRequest:
+      type: object
+      required: [file_id]
+      properties:
+        file_id: { type: string, format: uuid }
+
+    WorkspaceInviteCreateRequest:
+      type: object
+      properties:
+        role: { type: string, enum: [ADMIN, MEMBER, GUEST], default: MEMBER }
+        max_uses: { type: [integer, "null"], minimum: 1, maximum: 1000 }
+        expires_in_seconds:
+          type: integer
+          minimum: 300
+          maximum: 2592000
+          default: 604800
+
+    WorkspaceInvite:
+      type: object
+      required: [id, role, status, used_count, expires_at, created_at, created_by]
+      description: Метаданные ссылки; токен и hash отсутствуют.
+      properties:
+        id: { type: string, format: uuid }
+        role: { type: string, enum: [ADMIN, MEMBER, GUEST] }
+        status: { type: string, enum: [ACTIVE, EXPIRED, EXHAUSTED, REVOKED] }
+        used_count: { type: integer, minimum: 0 }
+        max_uses: { type: [integer, "null"], minimum: 1, maximum: 1000 }
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        created_by: { type: string, format: uuid }
+
+    WorkspaceInviteCreated:
+      type: object
+      required: [invite, token, accept_url]
+      properties:
+        invite: { $ref: "#/components/schemas/WorkspaceInvite" }
+        token: { type: string, description: Одноразовый показ; в БД только hash }
+        accept_url: { type: string, description: Относительный accept URL }
+
+    WorkspaceInviteList:
+      type: object
+      required: [invites]
+      properties:
+        invites:
+          type: array
+          items: { $ref: "#/components/schemas/WorkspaceInvite" }
+
+    WorkspaceInviteAcceptance:
+      type: object
+      required: [workspace_id, name, slug, role, already_member]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        role: { type: string, enum: [OWNER, ADMIN, MEMBER, GUEST] }
+        already_member: { type: boolean }
+
+    WorkspacePermissionEntry:
+      type: object
+      required: [role, permission, allowed]
+      properties:
+        role: { type: string, enum: [OWNER, ADMIN, MEMBER] }
+        permission:
+          type: string
+          enum:
+            [
+              manage_workspace,
+              manage_members,
+              manage_invites,
+              manage_permissions,
+              view_audit,
+              manage_security,
+            ]
+        allowed: { type: boolean }
+
+    WorkspacePermissionUpdate:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 18
+          items: { $ref: "#/components/schemas/WorkspacePermissionEntry" }
+
+    WorkspaceRolePermissions:
+      type: object
+      required:
+        [
+          role,
+          manage_workspace,
+          manage_members,
+          manage_invites,
+          manage_permissions,
+          view_audit,
+          manage_security,
+        ]
+      properties:
+        role: { type: string, enum: [OWNER, ADMIN, MEMBER] }
+        manage_workspace: { type: boolean }
+        manage_members: { type: boolean }
+        manage_invites: { type: boolean }
+        manage_permissions: { type: boolean }
+        view_audit: { type: boolean }
+        manage_security: { type: boolean }
+
+    WorkspacePermissionMatrix:
+      type: object
+      required: [workspace_id, roles]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/WorkspaceRolePermissions" }
+
 
   responses:
     BadRequest:

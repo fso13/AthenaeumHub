@@ -30,6 +30,9 @@ public class UserEntity {
     @Column(name = "phone")
     private String phone;
 
+    @Column(name = "avatar_file_id")
+    private UUID avatarFileId;
+
     @Column(name = "status", nullable = false)
     private String status;
 
@@ -60,6 +63,10 @@ public class UserEntity {
 
     public String getPhone() {
         return phone;
+    }
+
+    public UUID getAvatarFileId() {
+        return avatarFileId;
     }
 
     public String getStatus() {

@@ -108,6 +108,26 @@ public class UserRepositoryAdapter implements UserRepository {
     }
 
     @Override
+    public void updateAvatar(UUID userId, UUID avatarFileId) {
+        int updated = entityManager.createNativeQuery("""
+                        UPDATE auth.users
+                           SET avatar_file_id = CAST(?2 AS uuid),
+                               avatar_updated_at = CASE
+                                   WHEN CAST(?2 AS uuid) IS NULL THEN NULL
+                                   ELSE now()
+                               END,
+                               updated_at = now()
+                         WHERE id = ?1
+                        """)
+                .setParameter(1, userId)
+                .setParameter(2, avatarFileId)
+                .executeUpdate();
+        if (updated == 0) {
+            throw DomainException.notFound("User not found");
+        }
+    }
+
+    @Override
     public boolean claimPlatformAdmin() {
         Boolean claim = (Boolean) entityManager.createNativeQuery(
                         "SELECT auth.claim_platform_admin()")

@@ -735,6 +735,209 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspaceId}/dlp/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * DLP-правила воркспейса (OWNER/ADMIN)
+         * @description Только ACTIVE OWNER/ADMIN активного воркспейса; чужая/неизвестная workspace — `403` без раскрытия существования. Список ограничен 100 правилами на воркспейс и упорядочен `created_at DESC, id DESC`. Правила доступны только в MANAGED воркспейсе: E2EE-контент непрозрачен для сервера, поэтому список отдаётся пустым без ошибки, а создание/изменение/удаление в E2EE — `422 DLP_E2EE_UNSUPPORTED`.
+         */
+        get: operations["listWorkspaceDlpPolicies"];
+        put?: never;
+        /**
+         * Создать DLP-правило
+         * @description OWNER/ADMIN; только MANAGED. `pattern_type=KEYWORD` — литерал, поиск без учёта регистра; `PATTERN` — тот же литерал с wildcard `*` (не более 20). Регулярные выражения не компилируются ни приложением, ни БД, поэтому ReDoS невозможен. `name` уникально в воркспейсе без учёта регистра (`409 DLP_POLICY_NAME_TAKEN`), `pattern` — 1..200 печатных символов без control characters. Лимит 100 правил — `409 DLP_POLICY_LIMIT`. Аудит содержит id, action, pattern_type и enabled, но не текст pattern.
+         */
+        post: operations["createWorkspaceDlpPolicy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/dlp/policies/{policyId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                policyId: components["parameters"]["PolicyId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Удалить DLP-правило
+         * @description OWNER/ADMIN; только MANAGED. Неизвестное/чужое правило — `404`. Исторические DLP-события сохраняются: `policy_id` становится `null`, а name snapshot остаётся.
+         */
+        delete: operations["deleteWorkspaceDlpPolicy"];
+        options?: never;
+        head?: never;
+        /**
+         * Изменить DLP-правило
+         * @description OWNER/ADMIN; только MANAGED. Частичное обновление: хотя бы одно поле. Повтор тех же значений идемпотентен (`200`, без нового audit-события). Неизвестное или чужое правило — `404`. Дубликат name — `409 DLP_POLICY_NAME_TAKEN`. Смена pattern_type повторно проверяет wildcard-лимит. Аудит перечисляет изменённые поля, без текста pattern.
+         */
+        patch: operations["updateWorkspaceDlpPolicy"];
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/dlp/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Content-free журнал DLP-событий (OWNER/ADMIN)
+         * @description OWNER/ADMIN. Стабильный порядок `created_at DESC, id DESC`, непрозрачный workspace-bound cursor, `has_more` по `limit + 1`. Опциональные точные фильтры `policy_id` и `action` (`WARN`/`BLOCK`). Строка содержит только id, policy_id, name snapshot, action, actor_id, chat_id и created_at: текста сообщения, ciphertext, имени файла, email и IP-адреса в таблице и ответе нет.
+         */
+        get: operations["listWorkspaceDlpEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Audit-лог воркспейса (OWNER/ADMIN)
+         * @description Только ACTIVE OWNER/ADMIN. Читается существующий append-only `audit.audit_events`; SQL-функция повторно проверяет роль и явно фильтрует `workspace_id`, поэтому события актора из другого воркспейса не утекают. Возвращаются только `id`, `action`, `actor_id`, `target_type`, `target_id`, `created_at`: metadata JSONB, хэши hash-chain, request id, actor email и содержимое сообщений/файлов не покидают БД. Фильтры `action` (точное имя) и `actor_id` (точный uuid), `from`/`to` включительно; `from > to` — `400`. Порядок `created_at DESC, id DESC`, cursor непрозрачен и привязан к воркспейсу.
+         */
+        get: operations["listWorkspaceAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/audit/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ограниченный экспорт audit-лога (CSV/JSON)
+         * @description OWNER/ADMIN. Те же фильтры, что у страницы, без cursor/limit. Экспорт ограничен 10 000 строк: при большем совпадении возвращаются первые 10 000 и `X-Export-Truncated: true`, вызвавшему нужно сузить `from`/`to`. `format` обязателен. CSV — RFC 4180 (кавычки только при `,`, `"`, CR/LF; внутренняя кавычка удваивается), JSON — объект `WorkspaceAuditExport`. Экспорт сам аудируется событием `workspace.audit.exported` (format, returned, truncated — только счётчики, без содержимого).
+         */
+        get: operations["exportWorkspaceAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Активные сессии участников воркспейса (OWNER/ADMIN)
+         * @description OWNER/ADMIN. Живые сессии Keycloak всех ACTIVE-участников, у которых есть Keycloak identity, в порядке `last_seen_at DESC, id DESC`; cursor непрозрачен и привязан к воркспейсу. В строке только `id`, `user_id`, device-метка клиента, `created_at`, `last_seen_at`, `current`; IP-адрес, username и токены Keycloak не возвращаются. `current=true` — сессия вызывающего по claim `sid`. Недоступный Keycloak — `503 AUTH_UNAVAILABLE`.
+         */
+        get: operations["listWorkspaceSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/sessions/revoke-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отозвать все сессии участников воркспейса
+         * @description OWNER/ADMIN. Отзывает сессии всех ACTIVE-участников через Keycloak Admin API; текущая сессия вызывающего сохраняется, чтобы администратор не разлогинил сам себя. Возвращает число отозванных сессий и затронутых пользователей. Недоступный Keycloak — `503 AUTH_UNAVAILABLE`; операция best-effort и может успеть отозвать часть сессий до сбоя. Событие аудита содержит только счётчики.
+         */
+        post: operations["revokeAllWorkspaceSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                /** @description Идентификатор сессии Keycloak (opaque, обычно uuid). Не логируется и не возвращается повторно. */
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отозвать одну сессию участника воркспейса
+         * @description OWNER/ADMIN. Сессия должна принадлежать ACTIVE-участнику этого воркспейса: чужая и уже отозванная неотличимы и дают `404 NOT_FOUND` без побочных эффектов. Недоступный Keycloak — `503 AUTH_UNAVAILABLE`. Аудит содержит id участника, без session id/IP/username.
+         */
+        delete: operations["revokeWorkspaceSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/security": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Настройки безопасности воркспейса (OWNER/ADMIN)
+         * @description OWNER/ADMIN. Политика воркспейса: `require_2fa`, `session_timeout_minutes` (15..10080), `dlp_enabled`, `retention_days` (1..3650). `security_mode` намеренно отсутствует: режим immutable (V16 trigger) и не меняется этим API. Значения хранятся для security-UI и последующего применения политик; в этом срезе они не добавляют новую точку enforcement в логин/message pipeline.
+         */
+        get: operations["getWorkspaceSecurity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Изменить настройки безопасности воркспейса
+         * @description OWNER/ADMIN. Частичное обновление: хотя бы одно поле. Повтор тех же значений идемпотентен (`200`, без audit-события). Явный `security_mode` в теле — `422 MODE_CHANGE_FORBIDDEN` (режим нельзя переключить, в том числе E2EE → MANAGED). `dlp_enabled=true` в E2EE — `422 DLP_E2EE_UNSUPPORTED`. Аудит содержит только список изменённых полей, без значений.
+         */
+        patch: operations["updateWorkspaceSecurity"];
+        trace?: never;
+    };
     "/uploads/preflight": {
         parameters: {
             query?: never;
@@ -1299,7 +1502,7 @@ export interface paths {
         put?: never;
         /**
          * Отправить сообщение; managed — text/attachments, E2EE — только envelopes
-         * @description С `thread_root_id` создаётся ответ в тред: корень должен существовать в том же чате, сам не быть ответом (максимальная глубина 1) и не быть удалённым; тот же `Idempotency-Key`. В E2EE-чате треды не поддерживаются → `422 THREADS_E2EE_UNSUPPORTED`. Ответ на ответ → `422 THREAD_NESTING_UNSUPPORTED`. P0-2: канал с `read_only=true` отклоняет отправку не-OWNER/ADMIN ролью (`403 CHAT_READ_ONLY`); право `post_messages` из матрицы канала проверяется отдельно (`403 CHAT_PERMISSION_DENIED`). Идемпотентный replay сохранённого `Idempotency-Key` возвращается до этих проверок и не ломается включением read-only.
+         * @description С `thread_root_id` создаётся ответ в тред: корень должен существовать в том же чате, сам не быть ответом (максимальная глубина 1) и не быть удалённым; тот же `Idempotency-Key`. В E2EE-чате треды не поддерживаются → `422 THREADS_E2EE_UNSUPPORTED`. Ответ на ответ → `422 THREAD_NESTING_UNSUPPORTED`. P0-2: канал с `read_only=true` отклоняет отправку не-OWNER/ADMIN ролью (`403 CHAT_READ_ONLY`); право `post_messages` из матрицы канала проверяется отдельно (`403 CHAT_PERMISSION_DENIED`). Идемпотентный replay сохранённого `Idempotency-Key` возвращается до этих проверок и не ломается включением read-only. P0-3: в MANAGED-воркспейсе с включённым DLP текстовое сообщение проверяется по литеральным правилам до выделения `seq`; совпадение с `BLOCK` даёт `422 DLP_BLOCKED` и откатывает отправку, а content-free событие (id правила, name snapshot, action) сохраняется независимо; `WARN` сохраняет событие и пропускает сообщение. E2EE не проверяется: plaintext на сервере отсутствует.
          */
         post: operations["sendMessage"];
         delete?: never;
@@ -1619,6 +1822,258 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Получить аватар (302 на короткоживущий presigned URL)
+         * @description Требуется аутентификация; ответ — `302` с `Location` на presigned object URL (TTL 5 минут). В теле дополнительно возвращаются URL и срок жизни. Аватар отсутствует — `404`.
+         */
+        get: operations["getMyAvatar"];
+        put?: never;
+        /**
+         * Установить аватар из существующего CLEAN-изображения
+         * @description Нового upload-пайплайна нет: тело ссылается на уже загруженное managed-вложение, которое принадлежит вызывающему, является изображением и прошло AV-проверку (`READY`/`BOUND` + `CLEAN`/`SKIPPED`). Чужое/отсутствующее вложение — скрытый `404`; не изображение — `422 AVATAR_INVALID`; `PENDING` — `409 ATTACHMENT_NOT_READY`; заражённое — `423 ATTACHMENT_QUARANTINED`. `avatar_url` в профиле — стабильный относительный URL, а не ключ хранения.
+         */
+        post: operations["setMyAvatar"];
+        /** Удалить аватар (идемпотентно) */
+        delete: operations["deleteMyAvatar"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/2fa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Состояние TOTP-аутентификатора
+         * @description Секрет, код и recovery-коды никогда не возвращаются. `enabled=false` означает, что настройка не начата или не подтверждена.
+         */
+        get: operations["getMyTwoFactor"];
+        put?: never;
+        post?: never;
+        /**
+         * Отключить 2FA
+         * @description Требует пароль текущего аккаунта (re-auth в Keycloak) и действующий TOTP-код или одноразовый recovery-код. Только possession access token недостаточно. Все recovery-коды удаляются. Событие аудита не содержит секретов/кодов.
+         */
+        delete: operations["disableMyTwoFactor"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/2fa/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Начать настройку TOTP
+         * @description Требует пароль (re-auth в Keycloak, привязанный к subject вызывающего). Возвращает секрет, `otpauth://` URI и `qr_payload` (тот же URI для QR) ровно один раз; в БД секрет хранится только как AES-256-GCM ciphertext. Повторный setup до подтверждения ротирует секрет; после включения — `409 TWO_FACTOR_ALREADY_ENABLED`.
+         */
+        post: operations["setupMyTwoFactor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/2fa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Подтвердить настройку TOTP шестизначным кодом
+         * @description Принятый time step сохраняется, поэтому повторное использование того же кода отклоняется. Неверный код — `422 TWO_FACTOR_CODE_INVALID`; setup не начат — `409 TWO_FACTOR_NOT_SETUP`.
+         */
+        post: operations["verifyMyTwoFactor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/2fa/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Перевыпустить одноразовые recovery-коды
+         * @description Требует пароль. Предыдущий набор перестаёт действовать целиком. В ответе — 10 plaintext-кодов один раз; в БД лежат только SHA-256 digest'ы, при использовании код помечается использованным.
+         */
+        post: operations["regenerateMyRecoveryCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Завершить login challenge вторым фактором
+         * @description `challenge_id` получен из `202` ответа `POST /auth/login`. Код — TOTP (6 цифр) или одноразовый recovery-код. Токены Keycloak до этого момента хранятся только server-side; challenge одноразовый, ограничен TTL и числом попыток. Неверный/ истёкший challenge — `401 TWO_FACTOR_CHALLENGE_INVALID`, неверный код — `422`, исчерпанные попытки — `429`.
+         */
+        post: operations["authVerifyTwoFactor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Обновить name/description/logo_file_id
+         * @description Частичное обновление; отсутствующее поле не меняется, `null`/пустая строка для `description` очищает его, `logo_file_id: null` убирает логотип. Требуется `manage_workspace` (OWNER всегда, ADMIN по умолчанию). `logo_file_id` ссылается на существующее CLEAN-изображение этого воркспейса. Security mode неизменяем и в теле не принимается. Audit хранит только имена изменённых полей.
+         */
+        patch: operations["updateWorkspace"];
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Установить логотип воркспейса из CLEAN-изображения */
+        post: operations["setWorkspaceAvatar"];
+        /** Удалить логотип (идемпотентно) */
+        delete: operations["deleteWorkspaceAvatar"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Метаданные invite-ссылок (без токенов)
+         * @description Требуется `manage_invites` (OWNER/ADMIN по умолчанию).
+         */
+        get: operations["listWorkspaceInvites"];
+        put?: never;
+        /**
+         * Создать invite-ссылку (email-токен, письмо не отправляется)
+         * @description Возвращает `token` и `accept_url` ровно один раз; в БД хранится только SHA-256 hash. OWNER может приглашать ADMIN/MEMBER/GUEST, ADMIN — MEMBER/GUEST; OWNER через ссылку не выдаётся. `expires_in_seconds` 300..2592000 (по умолчанию 7 дней), `max_uses` 1..1000 или unlimited. Письмо backend не отправляет.
+         */
+        post: operations["createWorkspaceInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/invites/{inviteId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Отозвать invite-ссылку */
+        delete: operations["revokeWorkspaceInvite"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspace-invites/{token}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Принять invite-ссылку и войти в воркспейс
+         * @description Вызывающий должен быть аутентифицированным активным пользователем. SECURITY DEFINER функция блокирует строку приглашения, поэтому `max_uses` соблюдается атомарно. Повторный accept действующим участником идемпотентен (`already_member=true`) и не расходует использование. Отозванная/истёкшая/ исчерпанная ссылка — `410` с отдельным кодом; неизвестный токен — `404`.
+         */
+        post: operations["acceptWorkspaceInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Матрица прав OWNER/ADMIN/MEMBER
+         * @description Доступна любому активному участнику (описывает его собственные эффективные права). OWNER всегда `true` и неизменяем.
+         */
+        get: operations["getWorkspacePermissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Изменить матрицу прав
+         * @description Требуется `manage_permissions`. OWNER-ячейки неизменяемы (`422 OWNER_PERMISSIONS_IMMUTABLE`); ADMIN может менять только MEMBER-ячейки, OWNER — ADMIN и MEMBER (`403 PERMISSION_CHANGE_FORBIDDEN`). Изменения атомарны; audit хранит только role/permission/allowed.
+         */
+        patch: operations["updateWorkspacePermissions"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1762,6 +2217,8 @@ export interface components {
             bio?: string | null;
             /** @description Plain-text контактный телефон; `null` — не заполнено */
             phone?: string | null;
+            /** @description Стабильный относительный URL аватара (`/api/v1/me/avatar`, 302 на presigned object URL); `null` — аватар не установлен. Ключ хранения и attachment id не раскрываются. */
+            avatar_url?: string | null;
         };
         /** @description Все поля опциональны. Отсутствие поля означает «не менять»; `null` для `bio`/ `phone` очищает поле. `display_name=null`/пустой — `400 VALIDATION_FAILED`. Пустой объект — `422 VALIDATION_FAILED` (`reason=empty_patch`). Email и пароль здесь не принимаются. */
         ProfileUpdate: {
@@ -2025,6 +2482,13 @@ export interface components {
             role: "OWNER" | "ADMIN" | "MEMBER" | "GUEST";
             /** @enum {string} */
             security_mode: "MANAGED" | "E2EE";
+            /** @description Plain-text описание; `null` — не заполнено (P0-4) */
+            description?: string | null;
+            /**
+             * Format: uuid
+             * @description Ссылка на CLEAN image attachment этого воркспейса; `null` — логотип не установлен. Сам файл скачивается обычным file flow.
+             */
+            logo_file_id?: string | null;
         };
         /** @description Активный участник воркспейса для выбора peer в DIRECT-чате. Возвращаются только каталожные поля: email, пароли, устройства и ключи в ответ не попадают. Вызывающий сам может быть в списке, если он активен; self-peer отсекается сервером при создании DIRECT-чата. */
         WorkspaceMember: {
@@ -2040,6 +2504,131 @@ export interface components {
             items: components["schemas"]["WorkspaceMember"][];
             next_cursor?: string | null;
             has_more: boolean;
+        };
+        /** @description DLP-правило. `pattern` — литерал (KEYWORD) или литерал с wildcard `*` (PATTERN), максимум 200 символов и 20 wildcard-сегментов. Регулярным выражением значение не является и не компилируется. */
+        DlpPolicy: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            action: "WARN" | "BLOCK";
+            /** @enum {string} */
+            pattern_type: "KEYWORD" | "PATTERN";
+            pattern: string;
+            enabled: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DlpPolicyList: {
+            items: components["schemas"]["DlpPolicy"][];
+        };
+        DlpPolicyCreateRequest: {
+            name: string;
+            /** @enum {string} */
+            action: "WARN" | "BLOCK";
+            /** @enum {string} */
+            pattern_type: "KEYWORD" | "PATTERN";
+            /** @description Literal без control characters. Для PATTERN допустим `*`, не более 20. Это не regex: ReDoS исключён по построению. */
+            pattern: string;
+            /** @default true */
+            enabled: boolean;
+        };
+        DlpPolicyUpdateRequest: {
+            name?: string;
+            /** @enum {string} */
+            action?: "WARN" | "BLOCK";
+            /** @enum {string} */
+            pattern_type?: "KEYWORD" | "PATTERN";
+            pattern?: string;
+            enabled?: boolean;
+        };
+        /** @description Content-free DLP-событие: только ids, name snapshot, action и время. Текста сообщения, ciphertext, имени файла, email и IP-адреса нет ни в таблице, ни в ответе. `policy_id` становится `null`, если правило удалено (name snapshot сохраняется). */
+        DlpEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            policy_id: string | null;
+            policy_name: string;
+            /** @enum {string} */
+            action: "WARN" | "BLOCK";
+            /** Format: uuid */
+            actor_id: string | null;
+            /** Format: uuid */
+            chat_id: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        DlpEventPage: {
+            items: components["schemas"]["DlpEvent"][];
+            next_cursor?: string | null;
+            has_more: boolean;
+        };
+        /** @description Строка audit-лога воркспейса: только действие, актор, цель и время. Metadata JSONB, хэши hash-chain, request id и actor email не возвращаются, поэтому тела сообщений/файлов и секреты не могут утечь через этот ответ. */
+        WorkspaceAuditEvent: {
+            /** Format: uuid */
+            id: string;
+            action: string;
+            /** Format: uuid */
+            actor_id: string | null;
+            target_type: string | null;
+            /** Format: uuid */
+            target_id: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        WorkspaceAuditPage: {
+            items: components["schemas"]["WorkspaceAuditEvent"][];
+            next_cursor?: string | null;
+            has_more: boolean;
+        };
+        /** @description JSON-представление экспорта. `exported_rows` ≤ 10 000; `truncated=true` означает, что совпадений больше и фильтры нужно сузить. */
+        WorkspaceAuditExport: {
+            items: components["schemas"]["WorkspaceAuditEvent"][];
+            exported_rows: number;
+            truncated: boolean;
+        };
+        /** @description Сессия Keycloak участника воркспейса без IP-адреса, username и токенов. `device` — метка клиента из Keycloak; `current` — сессия вызывающего по claim `sid`. */
+        WorkspaceSession: {
+            id: string;
+            /** Format: uuid */
+            user_id: string;
+            device: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            current: boolean;
+        };
+        WorkspaceSessionPage: {
+            items: components["schemas"]["WorkspaceSession"][];
+            next_cursor?: string | null;
+            has_more: boolean;
+        };
+        WorkspaceSessionRevokeAll: {
+            revoked_sessions: number;
+            affected_users: number;
+        };
+        /** @description Политика безопасности воркспейса. `security_mode` отсутствует намеренно: режим immutable и не меняется этим API. */
+        WorkspaceSecurity: {
+            require_2fa: boolean;
+            session_timeout_minutes: number;
+            dlp_enabled: boolean;
+            retention_days: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        WorkspaceSecurityUpdateRequest: {
+            require_2fa?: boolean;
+            session_timeout_minutes?: number;
+            dlp_enabled?: boolean;
+            retention_days?: number;
+            /**
+             * @description Не изменяется: любое значение отклоняется `422 MODE_CHANGE_FORBIDDEN`. Поле документировано, чтобы клиент видел явный отказ, а не молчаливое игнорирование.
+             * @enum {string}
+             */
+            security_mode?: "MANAGED" | "E2EE";
         };
         /** @description Только существующий ACTIVE-пользователь. `role=OWNER` не назначается: сервер отвечает `403 ROLE_CHANGE_FORBIDDEN`; ADMIN может назначать только `MEMBER`/`GUEST`. */
         AddWorkspaceMemberRequest: {
@@ -2948,6 +3537,146 @@ export interface components {
                 unread_count: number;
             }[];
         };
+        AvatarUpdate: {
+            /**
+             * Format: uuid
+             * @description Существующее CLEAN-изображение, загруженное вызывающим.
+             */
+            file_id: string;
+        };
+        ProfileAvatar: {
+            /** Format: uri */
+            url: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        TwoFactorSetupRequest: {
+            password: string;
+        };
+        /** @description Секрет и URI показываются один раз при setup. `qr_payload` — тот же otpauth URI, который клиент кодирует в QR. Ни одно из значений не логируется и не возвращается повторно. */
+        TwoFactorSetup: {
+            /** @description Base64url TOTP secret (показывается один раз) */
+            secret: string;
+            /** @description otpauth://totp/... */
+            otpauth_uri: string;
+            /** @description Данные для QR (тот же otpauth URI) */
+            qr_payload: string;
+        };
+        TwoFactorVerifyRequest: {
+            code: string;
+        };
+        TwoFactorDisableRequest: {
+            password: string;
+            /** @description TOTP (6 цифр) или одноразовый recovery-код. */
+            code: string;
+        };
+        TwoFactorRecoveryCodesRequest: {
+            password: string;
+        };
+        TwoFactorStatus: {
+            enabled: boolean;
+            /** Format: date-time */
+            enabled_at?: string | null;
+            recovery_codes_remaining: number;
+        };
+        TwoFactorRecoveryCodes: {
+            codes: string[];
+            remaining: number;
+        };
+        AuthTwoFactorChallenge: {
+            /** Format: uuid */
+            challenge_id: string;
+            expires_in: number;
+            methods: ("TOTP" | "RECOVERY_CODE")[];
+        };
+        AuthTwoFactorVerifyRequest: {
+            /** Format: uuid */
+            challenge_id: string;
+            /** @description TOTP (6 цифр) или одноразовый recovery-код. */
+            code: string;
+        };
+        /** @description Все поля опциональны. Отсутствие — «не менять»; `description: null`/пустая строка и `logo_file_id: null` очищают поле. Пустой объект — `400 VALIDATION_FAILED`. `security_mode` здесь не принимается. */
+        WorkspaceUpdate: {
+            name?: string;
+            description?: string | null;
+            /** Format: uuid */
+            logo_file_id?: string | null;
+        };
+        WorkspaceAvatarRequest: {
+            /** Format: uuid */
+            file_id: string;
+        };
+        WorkspaceInviteCreateRequest: {
+            /**
+             * @default MEMBER
+             * @enum {string}
+             */
+            role: "ADMIN" | "MEMBER" | "GUEST";
+            max_uses?: number | null;
+            /** @default 604800 */
+            expires_in_seconds: number;
+        };
+        /** @description Метаданные ссылки; токен и hash отсутствуют. */
+        WorkspaceInvite: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            role: "ADMIN" | "MEMBER" | "GUEST";
+            /** @enum {string} */
+            status: "ACTIVE" | "EXPIRED" | "EXHAUSTED" | "REVOKED";
+            used_count: number;
+            max_uses?: number | null;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: uuid */
+            created_by: string;
+        };
+        WorkspaceInviteCreated: {
+            invite: components["schemas"]["WorkspaceInvite"];
+            /** @description Одноразовый показ; в БД только hash */
+            token: string;
+            /** @description Относительный accept URL */
+            accept_url: string;
+        };
+        WorkspaceInviteList: {
+            invites: components["schemas"]["WorkspaceInvite"][];
+        };
+        WorkspaceInviteAcceptance: {
+            /** Format: uuid */
+            workspace_id: string;
+            name: string;
+            slug: string;
+            /** @enum {string} */
+            role: "OWNER" | "ADMIN" | "MEMBER" | "GUEST";
+            already_member: boolean;
+        };
+        WorkspacePermissionEntry: {
+            /** @enum {string} */
+            role: "OWNER" | "ADMIN" | "MEMBER";
+            /** @enum {string} */
+            permission: "manage_workspace" | "manage_members" | "manage_invites" | "manage_permissions" | "view_audit" | "manage_security";
+            allowed: boolean;
+        };
+        WorkspacePermissionUpdate: {
+            entries: components["schemas"]["WorkspacePermissionEntry"][];
+        };
+        WorkspaceRolePermissions: {
+            /** @enum {string} */
+            role: "OWNER" | "ADMIN" | "MEMBER";
+            manage_workspace: boolean;
+            manage_members: boolean;
+            manage_invites: boolean;
+            manage_permissions: boolean;
+            view_audit: boolean;
+            manage_security: boolean;
+        };
+        WorkspacePermissionMatrix: {
+            /** Format: uuid */
+            workspace_id: string;
+            roles: components["schemas"]["WorkspaceRolePermissions"][];
+        };
     };
     responses: {
         /** @description Неверный запрос */
@@ -3068,6 +3797,9 @@ export interface components {
         ChatId: string;
         /** @description Идентификатор пользователя (участника воркспейса/канала). */
         UserId: string;
+        PolicyId: string;
+        /** @description Идентификатор сессии Keycloak (opaque, обычно uuid). Не логируется и не возвращается повторно. */
+        SessionId: string;
         InviteId: string;
         /** @description Opaque invite-токен (base64url, 32 случайных байта). Хранится только его SHA-256 hash; сервер не логирует и не возвращает токен повторно. */
         InviteToken: string;
@@ -3813,13 +4545,22 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Сессия выдана */
+            /** @description Сессия выдана (2FA не включена) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["AuthSession"];
+                };
+            };
+            /** @description Пароль верен, но у аккаунта включён TOTP: вместо сессии выдан одноразовый login challenge. Токены Keycloak до второго фактора не возвращаются. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthTwoFactorChallenge"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -4428,6 +5169,376 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listWorkspaceDlpPolicies: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Правила воркспейса */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DlpPolicyList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createWorkspaceDlpPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DlpPolicyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Правило создано */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DlpPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    deleteWorkspaceDlpPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                policyId: components["parameters"]["PolicyId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Правило удалено */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    updateWorkspaceDlpPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                policyId: components["parameters"]["PolicyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DlpPolicyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Правило изменено */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DlpPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    listWorkspaceDlpEvents: {
+        parameters: {
+            query?: {
+                policy_id?: string;
+                action?: "WARN" | "BLOCK";
+                cursor?: string;
+                limit?: number;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница DLP-событий */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DlpEventPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listWorkspaceAudit: {
+        parameters: {
+            query?: {
+                action?: string;
+                actor_id?: string;
+                from?: string;
+                to?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница audit-лога */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceAuditPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    exportWorkspaceAudit: {
+        parameters: {
+            query: {
+                format: "csv" | "json";
+                action?: string;
+                actor_id?: string;
+                from?: string;
+                to?: string;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Экспорт (не более 10 000 строк) */
+            200: {
+                headers: {
+                    /** @description Число строк в ответе */
+                    "X-Export-Rows"?: number;
+                    /** @description true, если совпадений больше лимита */
+                    "X-Export-Truncated"?: boolean;
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example created_at,action,actor_id,target_type,target_id
+                     *     2026-01-01T00:00:00Z,workspace.security.updated,00000000-0000-0000-0000-000000000000,workspace_security,
+                     */
+                    "text/csv": string;
+                    "application/json": components["schemas"]["WorkspaceAuditExport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listWorkspaceSessions: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Страница сессий */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSessionPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    revokeAllWorkspaceSessions: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Сессии отозваны (счётчики) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSessionRevokeAll"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    revokeWorkspaceSession: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                /** @description Идентификатор сессии Keycloak (opaque, обычно uuid). Не логируется и не возвращается повторно. */
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Сессия отозвана */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    getWorkspaceSecurity: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Настройки безопасности */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSecurity"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateWorkspaceSecurity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceSecurityUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Настройки обновлены */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSecurity"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
         };
     };
     preflightUpload: {
@@ -6035,6 +7146,660 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    getMyAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Временный redirect на presigned URL */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileAvatar"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setMyAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AvatarUpdate"];
+            };
+        };
+        responses: {
+            /** @description Обновлённый профиль */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthUser"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Вложение помещено в карантин (`ATTACHMENT_QUARANTINED`) */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteMyAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Аватар удалён (или уже отсутствовал) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getMyTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Состояние 2FA */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    disableMyTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwoFactorDisableRequest"];
+            };
+        };
+        responses: {
+            /** @description 2FA отключена */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Пароль не подтверждён (`REAUTH_FAILED`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 2FA не включена (`TWO_FACTOR_NOT_ENABLED`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Неверный TOTP/recovery-код */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    setupMyTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwoFactorSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Параметры настройки (показываются один раз) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorSetup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Пароль не подтверждён (`REAUTH_FAILED`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 2FA уже включена */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    verifyMyTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwoFactorVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description 2FA включена */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Setup не начат или уже включён */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Неверный код (`TWO_FACTOR_CODE_INVALID`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    regenerateMyRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwoFactorRecoveryCodesRequest"];
+            };
+        };
+        responses: {
+            /** @description Новые одноразовые коды */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorRecoveryCodes"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Пароль не подтверждён (`REAUTH_FAILED`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 2FA не включена */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    authVerifyTwoFactor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthTwoFactorVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Второй фактор принят, сессия выдана */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description Challenge недействителен/истёк */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 2FA больше не включена */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Неверный TOTP/recovery-код */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    updateWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Обновлённый воркспейс */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Логотип помещён в карантин (`ATTACHMENT_QUARANTINED`) */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setWorkspaceAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceAvatarRequest"];
+            };
+        };
+        responses: {
+            /** @description Обновлённый воркспейс */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            /** @description Не изображение (`WORKSPACE_LOGO_INVALID`) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Вложение помещено в карантин */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteWorkspaceAvatar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Логотип удалён (или уже отсутствовал) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listWorkspaceInvites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Список ссылок */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceInviteList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createWorkspaceInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceInviteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Ссылка создана; токен показывается один раз */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceInviteCreated"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            /** @description Роль запрещена (`WORKSPACE_INVITE_ROLE_FORBIDDEN`) или нет прав */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    revokeWorkspaceInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                inviteId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ссылка отозвана (идемпотентно) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Ссылка не найдена (`WORKSPACE_INVITE_NOT_FOUND`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    acceptWorkspaceInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Участие выдано */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceInviteAcceptance"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description Ссылка не найдена (`WORKSPACE_INVITE_NOT_FOUND`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Ссылка отозвана/истекла/исчерпана */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getWorkspacePermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Эффективная матрица */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePermissionMatrix"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateWorkspacePermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspacePermissionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Обновлённая матрица */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePermissionMatrix"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
         };
     };
 }

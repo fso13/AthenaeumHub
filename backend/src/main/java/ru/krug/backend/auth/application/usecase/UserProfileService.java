@@ -5,6 +5,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import ru.krug.backend.auth.application.model.ProfileAvatars;
 import ru.krug.backend.auth.application.model.UserProfileView;
 import ru.krug.backend.auth.application.port.UserProfilePort;
 import ru.krug.backend.auth.domain.model.User;
@@ -34,8 +35,9 @@ public class UserProfileService implements UserProfilePort {
                 .orElseThrow(() -> DomainException.notFound("User not found"));
     }
 
-    private static UserProfileView toView(User user) {
+    public static UserProfileView toView(User user) {
         return new UserProfileView(user.id().toString(), user.displayName().value(), user.email(),
-                user.isPlatformAdmin(), user.bio().value(), user.phone().value());
+                user.isPlatformAdmin(), user.bio().value(), user.phone().value(),
+                ProfileAvatars.url(user.avatarFileId()));
     }
 }

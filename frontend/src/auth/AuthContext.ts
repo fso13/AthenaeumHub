@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { MessageKey } from '../i18n/ru';
 import type { AuthErrorInfo } from './errors';
-import type { AuthUser } from './types';
+import type { AuthUser, PendingTwoFactorChallenge } from './types';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 
@@ -50,6 +50,8 @@ export interface PasswordAuthValue {
   status: AuthStatus;
   user: AuthUser | null;
   pending: PendingVerification | null;
+  /** P0-4: a `202` TOTP login challenge waiting for the second factor. */
+  challenge: PendingTwoFactorChallenge | null;
   busy: boolean;
   error: AuthErrorInfo | null;
   /** One-off success message (e.g. code resent); translated by the screen. */
@@ -58,6 +60,15 @@ export interface PasswordAuthValue {
   register: (input: RegisterInput) => Promise<boolean>;
   verify: (code: string) => Promise<boolean>;
   resendCode: () => Promise<boolean>;
+  /** P0-4: complete the login challenge with a TOTP/recovery code. */
+  verifyTwoFactor: (code: string) => Promise<boolean>;
+  /**
+   * P0-4 "resend": request a fresh challenge by re-submitting the already
+   * verified password. No new email/code is sent and no secret is exposed.
+   */
+  resendChallenge: () => Promise<boolean>;
+  /** P0-4 back/cancel: drop the challenge and return to the credentials form. */
+  cancelChallenge: () => void;
   signOut: () => Promise<void>;
   refresh: () => Promise<boolean>;
   openLogin: () => void;

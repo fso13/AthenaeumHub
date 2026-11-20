@@ -36,6 +36,19 @@ export interface StoredPendingVerification {
   resendUntil: number;
 }
 
+/**
+ * P0-4 (#82) second-factor login challenge. It is held in memory only: the
+ * challenge id is single-use, expires quickly and is worthless without the
+ * TOTP/recovery code, but it is still not persisted.
+ */
+export interface PendingTwoFactorChallenge {
+  id: string;
+  /** Challenge expiry in epoch ms (`expires_in` from the `202` response). */
+  expiresAt: number;
+  /** Methods the server accepts for this account (`TOTP`/`RECOVERY_CODE`). */
+  methods: Array<'TOTP' | 'RECOVERY_CODE'>;
+}
+
 export function toAuthUser(session: StoredAuthSession): AuthUser {
   return {
     sub: session.user.id,

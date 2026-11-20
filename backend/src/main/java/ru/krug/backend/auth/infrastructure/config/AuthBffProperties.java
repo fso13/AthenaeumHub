@@ -19,6 +19,7 @@ public record AuthBffProperties(
         Keycloak keycloak,
         Mail mail,
         Code code,
+        TwoFactor twoFactor,
         RateLimit rateLimit,
         Cleanup cleanup) {
 
@@ -46,6 +47,13 @@ public record AuthBffProperties(
             String secretKey) {
     }
 
+    public record TwoFactor(
+            Duration challengeTtl,
+            int maxAttempts,
+            int window,
+            String issuer) {
+    }
+
     public record RateLimit(
             boolean enabled,
             int registerPerEmail,
@@ -59,7 +67,11 @@ public record AuthBffProperties(
             int resendPerEmail,
             Duration resendEmailWindow,
             int resendPerIp,
-            Duration resendIpWindow) {
+            Duration resendIpWindow,
+            int twoFactorPerUser,
+            Duration twoFactorUserWindow,
+            int twoFactorPerIp,
+            Duration twoFactorIpWindow) {
     }
 
     public record Cleanup(

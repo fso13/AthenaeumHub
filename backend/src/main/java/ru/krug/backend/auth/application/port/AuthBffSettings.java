@@ -24,4 +24,12 @@ public interface AuthBffSettings {
     int cleanupBatchSize();
 
     Duration cleanupConsumedRetention();
+
+    Duration twoFactorChallengeTtl();
+
+    int twoFactorMaxAttempts();
+
+    int twoFactorWindow();
+
+    String twoFactorIssuer();
 }

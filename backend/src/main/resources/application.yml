@@ -98,6 +98,15 @@ krug:
       admin-token-skew: ${KRUG_KEYCLOAK_ADMIN_TOKEN_SKEW:30s}
     mail:
       from: ${KRUG_MAIL_FROM:no-reply@krug.local}
+    # P0-4: TOTP authenticator login challenge. Tokens are held server-side only for the
+    # short challenge TTL; a restart invalidates pending challenges (the user signs in again).
+    two-factor:
+      challenge-ttl: ${KRUG_AUTH_BFF_2FA_CHALLENGE_TTL:5m}
+      max-attempts: ${KRUG_AUTH_BFF_2FA_MAX_ATTEMPTS:5}
+      # RFC 6238 adjacent-step window; ±1 = 30 s in each direction.
+      window: ${KRUG_AUTH_BFF_2FA_WINDOW:1}
+      # Label shown by authenticator apps; never a secret.
+      issuer: ${KRUG_AUTH_BFF_2FA_ISSUER:Krug}
     code:
       expiry: ${KRUG_AUTH_BFF_CODE_EXPIRY:10m}
       resend-cooldown: ${KRUG_AUTH_BFF_RESEND_COOLDOWN:60s}
@@ -120,6 +129,12 @@ krug:
       resend-email-window: ${KRUG_AUTH_BFF_RESEND_EMAIL_WINDOW:10m}
       resend-per-ip: ${KRUG_AUTH_BFF_RESEND_PER_IP:10}
       resend-ip-window: ${KRUG_AUTH_BFF_RESEND_IP_WINDOW:10m}
+      # P0-4: authenticator endpoints. The user window also protects a stolen access token
+      # from brute-forcing the password re-auth or the 6-digit code.
+      two-factor-per-user: ${KRUG_AUTH_BFF_2FA_PER_USER:20}
+      two-factor-user-window: ${KRUG_AUTH_BFF_2FA_USER_WINDOW:5m}
+      two-factor-per-ip: ${KRUG_AUTH_BFF_2FA_PER_IP:60}
+      two-factor-ip-window: ${KRUG_AUTH_BFF_2FA_IP_WINDOW:5m}
     cleanup:
       enabled: ${KRUG_AUTH_BFF_CLEANUP_ENABLED:true}
       poll-interval: ${KRUG_AUTH_BFF_CLEANUP_POLL_INTERVAL:10m}

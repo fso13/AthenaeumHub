@@ -40,7 +40,8 @@ public final class AuthApiMapper {
 
     public static MeResponse toResponse(MeView view) {
         MeResponse.User user = new MeResponse.User(view.userId(), view.displayName(),
-                view.email(), view.platformAdmin(), view.bio(), view.phone());
+                view.email(), view.platformAdmin(), view.bio(), view.phone(),
+                view.avatarUrl());
         List<MeResponse.Workspace> workspaces = view.workspaces().stream()
                 .map(AuthApiMapper::toWorkspace)
                 .toList();
@@ -50,7 +51,8 @@ public final class AuthApiMapper {
     /** Flat {@code AuthUser} response shared by {@code GET/PATCH /me}. */
     public static MeResponse.User toAuthUser(UserProfileView view) {
         return new MeResponse.User(UUID.fromString(view.id()), view.displayName(),
-                view.email(), view.platformAdmin(), view.bio(), view.phone());
+                view.email(), view.platformAdmin(), view.bio(), view.phone(),
+                view.avatarUrl());
     }
 
     public static UpdateProfileCommand toCommand(UpdateProfileRequest request) {

@@ -26,6 +26,7 @@ import ru.krug.backend.message.application.model.MessageAttachmentView;
 import ru.krug.backend.message.application.model.MessageCreateInput;
 import ru.krug.backend.message.application.model.MessageView;
 import ru.krug.backend.message.application.model.SendMessageResult;
+import ru.krug.backend.message.application.port.DlpGuardPort;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
 import ru.krug.backend.message.application.port.MessageChatContextPort;
 import ru.krug.backend.message.application.service.E2eeEnvelopeValidator;
@@ -84,6 +85,7 @@ public class MessageSubmissionHandler {
     private final MessageChatContextPort chatContext;
     private final E2eeEnvelopeValidator envelopeValidator;
     private final E2eeSettingsPort e2eeSettings;
+    private final DlpGuardPort dlpGuard;
     private final ClockPort clock;
     private final ApplicationEventPublisher events;
 
@@ -99,8 +101,8 @@ public class MessageSubmissionHandler {
                                     StickerCatalogPort stickerCatalog,
                                     MessageChatContextPort chatContext,
                                     E2eeEnvelopeValidator envelopeValidator,
-                                    E2eeSettingsPort e2eeSettings, ClockPort clock,
-                                    ApplicationEventPublisher events) {
+                                    E2eeSettingsPort e2eeSettings, DlpGuardPort dlpGuard,
+                                    ClockPort clock, ApplicationEventPublisher events) {
         this.tenantContext = tenantContext;
         this.chatAccess = chatAccess;
         this.chatPermissions = chatPermissions;
@@ -117,6 +119,7 @@ public class MessageSubmissionHandler {
         this.chatContext = chatContext;
         this.envelopeValidator = envelopeValidator;
         this.e2eeSettings = e2eeSettings;
+        this.dlpGuard = dlpGuard;
         this.clock = clock;
         this.events = events;
     }
@@ -153,6 +156,13 @@ public class MessageSubmissionHandler {
         // Replays bypass the limiter (they do no work); a real send consumes quota. If the
         // limiter rejects, the whole transaction rolls back, including the reservation.
         rateLimit.checkMessageSend(principal, chatId);
+        // P0-3: MANAGED text messages are evaluated against the workspace DLP rules before
+        // seq allocation. A BLOCK throws 422 DLP_BLOCKED and rolls the whole send back; the
+        // content-free decision event is written independently. E2EE has no plaintext and
+        // never reaches this gate.
+        if (!e2eeChat && input.hasText()) {
+            dlpGuard.enforce(principal, chatId, input.text());
+        }
         if (e2eeChat) {
             return submitE2ee(principal, chatId, idempotencyKey, requestHash, input, envelopes);
         }

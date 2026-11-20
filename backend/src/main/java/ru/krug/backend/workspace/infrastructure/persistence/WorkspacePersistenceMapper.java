@@ -9,6 +9,7 @@ public final class WorkspacePersistenceMapper {
 
     public static Workspace toDomain(WorkspaceEntity entity) {
         return Workspace.reconstitute(entity.getId(), entity.getName(), entity.getSlug(),
+                entity.getDescription(), entity.getLogoFileId(),
                 Workspace.SecurityMode.valueOf(entity.getSecurityMode()),
                 Workspace.Status.valueOf(entity.getStatus()), entity.getCreatedBy());
     }

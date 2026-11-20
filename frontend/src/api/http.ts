@@ -46,6 +46,62 @@ export class ApiClient {
     return this.request<T>({ method: 'GET', path, query });
   }
 
+  /**
+   * P0-3 (#81): binary/text download (`GET .../audit/export`). The regular
+   * `get` always parses JSON; an export is CSV or JSON and must stay a `Blob`
+   * so the browser downloads exactly the bytes the server produced. Error
+   * responses still use the contract JSON envelope and become `ApiError`.
+   */
+  async getBlob(
+    path: string,
+    query?: RequestOptions['query'],
+  ): Promise<{ blob: Blob; status: number; headers: Headers }> {
+    const url = this.buildUrl(path, query);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
+
+    const headers = new Headers({
+      Accept: 'text/csv, application/json',
+      'X-Request-Id': newUuid(),
+    });
+    const token = this.options.getToken();
+    const deviceId = this.options.getDeviceId();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    if (deviceId) headers.set('X-Device-Id', deviceId);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+        cache: 'no-store',
+        credentials: 'omit',
+      });
+    } catch (error) {
+      if (controller.signal.aborted) throw ApiError.timeout();
+      throw ApiError.network(error);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw problemFromResponse(
+        response.status,
+        parseJson(text),
+        response.headers,
+        response.statusText,
+      );
+    }
+
+    return {
+      blob: await response.blob(),
+      status: response.status,
+      headers: response.headers,
+    };
+  }
+
   post<T>(
     path: string,
     body?: unknown,
@@ -126,8 +182,16 @@ export class ApiClient {
   }
 
   /** Bodyless DELETE mutations (E5-F: remove a favorite). */
-  delete<T>(path: string, options: { auth?: boolean } = {}): Promise<ApiResponse<T>> {
-    return this.request<T>({ method: 'DELETE', path, auth: options.auth });
+  /**
+   * `DELETE` with an optional JSON body: the contract's `DELETE /me/2fa`
+   * carries a password + code re-auth body (P0-4 / #82). Every other DELETE
+   * stays bodyless.
+   */
+  delete<T>(
+    path: string,
+    options: { auth?: boolean; body?: unknown } = {},
+  ): Promise<ApiResponse<T>> {
+    return this.request<T>({ method: 'DELETE', path, auth: options.auth, body: options.body });
   }
 
   async request<T>(options: RequestOptions): Promise<ApiResponse<T>> {

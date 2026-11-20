@@ -455,6 +455,8 @@ public final class KeycloakWireMock {
             }
             if (byId.containsKey(id)) {
                 refreshTokens.entrySet().removeIf(entry -> entry.getValue().equals(id));
+                // Keycloak's "logout all sessions" also drops the admin session list.
+                sessionsByUser.remove(id);
             }
             return Response.response().status(204).build();
         }

@@ -8,8 +8,19 @@ import type {
   AuthResendEmailCodeRequest,
   AuthResendEmailCodeResponse,
   AuthSession,
+  AuthTwoFactorChallenge,
+  AuthTwoFactorVerifyRequest,
   AuthVerifyEmailRequest,
 } from './types';
+
+/**
+ * Result of `POST /auth/login` (P0-4 / #82): a no-2FA account gets the session
+ * synchronously, a TOTP account gets a single-use `202` challenge instead. The
+ * Keycloak token pair stays server-side until the second factor is accepted.
+ */
+export type AuthLoginResult =
+  | { kind: 'session'; session: AuthSession }
+  | { kind: 'challenge'; challenge: AuthTwoFactorChallenge };
 
 /**
  * Typed Auth BFF client (`contracts/openapi.yaml` §auth). Every endpoint is
@@ -21,7 +32,9 @@ export interface AuthApi {
   register(body: AuthRegisterRequest): Promise<AuthRegisterResponse>;
   verifyEmail(body: AuthVerifyEmailRequest): Promise<AuthSession>;
   resendEmailCode(body: AuthResendEmailCodeRequest): Promise<AuthResendEmailCodeResponse>;
-  login(body: AuthLoginRequest): Promise<AuthSession>;
+  login(body: AuthLoginRequest): Promise<AuthLoginResult>;
+  /** `POST /auth/2fa/verify`: completes a login challenge, returns the session. */
+  verifyTwoFactor(body: AuthTwoFactorVerifyRequest): Promise<AuthSession>;
   refresh(refreshToken: string): Promise<AuthSession>;
   logout(refreshToken: string): Promise<void>;
 }
@@ -50,7 +63,21 @@ export function createAuthApi(client: ApiClient): AuthApi {
     },
 
     async login(body) {
-      const response = await client.post<AuthSession>('/auth/login', body, { auth: false });
+      const response = await client.post<AuthSession | AuthTwoFactorChallenge>(
+        '/auth/login',
+        body,
+        {
+          auth: false,
+        },
+      );
+      if (response.status === 202) {
+        return { kind: 'challenge', challenge: response.data as AuthTwoFactorChallenge };
+      }
+      return { kind: 'session', session: response.data as AuthSession };
+    },
+
+    async verifyTwoFactor(body) {
+      const response = await client.post<AuthSession>('/auth/2fa/verify', body, { auth: false });
       return response.data;
     },
 

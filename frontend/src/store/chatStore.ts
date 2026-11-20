@@ -49,6 +49,7 @@ import type {
   WorkspaceLimits,
   WorkspaceMember,
   WorkspaceMemberPage,
+  WorkspaceInviteAcceptance,
   WorkspaceSummary,
 } from '../api/types';
 import { createFilesStore, type FilesStore } from './filesStore';
@@ -56,6 +57,11 @@ import { createPluginsStore, type PluginsStore } from '../plugins/store';
 import { createPluginActionsStore, type PluginActionsStore } from '../plugins/actionsStore';
 import { createStickersStore, type StickersStore } from '../stickers/store';
 import { createOpsStore, type OpsStore } from '../ops/store';
+import { createSecurityStore, type SecurityStore } from '../security/securityStore';
+import {
+  createProfileWorkspaceStore,
+  type ProfileWorkspaceStore,
+} from '../profile/profileWorkspaceStore';
 import { readDeviceWorkspaceId, writeDeviceWorkspaceId } from '../workspace/deviceWorkspace';
 import { getDeviceId, getSession, setSession } from '../auth/session';
 import { setRuntimeDeviceId } from '../auth/runtime';
@@ -1058,6 +1064,10 @@ export class ChatStore {
   readonly pluginActions: PluginActionsStore;
   /** E8: setup status and platform-admin settings/overview. */
   readonly ops: OpsStore;
+  /** P0-3 (#81): workspace DLP, audit, sessions and security settings. */
+  readonly security: SecurityStore;
+  /** P0-4 (#82): profile avatar, TOTP setup and workspace settings/invites. */
+  readonly profile: ProfileWorkspaceStore;
 
   private state: AppState;
   private listeners = new Set<() => void>();
@@ -1191,6 +1201,13 @@ export class ChatStore {
     };
 
     this.ops = createOpsStore({ api: deps.api });
+    this.security = createSecurityStore({ api: deps.api });
+    this.profile = createProfileWorkspaceStore({
+      api: deps.api,
+      onWorkspaceUpdated: (workspace) => this.applyWorkspaceSummary(workspace),
+      onProfileUpdated: (user) => this.applyProfileUser(user),
+      onWorkspaceLogoCleared: (workspaceId) => this.clearWorkspaceLogo(workspaceId),
+    });
 
     this.files = createFilesStore({
       api: deps.api,
@@ -1260,6 +1277,8 @@ export class ChatStore {
     this.plugins.dispose();
     this.pluginActions.dispose();
     this.ops.dispose();
+    this.security.dispose();
+    this.profile.dispose();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.listeners.clear();
@@ -1555,6 +1574,8 @@ export class ChatStore {
     this.inviteAcceptInFlight = null;
     writeDeviceWorkspaceId(workspace.id);
     this.files.setWorkspace(workspace.id, workspace.role ?? null);
+    this.security.reset();
+    this.profile.reset();
     // D1-FE1: keep the outgoing workspace badge truthful after `chats` is
     // cleared; the value is the same sum the server just gave us.
     const previousWorkspaceId = this.state.activeWorkspaceId;
@@ -3808,6 +3829,85 @@ export class ChatStore {
     }
   }
 
+  /* ------------------------------------------------------------------ */
+  /* P0-4 (#82): profile/workspace server rows                         */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * P0-4 (#82): accept a workspace invite link. The server enforces
+   * expiry/usage/revocation atomically and answers an existing ACTIVE member
+   * idempotently (`already_member=true`, no use consumed). On success `/me`
+   * is re-read and the joined workspace is opened.
+   */
+  async acceptWorkspaceInvite(
+    token: string,
+  ): Promise<{ acceptance: WorkspaceInviteAcceptance | null; error: ApiError | null }> {
+    try {
+      const acceptance = await this.api.acceptWorkspaceInvite(token);
+      await this.loadProfile(true);
+      if (this.state.workspaces.some((workspace) => workspace.id === acceptance.workspace_id)) {
+        await this.selectWorkspace(acceptance.workspace_id);
+      }
+      return { acceptance, error: null };
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      return { acceptance: null, error: apiError };
+    }
+  }
+
+  /**
+   * Replace the workspace list row and the active projection with the server
+   * response (PATCH/avatar return `WorkspaceSummary`). The server stays the
+   * only source of truth: nothing is patched optimistically.
+   */
+  applyWorkspaceSummary(workspace: WorkspaceSummary): void {
+    const known = this.state.workspaces.some((item) => item.id === workspace.id);
+    const workspaces = known
+      ? this.state.workspaces.map((item) => (item.id === workspace.id ? workspace : item))
+      : [...this.state.workspaces, workspace];
+    this.patch({
+      workspaces,
+      activeWorkspace:
+        this.state.activeWorkspaceId === workspace.id ? workspace : this.state.activeWorkspace,
+    });
+  }
+
+  /**
+   * P0-4: `POST /me/avatar` returns `AuthUser`; `DELETE` returns `204`, so
+   * `null` only clears `avatar_url` on the already-known profile row.
+   */
+  applyProfileUser(user: AuthUser | null): void {
+    const current = this.state.user;
+    const meUser = this.state.me?.user ?? null;
+    if (user) {
+      this.patch({
+        user,
+        me: this.state.me ? { ...this.state.me, user } : this.state.me,
+      });
+      return;
+    }
+    if (!current && !meUser) return;
+    this.patch({
+      user: current ? { ...current, avatar_url: null } : current,
+      me: this.state.me
+        ? { ...this.state.me, user: { ...this.state.me.user, avatar_url: null } }
+        : this.state.me,
+    });
+  }
+
+  /** P0-4: workspace-logo `DELETE` is a `204`; clear the known row's logo id. */
+  clearWorkspaceLogo(workspaceId: string): void {
+    const workspaces = this.state.workspaces.map((item) =>
+      item.id === workspaceId ? { ...item, logo_file_id: null } : item,
+    );
+    const activeWorkspace =
+      this.state.activeWorkspace?.id === workspaceId
+        ? { ...this.state.activeWorkspace, logo_file_id: null }
+        : this.state.activeWorkspace;
+    this.patch({ workspaces, activeWorkspace });
+  }
+
   /** First-login onboarding: POST /workspaces then open the created chat. */
   async createWorkspace(name: string): Promise<void> {
     const trimmed = name.trim();
@@ -3880,6 +3980,8 @@ export class ChatStore {
     this.plugins.reset();
     this.pluginActions.reset();
     this.ops.reset();
+    this.security.reset();
+    this.profile.reset();
     this.chatLimitsPromise = null;
     this.unreadWorkspaceRequests.clear();
     this.membersToken += 1;

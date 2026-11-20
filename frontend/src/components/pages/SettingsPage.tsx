@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { formatBytes } from '../../files/format';
 import { t, type MessageKey } from '../../i18n/ru';
 import type { AppView } from '../../router/views';
-import { useChatState, useChatStore } from '../../store/ChatProvider';
+import {
+  useChatState,
+  useChatStore,
+  useProfileWorkspaceState,
+  useProfileWorkspaceStore,
+} from '../../store/ChatProvider';
 import type { Theme } from '../../theme/themePreference';
 import { formatDateTime } from '../admin/format';
 import { Avatar } from '../Avatar';
@@ -21,6 +26,7 @@ import {
 } from '../Icons';
 import { BlockedUsersCard } from '../BlockedUsersCard';
 import { NotificationPreferencesDialog } from '../NotificationPreferencesDialog';
+import { WorkspaceSettingsPanel } from '../workspace/WorkspaceSettingsPanel';
 import { PageShell } from './PageShell';
 import { roleLabel, securityModeLabel, storageLimit, storageUsed, tariffLabel } from './pageData';
 
@@ -93,6 +99,8 @@ export function SettingsPage({
   onNavigate,
 }: SettingsPageProps) {
   const store = useChatStore();
+  const profileStore = useProfileWorkspaceStore();
+  const profileState = useProfileWorkspaceState();
   const state = useChatState();
   const [tab, setTab] = useState<SettingsTab>('profile');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -113,6 +121,14 @@ export function SettingsPage({
     if (devices.status === 'idle') void store.loadDevices();
   }, [devices.status, store, tab]);
 
+  useEffect(() => {
+    if (tab !== 'profile') return;
+    void profileStore.loadTwoFactor();
+  }, [profileStore, tab]);
+
+  const twoFactorStatus = profileState.twoFactor.value;
+  const twoFactorEnabled = twoFactorStatus?.enabled === true;
+
   const e2eeKeys = devices.items.filter((item) => item.e2ee_capable !== false).length;
 
   const securityCard = (
@@ -128,9 +144,26 @@ export function SettingsPage({
       <div className="setting-row">
         <div className="text">
           <b>{t('settings.twoFactor')}</b>
-          <small>{t('settings.twoFactorUnavailable')}</small>
+          <small>
+            {profileState.twoFactor.status === 'loading' || profileState.twoFactor.status === 'idle'
+              ? t('profile.twoFactor.loading')
+              : twoFactorEnabled
+                ? t('settings.twoFactorHintEnabled')
+                : t('settings.twoFactorHintDisabled')}
+          </small>
         </div>
-        <span className="mode-chip mode-chip--mock">{t('common.unavailable')}</span>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={onOpenProfile}
+          disabled={!onOpenProfile}
+        >
+          {profileState.twoFactor.status === 'ready'
+            ? twoFactorEnabled
+              ? t('settings.twoFactorEnabled')
+              : t('settings.twoFactorDisabled')
+            : t('settings.twoFactorUnknown')}
+        </button>
       </div>
       <div className="setting-row">
         <div className="text">
@@ -218,7 +251,12 @@ export function SettingsPage({
                       })}
                     </small>
                   </div>
-                  <button type="button" className="btn btn--sm" disabled>
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={onOpenProfile}
+                    disabled={!onOpenProfile}
+                  >
                     {t('settings.changeAvatar')}
                   </button>
                 </div>
@@ -397,13 +435,16 @@ export function SettingsPage({
 
           {tab === 'workspace' ? (
             <>
+              {workspace ? (
+                <WorkspaceSettingsPanel
+                  workspace={workspace}
+                  actorRole={workspace.role}
+                  onOpenMembers={onOpenMembers}
+                />
+              ) : null}
               <section className="card" aria-labelledby="settings-workspace">
-                <h3 id="settings-workspace">{t('settings.workspaceSection')}</h3>
+                <h3 id="settings-workspace">{t('settings.limitsSummary')}</h3>
                 <p className="pane-sub">{t('settings.pane.workspaceSub')}</p>
-                <div className="form-row">
-                  <label htmlFor="workspace-name">{t('settings.workspaceName')}</label>
-                  <input id="workspace-name" className="input" value={workspaceName} readOnly />
-                </div>
                 <div className="form-row">
                   <label htmlFor="workspace-mode">{t('settings.workspaceMode')}</label>
                   <input
@@ -412,15 +453,6 @@ export function SettingsPage({
                     value={securityModeLabel(securityMode)}
                     readOnly
                   />
-                </div>
-                <div className="setting-row">
-                  <div className="text">
-                    <b>{t('settings.inviteLink')}</b>
-                    <small>{t('settings.inviteUnavailable')}</small>
-                  </div>
-                  <span className="mode-chip mode-chip--mock">
-                    {t('settings.unavailableShort')}
-                  </span>
                 </div>
                 <div className="form-grid">
                   <div className="form-row">

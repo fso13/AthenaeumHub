@@ -11,4 +11,11 @@ public interface AuthRateLimitPort {
     void checkLogin(String email, String clientIp);
 
     void checkResend(String email, String clientIp);
+
+    /**
+     * P0-4: authenticator setup/verify/disable, recovery-code regeneration and the login
+     * challenge. Keyed by the authenticated user id (verified challenges additionally by
+     * client IP), so a stolen access token cannot brute-force the password/TOTP code.
+     */
+    void checkTwoFactor(String userId, String clientIp);
 }

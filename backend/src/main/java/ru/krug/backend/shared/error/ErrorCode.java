@@ -172,6 +172,34 @@ public final class ErrorCode {
     public static final String INVITE_EXPIRED = "INVITE_EXPIRED";
     public static final String INVITE_EXHAUSTED = "INVITE_EXHAUSTED";
 
+    // P0-3 (#81): workspace DLP, audit/export and session management.
+    public static final String DLP_E2EE_UNSUPPORTED = "DLP_E2EE_UNSUPPORTED";
+    public static final String DLP_POLICY_LIMIT = "DLP_POLICY_LIMIT";
+    public static final String DLP_POLICY_NAME_TAKEN = "DLP_POLICY_NAME_TAKEN";
+    public static final String DLP_BLOCKED = "DLP_BLOCKED";
+
+    // P0-4 (#82): avatar, TOTP authenticator, workspace settings/invites/permissions.
+    public static final String AVATAR_INVALID = "AVATAR_INVALID";
+    public static final String WORKSPACE_LOGO_INVALID = "WORKSPACE_LOGO_INVALID";
+    public static final String TWO_FACTOR_ALREADY_ENABLED = "TWO_FACTOR_ALREADY_ENABLED";
+    public static final String TWO_FACTOR_NOT_SETUP = "TWO_FACTOR_NOT_SETUP";
+    public static final String TWO_FACTOR_NOT_ENABLED = "TWO_FACTOR_NOT_ENABLED";
+    public static final String TWO_FACTOR_CODE_INVALID = "TWO_FACTOR_CODE_INVALID";
+    public static final String TWO_FACTOR_RECOVERY_CODE_INVALID =
+            "TWO_FACTOR_RECOVERY_CODE_INVALID";
+    public static final String TWO_FACTOR_CHALLENGE_INVALID = "TWO_FACTOR_CHALLENGE_INVALID";
+    public static final String TWO_FACTOR_CHALLENGE_EXPIRED = "TWO_FACTOR_CHALLENGE_EXPIRED";
+    public static final String REAUTH_FAILED = "REAUTH_FAILED";
+    public static final String WORKSPACE_INVITE_NOT_FOUND = "WORKSPACE_INVITE_NOT_FOUND";
+    public static final String WORKSPACE_INVITE_REVOKED = "WORKSPACE_INVITE_REVOKED";
+    public static final String WORKSPACE_INVITE_EXPIRED = "WORKSPACE_INVITE_EXPIRED";
+    public static final String WORKSPACE_INVITE_EXHAUSTED = "WORKSPACE_INVITE_EXHAUSTED";
+    public static final String WORKSPACE_INVITE_ROLE_FORBIDDEN =
+            "WORKSPACE_INVITE_ROLE_FORBIDDEN";
+    public static final String WORKSPACE_PERMISSION_DENIED = "WORKSPACE_PERMISSION_DENIED";
+    public static final String OWNER_PERMISSIONS_IMMUTABLE = "OWNER_PERMISSIONS_IMMUTABLE";
+    public static final String PERMISSION_CHANGE_FORBIDDEN = "PERMISSION_CHANGE_FORBIDDEN";
+
     private ErrorCode() {
     }
 }

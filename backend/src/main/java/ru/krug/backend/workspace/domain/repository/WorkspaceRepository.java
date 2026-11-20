@@ -25,4 +25,10 @@ public interface WorkspaceRepository {
     void save(Workspace workspace);
 
     void save(Membership membership);
+
+    /**
+     * Updates only the editable workspace settings (name/description/logo) and bumps
+     * {@code updated_at}. Security mode and created_by are never touched.
+     */
+    void updateDetails(UUID workspaceId, String name, String description, UUID logoFileId);
 }

@@ -44,9 +44,17 @@ import type {
   PollList,
   PollVoteRequest,
   CreateWorkspaceRequest,
+  AuditExportFormat,
+  AvatarUpdate,
   Device,
   DeviceList,
   DeviceRegistration,
+  DlpAction,
+  DlpEventPage,
+  DlpPolicy,
+  DlpPolicyCreateRequest,
+  DlpPolicyList,
+  DlpPolicyUpdateRequest,
   DownloadUrl,
   FileKindFilter,
   FilePage,
@@ -80,14 +88,32 @@ import type {
   TranslationRequest,
   TestEmailRequest,
   TestEmailResponse,
+  TwoFactorDisableRequest,
+  TwoFactorRecoveryCodes,
+  TwoFactorSetup,
+  TwoFactorStatus,
+  TwoFactorVerifyRequest,
   UploadCompleteRequest,
   UploadInitRequest,
   UploadPart,
   UploadSession,
+  WorkspaceAuditPage,
+  WorkspaceAvatarRequest,
+  WorkspaceInviteAcceptance,
+  WorkspaceInviteCreateRequest,
+  WorkspaceInviteCreated,
+  WorkspaceInviteList,
   WorkspaceLimits,
   WorkspaceMember,
   WorkspaceMemberPage,
+  WorkspacePermissionMatrix,
+  WorkspacePermissionUpdate,
+  WorkspaceSecurity,
+  WorkspaceSecurityUpdateRequest,
+  WorkspaceSessionPage,
+  WorkspaceSessionRevokeAll,
   WorkspaceSummary,
+  WorkspaceUpdate,
 } from './types';
 
 export interface ListMessagesQuery {
@@ -154,6 +180,53 @@ export interface ListWorkspaceMembersQuery {
  * client never builds `cursor` locally (it is the opaque `next_cursor` of the
  * previous page) and never sends object keys or presigned URLs.
  */
+/**
+ * P0-3 DLP event page. `policy_id` and `action` are exact filters; `cursor` is
+ * the opaque workspace-bound `next_cursor` and is never built locally.
+ */
+export interface ListWorkspaceDlpEventsQuery {
+  policyId?: string;
+  action?: DlpAction;
+  cursor?: string;
+  limit?: number;
+}
+
+/** P0-3 workspace audit filters; dates are inclusive (`from > to` → 400). */
+export interface ListWorkspaceAuditQuery {
+  action?: string;
+  actorId?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}
+
+/** Export has the same filters as the page but no cursor/limit (cap 10 000). */
+export interface ExportWorkspaceAuditQuery {
+  format: AuditExportFormat;
+  action?: string;
+  actorId?: string;
+  from?: string;
+  to?: string;
+}
+
+/**
+ * Bounded export returned as a Blob so the browser writes the exact server
+ * bytes. `rows`/`truncated` come from `X-Export-Rows`/`X-Export-Truncated`;
+ * `filename` comes from `Content-Disposition` when present.
+ */
+export interface WorkspaceAuditExportResult {
+  blob: Blob;
+  filename: string | null;
+  rows: number | null;
+  truncated: boolean;
+}
+
+export interface ListWorkspaceSessionsQuery {
+  cursor?: string;
+  limit?: number;
+}
+
 export interface ListFilesQuery {
   workspaceId?: string;
   chatId?: string;
@@ -183,6 +256,45 @@ export interface ChatApi {
   listMySessions(): Promise<ProfileSessions>;
   /** #72: revoke one own session; `404` means it is already gone. */
   revokeMySession(sessionId: string): Promise<void>;
+
+  /*
+   * P0-4 (#82): self-service avatar + TOTP authenticator. The setup secret and
+   * recovery codes are readable only from their one-time responses; the client
+   * keeps them in memory and never persists/logs them. Every mutating call
+   * carries the password re-auth the server requires.
+   */
+  setMyAvatar(fileId: string): Promise<AuthUser>;
+  removeMyAvatar(): Promise<void>;
+  /** Authenticated avatar bytes (the contract `302` is followed by `fetch`). */
+  getMyAvatarBlob(): Promise<Blob>;
+  getMyTwoFactor(): Promise<TwoFactorStatus>;
+  setupMyTwoFactor(password: string): Promise<TwoFactorSetup>;
+  verifyMyTwoFactor(code: string): Promise<TwoFactorStatus>;
+  disableMyTwoFactor(body: TwoFactorDisableRequest): Promise<void>;
+  regenerateMyRecoveryCodes(password: string): Promise<TwoFactorRecoveryCodes>;
+
+  /*
+   * P0-4 (#82): workspace settings, logo, invite links and the OWNER/ADMIN/
+   * MEMBER permission matrix. The server owns every guard; the client only
+   * echoes contract fields and replaces rows with server responses.
+   */
+  updateWorkspace(workspaceId: string, body: WorkspaceUpdate): Promise<WorkspaceSummary>;
+  setWorkspaceAvatar(workspaceId: string, fileId: string): Promise<WorkspaceSummary>;
+  deleteWorkspaceAvatar(workspaceId: string): Promise<void>;
+  /** Metadata only: the raw token is returned once by create and never listed. */
+  listWorkspaceInvites(workspaceId: string): Promise<WorkspaceInviteList>;
+  createWorkspaceInvite(
+    workspaceId: string,
+    body: WorkspaceInviteCreateRequest,
+  ): Promise<WorkspaceInviteCreated>;
+  revokeWorkspaceInvite(workspaceId: string, inviteId: string): Promise<void>;
+  /** No email is sent: the accept link is copied/shared by the inviter. */
+  acceptWorkspaceInvite(token: string): Promise<WorkspaceInviteAcceptance>;
+  getWorkspacePermissions(workspaceId: string): Promise<WorkspacePermissionMatrix>;
+  updateWorkspacePermissions(
+    workspaceId: string,
+    body: WorkspacePermissionUpdate,
+  ): Promise<WorkspacePermissionMatrix>;
   /** #73: file-center page with metadata-only rows and the workspace quota. */
   listFiles(query?: ListFilesQuery): Promise<FilePage>;
 
@@ -351,6 +463,46 @@ export interface ChatApi {
     body: ChangeWorkspaceMemberRoleRequest,
   ): Promise<WorkspaceMember>;
   removeWorkspaceMember(workspaceId: string, userId: string): Promise<void>;
+
+  /*
+   * P0-3 (#81): workspace security. Every operation is OWNER/ADMIN and carries
+   * the `X-Device-Id` header; the server owns validation, limits, audit,
+   * permission checks and the immutable security mode. The client never
+   * fabricates a policy/event/session/security value.
+   */
+  listWorkspaceDlpPolicies(workspaceId: string): Promise<DlpPolicyList>;
+  createWorkspaceDlpPolicy(workspaceId: string, body: DlpPolicyCreateRequest): Promise<DlpPolicy>;
+  updateWorkspaceDlpPolicy(
+    workspaceId: string,
+    policyId: string,
+    body: DlpPolicyUpdateRequest,
+  ): Promise<DlpPolicy>;
+  deleteWorkspaceDlpPolicy(workspaceId: string, policyId: string): Promise<void>;
+  listWorkspaceDlpEvents(
+    workspaceId: string,
+    query?: ListWorkspaceDlpEventsQuery,
+  ): Promise<DlpEventPage>;
+  listWorkspaceAudit(
+    workspaceId: string,
+    query?: ListWorkspaceAuditQuery,
+  ): Promise<WorkspaceAuditPage>;
+  /** Bounded blob export: CSV or JSON; headers carry rows/truncation. */
+  exportWorkspaceAudit(
+    workspaceId: string,
+    query: ExportWorkspaceAuditQuery,
+  ): Promise<WorkspaceAuditExportResult>;
+  listWorkspaceSessions(
+    workspaceId: string,
+    query?: ListWorkspaceSessionsQuery,
+  ): Promise<WorkspaceSessionPage>;
+  revokeWorkspaceSession(workspaceId: string, sessionId: string): Promise<void>;
+  revokeAllWorkspaceSessions(workspaceId: string): Promise<WorkspaceSessionRevokeAll>;
+  getWorkspaceSecurity(workspaceId: string): Promise<WorkspaceSecurity>;
+  updateWorkspaceSecurity(
+    workspaceId: string,
+    body: WorkspaceSecurityUpdateRequest,
+  ): Promise<WorkspaceSecurity>;
+
   /** Server is the source of truth for size/quota/count/type decisions. */
   preflightUpload(
     chatId: string,
@@ -393,6 +545,35 @@ export interface ListNotificationsQuery {
   /** Opaque base64url cursor from `page.next_cursor`; never constructed locally. */
   cursor?: string;
   limit?: number;
+}
+
+/**
+ * Extract a safe download name from `Content-Disposition`. Only a plain
+ * basename is accepted: separators and control characters are stripped so a
+ * server header cannot steer the browser to a path outside the download.
+ */
+export function contentDispositionFilename(header: string | null): string | null {
+  if (!header) return null;
+  const extended = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  const quoted = /filename="([^"]+)"/i.exec(header);
+  const bare = /filename=([^;]+)/i.exec(header);
+  const raw = extended?.[1] ?? quoted?.[1] ?? bare?.[1];
+  if (!raw) return null;
+  let decoded = raw.trim();
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // Keep the raw value; it is still sanitized below.
+  }
+  const rawBase = decoded.split(/[\\/]/).pop() ?? '';
+  const base = [...rawBase]
+    .filter((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code >= 0x20 && code !== 0x7f;
+    })
+    .join('')
+    .trim();
+  return base ? base.slice(0, 180) : null;
 }
 
 type ApiAuthConfig = Pick<AppConfig, 'devSession'> & { authMode?: AppConfig['authMode'] };
@@ -495,6 +676,161 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       return withReauth(async () => {
         // Success is `204`; a repeat revoke is `404` by design.
         await client.delete(`/me/sessions/${encodeURIComponent(sessionId)}`);
+      });
+    },
+
+    /* ------------------------------------------------------------------ */
+    /* P0-4 (#82): avatar + TOTP second factor                            */
+    /* ------------------------------------------------------------------ */
+
+    setMyAvatar(fileId) {
+      return withReauth(async () => {
+        const body: AvatarUpdate = { file_id: fileId };
+        const response = await client.post<AuthUser>('/me/avatar', body);
+        return response.data;
+      });
+    },
+
+    removeMyAvatar() {
+      return withReauth(async () => {
+        // Idempotent `204`; the attachment itself is not deleted.
+        await client.delete('/me/avatar');
+      });
+    },
+
+    getMyAvatarBlob() {
+      return withReauth(async () => {
+        // The endpoint answers `302` to a 5-minute presigned URL; `fetch`
+        // follows it and the caller only ever sees image bytes. The raw
+        // attachment id/storage key never reaches the browser.
+        const response = await client.getBlob('/me/avatar');
+        return response.blob;
+      });
+    },
+
+    getMyTwoFactor() {
+      return withReauth(async () => {
+        const response = await client.get<TwoFactorStatus>('/me/2fa');
+        return response.data;
+      });
+    },
+
+    setupMyTwoFactor(password) {
+      return withReauth(async () => {
+        // The secret/otpauth URI are returned exactly once; nothing is cached.
+        const response = await client.post<TwoFactorSetup>('/me/2fa/setup', { password });
+        return response.data;
+      });
+    },
+
+    verifyMyTwoFactor(code) {
+      return withReauth(async () => {
+        const body: TwoFactorVerifyRequest = { code };
+        const response = await client.post<TwoFactorStatus>('/me/2fa/verify', body);
+        return response.data;
+      });
+    },
+
+    disableMyTwoFactor(body) {
+      return withReauth(async () => {
+        await client.delete('/me/2fa', { body });
+      });
+    },
+
+    regenerateMyRecoveryCodes(password) {
+      return withReauth(async () => {
+        const response = await client.post<TwoFactorRecoveryCodes>('/me/2fa/recovery-codes', {
+          password,
+        });
+        return response.data;
+      });
+    },
+
+    /* ------------------------------------------------------------------ */
+    /* P0-4 (#82): workspace settings, logo, invites, permissions         */
+    /* ------------------------------------------------------------------ */
+
+    updateWorkspace(workspaceId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<WorkspaceSummary>(
+          `/workspaces/${encodeURIComponent(workspaceId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    setWorkspaceAvatar(workspaceId, fileId) {
+      return withReauth(async () => {
+        const body: WorkspaceAvatarRequest = { file_id: fileId };
+        const response = await client.post<WorkspaceSummary>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/avatar`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    deleteWorkspaceAvatar(workspaceId) {
+      return withReauth(async () => {
+        // Idempotent `204`; the logo attachment stays in the file center.
+        await client.delete(`/workspaces/${encodeURIComponent(workspaceId)}/avatar`);
+      });
+    },
+
+    listWorkspaceInvites(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.get<WorkspaceInviteList>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/invites`,
+        );
+        return response.data;
+      });
+    },
+
+    createWorkspaceInvite(workspaceId, body) {
+      return withReauth(async () => {
+        // `token`/`accept_url` exist only in this response; nothing is stored.
+        const response = await client.post<WorkspaceInviteCreated>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/invites`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    revokeWorkspaceInvite(workspaceId, inviteId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/workspaces/${encodeURIComponent(workspaceId)}/invites/${encodeURIComponent(inviteId)}`,
+        );
+      });
+    },
+
+    acceptWorkspaceInvite(token) {
+      return withReauth(async () => {
+        const response = await client.post<WorkspaceInviteAcceptance>(
+          `/workspace-invites/${encodeURIComponent(token)}/accept`,
+        );
+        return response.data;
+      });
+    },
+
+    getWorkspacePermissions(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.get<WorkspacePermissionMatrix>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/permissions`,
+        );
+        return response.data;
+      });
+    },
+
+    updateWorkspacePermissions(workspaceId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<WorkspacePermissionMatrix>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/permissions`,
+          body,
+        );
+        return response.data;
       });
     },
 
@@ -1124,6 +1460,141 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
         await client.delete(
           `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
         );
+      });
+    },
+
+    listWorkspaceDlpPolicies(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.get<DlpPolicyList>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/dlp/policies`,
+        );
+        return response.data;
+      });
+    },
+
+    createWorkspaceDlpPolicy(workspaceId, body) {
+      return withReauth(async () => {
+        const response = await client.post<DlpPolicy>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/dlp/policies`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    updateWorkspaceDlpPolicy(workspaceId, policyId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<DlpPolicy>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/dlp/policies/${encodeURIComponent(policyId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    deleteWorkspaceDlpPolicy(workspaceId, policyId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/workspaces/${encodeURIComponent(workspaceId)}/dlp/policies/${encodeURIComponent(policyId)}`,
+        );
+      });
+    },
+
+    listWorkspaceDlpEvents(workspaceId, query = {}) {
+      return withReauth(async () => {
+        const response = await client.get<DlpEventPage>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/dlp/events`,
+          {
+            policy_id: query.policyId,
+            action: query.action,
+            cursor: query.cursor,
+            limit: query.limit,
+          },
+        );
+        return response.data;
+      });
+    },
+
+    listWorkspaceAudit(workspaceId, query = {}) {
+      return withReauth(async () => {
+        const response = await client.get<WorkspaceAuditPage>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/audit`,
+          {
+            action: query.action,
+            actor_id: query.actorId,
+            from: query.from,
+            to: query.to,
+            cursor: query.cursor,
+            limit: query.limit,
+          },
+        );
+        return response.data;
+      });
+    },
+
+    async exportWorkspaceAudit(workspaceId, query) {
+      const response = await withReauth(async () =>
+        client.getBlob(`/workspaces/${encodeURIComponent(workspaceId)}/audit/export`, {
+          format: query.format,
+          action: query.action,
+          actor_id: query.actorId,
+          from: query.from,
+          to: query.to,
+        }),
+      );
+      const rowsHeader = response.headers.get('x-export-rows');
+      const parsedRows = rowsHeader === null ? Number.NaN : Number.parseInt(rowsHeader, 10);
+      return {
+        blob: response.blob,
+        filename: contentDispositionFilename(response.headers.get('content-disposition')),
+        rows: Number.isFinite(parsedRows) && parsedRows >= 0 ? parsedRows : null,
+        truncated: response.headers.get('x-export-truncated') === 'true',
+      };
+    },
+
+    listWorkspaceSessions(workspaceId, query = {}) {
+      return withReauth(async () => {
+        const response = await client.get<WorkspaceSessionPage>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/sessions`,
+          { cursor: query.cursor, limit: query.limit },
+        );
+        return response.data;
+      });
+    },
+
+    revokeWorkspaceSession(workspaceId, sessionId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/workspaces/${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}`,
+        );
+      });
+    },
+
+    revokeAllWorkspaceSessions(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.post<WorkspaceSessionRevokeAll>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/sessions/revoke-all`,
+        );
+        return response.data;
+      });
+    },
+
+    getWorkspaceSecurity(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.get<WorkspaceSecurity>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/security`,
+        );
+        return response.data;
+      });
+    },
+
+    updateWorkspaceSecurity(workspaceId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<WorkspaceSecurity>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/security`,
+          body,
+        );
+        return response.data;
       });
     },
 

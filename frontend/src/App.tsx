@@ -28,6 +28,7 @@ import { SetupWizard } from './components/admin/SetupWizard';
 import { AppShell } from './components/AppShell';
 import { InviteAcceptPage } from './components/InviteAcceptPage';
 import { WorkspaceMembersDialog } from './components/WorkspaceMembersDialog';
+import { WorkspaceInviteAcceptPage } from './components/WorkspaceInviteAcceptPage';
 
 interface AppProps {
   store: ChatStore;
@@ -40,6 +41,23 @@ interface AppProps {
  * `/invite/...` URL is claimed so a malformed token gets an honest error
  * instead of falling through to the chat surface.
  */
+function parseWorkspaceInviteRoute(location: string): {
+  matched: boolean;
+  token: string | null;
+} {
+  const pathname = location.split('?')[0] ?? '/';
+  if (pathname !== '/workspace-invite' && !pathname.startsWith('/workspace-invite/')) {
+    return { matched: false, token: null };
+  }
+  const raw = pathname.slice('/workspace-invite'.length).replace(/^\/+|\/+$/g, '');
+  if (raw.length === 0) return { matched: true, token: null };
+  try {
+    return { matched: true, token: decodeURIComponent(raw) };
+  } catch {
+    return { matched: true, token: null };
+  }
+}
+
 function parseInviteRoute(location: string): { matched: boolean; token: string | null } {
   const pathname = location.split('?')[0] ?? '/';
   if (pathname !== '/invite' && !pathname.startsWith('/invite/')) {
@@ -124,8 +142,12 @@ function ChatWorkspace({
 function DevApp({ store, config }: AppProps) {
   const location = useLocation();
   const invite = parseInviteRoute(location);
+  const workspaceInvite = parseWorkspaceInviteRoute(location);
   useChatRuntime(store, config);
   if (invite.matched) return <InviteAcceptPage token={invite.token} />;
+  if (workspaceInvite.matched) {
+    return <WorkspaceInviteAcceptPage token={workspaceInvite.token} />;
+  }
   return <ChatWorkspace config={config} />;
 }
 
@@ -141,6 +163,7 @@ function PasswordApp({ store, config }: AppProps) {
   const navigate = useNavigate();
   const pathname = location.split('?')[0] ?? '/';
   const inviteRoute = parseInviteRoute(location);
+  const workspaceInviteRoute = parseWorkspaceInviteRoute(location);
   const identityRef = useRef<string | null>(null);
   const identity = auth.user?.sub ?? null;
 
@@ -202,13 +225,19 @@ function PasswordApp({ store, config }: AppProps) {
   useEffect(() => {
     if (setupLoading || setupError || setupRequired) return;
     if (pathname === '/setup' || pathname === '/admin') return;
-    if (state.onboardingRequired && pathname !== '/onboarding' && !inviteRoute.matched) {
+    if (
+      state.onboardingRequired &&
+      pathname !== '/onboarding' &&
+      !inviteRoute.matched &&
+      !workspaceInviteRoute.matched
+    ) {
       navigate('/onboarding', { replace: true });
     } else if (!state.onboardingRequired && pathname === '/onboarding') {
       if (state.sessionStatus === 'ready') navigate('/', { replace: true });
     }
   }, [
     inviteRoute.matched,
+    workspaceInviteRoute.matched,
     pathname,
     state.onboardingRequired,
     state.sessionStatus,
@@ -269,6 +298,10 @@ function PasswordApp({ store, config }: AppProps) {
 
   if (inviteRoute.matched) {
     return <InviteAcceptPage token={inviteRoute.token} />;
+  }
+
+  if (workspaceInviteRoute.matched) {
+    return <WorkspaceInviteAcceptPage token={workspaceInviteRoute.token} />;
   }
 
   if (state.onboardingRequired) {

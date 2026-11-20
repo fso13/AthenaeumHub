@@ -26,6 +26,9 @@ import type {
   ChatPluginState,
   CreateWorkspaceRequest,
   DeviceRegistration,
+  DlpEventPage,
+  DlpPolicy,
+  DlpPolicyList,
   FileItem,
   MessageCreateBody,
   Notification,
@@ -44,8 +47,17 @@ import type {
   ThreadSummary,
   UploadInitRequest,
   UploadSession,
+  WorkspaceAuditEvent,
+  WorkspaceAuditPage,
   WorkspaceMember,
   WorkspaceMemberPage,
+  TwoFactorStatus,
+  WorkspaceInvite,
+  WorkspacePermissionEntry,
+  WorkspacePermissionMatrix,
+  WorkspaceSecurity,
+  WorkspaceSessionPage,
+  WorkspaceSessionRevokeAll,
   InviteAcceptResult,
   WorkspaceRole,
   WorkspaceSummary,
@@ -56,12 +68,23 @@ import { pluginUnavailableReason } from '../plugins/model';
 import {
   countActiveChatsForUser,
   countActiveChatsInWorkspace,
+  createDefaultWorkspacePermissions,
+  createMockTwoFactor,
   type ChatRecord,
   type MockAuthUserRecord,
   type MockDb,
   type MockUpload,
 } from './db';
-import { IDS, MOCK_ACCESS_TOKEN, MOCK_DEMO_EMAIL, MOCK_EMAIL_CODE, messageId } from './fixtures';
+import {
+  IDS,
+  MOCK_ACCESS_TOKEN,
+  MOCK_DEMO_EMAIL,
+  MOCK_EMAIL_CODE,
+  MOCK_RECOVERY_CODES,
+  MOCK_TOTP_CODE,
+  MOCK_TOTP_SECRET,
+  messageId,
+} from './fixtures';
 import {
   publishMockMessageCreated,
   publishMockMessageDeleted,
@@ -120,6 +143,95 @@ function requireAuth(request: Request): Response | null {
     return errorResponse(401, 'UNAUTHENTICATED', 'Device id is missing');
   }
   return null;
+}
+
+/* ------------------------------------------------------------------------- */
+/* P0-4 (#82): avatar, TOTP authenticator, workspace settings/invites          */
+/* ------------------------------------------------------------------------- */
+
+const TWO_FACTOR_CHALLENGE_TTL_SECONDS = 300;
+const TWO_FACTOR_MAX_ATTEMPTS = 5;
+
+function findMockWorkspace(db: MockDb, workspaceId: string): WorkspaceSummary | null {
+  return db.me.workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
+}
+
+/** Effective workspace right for the caller, from the stored matrix. */
+function workspaceRight(db: MockDb, workspaceId: string, permission: string): boolean {
+  const workspace = findMockWorkspace(db, workspaceId);
+  if (!workspace) return false;
+  if (workspace.role === 'OWNER') return true;
+  if (workspace.role === 'GUEST') return false;
+  const matrix =
+    db.workspacePermissions[workspaceId] ?? createDefaultWorkspacePermissions(workspaceId);
+  const row = matrix.roles.find((entry) => entry.role === workspace.role);
+  return row ? row[permission as keyof typeof row] === true : false;
+}
+
+function imageFileView(db: MockDb, fileId: string): FileItem | null {
+  return db.fileCenterItems.find((item) => item.id === fileId) ?? null;
+}
+
+/** Shared avatar/logo gate: existing, image, scan-approved. */
+function imageValidationError(
+  file: FileItem | null,
+  invalidCode: 'AVATAR_INVALID' | 'WORKSPACE_LOGO_INVALID',
+): Response | null {
+  if (!file) return errorResponse(404, 'NOT_FOUND', 'Attachment is not available');
+  const mime = (file.mime_type ?? '').toLowerCase();
+  const isImage = file.media?.kind === 'IMAGE' || mime.startsWith('image/');
+  if (!isImage) return errorResponse(422, invalidCode, 'Attachment is not an image');
+  if (file.scan_status === 'PENDING') {
+    return errorResponse(409, 'ATTACHMENT_NOT_READY', 'Attachment scan is not finished');
+  }
+  if (file.scan_status === 'INFECTED') {
+    return errorResponse(423, 'ATTACHMENT_QUARANTINED', 'Attachment is quarantined');
+  }
+  if (file.scan_status !== 'CLEAN' && file.scan_status !== 'SKIPPED') {
+    return errorResponse(422, invalidCode, 'Attachment cannot be used as an image');
+  }
+  return null;
+}
+
+function twoFactorStatusView(db: MockDb): TwoFactorStatus {
+  const remaining = [...db.twoFactor.recoveryCodes.values()].filter((used) => !used).length;
+  return {
+    enabled: db.twoFactor.enabled,
+    enabled_at: db.twoFactor.enabledAt,
+    recovery_codes_remaining: remaining,
+  };
+}
+
+/** Password re-auth stand-in: the mock user's own password. */
+function verifyMockPassword(db: MockDb, password: string | null): boolean {
+  if (!password) return false;
+  return db.authUsers.some((user) => user.id === db.me.user.id && user.password === password);
+}
+
+function consumeRecoveryCode(db: MockDb, code: string): boolean {
+  const normalized = code.trim().toUpperCase();
+  for (const [stored, used] of db.twoFactor.recoveryCodes) {
+    if (stored === normalized && !used) {
+      db.twoFactor.recoveryCodes.set(stored, true);
+      return true;
+    }
+  }
+  return false;
+}
+
+function twoFactorCodeAccepted(db: MockDb, code: string | null): boolean {
+  if (!code) return false;
+  const normalized = code.trim();
+  if (normalized === MOCK_TOTP_CODE) return true;
+  const recovery = normalized.toUpperCase();
+  return [...db.twoFactor.recoveryCodes.entries()].some(
+    ([stored, used]) => stored === recovery && !used,
+  );
+}
+
+function workspaceInviteView(invite: { token?: string } & WorkspaceInvite): WorkspaceInvite {
+  const { token: _token, ...rest } = invite;
+  return rest;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1079,6 +1191,180 @@ function mockTranslation(target: string, source: string): string {
   return `[${target}] ${normalized}`.slice(0, 8000);
 }
 
+/* ------------------------------------------------------------------------- */
+/* P0-3 (#81): workspace DLP, audit/export, sessions and security settings    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * OWNER/ADMIN guard for every #81 operation. Mirrors the backend: a foreign or
+ * unknown workspace and a non-manager member are both `403` without disclosing
+ * existence. The `X-Device-Id` header is required by the contract too.
+ */
+function workspaceManagerGuard(
+  db: MockDb,
+  request: Request,
+  workspaceId: string,
+): WorkspaceSummary | Response {
+  const unauthorized = requireAuth(request);
+  if (unauthorized) return unauthorized;
+  const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+  if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+  if (workspace.role !== 'OWNER' && workspace.role !== 'ADMIN') {
+    return errorResponse(403, 'FORBIDDEN', 'Workspace manager role is required');
+  }
+  return workspace;
+}
+
+function isResponse(value: unknown): value is Response {
+  return value instanceof Response;
+}
+
+/** Opaque workspace-bound offset cursor used by the mock pages. */
+function readOffsetCursor(
+  cursor: string | null,
+  scheme: string,
+  workspaceId: string,
+): number | null {
+  if (cursor === null || cursor === '') return 0;
+  const match = new RegExp(`^${scheme}:${workspaceId}:(\\d+)$`).exec(cursor);
+  if (!match) return null;
+  return Number(match[1]);
+}
+
+function offsetCursor(scheme: string, workspaceId: string, offset: number): string {
+  return `${scheme}:${workspaceId}:${offset}`;
+}
+
+/** `limit` 1..100, default per operation; null means `400`. */
+function readPageLimit(raw: string | null, fallback: number): number | null {
+  if (raw === null || raw === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) return null;
+  return parsed;
+}
+
+function appendSecurityAudit(
+  db: MockDb,
+  action: string,
+  targetType: string | null,
+  targetId: string | null,
+): void {
+  db.security.auditEvents.push({
+    id: newUuid(),
+    action,
+    actor_id: db.me.user.id,
+    target_type: targetType,
+    target_id: targetId,
+    created_at: db.serverTime(),
+  });
+}
+
+function sortSecurityEvents<T extends { created_at: string; id: string }>(rows: T[]): T[] {
+  return [...rows].sort(
+    (left, right) =>
+      right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id),
+  );
+}
+
+function csvCell(value: string | null | undefined): string {
+  const text = value ?? '';
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** RFC 4180 CSV with the five contract columns and CRLF rows. */
+function auditCsv(rows: WorkspaceAuditEvent[]): string {
+  const lines = ['created_at,action,actor_id,target_type,target_id'];
+  for (const row of rows) {
+    lines.push(
+      [row.created_at, row.action, row.actor_id ?? '', row.target_type ?? '', row.target_id ?? '']
+        .map(csvCell)
+        .join(','),
+    );
+  }
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+function exportFilename(format: 'csv' | 'json'): string {
+  return `workspace-audit-${new Date().toISOString().slice(0, 10)}.${format}`;
+}
+
+/** Same filters as the audit page, shared by the export operation. */
+function filterAuditRows(
+  rows: WorkspaceAuditEvent[],
+  query: {
+    action?: string | null;
+    actorId?: string | null;
+    from?: string | null;
+    to?: string | null;
+  },
+): WorkspaceAuditEvent[] {
+  const needle = query.action?.trim() ?? '';
+  const actor = query.actorId?.trim() ?? '';
+  const from = query.from ? Date.parse(query.from) : null;
+  const to = query.to ? Date.parse(query.to) : null;
+  return sortSecurityEvents(
+    rows.filter((row) => {
+      if (needle && row.action !== needle) return false;
+      if (actor && row.actor_id !== actor) return false;
+      const at = Date.parse(row.created_at);
+      if (from !== null && at < from) return false;
+      if (to !== null && at > to) return false;
+      return true;
+    }),
+  );
+}
+
+/** Parse audit filter query and validate with the contract's 400 rules. */
+function readAuditQuery(request: Request):
+  | {
+      action: string | null;
+      actorId: string | null;
+      from: string | null;
+      to: string | null;
+      cursor: string | null;
+      limitRaw: string | null;
+    }
+  | Response {
+  const url = new URL(request.url);
+  const action = url.searchParams.get('action');
+  const actorId = url.searchParams.get('actor_id');
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+  if (action !== null && action.length > 120) {
+    return errorResponse(400, 'VALIDATION_FAILED', 'action is longer than 120', {
+      details: { field: 'action' },
+    });
+  }
+  if (actorId !== null && !UUID_RE.test(actorId)) {
+    return errorResponse(400, 'VALIDATION_FAILED', 'actor_id must be a UUID', {
+      details: { field: 'actor_id' },
+    });
+  }
+  if (from !== null && Number.isNaN(Date.parse(from))) {
+    return errorResponse(400, 'VALIDATION_FAILED', 'from is not a date', {
+      details: { field: 'from' },
+    });
+  }
+  if (to !== null && Number.isNaN(Date.parse(to))) {
+    return errorResponse(400, 'VALIDATION_FAILED', 'to is not a date', {
+      details: { field: 'to' },
+    });
+  }
+  if (from !== null && to !== null && Date.parse(from) > Date.parse(to)) {
+    return errorResponse(400, 'VALIDATION_FAILED', 'from must not be after to', {
+      details: { field: 'from' },
+    });
+  }
+  return {
+    action,
+    actorId,
+    from,
+    to,
+    cursor: url.searchParams.get('cursor'),
+    limitRaw: url.searchParams.get('limit'),
+  };
+}
+
 export function createHandlers(db: MockDb) {
   return [
     http.get(`${API}/health`, () => HttpResponse.json({ status: 'ok' })),
@@ -1239,6 +1525,72 @@ export function createHandlers(db: MockDb) {
         return errorResponse(403, 'EMAIL_NOT_VERIFIED', 'Email is not verified', {
           details: verification ? { verification_id: verification.id } : undefined,
         });
+      }
+      if (db.twoFactor.enabled) {
+        // P0-4: the password is valid but the account has TOTP enabled. Tokens
+        // stay server-side until `POST /auth/2fa/verify` accepts the code.
+        const challenge = {
+          id: newUuid(),
+          userId: user.id,
+          expiresAt: Date.now() + TWO_FACTOR_CHALLENGE_TTL_SECONDS * 1000,
+          attempts: TWO_FACTOR_MAX_ATTEMPTS,
+        };
+        db.twoFactorChallenge = challenge;
+        db.twoFactorRequests.push({
+          action: 'CHALLENGE',
+          password: null,
+          code: null,
+          deviceId: request.headers.get('x-device-id'),
+        });
+        return HttpResponse.json(
+          {
+            challenge_id: challenge.id,
+            expires_in: TWO_FACTOR_CHALLENGE_TTL_SECONDS,
+            methods: ['TOTP', 'RECOVERY_CODE'],
+          },
+          { status: 202 },
+        );
+      }
+      return HttpResponse.json(issueAuthSession(db, user));
+    }),
+
+    /* P0-4 (#82): complete the login challenge with TOTP/recovery code. */
+    http.post(`${API}/auth/2fa/verify`, async ({ request }) => {
+      const body = asRecord(await readJson(request));
+      const challengeId = readStringField(body, 'challenge_id');
+      const code = readStringField(body, 'code');
+      if (!challengeId || !code) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Invalid two-factor payload');
+      }
+      const challenge = db.twoFactorChallenge;
+      db.twoFactorLoginRequests.push({ challengeId, code });
+      if (
+        !challenge ||
+        challenge.id !== challengeId ||
+        challenge.expiresAt <= Date.now() ||
+        challenge.attempts <= 0
+      ) {
+        db.twoFactorChallenge = null;
+        return errorResponse(
+          401,
+          'TWO_FACTOR_CHALLENGE_INVALID',
+          'The two-factor challenge is invalid or expired',
+        );
+      }
+      const normalized = code.trim().toUpperCase();
+      const recoveryAccepted = consumeRecoveryCode(db, normalized);
+      if (!recoveryAccepted && normalized !== MOCK_TOTP_CODE) {
+        challenge.attempts -= 1;
+        if (challenge.attempts <= 0) {
+          db.twoFactorChallenge = null;
+          return errorResponse(429, 'RATE_LIMITED', 'Too many invalid codes');
+        }
+        return errorResponse(422, 'TWO_FACTOR_CODE_INVALID', 'Invalid two-factor code');
+      }
+      const user = db.authUsers.find((candidate) => candidate.id === challenge.userId);
+      db.twoFactorChallenge = null;
+      if (!user) {
+        return errorResponse(401, 'TWO_FACTOR_CHALLENGE_INVALID', 'Challenge user is gone');
       }
       return HttpResponse.json(issueAuthSession(db, user));
     }),
@@ -1422,6 +1774,217 @@ export function createHandlers(db: MockDb) {
       const index = db.profileSessions.findIndex((session) => session.id === sessionId);
       if (index < 0) return errorResponse(404, 'NOT_FOUND', 'Session not found');
       db.profileSessions.splice(index, 1);
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /* P0-4 (#82): own avatar (existing CLEAN image; no upload pipeline). */
+    http.post(`${API}/me/avatar`, async ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const body = asRecord(await readJson(request));
+      const fileId = readStringField(body, 'file_id');
+      if (!fileId) return errorResponse(400, 'VALIDATION_FAILED', 'file_id is required');
+      db.avatarRequests.push({ action: 'SET', fileId });
+      if (db.forceAvatarError) {
+        const forced = db.forceAvatarError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const file = imageFileView(db, fileId);
+      const invalid = imageValidationError(file, 'AVATAR_INVALID');
+      if (invalid) return invalid;
+      db.profileAvatarFileId = fileId;
+      db.me = {
+        ...db.me,
+        user: { ...db.me.user, avatar_url: '/api/v1/me/avatar' },
+      };
+      return HttpResponse.json(db.me.user);
+    }),
+
+    http.delete(`${API}/me/avatar`, ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      db.avatarRequests.push({ action: 'DELETE', fileId: null });
+      if (db.forceAvatarError) {
+        const forced = db.forceAvatarError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      db.profileAvatarFileId = null;
+      db.me = { ...db.me, user: { ...db.me.user, avatar_url: null } };
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /*
+     * The real endpoint answers `302 Location: <presigned>`; `fetch` follows it
+     * and the browser only sees image bytes, so the mock serves the bytes with
+     * a `200` (the client contract is a Blob either way).
+     */
+    http.get(`${API}/me/avatar`, ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      db.avatarRequests.push({ action: 'GET', fileId: db.profileAvatarFileId });
+      if (!db.profileAvatarFileId) return errorResponse(404, 'NOT_FOUND', 'Avatar is not set');
+      return new HttpResponse(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      });
+    }),
+
+    /* P0-4 (#82): TOTP authenticator (secret shown only by setup). */
+    http.get(`${API}/me/2fa`, ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      db.twoFactorRequests.push({
+        action: 'STATUS',
+        password: null,
+        code: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTwoFactorError) {
+        const forced = db.forceTwoFactorError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      return HttpResponse.json(twoFactorStatusView(db));
+    }),
+
+    http.post(`${API}/me/2fa/setup`, async ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const body = asRecord(await readJson(request));
+      const password = readStringField(body, 'password');
+      db.twoFactorRequests.push({
+        action: 'SETUP',
+        password,
+        code: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTwoFactorError) {
+        const forced = db.forceTwoFactorError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!verifyMockPassword(db, password)) {
+        return errorResponse(403, 'REAUTH_FAILED', 'Password was not confirmed');
+      }
+      if (db.twoFactor.enabled) {
+        return errorResponse(409, 'TWO_FACTOR_ALREADY_ENABLED', 'Two-factor is already enabled');
+      }
+      db.twoFactor.pendingSecret = `${MOCK_TOTP_SECRET}${newUuid().slice(0, 4)}`;
+      const uri = `otpauth://totp/Pickle:${encodeURIComponent(MOCK_DEMO_EMAIL)}?secret=${db.twoFactor.pendingSecret}&issuer=Pickle&algorithm=SHA1&digits=6&period=30`;
+      return HttpResponse.json({
+        secret: db.twoFactor.pendingSecret,
+        otpauth_uri: uri,
+        qr_payload: uri,
+      });
+    }),
+
+    http.post(`${API}/me/2fa/verify`, async ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const body = asRecord(await readJson(request));
+      const code = readStringField(body, 'code');
+      db.twoFactorRequests.push({
+        action: 'VERIFY',
+        password: null,
+        code,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTwoFactorError) {
+        const forced = db.forceTwoFactorError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (db.twoFactor.enabled) {
+        return errorResponse(409, 'TWO_FACTOR_ALREADY_ENABLED', 'Two-factor is already enabled');
+      }
+      if (!db.twoFactor.pendingSecret) {
+        return errorResponse(409, 'TWO_FACTOR_NOT_SETUP', 'Two-factor setup was not started');
+      }
+      if (code !== MOCK_TOTP_CODE) {
+        return errorResponse(422, 'TWO_FACTOR_CODE_INVALID', 'Invalid authenticator code');
+      }
+      db.twoFactor.enabled = true;
+      db.twoFactor.enabledAt = new Date().toISOString();
+      db.twoFactor.secret = db.twoFactor.pendingSecret;
+      db.twoFactor.pendingSecret = null;
+      db.twoFactor.lastStep = 1;
+      return HttpResponse.json(twoFactorStatusView(db));
+    }),
+
+    http.post(`${API}/me/2fa/recovery-codes`, async ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const body = asRecord(await readJson(request));
+      const password = readStringField(body, 'password');
+      db.twoFactorRequests.push({
+        action: 'RECOVERY',
+        password,
+        code: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTwoFactorError) {
+        const forced = db.forceTwoFactorError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!verifyMockPassword(db, password)) {
+        return errorResponse(403, 'REAUTH_FAILED', 'Password was not confirmed');
+      }
+      if (!db.twoFactor.enabled) {
+        return errorResponse(409, 'TWO_FACTOR_NOT_ENABLED', 'Two-factor is not enabled');
+      }
+      db.twoFactor.recoveryCodes = new Map(MOCK_RECOVERY_CODES.map((code) => [code, false]));
+      return HttpResponse.json({
+        codes: [...MOCK_RECOVERY_CODES],
+        remaining: MOCK_RECOVERY_CODES.length,
+      });
+    }),
+
+    http.delete(`${API}/me/2fa`, async ({ request }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const body = asRecord(await readJson(request));
+      const password = readStringField(body, 'password');
+      const code = readStringField(body, 'code');
+      db.twoFactorRequests.push({
+        action: 'DISABLE',
+        password,
+        code,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTwoFactorError) {
+        const forced = db.forceTwoFactorError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!verifyMockPassword(db, password)) {
+        return errorResponse(403, 'REAUTH_FAILED', 'Password was not confirmed');
+      }
+      if (!db.twoFactor.enabled) {
+        return errorResponse(409, 'TWO_FACTOR_NOT_ENABLED', 'Two-factor is not enabled');
+      }
+      const accepted = twoFactorCodeAccepted(db, code);
+      if (accepted) consumeRecoveryCode(db, code ?? '');
+      if (!accepted) {
+        return errorResponse(422, 'TWO_FACTOR_CODE_INVALID', 'Invalid authenticator code');
+      }
+      db.twoFactor = createMockTwoFactor();
       return new HttpResponse(null, { status: 204 });
     }),
 
@@ -3077,6 +3640,381 @@ export function createHandlers(db: MockDb) {
       db.workspaceRequests.set(idempotencyKey, { bodyHash, workspace });
 
       return HttpResponse.json(workspace, { status: 201 });
+    }),
+
+    /* P0-4 (#82): workspace settings (name/description/logo). */
+    http.patch(`${API}/workspaces/:workspaceId`, async ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      db.workspaceSettingsRequests.push({
+        workspaceId,
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceWorkspaceSettingsError) {
+        const forced = db.forceWorkspaceSettingsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const workspace = findMockWorkspace(db, workspaceId);
+      if (!workspace) return errorResponse(404, 'NOT_FOUND', 'Workspace is not available');
+      if (!workspaceRight(db, workspaceId, 'manage_workspace')) {
+        return errorResponse(403, 'FORBIDDEN', 'manage_workspace is required');
+      }
+      const has = (key: string) => Object.prototype.hasOwnProperty.call(body, key);
+      if (!has('name') && !has('description') && !has('logo_file_id')) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'At least one field is required');
+      }
+      let name = workspace.name;
+      let description = workspace.description ?? null;
+      let logoFileId = workspace.logo_file_id ?? null;
+      if (has('name')) {
+        if (typeof body.name !== 'string') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'name must be a string', {
+            details: { field: 'name' },
+          });
+        }
+        const normalized = body.name.trim();
+        if (normalized.length === 0 || normalized.length > 120) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'name is out of bounds', {
+            details: { field: 'name' },
+          });
+        }
+        name = normalized;
+      }
+      if (has('description')) {
+        const raw = body.description;
+        if (raw !== null && typeof raw !== 'string') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'description must be a string', {
+            details: { field: 'description' },
+          });
+        }
+        const normalized = typeof raw === 'string' ? raw.trim() : '';
+        if (normalized.length > 500 || hasForbiddenControl(normalized, true)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'description is invalid', {
+            details: { field: 'description' },
+          });
+        }
+        description = normalized.length > 0 ? normalized : null;
+      }
+      if (has('logo_file_id')) {
+        if (body.logo_file_id === null) {
+          logoFileId = null;
+        } else if (typeof body.logo_file_id === 'string') {
+          const file = imageFileView(db, body.logo_file_id);
+          const invalid = imageValidationError(file, 'WORKSPACE_LOGO_INVALID');
+          if (invalid) return invalid;
+          logoFileId = body.logo_file_id;
+        } else {
+          return errorResponse(400, 'VALIDATION_FAILED', 'logo_file_id must be a uuid or null');
+        }
+      }
+      const updated: WorkspaceSummary = {
+        ...workspace,
+        name,
+        description,
+        logo_file_id: logoFileId,
+      };
+      db.me = {
+        ...db.me,
+        workspaces: db.me.workspaces.map((item) => (item.id === workspaceId ? updated : item)),
+      };
+      if (db.session.workspace.id === workspaceId) {
+        db.session = { ...db.session, workspace: { ...db.session.workspace, name } };
+      }
+      return HttpResponse.json(updated);
+    }),
+
+    http.post(`${API}/workspaces/:workspaceId/avatar`, async ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const body = asRecord(await readJson(request));
+      const fileId = readStringField(body, 'file_id');
+      if (!fileId) return errorResponse(400, 'VALIDATION_FAILED', 'file_id is required');
+      db.workspaceAvatarRequests.push({ workspaceId, action: 'SET', fileId });
+      const workspace = findMockWorkspace(db, workspaceId);
+      if (!workspace) return errorResponse(404, 'NOT_FOUND', 'Workspace is not available');
+      if (!workspaceRight(db, workspaceId, 'manage_workspace')) {
+        return errorResponse(403, 'FORBIDDEN', 'manage_workspace is required');
+      }
+      const invalid = imageValidationError(imageFileView(db, fileId), 'WORKSPACE_LOGO_INVALID');
+      if (invalid) return invalid;
+      const updated: WorkspaceSummary = { ...workspace, logo_file_id: fileId };
+      db.me = {
+        ...db.me,
+        workspaces: db.me.workspaces.map((item) => (item.id === workspaceId ? updated : item)),
+      };
+      return HttpResponse.json(updated);
+    }),
+
+    http.delete(`${API}/workspaces/:workspaceId/avatar`, ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      db.workspaceAvatarRequests.push({ workspaceId, action: 'DELETE', fileId: null });
+      const workspace = findMockWorkspace(db, workspaceId);
+      if (!workspace) return errorResponse(404, 'NOT_FOUND', 'Workspace is not available');
+      if (!workspaceRight(db, workspaceId, 'manage_workspace')) {
+        return errorResponse(403, 'FORBIDDEN', 'manage_workspace is required');
+      }
+      const updated: WorkspaceSummary = { ...workspace, logo_file_id: null };
+      db.me = {
+        ...db.me,
+        workspaces: db.me.workspaces.map((item) => (item.id === workspaceId ? updated : item)),
+      };
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /* P0-4 (#82): workspace invite links (metadata only; token shown once). */
+    http.get(`${API}/workspaces/:workspaceId/invites`, ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      db.workspaceInviteRequests.push({ workspaceId, action: 'LIST' });
+      if (db.forceWorkspaceInviteError) {
+        const forced = db.forceWorkspaceInviteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!workspaceRight(db, workspaceId, 'manage_invites')) {
+        return errorResponse(403, 'FORBIDDEN', 'manage_invites is required');
+      }
+      return HttpResponse.json({
+        invites: db.workspaceInvites
+          .filter((invite) => invite.status !== 'REVOKED')
+          .map((invite) => workspaceInviteView(invite)),
+      });
+    }),
+
+    http.post(`${API}/workspaces/:workspaceId/invites`, async ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const body = (asRecord(await readJson(request)) ?? {}) as Record<string, unknown>;
+      const role = (readStringField(body, 'role') ?? 'MEMBER') as WorkspaceInvite['role'];
+      db.workspaceInviteRequests.push({ workspaceId, action: 'CREATE', role });
+      if (db.forceWorkspaceInviteError) {
+        const forced = db.forceWorkspaceInviteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const workspace = findMockWorkspace(db, workspaceId);
+      if (!workspace) return errorResponse(404, 'NOT_FOUND', 'Workspace is not available');
+      if (!workspaceRight(db, workspaceId, 'manage_invites')) {
+        return errorResponse(403, 'FORBIDDEN', 'manage_invites is required');
+      }
+      const allowedRoles =
+        workspace.role === 'OWNER' ? ['ADMIN', 'MEMBER', 'GUEST'] : ['MEMBER', 'GUEST'];
+      if (!allowedRoles.includes(role)) {
+        return errorResponse(
+          403,
+          'WORKSPACE_INVITE_ROLE_FORBIDDEN',
+          'The invited role exceeds the caller role',
+        );
+      }
+      const maxUsesRaw = body.max_uses;
+      const maxUses =
+        typeof maxUsesRaw === 'number' && Number.isFinite(maxUsesRaw)
+          ? Math.min(1000, Math.max(1, Math.trunc(maxUsesRaw)))
+          : null;
+      const expiresIn =
+        typeof body.expires_in_seconds === 'number' && Number.isFinite(body.expires_in_seconds)
+          ? Math.min(2592000, Math.max(300, Math.trunc(body.expires_in_seconds)))
+          : 604800;
+      const token = `mock-workspace-invite-${newUuid()}`;
+      const created = {
+        id: newUuid(),
+        role,
+        status: 'ACTIVE' as const,
+        used_count: 0,
+        max_uses: maxUses,
+        expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+        created_at: new Date().toISOString(),
+        created_by: db.me.user.id,
+        token,
+      };
+      db.workspaceInvites.push(created);
+      return HttpResponse.json(
+        {
+          invite: workspaceInviteView(created),
+          token,
+          accept_url: `/api/v1/workspace-invites/${token}/accept`,
+        },
+        { status: 201 },
+      );
+    }),
+
+    http.delete(`${API}/workspaces/:workspaceId/invites/:inviteId`, ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const inviteId = String(params.inviteId);
+      db.workspaceInviteRequests.push({ workspaceId, action: 'REVOKE', inviteId });
+      if (db.forceWorkspaceInviteError) {
+        const forced = db.forceWorkspaceInviteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!workspaceRight(db, workspaceId, 'manage_invites')) {
+        return errorResponse(403, 'FORBIDDEN', 'manage_invites is required');
+      }
+      const invite = db.workspaceInvites.find((item) => item.id === inviteId);
+      if (!invite) {
+        return errorResponse(404, 'WORKSPACE_INVITE_NOT_FOUND', 'Invite was not found');
+      }
+      invite.status = 'REVOKED';
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/workspace-invites/:token/accept`, ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const token = String(params.token);
+      db.workspaceInviteRequests.push({ workspaceId: IDS.workspace, action: 'ACCEPT' });
+      if (db.forceWorkspaceInviteError) {
+        const forced = db.forceWorkspaceInviteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const invite = db.workspaceInvites.find((item) => item.token === token);
+      if (!invite) {
+        return errorResponse(404, 'WORKSPACE_INVITE_NOT_FOUND', 'Invite was not found');
+      }
+      if (invite.status === 'REVOKED') {
+        return errorResponse(410, 'WORKSPACE_INVITE_REVOKED', 'Invite was revoked');
+      }
+      if (new Date(invite.expires_at).getTime() <= Date.now()) {
+        return errorResponse(410, 'WORKSPACE_INVITE_EXPIRED', 'Invite expired');
+      }
+      if (
+        invite.max_uses !== null &&
+        invite.max_uses !== undefined &&
+        invite.used_count >= invite.max_uses
+      ) {
+        return errorResponse(410, 'WORKSPACE_INVITE_EXHAUSTED', 'Invite is exhausted');
+      }
+      const workspace = findMockWorkspace(db, IDS.workspace);
+      return HttpResponse.json({
+        workspace_id: IDS.workspace,
+        name: workspace?.name ?? 'Workspace',
+        slug: workspace?.slug ?? 'workspace',
+        role: invite.role,
+        already_member: workspace !== null,
+      });
+    }),
+
+    /* P0-4 (#82): OWNER/ADMIN/MEMBER permission matrix. */
+    http.get(`${API}/workspaces/:workspaceId/permissions`, ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      db.workspacePermissionRequests.push({
+        workspaceId,
+        body: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceWorkspacePermissionError) {
+        const forced = db.forceWorkspacePermissionError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!findMockWorkspace(db, workspaceId)) {
+        return errorResponse(404, 'NOT_FOUND', 'Workspace is not available');
+      }
+      const matrix =
+        db.workspacePermissions[workspaceId] ?? createDefaultWorkspacePermissions(workspaceId);
+      return HttpResponse.json(matrix);
+    }),
+
+    http.patch(`${API}/workspaces/:workspaceId/permissions`, async ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const body = asRecord(await readJson(request));
+      db.workspacePermissionRequests.push({
+        workspaceId,
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceWorkspacePermissionError) {
+        const forced = db.forceWorkspacePermissionError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const workspace = findMockWorkspace(db, workspaceId);
+      if (!workspace) return errorResponse(404, 'NOT_FOUND', 'Workspace is not available');
+      if (!workspaceRight(db, workspaceId, 'manage_permissions')) {
+        return errorResponse(403, 'FORBIDDEN', 'manage_permissions is required');
+      }
+      const entries = Array.isArray(body?.entries)
+        ? (body?.entries as WorkspacePermissionEntry[])
+        : null;
+      if (!entries || entries.length === 0 || entries.length > 18) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'entries are required');
+      }
+      const current =
+        db.workspacePermissions[workspaceId] ?? createDefaultWorkspacePermissions(workspaceId);
+      const next: WorkspacePermissionMatrix = {
+        ...current,
+        roles: current.roles.map((row) => ({ ...row })),
+      };
+      for (const entry of entries) {
+        if (
+          !entry ||
+          !['OWNER', 'ADMIN', 'MEMBER'].includes(entry.role) ||
+          ![
+            'manage_workspace',
+            'manage_members',
+            'manage_invites',
+            'manage_permissions',
+            'view_audit',
+            'manage_security',
+          ].includes(entry.permission) ||
+          typeof entry.allowed !== 'boolean'
+        ) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'Invalid permission entry');
+        }
+        const currentRow = current.roles.find((row) => row.role === entry.role);
+        const nextRow = next.roles.find((row) => row.role === entry.role);
+        if (!currentRow || !nextRow) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'Unknown role');
+        }
+        if (entry.role === 'OWNER' && currentRow[entry.permission] !== entry.allowed) {
+          return errorResponse(
+            422,
+            'OWNER_PERMISSIONS_IMMUTABLE',
+            'Owner permissions are immutable',
+          );
+        }
+        if (workspace.role === 'ADMIN' && entry.role === 'ADMIN') {
+          return errorResponse(
+            403,
+            'PERMISSION_CHANGE_FORBIDDEN',
+            'An admin can only change member permissions',
+          );
+        }
+        nextRow[entry.permission] = entry.allowed;
+      }
+      db.workspacePermissions[workspaceId] = next;
+      return HttpResponse.json(next);
     }),
 
     http.get(`${API}/workspaces/:workspaceId/chats`, ({ request, params }) => {
@@ -5753,6 +6691,593 @@ export function createHandlers(db: MockDb) {
       });
 
       return HttpResponse.json(preference);
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* P0-3 (#81): workspace DLP/audit/export/sessions/security settings  */
+    /* ------------------------------------------------------------------ */
+
+    http.get(`${API}/workspaces/:workspaceId/dlp/policies`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      db.security.policyRequests.push({
+        action: 'list',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.security.forcePolicyListError) {
+        const forced = db.security.forcePolicyListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      // E2EE: the server has no plaintext, so the list is empty by contract.
+      if (guard.security_mode === 'E2EE') {
+        const empty: DlpPolicyList = { items: [] };
+        return HttpResponse.json(empty);
+      }
+      const items = sortSecurityEvents(db.security.dlpPolicies);
+      return HttpResponse.json({ items } satisfies DlpPolicyList);
+    }),
+
+    http.post(`${API}/workspaces/:workspaceId/dlp/policies`, async ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forcePolicyMutationError) {
+        const forced = db.security.forcePolicyMutationError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (guard.security_mode === 'E2EE') {
+        return errorResponse(
+          422,
+          'DLP_E2EE_UNSUPPORTED',
+          'DLP policies are not available in an E2EE workspace',
+        );
+      }
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const allowed = ['name', 'action', 'pattern_type', 'pattern', 'enabled'];
+      if (Object.keys(body).some((key) => !allowed.includes(key))) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Unknown DLP policy field');
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (name.length < 1 || name.length > 120 || hasForbiddenControl(name, false)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'name is invalid', {
+          details: { field: 'name' },
+        });
+      }
+      if (body.action !== 'WARN' && body.action !== 'BLOCK') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'action is invalid', {
+          details: { field: 'action' },
+        });
+      }
+      if (body.pattern_type !== 'KEYWORD' && body.pattern_type !== 'PATTERN') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'pattern_type is invalid', {
+          details: { field: 'pattern_type' },
+        });
+      }
+      const pattern = typeof body.pattern === 'string' ? body.pattern : '';
+      if (
+        pattern.length < 1 ||
+        pattern.length > 200 ||
+        hasForbiddenControl(pattern, false) ||
+        (body.pattern_type === 'PATTERN' && (pattern.match(/\*/g)?.length ?? 0) > 20)
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'pattern is invalid', {
+          details: { field: 'pattern' },
+        });
+      }
+      if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'enabled must be a boolean', {
+          details: { field: 'enabled' },
+        });
+      }
+      if (db.security.dlpPolicies.length >= 100) {
+        return errorResponse(409, 'DLP_POLICY_LIMIT', 'DLP policy limit reached');
+      }
+      const normalized = name.toLowerCase();
+      if (db.security.dlpPolicies.some((policy) => policy.name.toLowerCase() === normalized)) {
+        return errorResponse(409, 'DLP_POLICY_NAME_TAKEN', 'DLP policy name is taken');
+      }
+      const now = db.serverTime();
+      const policy: DlpPolicy = {
+        id: newUuid(),
+        name,
+        action: body.action,
+        pattern_type: body.pattern_type,
+        pattern,
+        enabled: body.enabled === undefined ? true : body.enabled,
+        created_at: now,
+        updated_at: now,
+      };
+      db.security.dlpPolicies.push(policy);
+      db.security.policyRequests.push({
+        action: 'create',
+        policyId: policy.id,
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      appendSecurityAudit(db, 'workspace.dlp.policy.created', 'dlp_policy', policy.id);
+      return HttpResponse.json(policy, { status: 201 });
+    }),
+
+    http.patch(
+      `${API}/workspaces/:workspaceId/dlp/policies/:policyId`,
+      async ({ request, params }) => {
+        const workspaceId = String(params.workspaceId);
+        const guard = workspaceManagerGuard(db, request, workspaceId);
+        if (isResponse(guard)) return guard;
+        if (db.security.forcePolicyMutationError) {
+          const forced = db.security.forcePolicyMutationError;
+          return errorResponse(forced.status, forced.code, forced.message, {
+            details: forced.details,
+            retryAfterSeconds: forced.retryAfterSeconds,
+          });
+        }
+        if (guard.security_mode === 'E2EE') {
+          return errorResponse(
+            422,
+            'DLP_E2EE_UNSUPPORTED',
+            'DLP policies are not available in an E2EE workspace',
+          );
+        }
+        const policyId = String(params.policyId);
+        const current = db.security.dlpPolicies.find((policy) => policy.id === policyId);
+        if (!current) return errorResponse(404, 'NOT_FOUND', 'DLP policy not found');
+        const body = asRecord(await readJson(request));
+        if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+        const allowed = ['name', 'action', 'pattern_type', 'pattern', 'enabled'];
+        if (Object.keys(body).some((key) => !allowed.includes(key))) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'Unknown DLP policy field');
+        }
+        if (Object.keys(body).length === 0) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'At least one field is required');
+        }
+
+        const nextName = typeof body.name === 'string' ? body.name.trim() : current.name;
+        const nextAction = body.action === undefined ? current.action : body.action;
+        const nextType = body.pattern_type === undefined ? current.pattern_type : body.pattern_type;
+        const nextPattern = typeof body.pattern === 'string' ? body.pattern : current.pattern;
+        const nextEnabled = body.enabled === undefined ? current.enabled : body.enabled;
+
+        if (nextName.length < 1 || nextName.length > 120 || hasForbiddenControl(nextName, false)) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'name is invalid', {
+            details: { field: 'name' },
+          });
+        }
+        if (nextAction !== 'WARN' && nextAction !== 'BLOCK') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'action is invalid', {
+            details: { field: 'action' },
+          });
+        }
+        if (nextType !== 'KEYWORD' && nextType !== 'PATTERN') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'pattern_type is invalid', {
+            details: { field: 'pattern_type' },
+          });
+        }
+        if (
+          nextPattern.length < 1 ||
+          nextPattern.length > 200 ||
+          hasForbiddenControl(nextPattern, false) ||
+          (nextType === 'PATTERN' && (nextPattern.match(/\*/g)?.length ?? 0) > 20)
+        ) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'pattern is invalid', {
+            details: { field: 'pattern' },
+          });
+        }
+        if (typeof nextEnabled !== 'boolean') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'enabled must be a boolean', {
+            details: { field: 'enabled' },
+          });
+        }
+        const normalized = nextName.toLowerCase();
+        if (
+          db.security.dlpPolicies.some(
+            (policy) => policy.id !== policyId && policy.name.toLowerCase() === normalized,
+          )
+        ) {
+          return errorResponse(409, 'DLP_POLICY_NAME_TAKEN', 'DLP policy name is taken');
+        }
+
+        const changed =
+          nextName !== current.name ||
+          nextAction !== current.action ||
+          nextType !== current.pattern_type ||
+          nextPattern !== current.pattern ||
+          nextEnabled !== current.enabled;
+        if (!changed) {
+          db.security.policyRequests.push({
+            action: 'update',
+            policyId,
+            body,
+            deviceId: request.headers.get('x-device-id'),
+          });
+          return HttpResponse.json(current);
+        }
+
+        const updated: DlpPolicy = {
+          ...current,
+          name: nextName,
+          action: nextAction,
+          pattern_type: nextType,
+          pattern: nextPattern,
+          enabled: nextEnabled,
+          updated_at: db.serverTime(),
+        };
+        db.security.dlpPolicies = db.security.dlpPolicies.map((policy) =>
+          policy.id === policyId ? updated : policy,
+        );
+        db.security.policyRequests.push({
+          action: 'update',
+          policyId,
+          body,
+          deviceId: request.headers.get('x-device-id'),
+        });
+        appendSecurityAudit(db, 'workspace.dlp.policy.updated', 'dlp_policy', policyId);
+        return HttpResponse.json(updated);
+      },
+    ),
+
+    http.delete(`${API}/workspaces/:workspaceId/dlp/policies/:policyId`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forcePolicyMutationError) {
+        const forced = db.security.forcePolicyMutationError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (guard.security_mode === 'E2EE') {
+        return errorResponse(
+          422,
+          'DLP_E2EE_UNSUPPORTED',
+          'DLP policies are not available in an E2EE workspace',
+        );
+      }
+      const policyId = String(params.policyId);
+      const policy = db.security.dlpPolicies.find((item) => item.id === policyId);
+      if (!policy) return errorResponse(404, 'NOT_FOUND', 'DLP policy not found');
+      db.security.dlpPolicies = db.security.dlpPolicies.filter((item) => item.id !== policyId);
+      db.security.dlpEvents = db.security.dlpEvents.map((event) =>
+        event.policy_id === policyId ? { ...event, policy_id: null } : event,
+      );
+      db.security.policyRequests.push({
+        action: 'delete',
+        policyId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      appendSecurityAudit(db, 'workspace.dlp.policy.deleted', 'dlp_policy', policyId);
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.get(`${API}/workspaces/:workspaceId/dlp/events`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceEventError) {
+        const forced = db.security.forceEventError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const url = new URL(request.url);
+      const policyId = url.searchParams.get('policy_id');
+      const action = url.searchParams.get('action');
+      const cursor = url.searchParams.get('cursor');
+      const limit = readPageLimit(url.searchParams.get('limit'), 30);
+      if (policyId !== null && !UUID_RE.test(policyId)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'policy_id must be a UUID', {
+          details: { field: 'policy_id' },
+        });
+      }
+      if (action !== null && action !== 'WARN' && action !== 'BLOCK') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'action is invalid', {
+          details: { field: 'action' },
+        });
+      }
+      if (limit === null) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'limit must be within 1..100');
+      }
+      const offset = readOffsetCursor(cursor, 'dpe', workspaceId);
+      if (offset === null) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'cursor is invalid');
+      }
+      db.security.eventRequests.push({ policyId, action, cursor, limit });
+      const rows =
+        guard.security_mode === 'E2EE'
+          ? []
+          : sortSecurityEvents(db.security.dlpEvents).filter(
+              (event) =>
+                (policyId === null || event.policy_id === policyId) &&
+                (action === null || event.action === action),
+            );
+      const items = rows.slice(offset, offset + limit);
+      const hasMore = offset + limit < rows.length;
+      const page: DlpEventPage = {
+        items,
+        next_cursor: hasMore ? offsetCursor('dpe', workspaceId, offset + limit) : null,
+        has_more: hasMore,
+      };
+      return HttpResponse.json(page);
+    }),
+
+    http.get(`${API}/workspaces/:workspaceId/audit`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceAuditError) {
+        const forced = db.security.forceAuditError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const query = readAuditQuery(request);
+      if (isResponse(query)) return query;
+      const limit = readPageLimit(query.limitRaw, 30);
+      if (limit === null) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'limit must be within 1..100');
+      }
+      const offset = readOffsetCursor(query.cursor, 'aud', workspaceId);
+      if (offset === null) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'cursor is invalid');
+      }
+      db.security.auditRequests.push({
+        action: query.action,
+        actorId: query.actorId,
+        from: query.from,
+        to: query.to,
+        cursor: query.cursor,
+        limit,
+      });
+      const rows = filterAuditRows(db.security.auditEvents, query);
+      const items = rows.slice(offset, offset + limit);
+      const hasMore = offset + limit < rows.length;
+      const page: WorkspaceAuditPage = {
+        items,
+        next_cursor: hasMore ? offsetCursor('aud', workspaceId, offset + limit) : null,
+        has_more: hasMore,
+      };
+      return HttpResponse.json(page);
+    }),
+
+    http.get(`${API}/workspaces/:workspaceId/audit/export`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceExportError) {
+        const forced = db.security.forceExportError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const url = new URL(request.url);
+      const format = url.searchParams.get('format');
+      if (format !== 'csv' && format !== 'json') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'format must be csv or json', {
+          details: { field: 'format' },
+        });
+      }
+      const query = readAuditQuery(request);
+      if (isResponse(query)) return query;
+      db.security.exportRequests.push({
+        format,
+        action: query.action,
+        actorId: query.actorId,
+        from: query.from,
+        to: query.to,
+      });
+      const rows = filterAuditRows(db.security.auditEvents, query);
+      const cap = Math.max(0, db.security.auditExportLimit);
+      const items = rows.slice(0, cap);
+      const truncated = rows.length > cap;
+      const headers: Record<string, string> = {
+        'X-Export-Rows': String(items.length),
+        'X-Export-Truncated': String(truncated),
+        'Content-Disposition': `attachment; filename="${exportFilename(format)}"`,
+      };
+      appendSecurityAudit(db, 'workspace.audit.exported', null, null);
+      if (format === 'csv') {
+        return new HttpResponse(auditCsv(items), {
+          status: 200,
+          headers: { ...headers, 'Content-Type': 'text/csv; charset=UTF-8' },
+        });
+      }
+      return HttpResponse.json(
+        { items, exported_rows: items.length, truncated },
+        { status: 200, headers },
+      );
+    }),
+
+    http.get(`${API}/workspaces/:workspaceId/sessions`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceSessionsError) {
+        const forced = db.security.forceSessionsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const url = new URL(request.url);
+      const cursor = url.searchParams.get('cursor');
+      const limit = readPageLimit(url.searchParams.get('limit'), 50);
+      if (limit === null) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'limit must be within 1..100');
+      }
+      const offset = readOffsetCursor(cursor, 'ses', workspaceId);
+      if (offset === null) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'cursor is invalid');
+      }
+      db.security.sessionRequests.push({ cursor, limit });
+      const rows = [...db.security.sessions].sort(
+        (left, right) =>
+          right.last_seen_at.localeCompare(left.last_seen_at) || right.id.localeCompare(left.id),
+      );
+      const items = rows.slice(offset, offset + limit);
+      const hasMore = offset + limit < rows.length;
+      const page: WorkspaceSessionPage = {
+        items,
+        next_cursor: hasMore ? offsetCursor('ses', workspaceId, offset + limit) : null,
+        has_more: hasMore,
+      };
+      return HttpResponse.json(page);
+    }),
+
+    http.delete(`${API}/workspaces/:workspaceId/sessions/:sessionId`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceSessionRevokeError) {
+        const forced = db.security.forceSessionRevokeError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const sessionId = String(params.sessionId);
+      const session = db.security.sessions.find((item) => item.id === sessionId);
+      if (!session) {
+        return errorResponse(404, 'NOT_FOUND', 'Session not found');
+      }
+      db.security.sessions = db.security.sessions.filter((item) => item.id !== sessionId);
+      db.security.sessionRevokeRequests.push(sessionId);
+      appendSecurityAudit(db, 'workspace.session.revoked', 'user', session.user_id);
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/workspaces/:workspaceId/sessions/revoke-all`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceRevokeAllError) {
+        const forced = db.security.forceRevokeAllError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      db.security.revokeAllRequests += 1;
+      const current = db.security.sessions.find((session) => session.current);
+      const removed = db.security.sessions.filter((session) => session !== current);
+      db.security.sessions = current ? [current] : [];
+      const affectedUsers = new Set(removed.map((session) => session.user_id));
+      const response: WorkspaceSessionRevokeAll = {
+        revoked_sessions: removed.length,
+        affected_users: affectedUsers.size,
+      };
+      appendSecurityAudit(db, 'workspace.sessions.revoked_all', null, null);
+      return HttpResponse.json(response);
+    }),
+
+    http.get(`${API}/workspaces/:workspaceId/security`, ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceSettingsError) {
+        const forced = db.security.forceSettingsError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      db.security.settingsRequests += 1;
+      return HttpResponse.json(db.security.settings satisfies WorkspaceSecurity);
+    }),
+
+    http.patch(`${API}/workspaces/:workspaceId/security`, async ({ request, params }) => {
+      const workspaceId = String(params.workspaceId);
+      const guard = workspaceManagerGuard(db, request, workspaceId);
+      if (isResponse(guard)) return guard;
+      if (db.security.forceSettingsSaveError) {
+        const forced = db.security.forceSettingsSaveError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      if (Object.prototype.hasOwnProperty.call(body, 'security_mode')) {
+        return errorResponse(422, 'MODE_CHANGE_FORBIDDEN', 'security_mode is immutable');
+      }
+      const allowed = ['require_2fa', 'session_timeout_minutes', 'dlp_enabled', 'retention_days'];
+      if (Object.keys(body).some((key) => !allowed.includes(key))) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Unknown security setting');
+      }
+      if (Object.keys(body).length === 0) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'At least one field is required');
+      }
+      if (body.require_2fa !== undefined && typeof body.require_2fa !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'require_2fa must be a boolean', {
+          details: { field: 'require_2fa' },
+        });
+      }
+      if (body.dlp_enabled !== undefined && typeof body.dlp_enabled !== 'boolean') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'dlp_enabled must be a boolean', {
+          details: { field: 'dlp_enabled' },
+        });
+      }
+      if (
+        body.session_timeout_minutes !== undefined &&
+        (!Number.isInteger(body.session_timeout_minutes) ||
+          (body.session_timeout_minutes as number) < 15 ||
+          (body.session_timeout_minutes as number) > 10_080)
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'session_timeout_minutes is out of range', {
+          details: { field: 'session_timeout_minutes' },
+        });
+      }
+      if (
+        body.retention_days !== undefined &&
+        (!Number.isInteger(body.retention_days) ||
+          (body.retention_days as number) < 1 ||
+          (body.retention_days as number) > 3650)
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'retention_days is out of range', {
+          details: { field: 'retention_days' },
+        });
+      }
+      if (body.dlp_enabled === true && guard.security_mode === 'E2EE') {
+        return errorResponse(
+          422,
+          'DLP_E2EE_UNSUPPORTED',
+          'DLP cannot be enabled in an E2EE workspace',
+        );
+      }
+      const current = db.security.settings;
+      const next: WorkspaceSecurity = {
+        ...current,
+        require_2fa: typeof body.require_2fa === 'boolean' ? body.require_2fa : current.require_2fa,
+        session_timeout_minutes:
+          typeof body.session_timeout_minutes === 'number'
+            ? body.session_timeout_minutes
+            : current.session_timeout_minutes,
+        dlp_enabled: typeof body.dlp_enabled === 'boolean' ? body.dlp_enabled : current.dlp_enabled,
+        retention_days:
+          typeof body.retention_days === 'number' ? body.retention_days : current.retention_days,
+      };
+      db.security.settingsPatches.push(body);
+      const changed =
+        next.require_2fa !== current.require_2fa ||
+        next.session_timeout_minutes !== current.session_timeout_minutes ||
+        next.dlp_enabled !== current.dlp_enabled ||
+        next.retention_days !== current.retention_days;
+      if (!changed) return HttpResponse.json(current);
+      next.updated_at = db.serverTime();
+      db.security.settings = next;
+      appendSecurityAudit(db, 'workspace.security.updated', 'workspace_security', workspaceId);
+      return HttpResponse.json(next);
     }),
 
     http.get(`${API}/sync`, ({ request }) => {

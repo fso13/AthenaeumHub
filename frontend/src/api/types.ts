@@ -133,6 +133,62 @@ export type AuthRefreshRequest = components['schemas']['AuthRefreshRequest'];
 export type AuthLogoutRequest = components['schemas']['AuthLogoutRequest'];
 
 /* ------------------------------------------------------------------------- */
+/* P0-4 (#82): profile avatar and TOTP second factor                        */
+/* ------------------------------------------------------------------------- */
+
+/** `POST /me/avatar` — an existing CLEAN image attachment owned by the caller. */
+export type AvatarUpdate = components['schemas']['AvatarUpdate'];
+/** `GET /me/avatar` body (the authenticated read also answers `302`). */
+export type ProfileAvatar = components['schemas']['ProfileAvatar'];
+/** `GET /me/2fa`: never carries the secret or the recovery codes. */
+export type TwoFactorStatus = components['schemas']['TwoFactorStatus'];
+/**
+ * `POST /me/2fa/setup` result. The secret/otpauth URI are shown exactly once and
+ * must never be persisted; they are kept only in component/store memory.
+ */
+export type TwoFactorSetup = components['schemas']['TwoFactorSetup'];
+export type TwoFactorSetupRequest = components['schemas']['TwoFactorSetupRequest'];
+export type TwoFactorVerifyRequest = components['schemas']['TwoFactorVerifyRequest'];
+export type TwoFactorDisableRequest = components['schemas']['TwoFactorDisableRequest'];
+export type TwoFactorRecoveryCodesRequest = components['schemas']['TwoFactorRecoveryCodesRequest'];
+/** One-time recovery codes; the server keeps only hashes. */
+export type TwoFactorRecoveryCodes = components['schemas']['TwoFactorRecoveryCodes'];
+/** `202` response of `POST /auth/login` when the account has TOTP enabled. */
+export type AuthTwoFactorChallenge = components['schemas']['AuthTwoFactorChallenge'];
+export type AuthTwoFactorVerifyRequest = components['schemas']['AuthTwoFactorVerifyRequest'];
+export type TwoFactorMethod = AuthTwoFactorChallenge['methods'][number];
+
+/* ------------------------------------------------------------------------- */
+/* P0-4 (#82): workspace settings, logo, invites and the permission matrix  */
+/* ------------------------------------------------------------------------- */
+
+/** `PATCH /workspaces/{id}`: absent = unchanged, `null` clears description/logo. */
+export type WorkspaceUpdate = components['schemas']['WorkspaceUpdate'];
+export type WorkspaceAvatarRequest = components['schemas']['WorkspaceAvatarRequest'];
+/** Metadata only; the raw invite token is never re-readable from the list. */
+export type WorkspaceInvite = components['schemas']['WorkspaceInvite'];
+export type WorkspaceInviteRole = WorkspaceInvite['role'];
+export type WorkspaceInviteStatus = WorkspaceInvite['status'];
+export type WorkspaceInviteList = components['schemas']['WorkspaceInviteList'];
+/** `token`/`accept_url` exist only in this response and are shown once. */
+export type WorkspaceInviteCreated = components['schemas']['WorkspaceInviteCreated'];
+export type WorkspaceInviteCreateRequest = components['schemas']['WorkspaceInviteCreateRequest'];
+export type WorkspaceInviteAcceptance = components['schemas']['WorkspaceInviteAcceptance'];
+/** One row of the effective OWNER/ADMIN/MEMBER matrix (six rights). */
+export type WorkspaceRolePermissions = components['schemas']['WorkspaceRolePermissions'];
+export type WorkspacePermissionRole = WorkspaceRolePermissions['role'];
+export type WorkspacePermissionKey =
+  | 'manage_workspace'
+  | 'manage_members'
+  | 'manage_invites'
+  | 'manage_permissions'
+  | 'view_audit'
+  | 'manage_security';
+export type WorkspacePermissionMatrix = components['schemas']['WorkspacePermissionMatrix'];
+export type WorkspacePermissionEntry = components['schemas']['WorkspacePermissionEntry'];
+export type WorkspacePermissionUpdate = components['schemas']['WorkspacePermissionUpdate'];
+
+/* ------------------------------------------------------------------------- */
 /* E4-F: managed files                                                       */
 /* ------------------------------------------------------------------------- */
 
@@ -261,6 +317,49 @@ export type TaskUpdate = components['schemas']['TaskUpdate'];
 export type TranslationRequest = components['schemas']['TranslationRequest'];
 /** Server-returned plain text; absence of a provider is an honest `503`. */
 export type Translation = components['schemas']['Translation'];
+
+/* ------------------------------------------------------------------------- */
+/* P0-3 (#81): workspace DLP, audit/export, sessions and security settings   */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * One DLP rule. `pattern` is a literal (KEYWORD) or a literal with `*`
+ * wildcards (PATTERN); it is never a regular expression. The UI therefore
+ * never claims regex support and validates only the contract bounds.
+ */
+export type DlpPolicy = components['schemas']['DlpPolicy'];
+export type DlpAction = DlpPolicy['action'];
+export type DlpPatternType = DlpPolicy['pattern_type'];
+export type DlpPolicyList = components['schemas']['DlpPolicyList'];
+export type DlpPolicyCreateRequest = components['schemas']['DlpPolicyCreateRequest'];
+/** PATCH body: every field optional; at least one is required by the contract. */
+export type DlpPolicyUpdateRequest = components['schemas']['DlpPolicyUpdateRequest'];
+/**
+ * Content-free DLP event: ids, rule-name snapshot, action and time only.
+ * Message text, attachments, email and IP are not part of the contract, so the
+ * UI cannot render them.
+ */
+export type DlpEventRow = components['schemas']['DlpEvent'];
+export type DlpEventPage = components['schemas']['DlpEventPage'];
+/** Workspace audit row: action/actor/target/time only (no metadata/hash/email). */
+export type WorkspaceAuditEvent = components['schemas']['WorkspaceAuditEvent'];
+export type WorkspaceAuditPage = components['schemas']['WorkspaceAuditPage'];
+/** Bounded JSON export shape (`exported_rows` ≤ 10 000). */
+export type WorkspaceAuditExport = components['schemas']['WorkspaceAuditExport'];
+export type AuditExportFormat = NonNullable<
+  operations['exportWorkspaceAudit']['parameters']['query']
+>['format'];
+/** Member Keycloak session: no IP/username/tokens in the contract. */
+export type WorkspaceSession = components['schemas']['WorkspaceSession'];
+export type WorkspaceSessionPage = components['schemas']['WorkspaceSessionPage'];
+export type WorkspaceSessionRevokeAll = components['schemas']['WorkspaceSessionRevokeAll'];
+/**
+ * Workspace security policy values. Deliberately has no `security_mode`: the
+ * mode is immutable and changing it is a documented `422 MODE_CHANGE_FORBIDDEN`.
+ */
+export type WorkspaceSecurity = components['schemas']['WorkspaceSecurity'];
+export type WorkspaceSecurityUpdateRequest =
+  components['schemas']['WorkspaceSecurityUpdateRequest'];
 
 /* ------------------------------------------------------------------------- */
 /* E6-F: in-app notifications and preferences                                */

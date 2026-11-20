@@ -141,6 +141,28 @@ const operations = {
   'POST /workspaces': spec.paths?.['/workspaces']?.post,
   'GET /workspaces/{workspaceId}/chats': spec.paths?.['/workspaces/{workspaceId}/chats']?.get,
   'GET /workspaces/{workspaceId}/limits': spec.paths?.['/workspaces/{workspaceId}/limits']?.get,
+  // P0-3 (#81): workspace DLP, audit/export, sessions and security settings.
+  'GET /workspaces/{workspaceId}/dlp/policies':
+    spec.paths?.['/workspaces/{workspaceId}/dlp/policies']?.get,
+  'POST /workspaces/{workspaceId}/dlp/policies':
+    spec.paths?.['/workspaces/{workspaceId}/dlp/policies']?.post,
+  'PATCH /workspaces/{workspaceId}/dlp/policies/{policyId}':
+    spec.paths?.['/workspaces/{workspaceId}/dlp/policies/{policyId}']?.patch,
+  'DELETE /workspaces/{workspaceId}/dlp/policies/{policyId}':
+    spec.paths?.['/workspaces/{workspaceId}/dlp/policies/{policyId}']?.delete,
+  'GET /workspaces/{workspaceId}/dlp/events':
+    spec.paths?.['/workspaces/{workspaceId}/dlp/events']?.get,
+  'GET /workspaces/{workspaceId}/audit': spec.paths?.['/workspaces/{workspaceId}/audit']?.get,
+  'GET /workspaces/{workspaceId}/audit/export':
+    spec.paths?.['/workspaces/{workspaceId}/audit/export']?.get,
+  'GET /workspaces/{workspaceId}/sessions': spec.paths?.['/workspaces/{workspaceId}/sessions']?.get,
+  'POST /workspaces/{workspaceId}/sessions/revoke-all':
+    spec.paths?.['/workspaces/{workspaceId}/sessions/revoke-all']?.post,
+  'DELETE /workspaces/{workspaceId}/sessions/{sessionId}':
+    spec.paths?.['/workspaces/{workspaceId}/sessions/{sessionId}']?.delete,
+  'GET /workspaces/{workspaceId}/security': spec.paths?.['/workspaces/{workspaceId}/security']?.get,
+  'PATCH /workspaces/{workspaceId}/security':
+    spec.paths?.['/workspaces/{workspaceId}/security']?.patch,
   'GET /sticker-packs': spec.paths?.['/sticker-packs']?.get,
   'PUT /stickers/{stickerId}/favorite': spec.paths?.['/stickers/{stickerId}/favorite']?.put,
   'DELETE /stickers/{stickerId}/favorite': spec.paths?.['/stickers/{stickerId}/favorite']?.delete,
@@ -161,6 +183,29 @@ const operations = {
   'POST /uploads/{uploadId}/abort': spec.paths?.['/uploads/{uploadId}/abort']?.post,
   'GET /attachments/{attachmentId}/download-url':
     spec.paths?.['/attachments/{attachmentId}/download-url']?.get,
+  // P0-4 (#82): avatar, TOTP authenticator, workspace settings/invites/permissions.
+  'POST /me/avatar': spec.paths?.['/me/avatar']?.post,
+  'DELETE /me/avatar': spec.paths?.['/me/avatar']?.delete,
+  'GET /me/avatar': spec.paths?.['/me/avatar']?.get,
+  'GET /me/2fa': spec.paths?.['/me/2fa']?.get,
+  'DELETE /me/2fa': spec.paths?.['/me/2fa']?.delete,
+  'POST /me/2fa/setup': spec.paths?.['/me/2fa/setup']?.post,
+  'POST /me/2fa/verify': spec.paths?.['/me/2fa/verify']?.post,
+  'POST /me/2fa/recovery-codes': spec.paths?.['/me/2fa/recovery-codes']?.post,
+  'POST /auth/2fa/verify': spec.paths?.['/auth/2fa/verify']?.post,
+  'PATCH /workspaces/{workspaceId}': spec.paths?.['/workspaces/{workspaceId}']?.patch,
+  'POST /workspaces/{workspaceId}/avatar': spec.paths?.['/workspaces/{workspaceId}/avatar']?.post,
+  'DELETE /workspaces/{workspaceId}/avatar':
+    spec.paths?.['/workspaces/{workspaceId}/avatar']?.delete,
+  'GET /workspaces/{workspaceId}/invites': spec.paths?.['/workspaces/{workspaceId}/invites']?.get,
+  'POST /workspaces/{workspaceId}/invites': spec.paths?.['/workspaces/{workspaceId}/invites']?.post,
+  'DELETE /workspaces/{workspaceId}/invites/{inviteId}':
+    spec.paths?.['/workspaces/{workspaceId}/invites/{inviteId}']?.delete,
+  'POST /workspace-invites/{token}/accept': spec.paths?.['/workspace-invites/{token}/accept']?.post,
+  'GET /workspaces/{workspaceId}/permissions':
+    spec.paths?.['/workspaces/{workspaceId}/permissions']?.get,
+  'PATCH /workspaces/{workspaceId}/permissions':
+    spec.paths?.['/workspaces/{workspaceId}/permissions']?.patch,
 };
 
 for (const [operation, definition] of Object.entries(operations)) {
@@ -689,18 +734,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 77,
-  'Contract must expose exactly 77 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings)',
+  Object.keys(spec.paths ?? {}).length === 98,
+  'Contract must expose exactly 98 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + P0-3 security)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 97,
-  'Contract check must cover exactly 97 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings)',
+  Object.keys(operations).length === 127,
+  'Contract check must cover exactly 127 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + P0-3 security)',
 );
 check(
-  Object.keys(schemas).length === 134,
-  'Contract must expose exactly 134 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings)',
+  Object.keys(schemas).length === 170,
+  'Contract must expose exactly 170 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + P0-3 security)',
 );
 
 check(
@@ -956,6 +1001,109 @@ check(
       Boolean(spec.paths?.['/chats/{chatId}/unarchive']?.post?.responses?.[status]),
   ),
   'Archive/unarchive must document idempotent 204',
+);
+
+// --- P0-3 (#81) workspace security invariants ----------------------------
+for (const field of [
+  'id',
+  'name',
+  'action',
+  'pattern_type',
+  'pattern',
+  'enabled',
+  'created_at',
+  'updated_at',
+]) {
+  check(
+    Array.isArray(schemas.DlpPolicy?.required) && schemas.DlpPolicy.required.includes(field),
+    `DlpPolicy.${field} must remain required`,
+  );
+}
+check(
+  schemas.DlpPolicy?.properties?.pattern?.maxLength === 200,
+  'DlpPolicy.pattern maxLength must stay 200 (bounded literal, never regex)',
+);
+check(
+  Array.isArray(schemas.DlpPolicyCreateRequest?.properties?.action?.enum) &&
+    schemas.DlpPolicyCreateRequest.properties.action.enum.includes('BLOCK') &&
+    schemas.DlpPolicyCreateRequest.properties.action.enum.includes('WARN'),
+  'DlpPolicyCreateRequest.action must stay WARN/BLOCK',
+);
+check(
+  String(schemas.DlpPolicyCreateRequest?.properties?.pattern?.description ?? '')
+    .toLowerCase()
+    .includes('redos'),
+  'DlpPolicyCreateRequest.pattern must document the no-regex/ReDoS guarantee',
+);
+for (const field of ['text', 'content', 'ciphertext', 'filename', 'email', 'ip_address']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.DlpEvent?.properties ?? {}, field),
+    `DlpEvent must not expose ${field}`,
+  );
+}
+check(
+  Boolean(
+    spec.paths?.['/workspaces/{workspaceId}/audit/export']?.get?.responses?.['200']?.content?.[
+      'text/csv'
+    ],
+  ) &&
+    Boolean(
+      spec.paths?.['/workspaces/{workspaceId}/audit/export']?.get?.responses?.['200']?.content?.[
+        'application/json'
+      ],
+    ),
+  'Audit export must document CSV and JSON responses',
+);
+check(
+  schemas.WorkspaceAuditExport?.properties?.exported_rows?.maximum === 10000,
+  'WorkspaceAuditExport.exported_rows must stay bounded at 10000',
+);
+for (const field of ['metadata', 'actor_email', 'request_id', 'hash']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.WorkspaceAuditEvent?.properties ?? {}, field),
+    `WorkspaceAuditEvent must not expose ${field}`,
+  );
+}
+for (const field of ['ip', 'ip_address', 'username', 'access_token', 'refresh_token']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(schemas.WorkspaceSession?.properties ?? {}, field),
+    `WorkspaceSession must not expose ${field}`,
+  );
+}
+check(
+  schemas.WorkspaceSecurity?.properties?.security_mode === undefined,
+  'WorkspaceSecurity must not expose a mutable security_mode',
+);
+check(
+  String(
+    schemas.WorkspaceSecurityUpdateRequest?.properties?.security_mode?.description ?? '',
+  ).includes('MODE_CHANGE_FORBIDDEN'),
+  'WorkspaceSecurityUpdateRequest.security_mode must document the immutable mode',
+);
+check(
+  schemas.WorkspaceSessionRevokeAll?.properties?.revoked_sessions?.minimum === 0 &&
+    schemas.WorkspaceSessionRevokeAll?.properties?.affected_users?.minimum === 0,
+  'WorkspaceSessionRevokeAll counters must stay non-negative',
+);
+check(
+  Boolean(
+    spec.paths?.['/workspaces/{workspaceId}/dlp/policies/{policyId}']?.delete?.responses?.['204'],
+  ),
+  'DELETE /workspaces/{workspaceId}/dlp/policies/{policyId} must document 204',
+);
+check(
+  Boolean(
+    spec.paths?.['/workspaces/{workspaceId}/sessions/revoke-all']?.post?.responses?.['200'],
+  ) &&
+    Boolean(
+      spec.paths?.['/workspaces/{workspaceId}/sessions/{sessionId}']?.delete?.responses?.['204'],
+    ),
+  'Session revoke-all/revoke must document their success responses',
+);
+
+check(
+  String(spec.paths?.['/chats/{chatId}/messages']?.post?.description ?? '').includes('DLP_BLOCKED'),
+  'POST /chats/{chatId}/messages must document the DLP_BLOCKED send gate',
 );
 
 console.log(

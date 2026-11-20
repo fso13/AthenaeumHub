@@ -14,6 +14,7 @@ public final class UserPersistenceMapper {
         return User.reconstitute(entity.getId(), entity.getEmail(),
                 new DisplayName(entity.getDisplayName()),
                 new Bio(entity.getBio()), new Phone(entity.getPhone()),
-                User.Status.valueOf(entity.getStatus()), entity.isPlatformAdmin());
+                entity.getAvatarFileId(), User.Status.valueOf(entity.getStatus()),
+                entity.isPlatformAdmin());
     }
 }
