@@ -111,7 +111,7 @@ npm run check        # всё перечисленное + build
 - `POST /auth/refresh` вызывается на первый 401 (один replay, общий для параллельных запросов, cooldown 5 с). Недействительный refresh очищает токены и возвращает на `/login`.
 - `POST /auth/logout` отзывает refresh в Keycloak (best-effort), затем очищает sessionStorage/memory token, device id и E2EE-состояние текущего аккаунта (E7-F5F) и возвращает на `/login?logged_out=1`.
 - При старте с сохранённой сессией выполняется `GET /me`; при `workspaces: []` открывается onboarding.
-- Dev-проверка без backend: `VITE_USE_MOCKS=true VITE_AUTH_MODE=password npm run dev` — MSW реализует `/auth/*`; демо-пользователь `demo@krug.test` / `Krug-demo-2026`, код подтверждения `123456` (только mock).
+- Dev-проверка без backend: `VITE_USE_MOCKS=true VITE_AUTH_MODE=password npm run dev` — MSW реализует `/auth/*`; демо-пользователь `demo@krug.test` / `Sova-demo-2026`, код подтверждения `123456` (только mock).
 
 ## Переменные окружения
 

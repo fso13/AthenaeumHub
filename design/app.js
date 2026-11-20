@@ -115,17 +115,17 @@ const WORKSPACES = [
 const PLUGINS = [
   {
     id: 'polls', name: 'Опросы', icon: 'poll', color: '', version: '1.4.0',
-    author: 'Krug Labs', desc: 'Быстрые голосования в чате: варианты, срок, один голос на участника.',
+    author: 'Sova Labs', desc: 'Быстрые голосования в чате: варианты, срок, один голос на участника.',
     perms: ['chat.messages.send', 'chat.members.read']
   },
   {
     id: 'tasks', name: 'Задачи', icon: 'task', color: 'is-amber', version: '0.9.2',
-    author: 'Krug Labs', desc: 'Превращает сообщение в задачу с исполнителем, сроком и статусом.',
+    author: 'Sova Labs', desc: 'Превращает сообщение в задачу с исполнителем, сроком и статусом.',
     perms: ['chat.messages.send', 'chat.members.read', 'ui.panel']
   },
   {
     id: 'translate', name: 'Перевод', icon: 'translate', color: 'is-blue', version: '2.1.0',
-    author: 'Krug Labs', desc: 'Переводит сообщения на лету. В E2EE-чатах работает только на устройстве.',
+    author: 'Sova Labs', desc: 'Переводит сообщения на лету. В E2EE-чатах работает только на устройстве.',
     perms: ['ui.message', 'storage.workspace']
   },
   {
@@ -135,12 +135,12 @@ const PLUGINS = [
   },
   {
     id: 'bridge', name: 'Мост в Telegram', icon: 'bot', color: 'is-blue', version: '0.6.1',
-    author: 'Krug Labs', desc: 'Синхронизирует выбранный чат с Telegram-группой через серверный коннектор.',
+    author: 'Sova Labs', desc: 'Синхронизирует выбранный чат с Telegram-группой через серверный коннектор.',
     perms: ['chat.messages.read', 'http.request'], managedOnly: true
   },
   {
     id: 'dlp', name: 'DLP-подсказки', icon: 'shield-check', color: 'is-plum', version: '1.2.0',
-    author: 'Krug Labs', desc: 'Предупреждает об отправке паспортных данных, ключей и номеров карт.',
+    author: 'Sova Labs', desc: 'Предупреждает об отправке паспортных данных, ключей и номеров карт.',
     perms: ['chat.messages.read', 'admin.policy'], managedOnly: true, enterprise: true
   }
 ];

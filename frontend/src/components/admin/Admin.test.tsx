@@ -7,7 +7,7 @@ import { navigate } from '../../router/router';
 import { mockDb, server } from '../../test/server';
 import { renderPasswordApp } from '../../test/renderApp';
 
-const SETUP_HEADING = 'Первичная настройка Pickle';
+const SETUP_HEADING = 'Первичная настройка Сова';
 const ADMIN_HEADING = 'Администрирование';
 const INCOMPLETE_HEADING = 'Установка не завершена';
 const FORBIDDEN_HEADING = 'Доступ запрещён';

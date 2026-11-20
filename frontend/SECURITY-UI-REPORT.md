@@ -143,7 +143,7 @@ schemas described above. Only `frontend/**` was modified; `contracts/`, `backend
   (the production contour and the D1 e2e contour) resolves OWNER/ADMIN from `/me`.
 - The Playwright visual suite is not part of `npm run check`; a local attempt was blocked by
   a pre-existing demo-password drift in `e2e/d1-helpers.ts` (`Sova-demo-2026` vs the current
-  `Pickle-demo-2026` fixture), unrelated to this slice.
+  `Sova-demo-2026` fixture), unrelated to this slice.
 
 ## Files
 

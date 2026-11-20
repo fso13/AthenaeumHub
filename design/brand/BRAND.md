@@ -23,7 +23,7 @@
 - `sova-logo.svg` / `.png` — словесный знак `сова` + бирюзовая точка.
 
 Иконки для web-приложения лежат в `frontend/public/icons/` (`favicon.ico`, `sova-icon-32.png`,
-`sova-icon-180.png`, `sova-icon-512.png`).
+`sova-icon-64.png`, `sova-icon-180.png`, `sova-icon-512.png`).
 
 **Дополнительные образы (не иконка):**
 

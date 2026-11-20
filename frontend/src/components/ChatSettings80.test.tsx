@@ -47,7 +47,7 @@ function coverImage(scanStatus: FileItem['scan_status'] = 'CLEAN'): FileItem {
 
 async function login(user: TestUser): Promise<void> {
   await user.type(await screen.findByLabelText('Email'), 'demo@krug.test');
-  await user.type(screen.getByLabelText('Пароль'), 'Pickle-demo-2026');
+  await user.type(screen.getByLabelText('Пароль'), 'Sova-demo-2026');
   await user.click(screen.getByRole('button', { name: 'Войти' }));
   await screen.findByRole('heading', { name: 'Команда «Восход»' });
 }

@@ -1,5 +1,5 @@
 export const ru = {
-  'app.name': 'Pickle',
+  'app.name': 'Сова',
   'app.tagline': 'защищённый мессенджер',
   'app.skipToChat': 'Перейти к чату',
 
@@ -520,7 +520,7 @@ export const ru = {
   'auth.login.registrationHint':
     'Нет аккаунта? Зарегистрируйтесь — код подтверждения придёт на email.',
   'auth.login.loggedOut': 'Вы вышли из аккаунта.',
-  'auth.register.title': 'Регистрация в Pickle',
+  'auth.register.title': 'Регистрация в Сова',
   'auth.register.lead': 'Создайте аккаунт — мы отправим 6-значный код на email.',
   'auth.register.nameLabel': 'Имя',
   'auth.register.nameRequired': 'Введите имя.',
@@ -727,7 +727,7 @@ export const ru = {
   'chat.create.limitError': 'Не удалось загрузить лимиты.',
 
   // E8/R-03: first-run setup
-  'setup.title': 'Первичная настройка Pickle',
+  'setup.title': 'Первичная настройка Сова',
   'setup.lead':
     'Настройте SMTP и параметры установки. Пароль SMTP отправляется только на сервер и никогда не возвращается.',
   'setup.step.smtp': 'Почта',
@@ -756,7 +756,7 @@ export const ru = {
 
   // E8/R-04: platform admin
   'admin.title': 'Администрирование',
-  'admin.lead': 'Пользователи, чаты, хранилище и параметры установки Pickle.',
+  'admin.lead': 'Пользователи, чаты, хранилище и параметры установки Сова.',
   'admin.open': 'Администрирование',
   'admin.backToChats': 'К чатам',
   'admin.overviewSection': 'Обзор установки',
@@ -1932,7 +1932,7 @@ export const ru = {
   'settings.feedAvatars': 'Аватары в ленте',
   'settings.feedAvatarsHint': 'Скрывать аватары у своих сообщений',
   'settings.accent': 'Акцент',
-  'settings.accentHint': 'Фирменный бирюзовый цвет Pickle',
+  'settings.accentHint': 'Фирменный бирюзовый цвет Сова',
   'settings.unavailableShort': 'Недоступно',
   'settings.noPreferences': 'Правила по умолчанию: все уведомления в приложении.',
   'settings.preferenceRow': '{type} · {channel}',
@@ -2427,7 +2427,7 @@ export const ru = {
   'chatInvites.error.generic': 'Не удалось выполнить действие со ссылкой.',
 
   'inviteAccept.title': 'Приглашение в канал',
-  'inviteAccept.lead': 'Ссылка-приглашение в канал Pickle.',
+  'inviteAccept.lead': 'Ссылка-приглашение в канал Сова.',
   'inviteAccept.details': 'Детали приглашения',
   'inviteAccept.token': 'Код приглашения',
   'inviteAccept.cta': 'Принять приглашение',
@@ -2726,7 +2726,7 @@ export const ru = {
     'Уже принявшие приглашение участники сохранят доступ. Новые входы по ссылке будут невозможны.',
   'common.refresh': 'Обновить',
   'workspaceAccept.title': 'Приглашение в пространство',
-  'workspaceAccept.lead': 'Ссылка-приглашение открывает доступ к пространству Pickle.',
+  'workspaceAccept.lead': 'Ссылка-приглашение открывает доступ к пространству Сова.',
   'workspaceAccept.details': 'Приглашение',
   'workspaceAccept.token': 'Код ссылки',
   'workspaceAccept.joinHint':

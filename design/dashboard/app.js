@@ -1463,8 +1463,8 @@
       $("#ws-menu-list").innerHTML = Object.values(SPACES)
         .map(
           (s) => `<button class="ws-menu-item ${s.id === state.space ? "is-active" : ""}" data-space="${s.id}">
-            <span class="av ${s.id === "studio" ? "sp-studio" : "sp-family"}" style="display:grid;place-items:center;color:#fff">${s.short}</span>
-            <span>${esc(s.name)}</span>
+            <span class="av ${s.id === "studio" ? "sp-studio" : "sp-family"}">${s.short}</span>
+            <span class="ws-item-name">${esc(s.name)}</span>
             <span class="role">${s.e2ee ? "E2EE" : "Управляемый"}</span>
           </button>`
         )
@@ -2643,7 +2643,7 @@
   function chatSettingsBody(chat, dm) {
     if (state.modalTab === "members") {
       return `<div class="form-row"><label>Ссылка-приглашение</label>
-        <div class="invite-row"><input class="input" readonly value="krug.im/s/atlas-1838"><button class="btn btn--sm" data-toast="Ссылка скопирована">Копировать</button></div>
+        <div class="invite-row"><input class="input" readonly value="sova.im/s/atlas-1838"><button class="btn btn--sm" data-toast="Ссылка скопирована">Копировать</button></div>
       </div>
       <div class="setting-row" style="border-top:0">
         <div class="text"><b>Приглашения по ссылке</b><small>Новые участники получают роль «Участник»</small></div>
@@ -2709,7 +2709,7 @@
       <div class="form-row"><label>Тема</label><input class="input" value="Продукт"></div>
     </div>
     <div class="form-row" style="margin-bottom:0"><label>${dm ? "Ссылка на профиль" : "Ссылка-приглашение"}</label>
-      <div class="invite-row"><input class="input" readonly value="${dm ? "krug.im/u/" + chat.person : "krug.im/s/" + chat.id + "-1838"}"><button class="btn btn--sm" data-toast="Ссылка скопирована">Копировать</button></div>
+      <div class="invite-row"><input class="input" readonly value="${dm ? "sova.im/u/" + chat.person : "sova.im/s/" + chat.id + "-1838"}"><button class="btn btn--sm" data-toast="Ссылка скопирована">Копировать</button></div>
     </div>`;
   }
 

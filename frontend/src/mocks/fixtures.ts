@@ -73,7 +73,7 @@ export const MOCK_RECOVERY_CODES = [
   '3333-4444-5555',
 ] as const;
 export const MOCK_DEMO_EMAIL = 'demo@krug.test';
-export const MOCK_DEMO_PASSWORD = 'Pickle-demo-2026';
+export const MOCK_DEMO_PASSWORD = 'Sova-demo-2026';
 
 export const mockSession: Session = {
   access_token: MOCK_ACCESS_TOKEN,
@@ -370,14 +370,14 @@ export function stickerId(index: number): string {
 
 const STICKER_ALTS = {
   krug: [
-    'Pickle: привет',
-    'Pickle: спасибо',
-    'Pickle: готово',
-    'Pickle: вопрос',
-    'Pickle: идея',
-    'Pickle: ура',
-    'Pickle: обнимаю',
-    'Pickle: пока',
+    'Сова: привет',
+    'Сова: спасибо',
+    'Сова: готово',
+    'Сова: вопрос',
+    'Сова: идея',
+    'Сова: ура',
+    'Сова: обнимаю',
+    'Сова: пока',
   ],
   cats: [
     'Кот: привет',
@@ -397,7 +397,7 @@ export function buildStickerPacks(): StickerPack[] {
       const stickerOffset = packIndex * 8;
       return {
         id: STICKER_PACK_IDS[key],
-        name: key === 'krug' ? 'Pickle' : 'Коты',
+        name: key === 'krug' ? 'Сова' : 'Коты',
         cover_url: `/stickers/${key}/cover.png`,
         stickers: STICKER_ALTS[key].map((alt, index) => ({
           id: stickerId(stickerOffset + index + 1),
@@ -631,7 +631,7 @@ export function buildNotifications(): Notification[] {
       type: 'SYSTEM',
       chat_id: null,
       chat_name: null,
-      title: 'Добро пожаловать в Pickle',
+      title: 'Добро пожаловать в Сова',
       body: null,
       created_at: iso(15, 18, 0),
       read: true,

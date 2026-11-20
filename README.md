@@ -73,8 +73,8 @@ python3 -m http.server 8080
 мобильный drawer и нижний sheet профиля. В рейле и на favicon — иконка «Сова»: линейная сова на бирюзовой
 плитке. Внутри — продуктовая модель Совы: управляемый контур с DLP и E2EE-пространство с ключами,
 голосовые, аудио- и видеофайлы, запись с микрофона, **треды**, **карточки песен с ID3-метаданными**,
-счётчики непрочитанных на пространствах с правилом **99+**, разделы «Обзор / Файлы / Плагины / Защита /
-Настройки» и окна профиля и настроек чата.
+счётчики непрочитанных на пространствах с правилом **99+**, **переключатель пространств** с чипами
+режима, разделы «Обзор / Файлы / Плагины / Защита / Настройки» и окна профиля и настроек чата.
 
 [![Обложка концепции](design/dashboard/screenshots/cover.png)](design/dashboard/index.html)
 
@@ -84,8 +84,8 @@ python3 -m http.server 8080
 | Спецификация: экраны, сетка, компоненты, внедрение | [`design/dashboard/DESIGN.md`](design/dashboard/DESIGN.md) |
 | Токены (W3C Design Tokens) | [`design/dashboard/tokens.json`](design/dashboard/tokens.json) |
 | Скриншоты | [светлая](design/dashboard/screenshots/desktop-light.png) · [тёмная](design/dashboard/screenshots/desktop-dark.png) · [голосовые и медиа](design/dashboard/screenshots/media-light.png) · [обзор](design/dashboard/screenshots/overview-light.png) · [файлы](design/dashboard/screenshots/files-light.png) · [настройки](design/dashboard/screenshots/settings-light.png) |
-| Версия макета | **1.0.0**, заморожено 18.11.2026 · [VERSION](design/dashboard/VERSION.md) · [release zip](design/dashboard/releases/sova-message-dashboard-v1.0.0.zip) |
-| Тикет на разработку | [D1 — Message Dashboard v1.0](docs/TASKS-DASHBOARD-V1.md) |
+| Версия макета | **1.2.0**, 19.11.2026 · [VERSION](design/dashboard/VERSION.md) · [release zip](design/dashboard/releases/sova-message-dashboard-v1.2.0.zip) · [v1.1](design/dashboard/releases/sova-message-dashboard-v1.1.0.zip) |
+| Тикет на разработку | [D1 — Message Dashboard «Сова»](docs/TASKS-DASHBOARD-V1.md) |
 
 | Голосовые, аудио и видео | Раздел «Файлы» |
 |---|---|
@@ -98,6 +98,10 @@ python3 -m http.server 8080
 | Настройки чата | Профиль |
 |---|---|
 | ![Настройки чата](design/dashboard/screenshots/chat-settings-light.png) | ![Профиль](design/dashboard/screenshots/profile-light.png) |
+
+| Переключатель пространств · тёмная | Переключатель пространств · светлая |
+|---|---|
+| ![Переключатель пространств, тёмная тема](design/dashboard/screenshots/workspace-switcher-dark.png) | ![Переключатель пространств, светлая тема](design/dashboard/screenshots/workspace-switcher-light.png) |
 
 ```bash
 cd design/dashboard

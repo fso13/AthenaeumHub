@@ -18,7 +18,7 @@ async function renderStickers() {
   return result;
 }
 
-async function openPicker(user: ReturnType<typeof renderApp>['user'], waitForTab = 'Pickle') {
+async function openPicker(user: ReturnType<typeof renderApp>['user'], waitForTab = 'Сова') {
   await user.click(screen.getByRole('button', { name: 'Стикеры' }));
   const dialog = await screen.findByRole('dialog', { name: 'Стикеры' });
   await screen.findByRole('tab', { name: waitForTab });
@@ -27,7 +27,7 @@ async function openPicker(user: ReturnType<typeof renderApp>['user'], waitForTab
 
 async function selectPack(
   user: ReturnType<typeof renderApp>['user'],
-  name = 'Pickle',
+  name = 'Сова',
 ): Promise<void> {
   await user.click(screen.getByRole('tab', { name }));
 }
@@ -47,7 +47,7 @@ describe('built-in stickers in managed chat', () => {
   it('renders a sticker from history as a 512px image without a bubble', async () => {
     await renderStickers();
 
-    const image = await screen.findByRole('img', { name: 'Pickle: готово' });
+    const image = await screen.findByRole('img', { name: 'Сова: готово' });
     expect(image).toHaveAttribute('src', '/stickers/krug/03.png');
     expect(image).toHaveAttribute('width', '512');
     expect(image).toHaveAttribute('height', '512');
@@ -62,15 +62,15 @@ describe('built-in stickers in managed chat', () => {
 
     const search = screen.getByLabelText('Поиск по стикерам');
     await user.type(search, 'спасибо');
-    expect(screen.getByRole('button', { name: 'Отправить стикер: Pickle: спасибо' })).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Отправить стикер: Pickle: привет' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Отправить стикер: Сова: спасибо' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Отправить стикер: Сова: привет' })).toBeNull();
     await user.clear(search);
 
     mockDb.sendDelayMs = 150;
     const sticker = builtinSticker('krug', 1);
-    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Pickle: спасибо' }));
+    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Сова: спасибо' }));
 
-    const optimistic = await screen.findByRole('img', { name: 'Pickle: спасибо' });
+    const optimistic = await screen.findByRole('img', { name: 'Сова: спасибо' });
     expect(optimistic.closest('.bubble')).toBeNull();
     expect(screen.getByText('Отправляется…')).toBeInTheDocument();
 
@@ -84,18 +84,18 @@ describe('built-in stickers in managed chat', () => {
     const sent = mockDb.chats[IDS.groupChat]?.messages.at(-1);
     expect(sent?.type).toBe('STICKER');
     expect(sent?.sticker_id).toBe(sticker.id);
-    expect(sent?.sticker?.alt).toBe('Pickle: спасибо');
+    expect(sent?.sticker?.alt).toBe('Сова: спасибо');
     expect(sent?.text).toBeNull();
     expect(mockDb.sendBodies[0]).toMatchObject({
       type: 'STICKER',
       sticker_id: sticker.id,
     });
-    expect(screen.getAllByRole('img', { name: 'Pickle: спасибо' })).toHaveLength(1);
+    expect(screen.getAllByRole('img', { name: 'Сова: спасибо' })).toHaveLength(1);
     expect(container.querySelectorAll('.sticker-message__image').length).toBeGreaterThan(0);
 
     await openPicker(user);
     await user.click(screen.getByRole('tab', { name: 'Недавние' }));
-    expect(screen.getByRole('button', { name: 'Отправить стикер: Pickle: спасибо' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Отправить стикер: Сова: спасибо' })).toBeVisible();
   });
 
   it('favorites and unfavorites with optimistic PUT/DELETE and shows the favorite tab', async () => {
@@ -104,21 +104,21 @@ describe('built-in stickers in managed chat', () => {
     await selectPack(user);
 
     const sticker = builtinSticker('krug', 0);
-    const add = screen.getByRole('button', { name: 'Добавить в избранное: Pickle: привет' });
+    const add = screen.getByRole('button', { name: 'Добавить в избранное: Сова: привет' });
     await user.click(add);
 
     await waitFor(() => {
       expect(mockDb.stickerFavorites.has(sticker.id)).toBe(true);
     });
     expect(
-      screen.getByRole('button', { name: 'Убрать из избранного: Pickle: привет' }),
+      screen.getByRole('button', { name: 'Убрать из избранного: Сова: привет' }),
     ).toHaveAttribute('aria-pressed', 'true');
     expect(mockDb.stickerFavoriteRequests).toEqual([{ stickerId: sticker.id, action: 'PUT' }]);
 
     await user.click(screen.getByRole('tab', { name: 'Избранное' }));
-    expect(screen.getByRole('button', { name: 'Отправить стикер: Pickle: привет' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Отправить стикер: Сова: привет' })).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Убрать из избранного: Pickle: привет' }));
+    await user.click(screen.getByRole('button', { name: 'Убрать из избранного: Сова: привет' }));
     await waitFor(() => {
       expect(mockDb.stickerFavorites.has(sticker.id)).toBe(false);
     });
@@ -131,12 +131,12 @@ describe('built-in stickers in managed chat', () => {
     await openPicker(user);
     await selectPack(user);
 
-    await user.click(screen.getByRole('button', { name: 'Добавить в избранное: Pickle: привет' }));
+    await user.click(screen.getByRole('button', { name: 'Добавить в избранное: Сова: привет' }));
 
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText(/Сервер недоступен/)).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Добавить в избранное: Pickle: привет' }),
+      screen.getByRole('button', { name: 'Добавить в избранное: Сова: привет' }),
     ).toHaveAttribute('aria-pressed', 'false');
     expect(mockDb.stickerFavorites.size).toBe(0);
   });
@@ -152,7 +152,7 @@ describe('built-in stickers in managed chat', () => {
       message: 'Sticker pack is disabled',
       details: { pack_id: STICKER_PACK_IDS.krug, status: 'DISABLED' },
     };
-    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Pickle: привет' }));
+    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Сова: привет' }));
 
     expect(await screen.findByText('Набор стикеров отключён')).toBeInTheDocument();
     expect(screen.queryByText('Отправляется…')).toBeNull();
@@ -160,10 +160,10 @@ describe('built-in stickers in managed chat', () => {
     expect(screen.getByRole('button', { name: 'Убрать' })).toBeInTheDocument();
 
     await openPicker(user, 'Коты');
-    expect(screen.queryByRole('tab', { name: 'Pickle' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Сова' })).toBeNull();
     expect(screen.getByRole('tab', { name: 'Коты' })).toBeInTheDocument();
-    expect(screen.getByText(/Набор «Pickle» отключён/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Отправить стикер: Pickle: привет' })).toBeNull();
+    expect(screen.getByText(/Набор «Сова» отключён/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Отправить стикер: Сова: привет' })).toBeNull();
   });
 
   it.each([
@@ -176,7 +176,7 @@ describe('built-in stickers in managed chat', () => {
     await selectPack(user);
 
     mockDb.forceSendError = { status, code, message: code };
-    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Pickle: привет' }));
+    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Сова: привет' }));
 
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText(title)).toBeInTheDocument();
@@ -199,11 +199,11 @@ describe('built-in stickers in managed chat', () => {
     expect(screen.getByRole('tab', { name: 'Недавние' })).toHaveAttribute('aria-selected', 'true');
 
     await selectPack(user);
-    const first = screen.getByRole('button', { name: 'Отправить стикер: Pickle: привет' });
+    const first = screen.getByRole('button', { name: 'Отправить стикер: Сова: привет' });
     first.focus();
     await user.keyboard('{ArrowRight}');
     expect(document.activeElement).toBe(
-      screen.getByRole('button', { name: 'Отправить стикер: Pickle: спасибо' }),
+      screen.getByRole('button', { name: 'Отправить стикер: Сова: спасибо' }),
     );
 
     await user.keyboard('{Escape}');
@@ -229,7 +229,7 @@ describe('built-in stickers in managed chat', () => {
 
     mockDb.forceStickerPacksError = null;
     await user.click(within(alert).getByRole('button', { name: 'Повторить' }));
-    expect(await screen.findByRole('tab', { name: 'Pickle' })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Сова' })).toBeInTheDocument();
   });
 
   it.each([
@@ -244,7 +244,7 @@ describe('built-in stickers in managed chat', () => {
     expect(within(alert).getByText('Не удалось загрузить стикеры')).toBeInTheDocument();
     expect(within(alert).getByText('Нет доступа')).toBeInTheDocument();
     expect(within(alert).getByText(code)).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Pickle' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Сова' })).toBeNull();
   });
 
   it('keeps sticker sending compatible with reply targeting', async () => {
@@ -255,7 +255,7 @@ describe('built-in stickers in managed chat', () => {
 
     await openPicker(user);
     await selectPack(user);
-    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Pickle: привет' }));
+    await user.click(screen.getByRole('button', { name: 'Отправить стикер: Сова: привет' }));
 
     await waitFor(() => {
       expect(mockDb.sendBodies[0]?.reply_to_id).toBeTruthy();

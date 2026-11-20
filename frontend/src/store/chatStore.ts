@@ -1543,7 +1543,7 @@ export class ChatStore {
 
     const device = await this.api.registerDevice(
       {
-        name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
+        name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
         platform: 'WEB',
         app_version: this.config.appVersion.slice(0, 40),
       },
@@ -5104,7 +5104,7 @@ export class ChatStore {
       try {
         const self = await this.e2eeBridge!.initialize({
           userId,
-          name: this.config.deviceName.slice(0, 80) || 'Pickle — браузер',
+          name: this.config.deviceName.slice(0, 80) || 'Сова — браузер',
           appVersion: this.config.appVersion.slice(0, 40),
         });
         this.patchE2ee({

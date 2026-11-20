@@ -24,7 +24,7 @@
 
 ## Acceptance
 
-Admin sees users/chats/storage; UI modern/accessible; LDAP user can log in via Сова forms; no secrets/content leaks.
+Admin sees users/chats/storage; UI modern/accessible; LDAP user can log in via Sova forms; no secrets/content leaks.
 
 
 ## E10 — Member directory + DIRECT chats

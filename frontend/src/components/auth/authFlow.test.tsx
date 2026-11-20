@@ -26,7 +26,7 @@ import { mockDb, server } from '../../test/server';
 import { renderPasswordApp } from '../../test/renderApp';
 
 const LOGIN_HEADING = 'Вход';
-const REGISTER_HEADING = 'Регистрация в Pickle';
+const REGISTER_HEADING = 'Регистрация в Сова';
 const VERIFY_HEADING = 'Подтвердите email';
 const CHAT_HEADING = 'Команда «Восход»';
 

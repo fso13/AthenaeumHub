@@ -116,6 +116,6 @@ BFF всё равно отправляет email в `username` — Keycloak ищ
 
 - Только LDAPS/StartTLS; не открывайте 389 в интернет.
 - Bind-аккаунт read-only, минимальные права, отдельный от админского.
-- Пароль bind — в Keycloak/Vault, не в Git/`.env` Сова.
+- Пароль bind — в Keycloak/Vault, не в Git/`.env` Совы.
 - Не включайте LDAP debug с паролями в проде.
-- Keycloak User Federation не даёт Сова доступ к LDAP-паролям.
+- Keycloak User Federation не даёт Сове доступ к LDAP-паролям.

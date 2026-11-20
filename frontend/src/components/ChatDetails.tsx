@@ -190,6 +190,8 @@ export function ChatDetails({
 }: ChatDetailsProps) {
   const store = useChatStore();
   const state = useChatState();
+  const filesStore = useFilesStore();
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const pluginsStore = usePluginsStore();
   const pluginsState = usePluginsState();
   const pluginActions = usePluginActionsState();
@@ -281,11 +283,30 @@ export function ChatDetails({
     pluginActionsCurrent && pluginActions.tasksStatus === 'ready'
       ? pluginActions.tasks.filter((task) => !task.done).length
       : null;
-  const cover = isDirect
+  const fallbackCover = isDirect
     ? COVER_BY_MODE.direct
     : isE2ee
       ? COVER_BY_MODE.e2ee
       : COVER_BY_MODE.managed;
+  const cover = coverUrl ?? fallbackCover;
+
+  useEffect(() => {
+    setCoverUrl(null);
+    const fileId = chat?.cover_file_id;
+    if (!open || !fileId) return;
+    let active = true;
+    void filesStore
+      .getDownloadUrl(fileId)
+      .then((download) => {
+        if (active) setCoverUrl(download.url);
+      })
+      .catch(() => {
+        // Keep the mode fallback if the cover link is unavailable.
+      });
+    return () => {
+      active = false;
+    };
+  }, [chat?.cover_file_id, chat?.id, filesStore, open]);
 
   useEffect(() => {
     // The attachment grid is part of the panel body in the v1 layout and starts

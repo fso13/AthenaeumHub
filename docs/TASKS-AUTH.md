@@ -149,7 +149,7 @@
 - Нет invite/membership flow — только личный воркспейс.
 - Нет 2FA/WebAuthn/step-up.
 - Нет BFF/HttpOnly refresh; sessionStorage — компромисс.
-- Keycloak hosted pages не брендированы под «Сова».
+- Keycloak hosted pages не брендированы под «Сову».
 - CORS/reverse proxy для production — отдельная задача.
 - `audit.audit_events` в B-04 не партиционирован и без anchors — E8/B-02.
 - JIT-провижининг выполняется на каждом аутентифицированном запросе (после первого — indexed lookup); request-scoped cache — оптимизация.

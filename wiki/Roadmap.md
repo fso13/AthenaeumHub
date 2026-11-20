@@ -5,7 +5,7 @@
 ## Сделано
 
 Managed MVP: auth BFF, чаты, файлы, стикеры, realtime, уведомления, admin (users/chats/storage/actions/audit),
-workspace members, DIRECT, LDAP guide, media, бренд Сова, deploy, QA.
+workspace members, DIRECT, LDAP guide, media, бренд Совы, deploy, QA.
 
 E2EE: backend B1–B4, client F1–F6, F7A browser KAT, F7B two-device, F8 P1 closure, G4 review.
 Флаг **false**.

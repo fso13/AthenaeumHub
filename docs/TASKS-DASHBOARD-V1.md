@@ -1,4 +1,4 @@
-# D1 — Message Dashboard v1.0: внедрение макета в продукт
+# D1 — Message Dashboard «Сова»: внедрение макета в продукт
 
 | Поле | Значение |
 |---|---|
@@ -6,8 +6,8 @@
 | **Тип** | Epic (FE + BE + contract) |
 | **Статус** | **READY / запланирован** (см. `docs/TASKS.md` §12) |
 | **Приоритет** | P1 (XL, после текущего G4; managed-only) |
-| **Дизайн** | [`design/dashboard/`](../design/dashboard/), версия **1.0.0**, заморожен 18.11.2026 |
-| **Release-снапшот** | [`design/dashboard/releases/sova-message-dashboard-v1.0.0.zip`](../design/dashboard/releases/sova-message-dashboard-v1.0.0.zip) |
+| **Дизайн** | [`design/dashboard/`](../design/dashboard/), версия **1.2.0**, релиз 19.11.2026 |
+| **Release-снапшот** | [`design/dashboard/releases/sova-message-dashboard-v1.2.0.zip`](../design/dashboard/releases/sova-message-dashboard-v1.2.0.zip) |
 | **Контракт** | [`contracts/openapi.yaml`](../contracts/openapi.yaml) |
 | **Зависимости** | I-01 (contract sync), E4 (upload/attachments), E6 (notifications), E7 (E2EE flag/keys), Keycloak |
 | **Компоненты** | `frontend/`, `backend/`, `contracts/`, QA |
@@ -16,7 +16,7 @@
 
 ## 1. Контекст и цель
 
-Макет [`design/dashboard`](../design/dashboard/) прошёл дизайн-ревью и **зафиксирован как v1.0.0**.
+Макет [`design/dashboard`](../design/dashboard/) прошёл дизайн-ревью и **обновлён до v1.2.0** (в v1.1 — ребрендинг «Сова», в v1.2 — переключатель пространств по референсу).
 Нужно перенести его в продукт: заменить текущий экранный слой чата на концепцию Message Dashboard и
 довести до продакшена три продуктовые фичи, которых сейчас нет:
 
@@ -30,6 +30,8 @@
 4. **Непрочитанные на иконках пространств** — число, при `> 99` — `99+`.
 5. **Разделы пространства** — Обзор, Файлы, Плагины, Защита, Настройки; окна Профиля и Настроек чата.
 6. **Визуальная система** — светлая/тёмная темы, плоская лента, правая панель, мобильный drawer/sheet.
+7. **Переключатель пространств** — меню по референсу: двухстрочное имя, чипы «Управляемый/E2EE»,
+   активная строка, разделитель, «Создать пространство»; v1.2 UI-дельта, backend не требуется.
 
 Источник истины по UI — замороженный макет и скриншоты, а не текущий фронтенд.
 
@@ -254,7 +256,8 @@ npx playwright test
   composer recording, modal a11y.
 - BE IT: threads (root/one-level/RLS/idempotency/limit), media metadata, chat settings, WS.
 - Playwright: 390/768/1440, light/dark, thread create/reply/reload, song upload, 99+ boundary.
-- Ручная сверка с v1.0: [`desktop-light`](../design/dashboard/screenshots/desktop-light.png),
+- Ручная сверка с v1.2: [`desktop-light`](../design/dashboard/screenshots/desktop-light.png),
+  [`workspace-switcher-dark`](../design/dashboard/screenshots/workspace-switcher-dark.png),
   [`thread-light`](../design/dashboard/screenshots/thread-light.png),
   [`media-light`](../design/dashboard/screenshots/media-light.png),
   [`mobile-thread`](../design/dashboard/screenshots/mobile-thread.png).
@@ -267,7 +270,7 @@ npx playwright test
 - [ ] Feature flags: треды (managed), запись голоса, media metadata — можно выключить.
 - [ ] Документация: README/ADR по threads и metadata; обновлён `frontend/README.md`.
 - [ ] Демо на стенде: сценарий из §6, скриншоты/видео приложены к PR.
-- [ ] PM/design приёмка по v1.0; отклонения — отдельным change request в v1.1, не правкой v1.0.
+- [ ] PM/design приёмка по v1.2; отклонения — отдельным change request в v1.3, не правкой v1.2.
 
 ## 9. Подзадачи и оценка
 
@@ -283,6 +286,28 @@ npx playwright test
 | D1-FE4 | Overview/Files + limits + empty/error | FE | 4 d |
 | D1-FE5 | Profile/Chat settings modals | FE | 3 d |
 | D1-QA1 | E2E, a11y, responsive, contract | QA | 3 d |
+
+### 9.1. Прогресс: переключатель пространств (v1.2)
+
+- [x] `WorkspaceSwitcher` вместо нативного `<select>`: двухстрочные имена, аватары с одной буквой,
+  чипы «Управляемый/E2EE», активная строка, разделитель и «Создать пространство».
+- [x] Клавиатура и доступность: `role=menu`, `menuitemradio`, `aria-checked`, Arrow/Home/End, Escape,
+  возврат фокуса, закрытие по outside/blur.
+- [x] Светлая/тёмная темы и мобильный drawer; заголовок с полным именем пространства.
+- [x] Тесты: `src/workspace/switcher.test.tsx`, `Dashboard.test.tsx`, новый
+  `e2e/d1-workspace-switcher.spec.ts`; 993 unit/integration зелёные, сборка и E2E зелёные.
+- [ ] Остальные пункты D1-FE1 (страницы/роутинг/темы) — вне этого инкремента.
+
+### 9.2. Follow-up: rebrand и contract guard (19.11.2026)
+
+- [x] UI/i18n переведены на «Сову»: вход/регистрация/настройка/админка, wordmark,
+  device name, набор стикеров и приветственное уведомление; демо-пароль — `Sova-demo-2026`.
+- [x] Contract guard актуализирован: 63 пути, 75 операций (включая polls/tasks/translate),
+  `npm run contract:check` зелёный.
+- [x] Auth v3: сплит-логин с сгенерированным ночным hero (сова, луна, ветвь, aurora), глазок
+  показа/скрытия пароля, «Запомнить меня» (email в sessionStorage), тёмные поля/CTA,
+  ссылка «Создать аккаунт»; auth/admin E2E — 19/19.
+- [x] `npm run check` зелёный: 993 unit/integration, lint, format, security, build.
 
 ## 10. Риски и вопросы
 

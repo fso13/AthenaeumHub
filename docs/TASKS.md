@@ -1,6 +1,6 @@
 # «Сова» — доска задач: первый вертикальный срез
 
-> **Фаза:** Сова base + E8–E12 + F7B приняты · G4 final review (E2EE flag off) · D1 Dashboard v1.0 queued (P1)  
+> **Фаза:** база Совы + E8–E12 + F7B приняты · G4 final review (E2EE flag off) · D1 Dashboard v1.0 queued (P1)  
 > **Контракт:** [`contracts/openapi.yaml`](<../contracts/openapi.yaml>)  
 > **Анализ:** [`docs/SYSTEM-ANALYSIS.md`](<SYSTEM-ANALYSIS.md>) §5–§7, §10–§12, §15–§16  
 > **Промты:** [`docs/PROMPTS-FRONTEND-BACKEND.md`](<PROMPTS-FRONTEND-BACKEND.md>) §2, §3, §6
@@ -302,7 +302,7 @@ DONE / PARTIAL / BLOCKED
 | B-03 | Redis rate limiter + KMS envelope encryption | backend | v1 | B-02 |
 | F-02 | E2EE 1:1: устройства, prekeys, decrypt, key-change warning | frontend | P1 | после crypto review |
 | F-03 | Файлы: preflight, лимиты, прогресс, докачка | frontend | v1 | E4 file pipeline |
-| D1 | Message Dashboard v1.0: рейл/бейджи 99+, страницы, треды, голосовые, метаданные песен | FE+BE | P1 | design v1.0.0 frozen; [тикет](TASKS-DASHBOARD-V1.md) |
+| D1 | Message Dashboard «Сова»: рейл/бейджи 99+, страницы, треды, голосовые, метаданные песен, переключатель пространств | FE+BE | P1 | design v1.2.0; [тикет](TASKS-DASHBOARD-V1.md) |
 
 ## 7. Решения по срезу
 
@@ -716,7 +716,7 @@ cd ../frontend && npm run --silent contract:check
 | D1-BE1 | Threads schema/API/summary/WS/RLS/idempotency | BE | 6 d | D1-C1 | **DONE** (467 tests) |
 | D1-BE2 | Media metadata/artwork/MIME/limits | BE | 4 d | D1-C1, E4 | **DONE** (486 tests) |
 | D1-BE3 | Chat settings PATCH + audit + members | BE | 3 d | D1-C1, E12 | **DONE** (498 tests) |
-| D1-FE1 | Shell: rail/sidebar/pages/routing/themes | FE | 5 d | D1-C1 | pending |
+| D1-FE1 | Shell: rail/sidebar/pages/routing/themes | FE | 5 d | D1-C1 | in progress (switcher v1.2 ready) |
 | D1-FE2 | Flat feed + voice/audio/video/song + ID3 | FE | 6 d | D1-BE2 | in progress |
 | D1-FE3 | Threads UI + realtime + mobile | FE | 4 d | D1-BE1 | in progress |
 | D1-FE4 | Overview/Files + limits + empty/error | FE | 4 d | D1-BE1/BE2 | **DONE** (в FE1) |

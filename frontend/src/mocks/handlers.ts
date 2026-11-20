@@ -1880,7 +1880,7 @@ export function createHandlers(db: MockDb) {
         return errorResponse(409, 'TWO_FACTOR_ALREADY_ENABLED', 'Two-factor is already enabled');
       }
       db.twoFactor.pendingSecret = `${MOCK_TOTP_SECRET}${newUuid().slice(0, 4)}`;
-      const uri = `otpauth://totp/Pickle:${encodeURIComponent(MOCK_DEMO_EMAIL)}?secret=${db.twoFactor.pendingSecret}&issuer=Pickle&algorithm=SHA1&digits=6&period=30`;
+      const uri = `otpauth://totp/Сова:${encodeURIComponent(MOCK_DEMO_EMAIL)}?secret=${db.twoFactor.pendingSecret}&issuer=Сова&algorithm=SHA1&digits=6&period=30`;
       return HttpResponse.json({
         secret: db.twoFactor.pendingSecret,
         otpauth_uri: uri,

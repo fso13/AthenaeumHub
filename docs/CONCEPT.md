@@ -556,7 +556,7 @@ file key → обёрнут ключом чата/получателя → хр�
   "id": "ru.krug.polls",
   "name": "Опросы",
   "version": "1.4.0",
-  "author": "Krug Labs",
+  "author": "Sova Labs",
   "signature": "ed25519:...",
   "entry": { "ui": "panel.html", "server": "https://polls.krug.dev" },
   "permissions": [
