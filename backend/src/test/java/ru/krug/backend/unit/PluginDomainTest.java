@@ -12,7 +12,6 @@ import ru.krug.backend.plugin.domain.model.Plugin;
 import ru.krug.backend.plugin.domain.model.PluginAvailability;
 import ru.krug.backend.plugin.domain.model.PluginAvailabilityPolicy;
 import ru.krug.backend.plugin.domain.model.PluginMode;
-import ru.krug.backend.plugin.domain.model.PluginPermission;
 import ru.krug.backend.plugin.domain.model.PluginState;
 import ru.krug.backend.plugin.domain.model.PluginUnavailableReason;
 
@@ -21,7 +20,7 @@ class PluginDomainTest {
 
     private static Plugin plugin(PluginState state, PluginMode... modes) {
         return new Plugin("polls", "Опросы", "Голосования в чате", "poll",
-                List.of(PluginPermission.MESSAGES), List.of(modes), state);
+                List.of("MESSAGES"), List.of(modes), state);
     }
 
     @Test
@@ -87,15 +86,15 @@ class PluginDomainTest {
 
     @Test
     void pluginCopiesMutableCollectionsAndSupportsModes() {
-        List<PluginPermission> permissions = new ArrayList<>(List.of(PluginPermission.MESSAGES));
+        List<String> permissions = new ArrayList<>(List.of("MESSAGES"));
         List<PluginMode> modes = new ArrayList<>(List.of(PluginMode.MANAGED));
         Plugin plugin = new Plugin("polls", "Опросы", "desc", null, permissions, modes,
                 PluginState.ACTIVE);
 
-        permissions.add(PluginPermission.FILES);
+        permissions.add("FILES");
         modes.add(PluginMode.E2EE);
 
-        assertThat(plugin.permissions()).containsExactly(PluginPermission.MESSAGES);
+        assertThat(plugin.permissions()).containsExactly("MESSAGES");
         assertThat(plugin.modes()).containsExactly(PluginMode.MANAGED);
         assertThat(plugin.supports(PluginMode.MANAGED)).isTrue();
         assertThat(plugin.supports(PluginMode.E2EE)).isFalse();

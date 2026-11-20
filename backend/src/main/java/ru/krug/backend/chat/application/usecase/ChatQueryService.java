@@ -68,7 +68,7 @@ public class ChatQueryService {
                 summary.visibility() == null ? null : summary.visibility().name(),
                 summary.lastMessageAt(), summary.unreadCount(), summary.lastSeq(),
                 summary.peerId(), summary.peerHasE2eeCapableDevices(), summary.createdAt(),
-                summary.coverFileId(), summary.readOnly(),
+                summary.coverFileId(), summary.avatarFileId(), summary.readOnly(),
                 summary.joinPolicy() == null ? null : summary.joinPolicy().name(),
                 summary.archived());
     }

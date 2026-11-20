@@ -21,6 +21,8 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -69,12 +71,21 @@ public class GlobalExceptionHandler {
             MethodArgumentTypeMismatchException.class,
             MissingServletRequestParameterException.class,
             MissingRequestHeaderException.class,
+            MissingServletRequestPartException.class,
             ConstraintViolationException.class
     })
     public ResponseEntity<ApiError> handleBadRequest(Exception ex, HttpServletRequest request) {
         return ResponseEntity.badRequest()
                 .body(error(ErrorCode.VALIDATION_FAILED, "Malformed or invalid request",
                         Map.of("reason", ex.getClass().getSimpleName()), request));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiError> handleUploadTooLarge(MaxUploadSizeExceededException ex,
+                                                         HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(error(ErrorCode.PLUGIN_PACKAGE_TOO_LARGE,
+                        "Uploaded file exceeds the size limit", Map.of(), request));
     }
 
     @ExceptionHandler(Exception.class)

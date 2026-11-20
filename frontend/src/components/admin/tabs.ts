@@ -1,7 +1,8 @@
 import type { MessageKey } from '../../i18n/ru';
 
 /** `/admin` sections (FR-ADM-14). Tabs live in the URL as `?tab=<id>`. */
-export type AdminTab = 'overview' | 'users' | 'chats' | 'audit' | 'storage' | 'settings';
+export type AdminTab =
+  'overview' | 'users' | 'chats' | 'audit' | 'storage' | 'plugins' | 'settings';
 
 export interface AdminTabDefinition {
   id: AdminTab;
@@ -14,6 +15,7 @@ export const ADMIN_TABS: readonly AdminTabDefinition[] = [
   { id: 'chats', label: 'admin.tab.chats' },
   { id: 'audit', label: 'admin.tab.audit' },
   { id: 'storage', label: 'admin.tab.storage' },
+  { id: 'plugins', label: 'admin.tab.plugins' },
   { id: 'settings', label: 'admin.tab.settings' },
 ];
 

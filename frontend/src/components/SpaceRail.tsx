@@ -10,6 +10,9 @@ interface SpaceRailProps {
   activeSpaceId: string | null;
   unreadBySpace: Record<string, number>;
   onSelect: (workspaceId: string) => void;
+  onCreateWorkspace?: () => void;
+  /** Workspace logo object/presigned URLs keyed by workspace id (optional). */
+  logoUrls?: Record<string, string | null>;
 }
 
 /**
@@ -18,7 +21,14 @@ interface SpaceRailProps {
  * contains the exact number. The badge itself is decorative (`aria-hidden`)
  * so assistive technology announces the number once, from the button label.
  */
-export function SpaceRail({ spaces, activeSpaceId, unreadBySpace, onSelect }: SpaceRailProps) {
+export function SpaceRail({
+  spaces,
+  activeSpaceId,
+  unreadBySpace,
+  onSelect,
+  onCreateWorkspace,
+  logoUrls,
+}: SpaceRailProps) {
   if (spaces.length === 0) return null;
 
   return (
@@ -50,6 +60,7 @@ export function SpaceRail({ spaces, activeSpaceId, unreadBySpace, onSelect }: Sp
                   seed={space.id}
                   size="lg"
                   short={workspaceInitial(space.name)}
+                  src={logoUrls?.[space.id] ?? null}
                 />
                 {badge ? (
                   <span className="unread-badge space-rail__badge" aria-hidden="true">
@@ -64,9 +75,10 @@ export function SpaceRail({ spaces, activeSpaceId, unreadBySpace, onSelect }: Sp
       <button
         type="button"
         className="rail-add"
-        disabled
+        disabled={!onCreateWorkspace}
         aria-label={t('rail.add')}
-        title={t('rail.addUnavailable')}
+        title={onCreateWorkspace ? t('rail.add') : t('rail.addUnavailable')}
+        onClick={onCreateWorkspace}
       >
         <PlusIcon aria-hidden="true" />
       </button>

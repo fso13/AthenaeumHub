@@ -11,6 +11,7 @@ import { AdminForbiddenScreen } from '../auth/AuthStatusScreens';
 import { AdminAuditSection } from './AdminAuditSection';
 import { AdminChatsSection } from './AdminChatsSection';
 import { AdminOverviewSection } from './AdminOverviewSection';
+import { AdminPluginsSection } from './AdminPluginsSection';
 import { AdminSettingsSection } from './AdminSettingsSection';
 import { AdminStorageSection } from './AdminStorageSection';
 import { AdminUsersSection } from './AdminUsersSection';
@@ -173,6 +174,7 @@ export function AdminScreen({ onBackToChats, onOpenSetup, onLogout }: AdminScree
           {tab === 'chats' ? <AdminChatsSection /> : null}
           {tab === 'audit' ? <AdminAuditSection /> : null}
           {tab === 'storage' ? <AdminStorageSection /> : null}
+          {tab === 'plugins' ? <AdminPluginsSection /> : null}
           {tab === 'settings' ? <AdminSettingsSection /> : null}
         </div>
       </div>

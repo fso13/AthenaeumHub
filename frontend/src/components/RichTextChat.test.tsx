@@ -32,6 +32,26 @@ describe('rich text in the managed feed', () => {
     expect(row.querySelector('.code-block__code')?.textContent).toBe('const answer = 42;');
   });
 
+  it('renders a heading, a table and a task list in a managed message row', async () => {
+    const message = insertMockMessage(
+      mockDb,
+      CHAT,
+      '# Итоги\n\n| Кто | Баллы |\n| :--- | ---: |\n| Сова | 42 |\n\n- [x] готово\n- [ ] в работе',
+    );
+    const { container } = renderApp();
+    await screen.findByRole('heading', { name: 'Команда «Восход»' });
+
+    const row = await waitFor(() => rowFor(message.id));
+    expect(within(row).getByRole('heading', { level: 1, name: 'Итоги' })).toBeInTheDocument();
+    expect(within(row).getByRole('table')).toBeInTheDocument();
+    expect(within(row).getByRole('cell', { name: '42' })).toBeInTheDocument();
+    const checkboxes = within(row).getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0]).toHaveAttribute('aria-checked', 'true');
+    expect(checkboxes[1]).toHaveAttribute('aria-checked', 'false');
+    expect(container.querySelector('.msg-text .rich-table-wrap')).not.toBeNull();
+  });
+
   it('keeps raw HTML as text in a managed message row', async () => {
     const message = insertMockMessage(
       mockDb,

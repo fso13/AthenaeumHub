@@ -151,10 +151,17 @@ describe('E8/R-02 workspace switcher', () => {
 
     const e2ee = within(menu).getByRole('menuitemradio', { name: /Семья/ });
     expect(within(e2ee).getByText('E2EE')).toBeInTheDocument();
-    expect(within(menu).getByRole('menuitem', { name: /Создать пространство/ })).toBeDisabled();
+    const create = within(menu).getByRole('menuitem', { name: /Создать пространство/ });
+    expect(create).toBeEnabled();
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    const reopened = await screen.findByRole('menu', { name: 'Пространства' });
+    await user.click(within(reopened).getByRole('menuitem', { name: /Создать пространство/ }));
+    expect(await screen.findByRole('dialog', { name: 'Новое пространство' })).toBeInTheDocument();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 });

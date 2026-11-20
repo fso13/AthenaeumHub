@@ -116,7 +116,10 @@ public interface ChatRepository {
     /** Clears/sets the cover reference; {@code false} when the live chat is gone. */
     boolean updateCover(UUID workspaceId, UUID chatId, UUID coverFileId);
 
-    /** Soft delete: sets deleted_at and clears the cover reference. */
+    /** Clears/sets the channel avatar reference; {@code false} when the live chat is gone. */
+    boolean updateAvatar(UUID workspaceId, UUID chatId, UUID avatarFileId);
+
+    /** Soft delete: sets deleted_at and clears the cover/avatar references. */
     boolean softDeleteChat(UUID workspaceId, UUID chatId);
 
     /** Effective persisted rights of one role; an empty map when the rows are missing. */

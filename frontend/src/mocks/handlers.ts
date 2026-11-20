@@ -5,6 +5,7 @@ import type {
   AdminChat,
   AdminChatPage,
   AdminOverview,
+  AdminPluginPackage,
   AdminSettings,
   AdminStorage,
   AdminStorageTotals,
@@ -65,14 +66,18 @@ import type {
 import { sha256Bytes } from '../files/hash';
 import { newUuid } from '../lib/ids';
 import { pluginUnavailableReason } from '../plugins/model';
+import { isSafePluginAssetPath } from '../plugins/assets';
 import {
+  allCatalogPlugins,
   countActiveChatsForUser,
   countActiveChatsInWorkspace,
   createDefaultWorkspacePermissions,
+  createMockPluginCatalog,
   createMockTwoFactor,
   type ChatRecord,
   type MockAuthUserRecord,
   type MockDb,
+  type MockPluginAssetRecord,
   type MockUpload,
 } from './db';
 import {
@@ -85,6 +90,7 @@ import {
   MOCK_TOTP_SECRET,
   messageId,
 } from './fixtures';
+import { parseMockManifest, readStoredZip } from './pluginPackage';
 import {
   publishMockMessageCreated,
   publishMockMessageDeleted,
@@ -96,6 +102,66 @@ const API = '*/api/v1';
 /** Mock presigned media origin (MinIO in the real contour). */
 const MOCK_MEDIA_ORIGIN = 'http://localhost:9002';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const PLUGIN_ASSET_TYPES: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+  txt: 'text/plain; charset=utf-8',
+};
+
+function pluginAssetMime(path: string): string {
+  const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+  return PLUGIN_ASSET_TYPES[extension] ?? 'application/octet-stream';
+}
+
+interface MultipartFilePart {
+  fileName: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * Minimal multipart reader for the mock. Node's `Request.formData()` uses the
+ * undici File brand, which clashes with jsdom's File in the Vitest environment;
+ * the actual browser path still sends a standards-compliant multipart body.
+ */
+async function readMultipartFile(request: Request): Promise<MultipartFilePart | null> {
+  const contentType = request.headers.get('content-type') ?? '';
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  if (!boundary) return null;
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  // A true 1:1 byte string; `TextDecoder('latin1')` maps 0x80..0x9f through
+  // windows-1252 and would corrupt binary ZIP bytes.
+  let raw = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    raw += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  for (const part of raw.split(`--${boundary}`)) {
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd < 0) continue;
+    const headers = part.slice(0, headerEnd);
+    const disposition = /content-disposition:([^\r\n]+)/i.exec(headers)?.[1] ?? '';
+    const name = /name="([^"]*)"/i.exec(disposition)?.[1];
+    if (name !== 'file') continue;
+    const fileName = /filename="([^"]*)"/i.exec(disposition)?.[1] ?? 'package.zip';
+    let body = part.slice(headerEnd + 4);
+    if (body.endsWith('\r\n')) body = body.slice(0, -2);
+    return { fileName, bytes: Uint8Array.from(body, (char) => char.charCodeAt(0)) };
+  }
+  return null;
+}
 
 interface ErrorOptions {
   details?: Record<string, unknown>;
@@ -347,6 +413,7 @@ function chatResponseOf(summary: MockDb['chats'][string]['summary']): Chat {
     unread_count: summary.unread_count,
     created_at: new Date().toISOString(),
     cover_file_id: summary.cover_file_id ?? null,
+    avatar_file_id: summary.avatar_file_id ?? null,
     read_only: summary.read_only ?? false,
     join_policy: summary.join_policy ?? null,
     archived: summary.archived ?? false,
@@ -2413,11 +2480,200 @@ export function createHandlers(db: MockDb) {
         });
       }
       return HttpResponse.json({
-        items: db.pluginCatalog.map((plugin) => ({
+        items: allCatalogPlugins(db).map((plugin) => ({
           ...plugin,
           permissions: [...plugin.permissions],
           modes: [...plugin.modes],
         })),
+      });
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* D1.2 (#86): external ZIP packages (platform_admin)                 */
+    /* ------------------------------------------------------------------ */
+
+    http.get(`${API}/admin/plugins`, ({ request }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      db.adminPluginListRequests += 1;
+      if (db.forceAdminPluginPackagesError) {
+        const forced = db.forceAdminPluginPackagesError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      return HttpResponse.json({
+        items: db.pluginPackages.map((pkg) => ({
+          ...pkg,
+          permissions: [...pkg.permissions],
+          modes: [...pkg.modes],
+        })),
+      });
+    }),
+
+    http.post(`${API}/admin/plugins`, async ({ request }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      if (db.pluginPackageInstallDelayMs > 0) await delay(db.pluginPackageInstallDelayMs);
+      if (db.forceInstallPluginPackageError) {
+        const forced = db.forceInstallPluginPackageError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const part = await readMultipartFile(request);
+      if (!part) {
+        return errorResponse(400, 'PLUGIN_PACKAGE_INVALID', 'Multipart part "file" is missing');
+      }
+      const bytes = part.bytes;
+      db.pluginPackageInstallRequests.push({
+        fileName: part.fileName,
+        size: bytes.byteLength,
+        deviceId: request.headers.get('x-device-id'),
+      });
+
+      if (bytes.byteLength === 0) {
+        return errorResponse(400, 'PLUGIN_PACKAGE_INVALID', 'Archive is empty');
+      }
+      if (bytes.byteLength > 5 * 1024 * 1024) {
+        return errorResponse(413, 'PLUGIN_PACKAGE_TOO_LARGE', 'Archive is larger than 5 MiB');
+      }
+      const archive = readStoredZip(bytes);
+      if (archive.error === 'invalid-zip') {
+        return errorResponse(400, 'PLUGIN_PACKAGE_INVALID', 'File is not a valid ZIP archive');
+      }
+      if (archive.error === 'unsupported-compression') {
+        return errorResponse(
+          400,
+          'PLUGIN_PACKAGE_INVALID',
+          'Mock accepts stored ZIP entries only; build one with createMockPluginZip',
+        );
+      }
+      if (archive.entries.size === 0 || archive.entries.size > 200) {
+        return errorResponse(400, 'PLUGIN_PACKAGE_INVALID', 'Archive has too many or no files');
+      }
+      let unpackedBytes = 0;
+      for (const [path, data] of archive.entries) {
+        if (!isSafePluginAssetPath(path)) {
+          return errorResponse(400, 'PLUGIN_PACKAGE_INVALID', `Unsafe path: ${path}`);
+        }
+        unpackedBytes += data.byteLength;
+      }
+      if (unpackedBytes > 10 * 1024 * 1024) {
+        return errorResponse(
+          400,
+          'PLUGIN_PACKAGE_INVALID',
+          'Unpacked archive is larger than 10 MiB',
+        );
+      }
+      const manifestBytes = archive.entries.get('manifest.json');
+      const manifest = manifestBytes ? parseMockManifest(manifestBytes) : null;
+      if (!manifest) {
+        return errorResponse(400, 'PLUGIN_PACKAGE_INVALID', 'manifest.json is missing or invalid');
+      }
+      if (!archive.entries.has(manifest.entry) || !manifest.entry.endsWith('.html')) {
+        return errorResponse(
+          400,
+          'PLUGIN_PACKAGE_INVALID',
+          'manifest.entry must be an existing .html file',
+        );
+      }
+      if (createMockPluginCatalog().some((plugin) => plugin.id === manifest.id)) {
+        return errorResponse(409, 'PLUGIN_ID_RESERVED', 'Plugin id is reserved by a built-in');
+      }
+      if (db.pluginPackages.some((pkg) => pkg.id === manifest.id)) {
+        return errorResponse(
+          409,
+          'PLUGIN_ALREADY_INSTALLED',
+          'Plugin package is already installed',
+        );
+      }
+
+      const assets = new Map<string, MockPluginAssetRecord>();
+      for (const [path, data] of archive.entries) {
+        if (path === 'manifest.json') continue;
+        assets.set(path, { contentType: pluginAssetMime(path), body: data });
+      }
+      const pkg: AdminPluginPackage = {
+        id: manifest.id,
+        name: manifest.name,
+        version: manifest.version,
+        description: manifest.description,
+        author: manifest.author,
+        entry: manifest.entry,
+        permissions: manifest.permissions as AdminPluginPackage['permissions'],
+        modes: manifest.modes as AdminPluginPackage['modes'],
+        size_bytes: bytes.byteLength,
+        file_count: archive.entries.size,
+        sha256: sha256Bytes(bytes),
+        installed_at: new Date().toISOString(),
+      };
+      db.pluginPackages = [...db.pluginPackages, pkg];
+      db.pluginPackageAssets.set(pkg.id, assets);
+      return HttpResponse.json(pkg, { status: 201 });
+    }),
+
+    http.delete(`${API}/admin/plugins/:pluginId`, ({ request, params }) => {
+      const forbidden = requirePlatformAdmin(db, request);
+      if (forbidden) return forbidden;
+      const pluginId = String(params.pluginId);
+      db.pluginPackageUninstallRequests.push(pluginId);
+      if (db.forceUninstallPluginPackageError) {
+        const forced = db.forceUninstallPluginPackageError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!db.pluginPackages.some((pkg) => pkg.id === pluginId)) {
+        return errorResponse(404, 'PLUGIN_NOT_FOUND', 'Plugin package not found');
+      }
+      db.pluginPackages = db.pluginPackages.filter((pkg) => pkg.id !== pluginId);
+      db.pluginPackageAssets.delete(pluginId);
+      db.chatPlugins.forEach((row) => row.delete(pluginId));
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /*
+     * Static package assets require the bearer JWT and are looked up by the
+     * exact stored path. A wildcard handler reads the pathname explicitly so
+     * the `assets/...` suffix is preserved.
+     */
+    http.get(`${API}/plugins/:pluginId/assets/*`, ({ request, params }) => {
+      const unauthorized = requireBearer(request);
+      if (unauthorized) return unauthorized;
+      const pluginId = String(params.pluginId);
+      if (!db.pluginPackages.some((pkg) => pkg.id === pluginId)) {
+        return errorResponse(404, 'PLUGIN_NOT_FOUND', 'Plugin package not found');
+      }
+      const url = new URL(request.url);
+      const marker = `/plugins/${pluginId}/assets/`;
+      const markerIndex = url.pathname.indexOf(marker);
+      if (markerIndex < 0) return errorResponse(404, 'NOT_FOUND', 'Asset not found');
+      let assetPath: string;
+      try {
+        assetPath = decodeURIComponent(url.pathname.slice(markerIndex + marker.length));
+      } catch {
+        return errorResponse(404, 'NOT_FOUND', 'Asset not found');
+      }
+      if (!isSafePluginAssetPath(assetPath))
+        return errorResponse(404, 'NOT_FOUND', 'Asset not found');
+      const asset = db.pluginPackageAssets.get(pluginId)?.get(assetPath);
+      if (!asset) return errorResponse(404, 'NOT_FOUND', 'Asset not found');
+      const isHtml = asset.contentType.startsWith('text/html');
+      return new HttpResponse(asset.body, {
+        headers: {
+          'Content-Type': asset.contentType,
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': isHtml
+            ? "default-src 'none'; connect-src 'none'; frame-ancestors 'self'; sandbox allow-scripts"
+            : "default-src 'none'; connect-src 'none'; frame-ancestors 'self'",
+          'Referrer-Policy': 'no-referrer',
+          'Cross-Origin-Resource-Policy': 'same-origin',
+        },
       });
     }),
 
@@ -3039,7 +3295,7 @@ export function createHandlers(db: MockDb) {
       if (!record || !workspace) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
 
       const stored = db.chatPlugins.get(chatId);
-      const items: ChatPluginState[] = db.pluginCatalog.map((plugin) => {
+      const items: ChatPluginState[] = allCatalogPlugins(db).map((plugin) => {
         const reason = pluginUnavailableReason(plugin, record.summary.security_mode);
         return {
           plugin_id: plugin.id,
@@ -3086,7 +3342,7 @@ export function createHandlers(db: MockDb) {
         return errorResponse(403, 'FORBIDDEN', 'Not a chat owner/admin');
       }
 
-      const plugin: Plugin | undefined = db.pluginCatalog.find((item) => item.id === pluginId);
+      const plugin: Plugin | undefined = allCatalogPlugins(db).find((item) => item.id === pluginId);
       if (!plugin) return errorResponse(404, 'PLUGIN_NOT_FOUND', 'Plugin not found');
       if (typeof body.enabled !== 'boolean') {
         return errorResponse(400, 'VALIDATION_FAILED', 'enabled must be a boolean', {
@@ -4336,6 +4592,124 @@ export function createHandlers(db: MockDb) {
       }
       record.summary = { ...record.summary, cover_file_id: null };
       return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/chats/:chatId/avatar`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const fileId = typeof body.file_id === 'string' ? body.file_id : null;
+      db.chatAvatarRequests.push({
+        chatId,
+        fileId,
+        action: 'SET',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatAvatarError) {
+        const forced = db.forceChatAvatarError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no avatar');
+      }
+      if (record.summary.security_mode === 'E2EE') {
+        return errorResponse(422, 'CHAT_SETTINGS_E2EE_UNSUPPORTED', 'E2EE has no avatar');
+      }
+      if (!actorCanManage(chatActorMember(db, chatId))) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+      }
+      if (fileId === null) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'file_id is required', {
+          details: { field: 'file_id' },
+        });
+      }
+      const file = db.fileCenterItems.find((item) => item.id === fileId);
+      if (!file || file.chat_id !== chatId) {
+        return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
+      }
+      const isImage = (file.mime_type ?? '').startsWith('image/');
+      if (!isImage) return errorResponse(422, 'CHAT_AVATAR_INVALID', 'Attachment is not an image');
+      if (file.scan_status !== 'CLEAN' && file.scan_status !== 'SKIPPED') {
+        return errorResponse(
+          file.scan_status === 'INFECTED' ? 423 : 409,
+          file.scan_status === 'INFECTED' ? 'ATTACHMENT_QUARANTINED' : 'ATTACHMENT_NOT_READY',
+          'Attachment is not avatar-ready',
+        );
+      }
+      record.summary = { ...record.summary, avatar_file_id: file.id };
+      return HttpResponse.json(chatResponseOf(record.summary));
+    }),
+
+    http.delete(`${API}/chats/:chatId/avatar`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatAvatarRequests.push({
+        chatId,
+        fileId: null,
+        action: 'DELETE',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatAvatarError) {
+        const forced = db.forceChatAvatarError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT') {
+        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no avatar');
+      }
+      if (!actorCanManage(chatActorMember(db, chatId))) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+      }
+      record.summary = { ...record.summary, avatar_file_id: null };
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /*
+     * The real endpoint answers `302 Location: <presigned>`; `fetch` follows it
+     * and the browser only sees image bytes, so the mock serves the bytes with
+     * a `200` (the client contract is a Blob either way).
+     */
+    http.get(`${API}/chats/:chatId/avatar`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const record = db.chats[chatId];
+      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      db.chatAvatarRequests.push({
+        chatId,
+        fileId: record.summary.avatar_file_id ?? null,
+        action: 'GET',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceChatAvatarError) {
+        const forced = db.forceChatAvatarError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.summary.type === 'DIRECT' || record.summary.security_mode === 'E2EE') {
+        return errorResponse(404, 'NOT_FOUND', 'Avatar is not set');
+      }
+      if (!record.summary.avatar_file_id) {
+        return errorResponse(404, 'NOT_FOUND', 'Avatar is not set');
+      }
+      return new HttpResponse(new Uint8Array([137, 80, 78, 71]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      });
     }),
 
     http.get(`${API}/chats/:chatId/permissions`, ({ request, params }) => {

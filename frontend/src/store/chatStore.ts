@@ -11,6 +11,7 @@ import type {
   ChangeChatMemberRoleRequest,
   ChangeWorkspaceMemberRoleRequest,
   Chat,
+  ChatAvatarRequest,
   ChatCoverRequest,
   ChatCreateRequest,
   ChatInvite,
@@ -58,6 +59,7 @@ import { createPluginActionsStore, type PluginActionsStore } from '../plugins/ac
 import { createStickersStore, type StickersStore } from '../stickers/store';
 import { createOpsStore, type OpsStore } from '../ops/store';
 import { createSecurityStore, type SecurityStore } from '../security/securityStore';
+import { createAvatarStore, type AvatarStore } from '../avatars/avatarStore';
 import {
   createProfileWorkspaceStore,
   type ProfileWorkspaceStore,
@@ -614,6 +616,21 @@ export function createEmptyChatCoverState(): ChatCoverState {
   };
 }
 
+/**
+ * Channel icon/avatar editor state. Candidate images are shared with the cover
+ * picker (`chatCover.images`): the avatar is an existing image of the same chat,
+ * so there is no second file-center read and no upload pipeline.
+ */
+export interface ChatAvatarState {
+  chatId: string | null;
+  actionStatus: 'idle' | 'saving' | 'removing' | 'saved' | 'error';
+  actionError: ApiError | null;
+}
+
+export function createEmptyChatAvatarState(): ChatAvatarState {
+  return { chatId: null, actionStatus: 'idle', actionError: null };
+}
+
 /** #80 pinned messages (metadata only) plus per-message pending/error state. */
 export interface ChatPinsState {
   chatId: string | null;
@@ -777,6 +794,8 @@ export interface AppState {
   chatPermissions: ChatPermissionsState;
   /** P0-2 (#80): cover editor (existing chat images only). */
   chatCover: ChatCoverState;
+  /** Channel icon/avatar editor (same existing chat images as the cover). */
+  chatAvatar: ChatAvatarState;
   /** P0-2 (#80): pinned-message metadata. */
   chatPins: ChatPinsState;
   /** P0-2 (#80): archive/unarchive feedback for the settings danger zone. */
@@ -978,6 +997,7 @@ export function toChatSummary(chat: Chat): ChatSummary {
     unread_count: chat.unread_count,
     last_seq: chat.last_seq,
     cover_file_id: chat.cover_file_id ?? null,
+    avatar_file_id: chat.avatar_file_id ?? null,
     read_only: chat.read_only ?? false,
     join_policy: chat.join_policy ?? null,
     archived: chat.archived ?? false,
@@ -1004,6 +1024,7 @@ function chatSummaryFromChat(chat: Chat, previous: ChatSummary | undefined): Cha
     unread_count: chat.unread_count,
     last_seq: chat.last_seq,
     cover_file_id: chat.cover_file_id ?? previous?.cover_file_id ?? null,
+    avatar_file_id: chat.avatar_file_id ?? previous?.avatar_file_id ?? null,
     read_only: chat.read_only ?? previous?.read_only ?? false,
     join_policy: chat.join_policy ?? previous?.join_policy ?? null,
     archived: chat.archived ?? previous?.archived ?? false,
@@ -1068,6 +1089,8 @@ export class ChatStore {
   readonly security: SecurityStore;
   /** P0-4 (#82): profile avatar, TOTP setup and workspace settings/invites. */
   readonly profile: ProfileWorkspaceStore;
+  /** Per-id chat/workspace avatar bytes (object URLs, cleared on change). */
+  readonly avatars: AvatarStore;
 
   private state: AppState;
   private listeners = new Set<() => void>();
@@ -1193,6 +1216,7 @@ export class ChatStore {
       inviteAccept: createEmptyInviteAcceptState(),
       chatPermissions: createEmptyChatPermissionsState(),
       chatCover: createEmptyChatCoverState(),
+      chatAvatar: createEmptyChatAvatarState(),
       chatPins: createEmptyChatPinsState(),
       chatArchive: createEmptyChatArchiveState(),
       chatDeletion: createEmptyChatDeletionState(),
@@ -1204,10 +1228,22 @@ export class ChatStore {
     this.security = createSecurityStore({ api: deps.api });
     this.profile = createProfileWorkspaceStore({
       api: deps.api,
-      onWorkspaceUpdated: (workspace) => this.applyWorkspaceSummary(workspace),
+      onWorkspaceUpdated: (workspace) => {
+        this.applyWorkspaceSummary(workspace);
+        // A new logo id means new bytes: drop the old URL and resolve once.
+        this.avatars.invalidateWorkspace(workspace.id);
+        if (workspace.logo_file_id) {
+          void this.avatars.ensureWorkspace(workspace.id, workspace.logo_file_id);
+        }
+      },
       onProfileUpdated: (user) => this.applyProfileUser(user),
-      onWorkspaceLogoCleared: (workspaceId) => this.clearWorkspaceLogo(workspaceId),
+      onWorkspaceLogoCleared: (workspaceId) => {
+        this.clearWorkspaceLogo(workspaceId);
+        this.avatars.invalidateWorkspace(workspaceId);
+      },
     });
+
+    this.avatars = createAvatarStore({ api: deps.api });
 
     this.files = createFilesStore({
       api: deps.api,
@@ -1279,6 +1315,7 @@ export class ChatStore {
     this.ops.dispose();
     this.security.dispose();
     this.profile.dispose();
+    this.avatars.dispose();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.listeners.clear();
@@ -1576,6 +1613,7 @@ export class ChatStore {
     this.files.setWorkspace(workspace.id, workspace.role ?? null);
     this.security.reset();
     this.profile.reset();
+    this.avatars.reset();
     // D1-FE1: keep the outgoing workspace badge truthful after `chats` is
     // cleared; the value is the same sum the server just gave us.
     const previousWorkspaceId = this.state.activeWorkspaceId;
@@ -1627,6 +1665,7 @@ export class ChatStore {
       inviteAccept: createEmptyInviteAcceptState(),
       chatPermissions: createEmptyChatPermissionsState(),
       chatCover: createEmptyChatCoverState(),
+      chatAvatar: createEmptyChatAvatarState(),
       chatPins: createEmptyChatPinsState(),
       chatArchive: createEmptyChatArchiveState(),
       chatDeletion: createEmptyChatDeletionState(),
@@ -2374,6 +2413,7 @@ export class ChatStore {
         chatPermissions: createEmptyChatPermissionsState(),
         chatPins: createEmptyChatPinsState(),
         chatCover: createEmptyChatCoverState(),
+        chatAvatar: createEmptyChatAvatarState(),
         chatArchive: createEmptyChatArchiveState(),
         chatDeletion: createEmptyChatDeletionState(),
       });
@@ -2749,6 +2789,112 @@ export class ChatStore {
       current.actionError !== null
     ) {
       this.patch({ chatCover: createEmptyChatCoverState() });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Channel icon/avatar                                                */
+  /* ------------------------------------------------------------------ */
+
+  /** `POST /chats/{chatId}/avatar`; the returned `Chat` is authoritative. */
+  async setChatAvatar(chatId: string, fileId: string): Promise<boolean> {
+    if (this.state.chatAvatar.actionStatus === 'saving') return false;
+    this.patch({
+      chatAvatar: {
+        ...this.state.chatAvatar,
+        chatId,
+        actionStatus: 'saving',
+        actionError: null,
+      },
+    });
+    const body: ChatAvatarRequest = { file_id: fileId };
+    try {
+      const updated = await this.api.setChatAvatar(chatId, body);
+      this.applyChatSummary(updated);
+      // The bytes changed: drop the old object URL and fetch the new one once.
+      this.avatars.invalidateChat(chatId);
+      if (updated.avatar_file_id) void this.avatars.ensureChat(chatId);
+      if (this.state.chatAvatar.chatId !== chatId) return false;
+      this.patch({
+        chatAvatar: {
+          ...this.state.chatAvatar,
+          actionStatus: 'saved',
+          actionError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatAvatar.chatId !== chatId) return false;
+      this.patch({
+        chatAvatar: {
+          ...this.state.chatAvatar,
+          actionStatus: 'error',
+          actionError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `DELETE /chats/{chatId}/avatar` (idempotent; the attachment stays). */
+  async removeChatAvatar(chatId: string): Promise<boolean> {
+    if (this.state.chatAvatar.actionStatus === 'removing') return false;
+    this.patch({
+      chatAvatar: {
+        ...this.state.chatAvatar,
+        chatId,
+        actionStatus: 'removing',
+        actionError: null,
+      },
+    });
+    try {
+      await this.api.deleteChatAvatar(chatId);
+      if (this.state.chatAvatar.chatId !== chatId) return false;
+      const clear = (chat: ChatSummary) =>
+        chat.id === chatId ? { ...chat, avatar_file_id: null } : chat;
+      this.patch({
+        chats: this.state.chats.map(clear),
+        archivedChats: {
+          ...this.state.archivedChats,
+          items: this.state.archivedChats.items.map(clear),
+        },
+      });
+      this.avatars.invalidateChat(chatId);
+      this.patch({
+        chatAvatar: {
+          ...this.state.chatAvatar,
+          actionStatus: 'saved',
+          actionError: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      if (this.state.chatAvatar.chatId !== chatId) return false;
+      this.patch({
+        chatAvatar: {
+          ...this.state.chatAvatar,
+          actionStatus: 'error',
+          actionError: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  clearChatAvatar(): void {
+    const current = this.state.chatAvatar;
+    if (
+      current.chatId !== null ||
+      current.actionStatus !== 'idle' ||
+      current.actionError !== null
+    ) {
+      this.patch({ chatAvatar: createEmptyChatAvatarState() });
     }
   }
 
@@ -3203,6 +3349,7 @@ export class ChatStore {
         chatPermissions: createEmptyChatPermissionsState(),
         chatPins: createEmptyChatPinsState(),
         chatCover: createEmptyChatCoverState(),
+        chatAvatar: createEmptyChatAvatarState(),
         chatDeletion: { chatId, status: 'idle', error: null },
         archivedChats: {
           ...this.state.archivedChats,
@@ -3909,10 +4056,10 @@ export class ChatStore {
   }
 
   /** First-login onboarding: POST /workspaces then open the created chat. */
-  async createWorkspace(name: string): Promise<void> {
+  async createWorkspace(name: string): Promise<boolean> {
     const trimmed = name.trim();
-    if (!trimmed || trimmed.length > 120) return;
-    if (this.state.onboardingStatus === 'submitting') return;
+    if (!trimmed || trimmed.length > 120) return false;
+    if (this.state.onboardingStatus === 'submitting') return false;
 
     this.patch({ onboardingStatus: 'submitting', onboardingError: null });
     try {
@@ -3946,6 +4093,7 @@ export class ChatStore {
 
       const workspace = me.workspaces.find((item) => item.id === created.id) ?? created;
       await this.activateWorkspace(workspace);
+      return true;
     } catch (error) {
       const apiError = toApiError(error);
       this.handleFailure(apiError);
@@ -3954,6 +4102,7 @@ export class ChatStore {
         onboardingError: apiError,
         authExpired: apiError.status === 401,
       });
+      return false;
     }
   }
 
@@ -3982,6 +4131,7 @@ export class ChatStore {
     this.ops.reset();
     this.security.reset();
     this.profile.reset();
+    this.avatars.reset();
     this.chatLimitsPromise = null;
     this.unreadWorkspaceRequests.clear();
     this.membersToken += 1;
@@ -4052,6 +4202,7 @@ export class ChatStore {
       inviteAccept: createEmptyInviteAcceptState(),
       chatPermissions: createEmptyChatPermissionsState(),
       chatCover: createEmptyChatCoverState(),
+      chatAvatar: createEmptyChatAvatarState(),
       chatPins: createEmptyChatPinsState(),
       chatArchive: createEmptyChatArchiveState(),
       chatDeletion: createEmptyChatDeletionState(),

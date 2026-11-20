@@ -1,8 +1,45 @@
-import type { ChatApi } from '../api/endpoints';
+import type { ChatApi, PluginPackageUploadOptions } from '../api/endpoints';
 import { toApiError, type ApiError } from '../api/problem';
-import type { ChatPluginState, Plugin } from '../api/types';
+import type { AdminPluginPackage, ChatPluginState, Plugin } from '../api/types';
+import { readBlobText } from './blob';
 
 export type PluginsLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+/** D1.2 (#86): admin ZIP install lifecycle. */
+export type PackageInstallStatus = 'idle' | 'uploading' | 'verifying' | 'done' | 'error';
+
+export interface PackageInstallState {
+  status: PackageInstallStatus;
+  fileName: string | null;
+  loadedBytes: number;
+  totalBytes: number;
+  /** Contract error; never a raw archive body or server stack. */
+  error: ApiError | null;
+  installed: AdminPluginPackage | null;
+}
+
+export type PackageUninstallStatus = 'idle' | 'running' | 'done' | 'error';
+
+export interface PackageUninstallState {
+  pluginId: string | null;
+  status: PackageUninstallStatus;
+  error: ApiError | null;
+}
+
+export const EMPTY_PACKAGE_INSTALL_STATE: PackageInstallState = {
+  status: 'idle',
+  fileName: null,
+  loadedBytes: 0,
+  totalBytes: 0,
+  error: null,
+  installed: null,
+};
+
+export const EMPTY_PACKAGE_UNINSTALL_STATE: PackageUninstallState = {
+  pluginId: null,
+  status: 'idle',
+  error: null,
+};
 
 /**
  * Feedback for the last server-confirmed PATCH. `changed` is derived by
@@ -30,10 +67,25 @@ export interface PluginsState {
   /** Inline PATCH failure; never replaces the last known server state. */
   toggleError: ApiError | null;
   lastToggle: PluginToggleResult | null;
+  /** D1.2 (#86): installed external packages from `GET /admin/plugins`. */
+  adminPackagesStatus: PluginsLoadStatus;
+  adminPackages: AdminPluginPackage[];
+  adminPackagesError: ApiError | null;
+  installState: PackageInstallState;
+  uninstallState: PackageUninstallState;
 }
 
 export interface PluginsStoreDeps {
-  api: Pick<ChatApi, 'listPlugins' | 'listChatPlugins' | 'updateChatPlugin'>;
+  api: Pick<
+    ChatApi,
+    | 'listPlugins'
+    | 'listChatPlugins'
+    | 'updateChatPlugin'
+    | 'listAdminPlugins'
+    | 'installPluginPackage'
+    | 'uninstallPluginPackage'
+    | 'getPluginAsset'
+  >;
   now?: () => number;
 }
 
@@ -48,7 +100,33 @@ export const EMPTY_PLUGINS_STATE: PluginsState = {
   pendingPluginIds: [],
   toggleError: null,
   lastToggle: null,
+  adminPackagesStatus: 'idle',
+  adminPackages: [],
+  adminPackagesError: null,
+  installState: { ...EMPTY_PACKAGE_INSTALL_STATE },
+  uninstallState: { ...EMPTY_PACKAGE_UNINSTALL_STATE },
 };
+
+/**
+ * Project a freshly installed admin package into the public catalog row so the
+ * plugins page can render it without a second round trip. `entry_url` mirrors
+ * the server contract (`/api/v1/plugins/{id}/assets/{entry}`).
+ */
+export function externalCatalogEntry(pkg: AdminPluginPackage): Plugin {
+  return {
+    id: pkg.id,
+    name: pkg.name,
+    description: pkg.description,
+    icon: 'plug',
+    permissions: pkg.permissions,
+    modes: pkg.modes,
+    state: 'ACTIVE',
+    kind: 'EXTERNAL',
+    version: pkg.version,
+    author: pkg.author,
+    entry_url: `/api/v1/plugins/${pkg.id}/assets/${pkg.entry}`,
+  };
+}
 
 /**
  * D1.1 (#69) plugins read model. Deliberately has no optimistic update: a
@@ -61,6 +139,7 @@ export class PluginsStore {
   private state: PluginsState = { ...EMPTY_PLUGINS_STATE };
   private readonly listeners = new Set<() => void>();
   private catalogPromise: Promise<void> | null = null;
+  private adminPromise: Promise<void> | null = null;
   private chatPromise: Promise<void> | null = null;
   private chatLoadId: string | null = null;
   private disposed = false;
@@ -210,6 +289,170 @@ export class PluginsStore {
     }
   }
 
+  /* ------------------------------------------------------------------ */
+  /* D1.2 (#86): external package administration                        */
+  /* ------------------------------------------------------------------ */
+
+  /** Read the installed external packages once per admin session. */
+  async ensureAdminPackages(): Promise<void> {
+    if (this.state.adminPackagesStatus === 'ready') return;
+    if (this.state.adminPackagesStatus === 'loading' && this.adminPromise) return this.adminPromise;
+    return this.loadAdminPackages();
+  }
+
+  async loadAdminPackages(force = false): Promise<void> {
+    if (!force && this.state.adminPackagesStatus === 'ready') return;
+    if (this.state.adminPackagesStatus === 'loading' && this.adminPromise) return this.adminPromise;
+
+    this.patch({ adminPackagesStatus: 'loading', adminPackagesError: null });
+    this.adminPromise = this.runLoadAdminPackages().finally(() => {
+      this.adminPromise = null;
+    });
+    return this.adminPromise;
+  }
+
+  private async runLoadAdminPackages(): Promise<void> {
+    try {
+      const response = await this.api.listAdminPlugins();
+      if (this.disposed) return;
+      this.patch({
+        adminPackagesStatus: 'ready',
+        adminPackages: response.items,
+        adminPackagesError: null,
+      });
+    } catch (error) {
+      if (this.disposed) return;
+      this.patch({ adminPackagesStatus: 'error', adminPackagesError: toApiError(error) });
+    }
+  }
+
+  /**
+   * Upload one ZIP. The server remains the only authority on the archive and
+   * manifest; this store only reflects progress and contract errors. The
+   * installed row is prepended after `201`, never before.
+   */
+  async installPackage(
+    file: File,
+    options: Pick<PluginPackageUploadOptions, 'signal'> = {},
+  ): Promise<void> {
+    if (
+      this.state.installState.status === 'uploading' ||
+      this.state.installState.status === 'verifying'
+    ) {
+      return;
+    }
+
+    const totalBytes = file.size;
+    this.patch({
+      installState: {
+        status: 'uploading',
+        fileName: file.name,
+        loadedBytes: 0,
+        totalBytes,
+        error: null,
+        installed: null,
+      },
+    });
+
+    let lastPercent = -1;
+    const onProgress = (loaded: number, total: number) => {
+      if (this.disposed) return;
+      const current = this.state.installState;
+      if (current.status !== 'uploading' && current.status !== 'verifying') return;
+      const effectiveTotal = total > 0 ? total : current.totalBytes;
+      const percent = effectiveTotal > 0 ? Math.floor((loaded / effectiveTotal) * 100) : -1;
+      if (percent === lastPercent && percent < 100) return;
+      lastPercent = percent;
+      this.patch({
+        installState: {
+          ...current,
+          status: effectiveTotal > 0 && loaded >= effectiveTotal ? 'verifying' : 'uploading',
+          loadedBytes: loaded,
+          totalBytes: effectiveTotal,
+        },
+      });
+    };
+
+    try {
+      const installed = await this.api.installPluginPackage(file, {
+        signal: options.signal,
+        onProgress,
+      });
+      if (this.disposed) return;
+      this.patch({
+        installState: {
+          status: 'done',
+          fileName: file.name,
+          loadedBytes: file.size,
+          totalBytes: file.size,
+          error: null,
+          installed,
+        },
+        adminPackagesStatus: 'ready',
+        adminPackagesError: null,
+        adminPackages: [
+          installed,
+          ...this.state.adminPackages.filter((item) => item.id !== installed.id),
+        ],
+        catalog: [
+          ...this.state.catalog.filter((plugin) => plugin.id !== installed.id),
+          externalCatalogEntry(installed),
+        ],
+      });
+    } catch (error) {
+      if (this.disposed) return;
+      const current = this.state.installState;
+      this.patch({
+        installState: {
+          ...current,
+          status: 'error',
+          error: toApiError(error),
+        },
+      });
+    }
+  }
+
+  /** Soft-uninstall; the server owns tombstoning and object cleanup. */
+  async uninstallPackage(pluginId: string): Promise<void> {
+    if (this.state.uninstallState.status === 'running') return;
+    this.patch({ uninstallState: { pluginId, status: 'running', error: null } });
+    try {
+      await this.api.uninstallPluginPackage(pluginId);
+      if (this.disposed) return;
+      this.patch({
+        uninstallState: { pluginId, status: 'done', error: null },
+        adminPackages: this.state.adminPackages.filter((item) => item.id !== pluginId),
+        catalog: this.state.catalog.filter((plugin) => plugin.id !== pluginId),
+        chatStates: this.state.chatStates.filter((item) => item.plugin_id !== pluginId),
+        pendingPluginIds: this.state.pendingPluginIds.filter((id) => id !== pluginId),
+      });
+    } catch (error) {
+      if (this.disposed) return;
+      this.patch({
+        uninstallState: { pluginId, status: 'error', error: toApiError(error) },
+      });
+    }
+  }
+
+  /** Clear the one-shot install/uninstall feedback (dialog open/close). */
+  resetPackageFeedback(): void {
+    this.patch({
+      installState: { ...EMPTY_PACKAGE_INSTALL_STATE },
+      uninstallState: { ...EMPTY_PACKAGE_UNINSTALL_STATE },
+    });
+  }
+
+  /** Authenticated package asset bytes (entry document when omitted). */
+  readPluginAsset(entryUrl: string, assetPath?: string): Promise<Blob> {
+    return this.api.getPluginAsset(entryUrl, assetPath);
+  }
+
+  /** Authenticated entry HTML used to build the sandboxed `srcdoc`. */
+  async readPluginEntry(entryUrl: string): Promise<string> {
+    const blob = await this.api.getPluginAsset(entryUrl);
+    return readBlobText(blob);
+  }
+
   private replaceState(pluginId: string, next: ChatPluginState): ChatPluginState[] {
     const found = this.state.chatStates.some((item) => item.plugin_id === pluginId);
     if (!found) return [...this.state.chatStates, next];
@@ -224,9 +467,10 @@ export class PluginsStore {
   /** Drop all user-scoped state on logout/account switch. */
   reset(): void {
     this.catalogPromise = null;
+    this.adminPromise = null;
     this.chatPromise = null;
     this.chatLoadId = null;
-    this.state = { ...EMPTY_PLUGINS_STATE, catalog: [], chatStates: [] };
+    this.state = { ...EMPTY_PLUGINS_STATE, catalog: [], chatStates: [], adminPackages: [] };
     this.emit();
   }
 }

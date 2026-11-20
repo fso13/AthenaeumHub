@@ -41,7 +41,8 @@ public class ChatViewAssembler {
                     visibility == null ? null : visibility.name(), summary.peerId(),
                     summary.peerHasE2eeCapableDevices(), summary.name(),
                     summary.description(), null, summary.lastSeq(), summary.unreadCount(),
-                    summary.createdAt(), summary.coverFileId(), summary.readOnly(),
+                    summary.createdAt(), summary.coverFileId(), summary.avatarFileId(),
+                    summary.readOnly(),
                     summary.joinPolicy() == null ? null : summary.joinPolicy().name(),
                     summary.archived());
         }
@@ -57,8 +58,8 @@ public class ChatViewAssembler {
         return new ChatView(chat.id(), chat.type().name(), chat.securityMode().name(),
                 visibility == null ? null : visibility.name(), null, false, chat.name(),
                 chat.description(), null, chatRepository.lastSeq(chat.id()), 0,
-                chat.createdAt(), settings.coverFileId(), settings.readOnly(), joinPolicy,
-                false);
+                chat.createdAt(), settings.coverFileId(), settings.avatarFileId(),
+                settings.readOnly(), joinPolicy, false);
     }
 
     /** Convenience for the freshly created GROUP channel before any summary row exists. */
@@ -66,7 +67,7 @@ public class ChatViewAssembler {
                                         ChannelJoinPolicy joinPolicy, Instant createdAt) {
         return new ChatView(chat.id(), "GROUP", chat.securityMode().name(),
                 visibility == null ? null : visibility.name(), null, false, chat.name(),
-                chat.description(), null, 0, 0, createdAt, null, false,
+                chat.description(), null, 0, 0, createdAt, null, null, false,
                 joinPolicy == null ? null : joinPolicy.name(), false);
     }
 
@@ -74,6 +75,7 @@ public class ChatViewAssembler {
     public static ChatView createdDirect(Chat chat, UUID peerId, boolean peerCapable,
                                          Instant createdAt) {
         return new ChatView(chat.id(), "DIRECT", chat.securityMode().name(), null, peerId,
-                peerCapable, null, null, null, 0, 0, createdAt, null, false, null, false);
+                peerCapable, null, null, null, 0, 0, createdAt, null, null, false, null,
+                false);
     }
 }

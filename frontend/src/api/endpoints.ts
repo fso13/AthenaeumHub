@@ -2,6 +2,7 @@ import type { AppConfig } from '../config/env';
 import { getSession, setSession } from '../auth/session';
 import { getAuthRuntimeMode } from '../auth/runtime';
 import { reauthenticate } from '../auth/reauth';
+import { pluginAssetApiPath, pluginRelativeAssetApiPath } from '../plugins/assets';
 import type { ApiClient } from './http';
 import { ApiError, isApiError } from './problem';
 import type {
@@ -11,6 +12,8 @@ import type {
   AdminChatPage,
   AdminChatType,
   AdminOverview,
+  AdminPluginPackage,
+  AdminPluginPackageList,
   AdminSettings,
   AdminSettingsPatch,
   AdminStorage,
@@ -22,6 +25,7 @@ import type {
   ChangeWorkspaceMemberRoleRequest,
   Chat,
   ChatCoverRequest,
+  ChatAvatarRequest,
   ChatCreateRequest,
   ChatInviteCreateRequest,
   ChatPermissions,
@@ -247,6 +251,12 @@ export interface SendMessageResult {
   replayed: boolean;
 }
 
+/** D1.2 (#86): upload progress/cancellation for the admin ZIP install. */
+export interface PluginPackageUploadOptions {
+  onProgress?: (loaded: number, total: number) => void;
+  signal?: AbortSignal;
+}
+
 export interface ChatApi {
   bootstrapDevSession(): Promise<Session>;
   getMe(): Promise<MeResponse>;
@@ -281,6 +291,12 @@ export interface ChatApi {
   updateWorkspace(workspaceId: string, body: WorkspaceUpdate): Promise<WorkspaceSummary>;
   setWorkspaceAvatar(workspaceId: string, fileId: string): Promise<WorkspaceSummary>;
   deleteWorkspaceAvatar(workspaceId: string): Promise<void>;
+  /**
+   * P0-4 workspace logo bytes. The contract/backend expose only POST/DELETE for
+   * `/workspaces/{id}/avatar`; `logo_file_id` is an existing managed attachment,
+   * so the read resolves its presigned download URL and follows it.
+   */
+  getWorkspaceAvatarBlob(workspaceId: string, fileId: string): Promise<Blob>;
   /** Metadata only: the raw token is returned once by create and never listed. */
   listWorkspaceInvites(workspaceId: string): Promise<WorkspaceInviteList>;
   createWorkspaceInvite(
@@ -342,6 +358,12 @@ export interface ChatApi {
   setChatCover(chatId: string, body: ChatCoverRequest): Promise<Chat>;
   /** #80 idempotent `204`; the attachment itself is not deleted. */
   deleteChatCover(chatId: string): Promise<void>;
+  /** #80/avatar: channel icon bytes (the contract `302` is followed by `fetch`). */
+  getChatAvatarBlob(chatId: string): Promise<Blob>;
+  /** Avatar: existing image attachment of the same chat; the `Chat` is authoritative. */
+  setChatAvatar(chatId: string, body: ChatAvatarRequest): Promise<Chat>;
+  /** Avatar: idempotent `204`; the attachment itself is not deleted. */
+  deleteChatAvatar(chatId: string): Promise<void>;
   /** #80 effective rights matrix; any ACTIVE GROUP participant may read it. */
   getChatPermissions(chatId: string): Promise<ChatPermissions>;
   /** #80 partial per-role patch; OWNER/ADMIN only, `owner` row rejected. */
@@ -385,6 +407,22 @@ export interface ChatApi {
    */
   listPlugins(): Promise<PluginList>;
   listChatPlugins(chatId: string): Promise<ChatPluginStateList>;
+  /*
+   * D1.2 (#86): platform-admin external package lifecycle. The server enforces
+   * the admin flag and every archive/manifest rule; the client only validates
+   * obvious file shape before upload and surfaces contract error codes.
+   */
+  listAdminPlugins(): Promise<AdminPluginPackageList>;
+  installPluginPackage(
+    file: File,
+    options?: PluginPackageUploadOptions,
+  ): Promise<AdminPluginPackage>;
+  uninstallPluginPackage(pluginId: string): Promise<void>;
+  /**
+   * Authenticated bytes of one package asset. `assetPath` is relative to the
+   * entry document; when omitted the entry document itself is returned.
+   */
+  getPluginAsset(entryUrl: string, assetPath?: string): Promise<Blob>;
   /** #77: active chat member ids for the group-call picker. */
   listChatMembers(chatId: string): Promise<ChatMembersResponse>;
   /**
@@ -577,6 +615,37 @@ export function contentDispositionFilename(header: string | null): string | null
 }
 
 type ApiAuthConfig = Pick<AppConfig, 'devSession'> & { authMode?: AppConfig['authMode'] };
+
+/**
+ * Follow a presigned object URL to its bytes. The URL is short-lived and
+ * self-authorizing, so no bearer token is attached (and no storage key is
+ * accepted from the caller). The bytes are re-wrapped in the current realm for
+ * `URL.createObjectURL`/`FileReader` consumers.
+ */
+async function fetchPresignedBlob(url: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(url, { method: 'GET', credentials: 'omit', cache: 'no-store' });
+  } catch (error) {
+    throw ApiError.network(error);
+  }
+  if (!response.ok) {
+    throw new ApiError({
+      source: 'http',
+      status: response.status,
+      code: `HTTP_${response.status}`,
+      message: response.statusText || `HTTP ${response.status}`,
+      requestId: response.headers.get('x-request-id') ?? undefined,
+    });
+  }
+  const raw = await response.blob();
+  if (typeof raw.arrayBuffer !== 'function') return raw;
+  try {
+    return new Blob([await raw.arrayBuffer()], { type: raw.type });
+  } catch {
+    return raw;
+  }
+}
 
 const REAUTH_COOLDOWN_MS = 5_000;
 
@@ -776,6 +845,13 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
         // Idempotent `204`; the logo attachment stays in the file center.
         await client.delete(`/workspaces/${encodeURIComponent(workspaceId)}/avatar`);
       });
+    },
+
+    async getWorkspaceAvatarBlob(_workspaceId, fileId) {
+      // The only read surface in the contract is the existing attachment flow:
+      // `logo_file_id` is a managed attachment, not a dedicated avatar object.
+      const download = await this.attachmentDownloadUrl(fileId);
+      return fetchPresignedBlob(download.url);
     },
 
     listWorkspaceInvites(workspaceId) {
@@ -1034,6 +1110,32 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       });
     },
 
+    getChatAvatarBlob(chatId) {
+      return withReauth(async () => {
+        // `302` to a 5-minute presigned object URL; `fetch` follows it and the
+        // browser only ever sees bytes. The attachment id/key is never exposed.
+        const response = await client.getBlob(`/chats/${encodeURIComponent(chatId)}/avatar`);
+        return response.blob;
+      });
+    },
+
+    setChatAvatar(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.post<Chat>(
+          `/chats/${encodeURIComponent(chatId)}/avatar`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    deleteChatAvatar(chatId) {
+      return withReauth(async () => {
+        // Idempotent `204`; the attachment itself is not deleted.
+        await client.delete(`/chats/${encodeURIComponent(chatId)}/avatar`);
+      });
+    },
+
     getChatPermissions(chatId) {
       return withReauth(async () => {
         const response = await client.get<ChatPermissions>(
@@ -1194,6 +1296,53 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
         // Catalog is global and authenticated; no chat/workspace is required.
         const response = await client.get<PluginList>('/plugins');
         return response.data;
+      });
+    },
+
+    /* ------------------------------------------------------------------ */
+    /* D1.2 (#86): external ZIP packages (platform_admin only)            */
+    /* ------------------------------------------------------------------ */
+
+    listAdminPlugins() {
+      return withReauth(async () => {
+        const response = await client.get<AdminPluginPackageList>('/admin/plugins');
+        return response.data;
+      });
+    },
+
+    installPluginPackage(file, options = {}) {
+      return withReauth(async () => {
+        // The multipart field name is fixed by the contract; `postFormData`
+        // encodes the boundary exactly once so XHR and fetch agree.
+        const form = new FormData();
+        form.append('file', file, file.name);
+        const response = await client.postFormData<AdminPluginPackage>('/admin/plugins', form, {
+          // A 5 MiB upload can exceed the default request timeout on slow
+          // links; the server itself is fast, so keep a generous cap.
+          timeoutMs: 120_000,
+          signal: options.signal,
+          onProgress: options.onProgress,
+        });
+        return response.data;
+      });
+    },
+
+    uninstallPluginPackage(pluginId) {
+      return withReauth(async () => {
+        await client.delete(`/admin/plugins/${encodeURIComponent(pluginId)}`);
+      });
+    },
+
+    getPluginAsset(entryUrl, assetPath) {
+      return withReauth(async () => {
+        const path = assetPath
+          ? pluginRelativeAssetApiPath(entryUrl, assetPath)
+          : pluginAssetApiPath(entryUrl);
+        if (!path) {
+          throw ApiError.client('PLUGIN_ASSET_INVALID', 'Asset path is not a package path');
+        }
+        const response = await client.getBlob(path);
+        return response.blob;
       });
     },
 

@@ -261,7 +261,9 @@ public class ChatRepositoryAdapter implements ChatRepository {
                                c.cover_file_id,
                                c.read_only,
                                c.join_policy,
-                               (ua.chat_id IS NOT NULL) AS archived
+                               (ua.chat_id IS NOT NULL) AS archived,
+                               -- Appended so the existing positional indices stay stable.
+                               c.avatar_file_id
                           FROM chat.chats c
                           JOIN chat.chat_members cm
                             ON cm.chat_id = c.id
@@ -300,6 +302,7 @@ public class ChatRepositoryAdapter implements ChatRepository {
                     Boolean.TRUE.equals(row[9]),
                     instant(row[10]),
                     (UUID) row[12],
+                    (UUID) row[16],
                     Boolean.TRUE.equals(row[13]),
                     type == Chat.Type.GROUP && row[14] != null
                             ? ChannelJoinPolicy.valueOf((String) row[14]) : null,
@@ -703,7 +706,7 @@ public class ChatRepositoryAdapter implements ChatRepository {
     public Optional<ChannelSettings> findChannelSettings(UUID workspaceId, UUID chatId) {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
-                        SELECT c.read_only, c.join_policy, c.cover_file_id
+                        SELECT c.read_only, c.join_policy, c.cover_file_id, c.avatar_file_id
                           FROM chat.chats c
                          WHERE c.id = ?1
                            AND c.workspace_id = ?2
@@ -715,7 +718,8 @@ public class ChatRepositoryAdapter implements ChatRepository {
         return rows.stream().findFirst().map(row -> new ChannelSettings(
                 Boolean.TRUE.equals(row[0]),
                 ChannelJoinPolicy.valueOf((String) row[1]),
-                (UUID) row[2]));
+                (UUID) row[2],
+                (UUID) row[3]));
     }
 
     @Override
@@ -775,13 +779,30 @@ public class ChatRepositoryAdapter implements ChatRepository {
     }
 
     @Override
+    public boolean updateAvatar(UUID workspaceId, UUID chatId, UUID avatarFileId) {
+        return entityManager.createNativeQuery("""
+                        UPDATE chat.chats
+                           SET avatar_file_id = ?3,
+                               updated_at = now()
+                         WHERE id = ?1
+                           AND workspace_id = ?2
+                           AND deleted_at IS NULL
+                        """)
+                .setParameter(1, chatId)
+                .setParameter(2, workspaceId)
+                .setParameter(3, avatarFileId)
+                .executeUpdate() > 0;
+    }
+
+    @Override
     public boolean softDeleteChat(UUID workspaceId, UUID chatId) {
-        // The cover reference is cleared with the delete; the attachment itself is left to
-        // the normal file retention/GC path and may still be used by a message.
+        // The cover/avatar references are cleared with the delete; the attachments themselves
+        // are left to the normal file retention/GC path and may still be used by a message.
         return entityManager.createNativeQuery("""
                         UPDATE chat.chats
                            SET deleted_at = now(),
                                cover_file_id = NULL,
+                               avatar_file_id = NULL,
                                updated_at = now()
                          WHERE id = ?1
                            AND workspace_id = ?2

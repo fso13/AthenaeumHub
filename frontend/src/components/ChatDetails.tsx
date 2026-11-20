@@ -6,6 +6,8 @@ import { t, type MessageKey } from '../i18n/ru';
 import { enabledPluginCount } from '../plugins/model';
 import { usePluginGate } from '../plugins/gate';
 import {
+  useAvatarsState,
+  useAvatarsStore,
   useChatState,
   useChatStore,
   useFilesStore,
@@ -191,6 +193,9 @@ export function ChatDetails({
   const store = useChatStore();
   const state = useChatState();
   const filesStore = useFilesStore();
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
+  const chatAvatar = chat ? (avatars.chats[chat.id] ?? null) : null;
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const pluginsStore = usePluginsStore();
   const pluginsState = usePluginsState();
@@ -290,6 +295,12 @@ export function ChatDetails({
       : COVER_BY_MODE.managed;
   const cover = coverUrl ?? fallbackCover;
 
+  // One deduped avatar read per chat; a missing/404 avatar keeps the initials.
+  useEffect(() => {
+    if (!chat?.avatar_file_id || chat.type === 'DIRECT') return;
+    void avatarsStore.ensureChat(chat.id);
+  }, [avatarsStore, chat?.avatar_file_id, chat?.id, chat?.type]);
+
   useEffect(() => {
     setCoverUrl(null);
     const fileId = chat?.cover_file_id;
@@ -384,6 +395,7 @@ export function ChatDetails({
             name={isDirect ? (peer?.display_name ?? name) : name}
             seed={chat?.peer_id ?? chat?.id ?? name}
             size="profile"
+            src={chatAvatar?.url ?? null}
           />
           <p className="profile-name">{name}</p>
           <p className="profile-sub">{subtitle}</p>

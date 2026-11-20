@@ -148,6 +148,14 @@ public final class ErrorCode {
     public static final String PLUGIN_NOT_AVAILABLE = "PLUGIN_NOT_AVAILABLE";
     public static final String PLUGIN_DISABLED = "PLUGIN_DISABLED";
 
+    // D1.2 (#86): external plugin packages. Admin-only ZIP install; static assets only,
+    // no plugin server code is ever executed. The archive is validated before storage.
+    public static final String PLUGIN_PACKAGE_INVALID = "PLUGIN_PACKAGE_INVALID";
+    public static final String PLUGIN_PACKAGE_TOO_LARGE = "PLUGIN_PACKAGE_TOO_LARGE";
+    public static final String PLUGIN_ALREADY_INSTALLED = "PLUGIN_ALREADY_INSTALLED";
+    public static final String PLUGIN_ID_RESERVED = "PLUGIN_ID_RESERVED";
+    public static final String PLUGIN_STORAGE_UNAVAILABLE = "PLUGIN_STORAGE_UNAVAILABLE";
+
     // D1.1 (#76): plugin actions. Every action re-checks the per-chat toggle; E2EE stays
     // managed-only. Translation has no provider by default (503) and never logs content.
     public static final String PLUGIN_NOT_ENABLED = "PLUGIN_NOT_ENABLED";
@@ -162,6 +170,7 @@ public final class ErrorCode {
     public static final String CHAT_READ_ONLY = "CHAT_READ_ONLY";
     public static final String CHAT_PERMISSION_DENIED = "CHAT_PERMISSION_DENIED";
     public static final String CHAT_COVER_INVALID = "CHAT_COVER_INVALID";
+    public static final String CHAT_AVATAR_INVALID = "CHAT_AVATAR_INVALID";
     public static final String CHAT_JOIN_CLOSED = "CHAT_JOIN_CLOSED";
     public static final String CHAT_PIN_LIMIT = "CHAT_PIN_LIMIT";
 

@@ -14,13 +14,20 @@ import type { ApiError } from '../api/problem';
 import { describeError } from '../domain/errors';
 import { safeHttpUrl } from '../files/format';
 import { t, type MessageKey } from '../i18n/ru';
-import { useFilesStore, useChatState, useChatStore } from '../store/ChatProvider';
+import {
+  useAvatarsState,
+  useAvatarsStore,
+  useChatState,
+  useChatStore,
+  useFilesStore,
+} from '../store/ChatProvider';
 import {
   CHAT_PERMISSION_KEYS,
   CHAT_PERMISSION_ROLES,
   chatPermissionAllowed,
   defaultChatPermissions,
 } from '../store/chatStore';
+import { Avatar } from './Avatar';
 import { AdminConfirmDialog } from './admin/AdminConfirmDialog';
 import type { AdminActionErrorInfo } from './admin/actionErrors';
 import { ChatInvitesPanel } from './chat-settings/ChatInvitesPanel';
@@ -122,6 +129,23 @@ function coverErrorText(error: ApiError): string {
       return t('chatSettings.directUnsupported');
     }
     return t('chatSettings.cover.error.invalid');
+  }
+  if (error.isNetwork || error.status >= 500) return describeError(error).message;
+  return t('chatSettings.error.generic');
+}
+
+/** Channel icon/avatar errors; same server guards as the cover. */
+function avatarErrorText(error: ApiError): string {
+  if (error.status === 403) return t('chatSettings.avatar.error.forbidden');
+  if (error.status === 404) return t('chatSettings.avatar.error.notFound');
+  if (error.status === 409) return t('chatSettings.avatar.error.notReady');
+  if (error.status === 423) return t('chatSettings.avatar.error.quarantined');
+  if (error.status === 422) {
+    if (error.code === 'CHAT_SETTINGS_E2EE_UNSUPPORTED') return t('chatSettings.error.e2ee');
+    if (error.code === 'CHAT_MEMBERSHIP_UNSUPPORTED') {
+      return t('chatSettings.directUnsupported');
+    }
+    return t('chatSettings.avatar.error.invalid');
   }
   if (error.isNetwork || error.status >= 500) return describeError(error).message;
   return t('chatSettings.error.generic');
@@ -244,6 +268,9 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
   const settings = state.chatSettings;
   const permissions = state.chatPermissions;
   const coverState = state.chatCover;
+  const avatarState = state.chatAvatar;
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
   const archiveState = state.chatArchive;
   const deletionState = state.chatDeletion;
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -260,6 +287,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
   const readOnlyId = useId();
   const dangerNoteId = useId();
   const coverHintId = useId();
+  const avatarHintId = useId();
 
   const [activeTab, setActiveTab] = useState<TabId>('main');
   const [name, setName] = useState(chat?.name ?? '');
@@ -276,6 +304,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
   const [rightsDraft, setRightsDraft] = useState<ChatPermissions | null>(null);
   const [rightsNotice, setRightsNotice] = useState<string | null>(null);
@@ -363,6 +392,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
     setLeaveOpen(false);
     setDeleteOpen(false);
     setCoverPickerOpen(false);
+    setAvatarPickerOpen(false);
     setCoverUrl(null);
     setRightsDraft(null);
     setRightsNotice(null);
@@ -372,6 +402,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
     store.clearChatInvites();
     store.clearChatPermissions();
     store.clearChatCover();
+    store.clearChatAvatar();
     store.clearChatArchive();
   }, [open, chat, store]);
 
@@ -408,6 +439,12 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
       active = false;
     };
   }, [chat?.cover_file_id, filesStore, open]);
+
+  // The current icon is an authenticated blob; a `404` keeps the initials.
+  useEffect(() => {
+    if (!open || !chat?.avatar_file_id || chat.type === 'DIRECT') return;
+    void avatarsStore.ensureChat(chat.id);
+  }, [avatarsStore, chat?.avatar_file_id, chat?.id, chat?.type, open]);
 
   // DIRECT danger actions need the own-block list to render block vs unblock.
   useEffect(() => {
@@ -594,6 +631,19 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
     : !canManageStructure
       ? structureDisabledReason
       : null;
+  const chatAvatarUrl = avatars.chats[chat.id]?.url ?? null;
+  const avatarBusy =
+    avatarState.chatId === chat.id &&
+    (avatarState.actionStatus === 'saving' || avatarState.actionStatus === 'removing');
+  const avatarActionError =
+    avatarState.chatId === chat.id && avatarState.actionStatus === 'error'
+      ? avatarState.actionError
+      : null;
+  const avatarDisabledReason = isE2ee
+    ? t('chatSettings.avatar.error.e2ee')
+    : !canManageStructure
+      ? structureDisabledReason
+      : null;
 
   const baseMatrix =
     permissions.chatId === chat.id && permissions.status === 'ready' ? permissions.matrix : null;
@@ -633,6 +683,32 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
     setDangerNotice(null);
     const ok = await store.removeChatCover(chat.id);
     if (ok) setNotice(t('chatSettings.cover.removed'));
+  };
+
+  const handleSelectAvatar = async (fileId: string) => {
+    setDangerNotice(null);
+    const ok = await store.setChatAvatar(chat.id, fileId);
+    if (!ok) return;
+    setAvatarPickerOpen(false);
+    setNotice(t('chatSettings.avatar.saved'));
+  };
+
+  const handleRemoveAvatar = async () => {
+    setDangerNotice(null);
+    const ok = await store.removeChatAvatar(chat.id);
+    if (ok) setNotice(t('chatSettings.avatar.removed'));
+  };
+
+  const openCoverPicker = () => {
+    setAvatarPickerOpen(false);
+    setCoverPickerOpen((open) => !open);
+    if (!coverPickerOpen) void store.loadChatCoverImages(chat.id);
+  };
+
+  const openAvatarPicker = () => {
+    setCoverPickerOpen(false);
+    setAvatarPickerOpen((open) => !open);
+    if (!avatarPickerOpen) void store.loadChatCoverImages(chat.id);
   };
 
   const handleToggleRight = (role: ChatPermissionRole, permission: ChatPermissionKey) => {
@@ -715,10 +791,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
             title={coverDisabledReason ?? t('chatSettings.cover.pickerHint')}
             aria-describedby={coverHintId}
             aria-expanded={coverPickerOpen}
-            onClick={() => {
-              setCoverPickerOpen((open) => !open);
-              if (!coverPickerOpen) void store.loadChatCoverImages(chat.id);
-            }}
+            onClick={openCoverPicker}
           >
             {coverBusy && coverState.actionStatus === 'saving'
               ? t('chatSettings.cover.working')
@@ -749,6 +822,56 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
         <p className="chat-settings-error" role="alert">
           {coverErrorText(coverActionError)}
         </p>
+      ) : null}
+      {!isDirect ? (
+        <section className="chat-settings-avatar" aria-labelledby={`${avatarHintId}-title`}>
+          <Avatar
+            name={chat.name?.trim() || t('chat.group')}
+            seed={chat.id}
+            size="lg"
+            src={chatAvatarUrl}
+          />
+          <div className="chat-settings-avatar__body">
+            <p className="chat-settings-avatar__title" id={`${avatarHintId}-title`}>
+              {t('chatSettings.avatar.section')}
+            </p>
+            <p className="chat-settings-avatar__hint" id={avatarHintId}>
+              {avatarDisabledReason ?? t('chatSettings.avatar.pickerHint')}
+            </p>
+            <div className="chat-settings-avatar__actions">
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={avatarDisabledReason !== null || avatarBusy || saving}
+                title={avatarDisabledReason ?? t('chatSettings.avatar.pickerHint')}
+                aria-describedby={avatarHintId}
+                aria-expanded={avatarPickerOpen}
+                onClick={openAvatarPicker}
+              >
+                {avatarBusy && avatarState.actionStatus === 'saving'
+                  ? t('chatSettings.avatar.working')
+                  : t('chatSettings.avatar.change')}
+              </button>
+              {chat.avatar_file_id && canManageStructure ? (
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  disabled={avatarBusy || saving}
+                  onClick={() => void handleRemoveAvatar()}
+                >
+                  {avatarState.actionStatus === 'removing'
+                    ? t('chatSettings.avatar.removing')
+                    : t('chatSettings.avatar.remove')}
+                </button>
+              ) : null}
+            </div>
+            {avatarActionError ? (
+              <p className="chat-settings-error" role="alert">
+                {avatarErrorText(avatarActionError)}
+              </p>
+            ) : null}
+          </div>
+        </section>
       ) : null}
       {coverPickerOpen && !isDirect && !isE2ee ? (
         <section className="cover-picker" aria-label={t('chatSettings.cover.pickerTitle')}>
@@ -794,6 +917,58 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
                     )}
                     <span className="cover-picker__name">
                       {item.filename ?? t('chatSettings.cover.select')}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
+      {avatarPickerOpen && !isDirect && !isE2ee ? (
+        <section className="cover-picker" aria-label={t('chatSettings.avatar.pickerTitle')}>
+          <p className="cover-picker__title">{t('chatSettings.avatar.pickerTitle')}</p>
+          {coverImagesLoading ? (
+            <p className="pane-sub">{t('chatSettings.avatar.loading')}</p>
+          ) : coverImagesError ? (
+            <div>
+              <p className="chat-settings-error" role="alert">
+                {avatarErrorText(coverImagesError)}
+              </p>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => void store.loadChatCoverImages(chat.id, true)}
+              >
+                {t('chatSettings.avatar.retry')}
+              </button>
+            </div>
+          ) : coverImages.length === 0 ? (
+            <p className="pane-sub">{t('chatSettings.avatar.empty')}</p>
+          ) : (
+            <ul className="cover-picker__grid">
+              {coverImages.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className="cover-picker__item"
+                    disabled={avatarBusy || item.id === chat.avatar_file_id}
+                    aria-label={`${item.filename ?? item.id}: ${t('chatSettings.avatar.select')}`}
+                    onClick={() => void handleSelectAvatar(item.id)}
+                  >
+                    {safeHttpUrl(item.media?.artwork_url) ? (
+                      <img
+                        src={safeHttpUrl(item.media?.artwork_url) ?? undefined}
+                        alt=""
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span className="cover-picker__fallback" aria-hidden="true">
+                        {item.filename ?? 'IMG'}
+                      </span>
+                    )}
+                    <span className="cover-picker__name">
+                      {item.filename ?? t('chatSettings.avatar.select')}
                     </span>
                   </button>
                 </li>

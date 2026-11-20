@@ -1,7 +1,9 @@
+import { useEffect } from 'react';
 import type { ChatSummary } from '../api/types';
 import { chatDisplayName } from '../domain/chatLabel';
 import { formatTime } from '../domain/messages';
 import { t, type MessageKey } from '../i18n/ru';
+import { useAvatarsState, useAvatarsStore } from '../store/ChatProvider';
 import type { AppState } from '../store/chatStore';
 import { Avatar } from './Avatar';
 import { pluralRu } from './pages/pageData';
@@ -68,6 +70,15 @@ export function ChatHeader({
     state.workspaceMembers.items,
     state.session?.chat.name ?? null,
   );
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
+  const chatAvatar = chat ? (avatars.chats[chat.id] ?? null) : null;
+
+  // One authenticated `GET /chats/{id}/avatar` per chat, deduped by the store.
+  useEffect(() => {
+    if (!chat?.avatar_file_id || chat.type === 'DIRECT') return;
+    void avatarsStore.ensureChat(chat.id);
+  }, [avatarsStore, chat?.avatar_file_id, chat?.id, chat?.type]);
   const chatType = chat?.type ?? state.session?.chat.type ?? 'GROUP';
   const securityMode =
     chat?.security_mode ??
@@ -120,7 +131,7 @@ export function ChatHeader({
   return (
     <header className="chat-head">
       <button type="button" className="chat-id" onClick={onToggleDetails}>
-        <Avatar name={name} seed={chat?.id ?? name} size="lg" />
+        <Avatar name={name} seed={chat?.id ?? name} size="lg" src={chatAvatar?.url ?? null} />
         <span className="chat-meta">
           <span className="chat-title" role="heading" aria-level={1}>
             {name}

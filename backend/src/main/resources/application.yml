@@ -58,6 +58,12 @@ spring:
       mail.smtp.writetimeout: 5000
   mvc:
     throw-exception-if-no-handler-found: true
+  # D1.2 (#86): plugin ZIP upload. The service also enforces 5 MiB; this is the transport
+  # backstop so an oversized body is rejected before it is buffered by the controller.
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
   web:
     resources:
       add-mappings: false

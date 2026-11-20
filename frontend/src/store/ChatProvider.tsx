@@ -11,6 +11,7 @@ import type {
   ProfileWorkspaceState,
   ProfileWorkspaceStore,
 } from '../profile/profileWorkspaceStore';
+import type { AvatarStore, AvatarsState } from '../avatars/avatarStore';
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
 
@@ -97,6 +98,16 @@ export function useProfileWorkspaceStore(): ProfileWorkspaceStore {
 
 export function useProfileWorkspaceState(): ProfileWorkspaceState {
   const store = useProfileWorkspaceStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** Per-id chat/workspace avatar bytes with initials fallback at the call site. */
+export function useAvatarsStore(): AvatarStore {
+  return useChatStore().avatars;
+}
+
+export function useAvatarsState(): AvatarsState {
+  const store = useAvatarsStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 

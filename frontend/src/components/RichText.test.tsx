@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +50,101 @@ describe('RichText', () => {
     expect(container.querySelectorAll('ol > li')).toHaveLength(2);
     expect(container.querySelectorAll('.mention')).toHaveLength(2);
     expect(container.querySelector('.mention--all')).toHaveTextContent('@all');
+  });
+
+  it('renders headings, rules, tables, images, nested lists and task lists', () => {
+    const { container } = render(
+      <RichText
+        text={[
+          '# Заголовок',
+          '## Подзаголовок',
+          '',
+          '---',
+          '',
+          '| Команда | Баллы |',
+          '| :--- | ---: |',
+          '| Сова | 42 |',
+          '',
+          '![Сова](https://example.com/owl.png)',
+          '',
+          '- [ ] один',
+          '- [x] два',
+          '',
+          'Обычный список:',
+          '',
+          '- родитель',
+          '  - ребёнок',
+          '',
+          '> цитата',
+          '>',
+          '> второй **абзац**',
+        ].join('\n')}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Заголовок' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Подзаголовок' })).toBeInTheDocument();
+    expect(container.querySelector('hr.rich-hr')).not.toBeNull();
+
+    const table = screen.getByRole('table');
+    expect(table).toBeInTheDocument();
+    expect(container.querySelector('.rich-table-wrap')).toHaveAttribute('role', 'region');
+    expect(container.querySelector('.rich-table-wrap')).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('columnheader', { name: 'Команда' })).toHaveClass(
+      'rich-table__cell--left',
+    );
+    expect(screen.getByRole('columnheader', { name: 'Баллы' })).toHaveClass(
+      'rich-table__cell--right',
+    );
+    expect(screen.getByRole('cell', { name: '42' })).toHaveClass('rich-table__cell--right');
+
+    const image = screen.getByRole('img', { name: 'Сова' });
+    expect(image).toHaveAttribute('src', 'https://example.com/owl.png');
+    expect(image).toHaveAttribute('loading', 'lazy');
+    expect(image).toHaveAttribute('decoding', 'async');
+    expect(image).toHaveAttribute('referrerpolicy', 'no-referrer');
+    expect(image).toHaveClass('rich-image');
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0]).toHaveAttribute('aria-checked', 'false');
+    expect(checkboxes[1]).toHaveAttribute('aria-checked', 'true');
+    expect(checkboxes[1]).toHaveAttribute('aria-disabled', 'true');
+    expect(checkboxes[1]).toHaveClass('rich-task--checked');
+    expect(container.querySelector('.rich-list--tasks')).not.toBeNull();
+
+    expect(container.querySelectorAll('ul ul li')).toHaveLength(1);
+    expect(container.querySelector('ul ul li')).toHaveTextContent('ребёнок');
+
+    expect(container.querySelectorAll('blockquote .rich-p')).toHaveLength(2);
+    expect(container.querySelector('blockquote strong')).toHaveTextContent('абзац');
+  });
+
+  it('falls back to alt text when an image fails to load', () => {
+    const { container } = render(<RichText text="![Сова](https://example.com/missing.png)" />);
+    const image = screen.getByRole('img', { name: 'Сова' });
+    fireEvent.error(image);
+    expect(screen.queryByRole('img', { name: 'Сова' })).toBeNull();
+    const fallback = container.querySelector('.rich-image-fallback');
+    expect(fallback).not.toBeNull();
+    expect(fallback).toHaveTextContent('Сова');
+  });
+
+  it('renders unsafe image targets and raw HTML as literal text', () => {
+    const { container } = render(
+      <RichText
+        text={
+          '![x](javascript:alert(1)) ![y](https://example.com/a.svg) ![z](data:image/png;base64,AAAA)\n\n<table><tr><td>ячейка</td></tr></table>'
+        }
+      />,
+    );
+    expect(screen.queryByRole('img')).toBeNull();
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(container.textContent).toContain('![x](javascript:alert(1))');
+    expect(container.textContent).toContain('![y](https://example.com/a.svg)');
+    expect(container.textContent).toContain('![z](data:image/png;base64,AAAA)');
+    expect(container.textContent).toContain('<table><tr><td>ячейка</td></tr></table>');
+    expect(container.querySelector('table')).toBeNull();
   });
 
   it('escapes raw HTML and rejects unsafe links', () => {
@@ -126,6 +221,34 @@ describe('RichText', () => {
           '**bold** [link](https://example.com) @all\n\n```ts\nconst a = 1;\n```\n\n> quote\n\n- list'
         }
         mentions={[]}
+      />,
+    );
+    const results = await axe.run(container, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    const serious = results.violations.filter(
+      (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+    );
+    expect(serious).toEqual([]);
+  });
+
+  it('passes an axe audit with headings, a table, an image and task lists', async () => {
+    const { container } = render(
+      <RichText
+        text={[
+          '# План',
+          '',
+          '| Задача | Статус |',
+          '| :--- | :---: |',
+          '| Макет | готово |',
+          '',
+          '![Сова](https://example.com/owl.png)',
+          '',
+          '- [x] сделать',
+          '- [ ] проверить',
+          '',
+          '> цитата со **ссылкой** [сайт](https://example.com)',
+        ].join('\n')}
       />,
     );
     const results = await axe.run(container, {

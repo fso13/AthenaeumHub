@@ -1,6 +1,7 @@
 import type {
   AdminAuditEvent,
   AdminChat,
+  AdminPluginPackage,
   AdminStorage,
   AdminUser,
   AdminUserStatus,
@@ -70,6 +71,12 @@ import {
   mockSession,
   type MockMemberUser,
 } from './fixtures';
+
+/** D1.2 (#86): static asset bytes of one mock external package. */
+export interface MockPluginAssetRecord {
+  contentType: string;
+  body: Uint8Array;
+}
 
 /** D1.1 (#76): one mock poll plus its per-user votes (server-side state). */
 export interface MockPollRecord {
@@ -544,6 +551,13 @@ export interface MockChatCoverRequestRecord {
   deviceId: string | null;
 }
 
+export interface MockChatAvatarRequestRecord {
+  chatId: string;
+  fileId: string | null;
+  action: 'SET' | 'DELETE' | 'GET';
+  deviceId: string | null;
+}
+
 export interface MockChatPermissionsRequestRecord {
   chatId: string;
   body: Record<string, unknown> | null;
@@ -736,11 +750,13 @@ export interface MockDb {
   chatPermissions: Record<string, ChatPermissions>;
   chatPermissionsRequests: MockChatPermissionsRequestRecord[];
   chatCoverRequests: MockChatCoverRequestRecord[];
+  chatAvatarRequests: MockChatAvatarRequestRecord[];
   chatPins: Record<string, ChatPin[]>;
   chatPinRequests: MockChatPinRequestRecord[];
   chatArchiveRequests: MockChatArchiveRequestRecord[];
   chatDeleteRequests: Array<{ chatId: string; deviceId: string | null }>;
   forceChatCoverError: ForcedSendError | null;
+  forceChatAvatarError: ForcedSendError | null;
   forceChatPermissionsError: ForcedSendError | null;
   forceChatPermissionsUpdateError: ForcedSendError | null;
   forceChatPinsError: ForcedSendError | null;
@@ -766,6 +782,16 @@ export interface MockDb {
   chatPluginPatchDelayMs: number;
   forceChatPluginsError: ForcedSendError | null;
   forceChatPluginPatchError: ForcedSendError | null;
+  /** D1.2 (#86): installed external ZIP packages and their static assets. */
+  pluginPackages: AdminPluginPackage[];
+  pluginPackageAssets: Map<string, Map<string, MockPluginAssetRecord>>;
+  adminPluginListRequests: number;
+  pluginPackageInstallRequests: Array<{ fileName: string; size: number; deviceId: string | null }>;
+  pluginPackageUninstallRequests: string[];
+  pluginPackageInstallDelayMs: number;
+  forceAdminPluginPackagesError: ForcedSendError | null;
+  forceInstallPluginPackageError: ForcedSendError | null;
+  forceUninstallPluginPackageError: ForcedSendError | null;
   /* D1.1 (#76): poll/task/translate action state and injectable failures. */
   polls: Map<string, MockPollRecord>;
   tasks: Map<string, MockTaskRecord>;
@@ -1011,6 +1037,7 @@ export function createMockPluginCatalog(): Plugin[] {
   return [
     {
       id: 'polls',
+      kind: 'BUILTIN',
       name: 'Опросы',
       description: 'Голосования и быстрые решения прямо в переписке.',
       icon: 'poll',
@@ -1020,6 +1047,7 @@ export function createMockPluginCatalog(): Plugin[] {
     },
     {
       id: 'tasks',
+      kind: 'BUILTIN',
       name: 'Задачи',
       description: 'Чек-листы, дедлайны и напоминания в чате.',
       icon: 'task',
@@ -1029,6 +1057,7 @@ export function createMockPluginCatalog(): Plugin[] {
     },
     {
       id: 'translate',
+      kind: 'BUILTIN',
       name: 'Перевод',
       description: 'Перевод входящих сообщений на лету.',
       icon: 'translate',
@@ -1038,6 +1067,7 @@ export function createMockPluginCatalog(): Plugin[] {
     },
     {
       id: 'telegram',
+      kind: 'BUILTIN',
       name: 'Мост в Telegram',
       description: 'Двусторонний мост для внешних команд и подрядчиков.',
       icon: 'plug',
@@ -1047,6 +1077,7 @@ export function createMockPluginCatalog(): Plugin[] {
     },
     {
       id: 'dlp',
+      kind: 'BUILTIN',
       name: 'DLP-подсказки',
       description: 'Предупреждает об отправке чувствительных данных.',
       icon: 'shield',
@@ -1055,6 +1086,101 @@ export function createMockPluginCatalog(): Plugin[] {
       state: 'ACTIVE',
     },
   ];
+}
+
+/** D1.2 (#86): project an installed package into the public catalog shape. */
+export function externalCatalogPlugin(pkg: AdminPluginPackage): Plugin {
+  return {
+    id: pkg.id,
+    kind: 'EXTERNAL',
+    name: pkg.name,
+    description: pkg.description,
+    icon: 'plug',
+    permissions: pkg.permissions,
+    modes: pkg.modes,
+    state: 'ACTIVE',
+    version: pkg.version,
+    author: pkg.author,
+    entry_url: `/api/v1/plugins/${pkg.id}/assets/${pkg.entry}`,
+  };
+}
+
+/** Built-in catalog followed by installed external packages (server order). */
+export function allCatalogPlugins(db: MockDb): Plugin[] {
+  return [...db.pluginCatalog, ...db.pluginPackages.map(externalCatalogPlugin)];
+}
+
+const MOCK_ASSET_TYPES: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  json: 'application/json; charset=utf-8',
+};
+
+function mockAssetContentType(path: string): string {
+  const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+  return MOCK_ASSET_TYPES[extension] ?? 'application/octet-stream';
+}
+
+export interface MockPluginPackageSeed {
+  id?: string;
+  name?: string;
+  version?: string;
+  description?: string;
+  author?: string;
+  entry?: string;
+  permissions?: AdminPluginPackage['permissions'];
+  modes?: AdminPluginPackage['modes'];
+  installed_at?: string;
+  assets?: Record<string, string | Uint8Array>;
+}
+
+/**
+ * Seed one installed external package (used by UI tests before GET /plugins).
+ * Mirrors the catalog row and the exact-match asset store of the backend.
+ */
+export function seedMockPluginPackage(
+  db: MockDb,
+  seed: MockPluginPackageSeed = {},
+): AdminPluginPackage {
+  const entry = seed.entry ?? 'index.html';
+  const id = seed.id ?? 'hello-panel';
+  const assets: Record<string, string | Uint8Array> = {
+    [entry]:
+      '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="assets/app.css"></head><body><h1>Hello panel</h1><img src="assets/logo.svg" alt="Sova"><script src="assets/app.js"></script></body></html>',
+    'assets/app.js': 'window.addEventListener("message", () => {});',
+    'assets/app.css': 'body { font: 14px system-ui; }',
+    'assets/logo.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>',
+    ...seed.assets,
+  };
+  const pkg: AdminPluginPackage = {
+    id,
+    name: seed.name ?? 'Hello panel',
+    version: seed.version ?? '1.0.0',
+    description: seed.description ?? 'Пример статической панели',
+    author: seed.author ?? 'Sova',
+    entry,
+    permissions: seed.permissions ?? ['chat.messages.read'],
+    modes: seed.modes ?? ['MANAGED'],
+    size_bytes: 2048,
+    file_count: Object.keys(assets).length,
+    sha256: 'a'.repeat(64),
+    installed_at: seed.installed_at ?? '2026-11-20T10:00:00.000Z',
+  };
+  const encoder = new TextEncoder();
+  const map = new Map<string, MockPluginAssetRecord>();
+  for (const [path, body] of Object.entries(assets)) {
+    map.set(path, {
+      contentType: mockAssetContentType(path),
+      body: typeof body === 'string' ? encoder.encode(body) : body,
+    });
+  }
+  db.pluginPackages = [...db.pluginPackages.filter((item) => item.id !== id), pkg];
+  db.pluginPackageAssets.set(id, map);
+  return pkg;
 }
 
 export function createMockAdminState(): MockAdminState {
@@ -1220,11 +1346,13 @@ export function createMockDb(): MockDb {
     chatPermissions: buildChatPermissions(),
     chatPermissionsRequests: [],
     chatCoverRequests: [],
+    chatAvatarRequests: [],
     chatPins: buildChatPins(),
     chatPinRequests: [],
     chatArchiveRequests: [],
     chatDeleteRequests: [],
     forceChatCoverError: null,
+    forceChatAvatarError: null,
     forceChatPermissionsError: null,
     forceChatPermissionsUpdateError: null,
     forceChatPinsError: null,
@@ -1243,6 +1371,15 @@ export function createMockDb(): MockDb {
     chatPluginPatchDelayMs: 0,
     forceChatPluginsError: null,
     forceChatPluginPatchError: null,
+    pluginPackages: [],
+    pluginPackageAssets: new Map(),
+    adminPluginListRequests: 0,
+    pluginPackageInstallRequests: [],
+    pluginPackageUninstallRequests: [],
+    pluginPackageInstallDelayMs: 0,
+    forceAdminPluginPackagesError: null,
+    forceInstallPluginPackageError: null,
+    forceUninstallPluginPackageError: null,
     polls: new Map(),
     tasks: new Map(),
     pollRequests: [],
@@ -1430,11 +1567,13 @@ export function resetMockDb(db: MockDb): void {
   db.chatPermissions = fresh.chatPermissions;
   db.chatPermissionsRequests = [];
   db.chatCoverRequests = [];
+  db.chatAvatarRequests = [];
   db.chatPins = fresh.chatPins;
   db.chatPinRequests = [];
   db.chatArchiveRequests = [];
   db.chatDeleteRequests = [];
   db.forceChatCoverError = null;
+  db.forceChatAvatarError = null;
   db.forceChatPermissionsError = null;
   db.forceChatPermissionsUpdateError = null;
   db.forceChatPinsError = null;
@@ -1453,6 +1592,15 @@ export function resetMockDb(db: MockDb): void {
   db.chatPluginPatchDelayMs = 0;
   db.forceChatPluginsError = null;
   db.forceChatPluginPatchError = null;
+  db.pluginPackages = fresh.pluginPackages;
+  db.pluginPackageAssets.clear();
+  db.adminPluginListRequests = 0;
+  db.pluginPackageInstallRequests = [];
+  db.pluginPackageUninstallRequests = [];
+  db.pluginPackageInstallDelayMs = 0;
+  db.forceAdminPluginPackagesError = null;
+  db.forceInstallPluginPackageError = null;
+  db.forceUninstallPluginPackageError = null;
   db.polls.clear();
   db.tasks.clear();
   db.pollRequests = [];

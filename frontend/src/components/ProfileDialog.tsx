@@ -241,7 +241,8 @@ export function ProfileDialog({
       setAvatarPickerOpen(false);
       setAvatarNotice(null);
       profileStore.clearTwoFactorDraft();
-      profileStore.clearAvatarPreview();
+      // The avatar object URL is shared with the sidebar user row and stays
+      // cached until logout/workspace switch (the store revokes it then).
       setConfirmLogout(false);
       setLoggingOut(false);
       setEditing(false);

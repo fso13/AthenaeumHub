@@ -82,6 +82,14 @@
       <artifactId>s3</artifactId>
       <version>2.31.5</version>
     </dependency>
+    <!-- D1.2 (#86): safe ZIP inspection (symlink marking, ZIP64, bounded streams).
+         1.24.0 is the version already available in the offline build repository and has
+         the required SeekableByteChannel API without extra compile dependencies. -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-compress</artifactId>
+      <version>1.24.0</version>
+    </dependency>
 
     <dependency>
       <groupId>org.springframework.boot</groupId>

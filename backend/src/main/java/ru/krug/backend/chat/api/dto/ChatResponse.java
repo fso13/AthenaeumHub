@@ -4,9 +4,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * OpenAPI {@code Chat} (I-01/D-S4-01). {@code visibility}, {@code join_policy} and
- * {@code cover_file_id} are GROUP-only and nullable; {@code read_only} and {@code archived}
- * are additive P0-2 fields ({@code archived} is the caller's own archive state).
+ * OpenAPI {@code Chat} (I-01/D-S4-01). {@code visibility}, {@code join_policy},
+ * {@code cover_file_id} and {@code avatar_file_id} are GROUP-only and nullable;
+ * {@code read_only} and {@code archived} are additive P0-2 fields ({@code archived} is the
+ * caller's own archive state).
  */
 public record ChatResponse(
         UUID id,
@@ -22,6 +23,7 @@ public record ChatResponse(
         long unreadCount,
         Instant createdAt,
         UUID coverFileId,
+        UUID avatarFileId,
         boolean readOnly,
         String joinPolicy,
         boolean archived) {

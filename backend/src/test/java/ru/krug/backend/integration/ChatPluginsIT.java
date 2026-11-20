@@ -280,7 +280,10 @@ class ChatPluginsIT extends IntegrationTestBase {
                 SELECT relrowsecurity, relforcerowsecurity FROM pg_class
                  WHERE oid = 'chat.chat_plugins'::regclass
                 """);
-        assertThat(catalogFlags.get("relrowsecurity")).isEqualTo(false);
+        // #86: the catalog keeps a global read policy but application writes are
+        // restricted by RLS to kind='EXTERNAL' rows (built-ins stay migrator-only).
+        assertThat(catalogFlags.get("relrowsecurity")).isEqualTo(true);
+        assertThat(catalogFlags.get("relforcerowsecurity")).isEqualTo(false);
         assertThat(chatFlags.get("relrowsecurity")).isEqualTo(true);
         assertThat(chatFlags.get("relforcerowsecurity")).isEqualTo(true);
 
@@ -290,7 +293,7 @@ class ChatPluginsIT extends IntegrationTestBase {
         for (String privilege : new String[]{"INSERT", "UPDATE", "DELETE"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT has_table_privilege('krug_app', 'plugin.catalog', ?)",
-                    Boolean.class, privilege)).as(privilege).isFalse();
+                    Boolean.class, privilege)).as(privilege).isTrue();
         }
         for (String privilege : new String[]{"SELECT", "INSERT", "UPDATE", "DELETE"}) {
             assertThat(jdbc.queryForObject(

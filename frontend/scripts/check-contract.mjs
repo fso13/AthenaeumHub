@@ -107,6 +107,9 @@ const operations = {
   'GET /me/blocked': spec.paths?.['/me/blocked']?.get,
   'POST /chats/{chatId}/cover': spec.paths?.['/chats/{chatId}/cover']?.post,
   'DELETE /chats/{chatId}/cover': spec.paths?.['/chats/{chatId}/cover']?.delete,
+  'POST /chats/{chatId}/avatar': spec.paths?.['/chats/{chatId}/avatar']?.post,
+  'DELETE /chats/{chatId}/avatar': spec.paths?.['/chats/{chatId}/avatar']?.delete,
+  'GET /chats/{chatId}/avatar': spec.paths?.['/chats/{chatId}/avatar']?.get,
   'DELETE /chats/{chatId}': spec.paths?.['/chats/{chatId}']?.delete,
   'GET /chats/{chatId}/permissions': spec.paths?.['/chats/{chatId}/permissions']?.get,
   'PATCH /chats/{chatId}/permissions': spec.paths?.['/chats/{chatId}/permissions']?.patch,
@@ -128,6 +131,12 @@ const operations = {
   'GET /chats/{chatId}/plugins': spec.paths?.['/chats/{chatId}/plugins']?.get,
   'PATCH /chats/{chatId}/plugins/{pluginId}':
     spec.paths?.['/chats/{chatId}/plugins/{pluginId}']?.patch,
+  // D1.2 (#86): external plugin packages (admin catalog + asset delivery).
+  'GET /admin/plugins': spec.paths?.['/admin/plugins']?.get,
+  'POST /admin/plugins': spec.paths?.['/admin/plugins']?.post,
+  'DELETE /admin/plugins/{pluginId}': spec.paths?.['/admin/plugins/{pluginId}']?.delete,
+  'GET /plugins/{pluginId}/assets/{assetPath}':
+    spec.paths?.['/plugins/{pluginId}/assets/{assetPath}']?.get,
   'GET /admin/audit': spec.paths?.['/admin/audit']?.get,
   'GET /me': spec.paths?.['/me']?.get,
   'POST /devices': spec.paths?.['/devices']?.post,
@@ -734,18 +743,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 98,
-  'Contract must expose exactly 98 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + P0-3 security)',
+  Object.keys(spec.paths ?? {}).length === 102,
+  'Contract must expose exactly 102 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 127,
-  'Contract check must cover exactly 127 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + P0-3 security)',
+  Object.keys(operations).length === 134,
+  'Contract check must cover exactly 134 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security)',
 );
 check(
-  Object.keys(schemas).length === 170,
-  'Contract must expose exactly 170 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + P0-3 security)',
+  Object.keys(schemas).length === 173,
+  'Contract must expose exactly 173 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security)',
 );
 
 check(
@@ -988,6 +997,32 @@ check(
 check(
   Boolean(spec.paths?.['/chats/{chatId}/cover']?.post?.responses?.['423']),
   'POST /chats/{chatId}/cover must document 423 quarantine',
+);
+// The channel avatar reuses the cover attachment rules (no new upload pipeline).
+check(
+  schemas.ChatAvatarRequest?.properties?.file_id?.format === 'uuid' &&
+    schemas.ChatAvatarRequest?.required?.includes('file_id'),
+  'ChatAvatarRequest.file_id must be a required uuid',
+);
+for (const schemaName of ['Chat', 'ChatSummary']) {
+  check(
+    Object.prototype.hasOwnProperty.call(schemas[schemaName]?.properties ?? {}, 'avatar_file_id'),
+    `${schemaName}.avatar_file_id must be documented (channel icons)`,
+  );
+}
+check(
+  Boolean(spec.paths?.['/chats/{chatId}/avatar']?.post?.responses?.['423']) &&
+    Boolean(spec.paths?.['/chats/{chatId}/avatar']?.post?.responses?.['409']),
+  'POST /chats/{chatId}/avatar must document 409/423 attachment states',
+);
+check(
+  Boolean(spec.paths?.['/chats/{chatId}/avatar']?.delete?.responses?.['204']) &&
+    !spec.paths['/chats/{chatId}/avatar'].delete.responses['204'].content,
+  'DELETE /chats/{chatId}/avatar must document a bodyless 204',
+);
+check(
+  Boolean(spec.paths?.['/chats/{chatId}/avatar']?.get?.responses?.['302']),
+  'GET /chats/{chatId}/avatar must document the 302 presigned redirect',
 );
 check(
   Boolean(spec.paths?.['/chats/{chatId}']?.delete?.responses?.['204']) &&

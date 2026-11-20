@@ -83,7 +83,8 @@ paths:
         По умолчанию возвращает все чаты пользователя, кроме архивированных им лично.
         `archived=true` возвращает только личный архив вызывающего. Архив user-local:
         архивирование одним участником не меняет список других. Элемент `ChatSummary`
-        содержит аддитивные `cover_file_id`, `read_only`, `join_policy` и `archived`.
+        содержит аддитивные `cover_file_id`, `avatar_file_id`, `read_only`, `join_policy` и
+        `archived`.
       parameters:
         - $ref: "#/components/parameters/WorkspaceId"
         - $ref: "#/components/parameters/DeviceId"
@@ -664,6 +665,104 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  /admin/plugins:
+    get:
+      tags: [admin, plugins]
+      operationId: listAdminPlugins
+      summary: Установленные внешние плагины (platform_admin)
+      description: >
+        Только внешние пакеты (`kind=EXTERNAL`), установленные администратором
+        платформы. Встроенные плагины в этот список не входят. Метаданные содержат
+        версию, автора, entry, permissions/modes, размер архива, число файлов и
+        SHA-256 архива; байты ассетов и object keys не возвращаются.
+      responses:
+        "200":
+          description: Список установленных внешних пакетов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPluginPackageList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [admin, plugins]
+      operationId: installPluginPackage
+      summary: Установить внешний плагин из ZIP (platform_admin)
+      description: >
+        Принимает `multipart/form-data` с единственной частью `file`. ZIP проверяется
+        безопасно: максимум 5 MiB архива, 10 MiB распакованных данных, 200 файлов,
+        запрещены symlink, traversal, абсолютные пути, дубликаты и шифрованные записи;
+        `manifest.json` в корне должен соответствовать manifest v1, а `entry` — быть
+        существующим `.html`-файлом. Ассеты сохраняются в S3/MinIO, в каталог
+        добавляется строка `kind=EXTERNAL, install_state=INSTALLED`. Серверный код
+        плагина не исполняется, сетевые вызовы не выполняются.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: ZIP-пакет ≤ 5 MiB с manifest.json в корне.
+      responses:
+        "201":
+          description: Пакет установлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPluginPackage"
+        "400":
+          description: >
+            Невалидный ZIP или manifest (`PLUGIN_PACKAGE_INVALID`), включая traversal,
+            symlink, превышение 10 MiB/200 файлов и отсутствующий entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: >
+            Пакет уже установлен (`PLUGIN_ALREADY_INSTALLED`) или id занят встроенным
+            плагином (`PLUGIN_ID_RESERVED`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+
+  /admin/plugins/{pluginId}:
+    parameters:
+      - $ref: "#/components/parameters/PluginId"
+    delete:
+      tags: [admin, plugins]
+      operationId: uninstallPluginPackage
+      summary: Удалить внешний плагин (platform_admin)
+      description: >
+        Удаляет пакет: catalog-строка переводится в `install_state=UNINSTALLED` и
+        `state=DISABLED` (чтобы per-chat ссылки не нарушали FK), metadata пакета
+        удаляется, объекты в S3/MinIO удаляются best-effort после коммита. Повторное
+        удаление неизвестного пакета — `404 PLUGIN_NOT_FOUND`. Встроенный плагин
+        удалить нельзя.
+      responses:
+        "204":
+          description: Пакет удалён
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /auth/register:
     post:
@@ -1298,26 +1397,66 @@ paths:
     get:
       tags: [plugins]
       operationId: listPlugins
-      summary: Встроенный каталог плагинов
+      summary: Каталог плагинов (встроенные и установленные внешние)
       description: >
-        Курируемый список first-party плагинов. Marketplace, установка, манифесты,
-        подписи, версии и выполнение кода отсутствуют — это только метаданные каталога.
-        `permissions` — закрытый словарь отображаемых прав (`MESSAGES`, `MEMBERS`,
-        `FILES`, `WEBHOOKS`); в этом срезе они не являются выданными capability-грантами.
-        `modes` — контуры, в которых плагин допустим: `MANAGED` (серверный) и/или `E2EE`
-        (только клиентский). `state` — состояние каталога: `ACTIVE` или `DISABLED`
-        (продуктовый kill switch: плагин остаётся видимым, но не включается). `icon` —
-        закрытый клиентский токен, не URL и не HTML. Требуется аутентификация;
+        Установленный каталог плагинов. Встроенные (`kind=BUILTIN`) — курируемый список
+        first-party; внешние (`kind=EXTERNAL`) — admin-установленные статические
+        ZIP-пакеты. Код плагинов не исполняется сервером: это только метаданные и
+        статические ассеты. `permissions` — закрытый словарь: для built-in
+        (`MESSAGES`, `MEMBERS`, `FILES`, `WEBHOOKS`), для external — manifest-токены
+        (`chat.messages.read`, `chat.messages.write`, `chat.members.read`,
+        `chat.files.read`, `chat.files.write`, `webhooks.send`). В этом срезе права
+        описательные, не выданные capability-гранты. `modes` — `MANAGED` и/или `E2EE`.
+        `state` — `ACTIVE`/`DISABLED` (kill switch). Для external дополнительно
+        отдаются `version`, `author`, `entry_url` — аутентифицированный путь к
+        entry-файлу пакета; built-in эти поля не отдают. Требуется аутентификация;
         членство в воркспейсе не требуется. Ответ стабильно отсортирован по каталогу.
       responses:
         "200":
-          description: Встроенный каталог плагинов
+          description: Установленный каталог плагинов
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/PluginList"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /plugins/{pluginId}/assets/{assetPath}:
+    parameters:
+      - $ref: "#/components/parameters/PluginId"
+      - name: assetPath
+        in: path
+        required: true
+        description: >
+          Относительный путь файла внутри пакета. Допустимы только ASCII-сегменты
+          `[A-Za-z0-9._-]`, разделитель `/`; `..`, `\\`, абсолютные пути и пустые
+          сегменты запрещены. Обслуживается только путь, записанный при установке.
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$"
+    get:
+      tags: [plugins]
+      operationId: getPluginAsset
+      summary: Статический ассет установленного внешнего плагина
+      description: >
+        Отдаёт файл из S3/MinIO по точному пути, сохранённому при установке. Требуется
+        bearer JWT (ассеты доступны любому аутентифицированному пользователю). Сервер не исполняет содержимое: ответ приходит с `nosniff`,
+        ограничивающим CSP (`default-src 'none'`, `connect-src 'none'`) и
+        `frame-ancestors 'self'`; для HTML дополнительно включён CSP `sandbox`.
+        Host обязан рендерить пакет в `<iframe sandbox="allow-scripts">` без
+        `allow-same-origin`.
+      responses:
+        "200":
+          description: Байты статического ассета
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /stickers/{stickerId}/favorite:
     parameters:
@@ -2248,6 +2387,101 @@ paths:
           $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/Unprocessable'
+
+  /chats/{chatId}/avatar:
+    parameters:
+      - $ref: '#/components/parameters/ChatId'
+      - $ref: '#/components/parameters/DeviceId'
+    post:
+      tags: [chat]
+      operationId: setChatAvatar
+      summary: Иконка/аватар канала из существующего вложения
+      description: >
+        OWNER/ADMIN канала. `file_id` — существующее managed-вложение этого же чата:
+        изображение (`image/*` или `media.kind=IMAGE`) в состоянии READY/BOUND и
+        CLEAN/SKIPPED — ровно те же правила, что у обложки. Нового upload-эндпоинта нет:
+        файл загружается обычным flow и передаётся ссылкой. Неизвестное/чужое/из другого
+        чата вложение — `404` без раскрытия существования; не изображение — `422
+        CHAT_AVATAR_INVALID`; не просканировано — `409 ATTACHMENT_NOT_READY`; карантин —
+        `423 ATTACHMENT_QUARANTINED`. E2EE-чат — `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`,
+        DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Повтор того же аватара идемпотентен
+        (`200`) и не пишет новый аудит. Аудит `chat.avatar.updated` без file id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatAvatarRequest'
+      responses:
+        '200':
+          description: Аватар установлен; возвращается полный Chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Chat'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '423':
+          description: Вложение в карантине (ATTACHMENT_QUARANTINED)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags: [chat]
+      operationId: deleteChatAvatar
+      summary: Удалить аватар канала
+      description: >
+        OWNER/ADMIN канала; идемпотентно (`204`, в том числе если аватара не было).
+        DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Сам attachment не удаляется: он
+        остаётся обычным вложением файлового flow. Аудит `chat.avatar.updated` пишется
+        только при фактическом удалении.
+      responses:
+        '204':
+          description: Аватар удалён (или уже отсутствовал)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    get:
+      tags: [chat]
+      operationId: getChatAvatar
+      summary: Получить аватар канала (302 на короткоживущий presigned URL)
+      description: >
+        Любой ACTIVE-участник канала. Ответ — `302` с `Location` на presigned object URL
+        (TTL 5 минут); в теле дополнительно возвращаются URL и срок жизни. Ключ хранения
+        никогда не раскрывается. Аватар не установлен (в том числе для DIRECT) — `404`;
+        не-участник/неизвестный чат — `404` без раскрытия существования.
+      responses:
+        '302':
+          description: Временный redirect на presigned URL
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileAvatar'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /chats/{chatId}/permissions:
     parameters:
@@ -4226,7 +4460,7 @@ components:
       name: pluginId
       in: path
       required: true
-      description: Slug встроенного плагина из `plugin.catalog`.
+      description: Slug плагина из `plugin.catalog` (built-in или установленного external).
       schema: { type: string, pattern: "^[a-z][a-z0-9-]{0,63}$" }
     PollId:
       name: pollId
@@ -4448,6 +4682,12 @@ components:
         D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id;
         PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode
         (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch.
+        D1.2 (#86, external plugin packages): PLUGIN_PACKAGE_INVALID (400) — unsafe or
+        malformed ZIP/manifest (traversal, symlink, limits, missing entry);
+        PLUGIN_PACKAGE_TOO_LARGE (413) — archive above 5 MiB; PLUGIN_ALREADY_INSTALLED
+        (409) — the package id is already installed; PLUGIN_ID_RESERVED (409) — the id
+        belongs to a built-in plugin; PLUGIN_STORAGE_UNAVAILABLE (503) — object storage
+        is unavailable and the operation can be retried.
         D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off;
         POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll;
         POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) —
@@ -4457,9 +4697,11 @@ components:
         P0-2 (#80, channel settings): CHAT_READ_ONLY (403) — write in a read-only
         channel; CHAT_PERMISSION_DENIED (403) — the role lacks a matrix right;
         CHAT_COVER_INVALID (422) — the referenced attachment is not an image;
-        CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT (409)
-        — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description/cover in
-        an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE chat.
+        CHAT_AVATAR_INVALID (422) — the referenced channel-avatar attachment is not an
+        image; CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT
+        (409) — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description,
+        cover or avatar in an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE
+        chat.
       properties:
         code: { type: string }
         message: { type: string }
@@ -5335,8 +5577,10 @@ components:
       type: object
       required: [id, name, description, permissions, modes]
       description: >
-        D1.1 (#69) built-in first-party plugin metadata. No manifest, archive, version,
-        signature or executable code is represented; permissions are descriptive only.
+        Установленный плагин каталога. `kind=BUILTIN` — first-party метаданные;
+        `kind=EXTERNAL` — admin-установленный статический пакет, для которого также
+        отдаются `version`, `author` и `entry_url`. Серверный код плагина отсутствует
+        и не исполняется; permissions описательные.
       properties:
         id:
           type: string
@@ -5350,9 +5594,22 @@ components:
         permissions:
           type: array
           uniqueItems: true
+          description: >
+            Built-in vocabulary (`MESSAGES`, `MEMBERS`, `FILES`, `WEBHOOKS`) or the
+            closed manifest v1 tokens (`chat.messages.read`, …). Descriptive only.
           items:
             type: string
-            enum: [MESSAGES, MEMBERS, FILES, WEBHOOKS]
+            enum:
+              - MESSAGES
+              - MEMBERS
+              - FILES
+              - WEBHOOKS
+              - chat.messages.read
+              - chat.messages.write
+              - chat.members.read
+              - chat.files.read
+              - chat.files.write
+              - webhooks.send
         modes:
           type: array
           minItems: 1
@@ -5366,6 +5623,89 @@ components:
           description: >
             Catalog lifecycle. Optional for additive compatibility; the server always
             emits it. DISABLED is a product kill switch.
+        kind:
+          type: string
+          enum: [BUILTIN, EXTERNAL]
+          default: BUILTIN
+          description: >
+            Optional for additive compatibility; the server always emits it.
+            EXTERNAL marks an admin-installed static package.
+        version:
+          type: string
+          description: Present only for EXTERNAL packages (semantic version).
+        author:
+          type: string
+          maxLength: 120
+          description: Present only for EXTERNAL packages.
+        entry_url:
+          type: string
+          maxLength: 640
+          description: >
+            Present only for EXTERNAL packages. Authenticated API path of the entry
+            document (for example `/api/v1/plugins/demo/assets/index.html`); it is not
+            an object-storage URL. The caller must send its bearer JWT.
+
+    AdminPluginPackage:
+      type: object
+      required: [id, name, version, description, author, entry, permissions, modes,
+                 size_bytes, file_count, sha256, installed_at]
+      description: >
+        D1.2 (#86) metadata of one installed external package. Asset bytes and object
+        keys are never exposed by the admin API.
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z][a-z0-9-]{0,63}$"
+        name: { type: string, minLength: 1, maxLength: 120 }
+        version: { type: string, minLength: 1, maxLength: 32 }
+        description: { type: string, minLength: 1, maxLength: 500 }
+        author: { type: string, minLength: 1, maxLength: 120 }
+        entry:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]{0,511}$"
+          description: Relative .html entry path inside the package.
+        permissions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - chat.messages.read
+              - chat.messages.write
+              - chat.members.read
+              - chat.files.read
+              - chat.files.write
+              - webhooks.send
+        modes:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [MANAGED, E2EE]
+        size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 5242880
+          description: Raw ZIP size.
+        file_count:
+          type: integer
+          minimum: 1
+          maximum: 200
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: SHA-256 of the uploaded ZIP.
+        installed_at: { type: string, format: date-time }
+
+    AdminPluginPackageList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPluginPackage"
 
     PluginList:
       type: object
@@ -5966,6 +6306,11 @@ components:
           type: [string, "null"]
           format: uuid
           description: P0-2 GROUP cover attachment id; null for DIRECT and when unset.
+        avatar_file_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            GROUP channel icon/avatar attachment id; null for DIRECT and when unset.
         read_only:
           type: boolean
           description: P0-2 read-only flag (GROUP; false for DIRECT).
@@ -6521,6 +6866,16 @@ components:
       properties:
         file_id: { type: string, format: uuid }
 
+    ChatAvatarRequest:
+      type: object
+      required: [file_id]
+      additionalProperties: false
+      description: >
+        `POST /chats/{chatId}/avatar`. There is no new upload endpoint: the id refers to an
+        existing CLEAN/SKIPPED image attachment of the same chat (the cover rules).
+      properties:
+        file_id: { type: string, format: uuid }
+
     ChatRolePermissions:
       type: object
       additionalProperties: false
@@ -6704,6 +7059,13 @@ components:
           type: [string, "null"]
           format: uuid
           description: P0-2 GROUP cover attachment id; null for DIRECT and when unset.
+        avatar_file_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            GROUP channel icon/avatar attachment id (same validation as the cover);
+            null for DIRECT and when unset. Read-only here: set/clear through
+            `POST`/`DELETE /chats/{chatId}/avatar`.
         read_only:
           type: boolean
           description: P0-2 read-only flag (GROUP; false for DIRECT).

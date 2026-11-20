@@ -333,13 +333,14 @@ public class ChatCreateService {
                     visibility == null ? null : visibility.name(), summary.peerId(),
                     summary.peerHasE2eeCapableDevices(), summary.name(),
                     summary.description(), null, summary.lastSeq(), summary.unreadCount(),
-                    summary.createdAt(), summary.coverFileId(), summary.readOnly(),
+                    summary.createdAt(), summary.coverFileId(), summary.avatarFileId(),
+                    summary.readOnly(),
                     summary.joinPolicy() == null ? null : summary.joinPolicy().name(),
                     summary.archived());
         }
         return new ChatView(chat.id(), chat.type().name(), chat.securityMode().name(),
                 fallbackVisibility == null ? null : fallbackVisibility.name(), null, false,
-                chat.name(), chat.description(), null, 0, 0, null, null, false,
+                chat.name(), chat.description(), null, 0, 0, null, null, null, false,
                 fallbackVisibility == null ? null
                         : ru.krug.backend.chat.domain.model.ChannelJoinPolicy
                                 .forVisibility(fallbackVisibility).name(),

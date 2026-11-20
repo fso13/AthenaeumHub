@@ -10,7 +10,11 @@ public record PluginView(
         String icon,
         List<String> permissions,
         List<String> modes,
-        String state) {
+        String state,
+        String kind,
+        String version,
+        String author,
+        String entryUrl) {
 
     public PluginView {
         permissions = permissions == null ? List.of() : List.copyOf(permissions);

@@ -403,6 +403,8 @@ export class ProfileWorkspaceStore {
       if (target === 'PROFILE') {
         const user = await this.api.setMyAvatar(fileId);
         this.onProfileUpdated?.(user);
+        // Replace the cached blob object URL; it is shared with the sidebar row.
+        void this.loadMyAvatarPreview(true);
       } else if (workspaceId) {
         const workspace = await this.api.setWorkspaceAvatar(workspaceId, fileId);
         this.onWorkspaceUpdated?.(workspace);

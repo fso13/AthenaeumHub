@@ -18,6 +18,12 @@ export const PLUGIN_PERMISSION_LABEL: Record<PluginPermission, MessageKey> = {
   MEMBERS: 'plugins.perms.members',
   FILES: 'plugins.perms.files',
   WEBHOOKS: 'plugins.perms.webhooks',
+  'chat.messages.read': 'plugins.perms.chat.messages.read',
+  'chat.messages.write': 'plugins.perms.chat.messages.write',
+  'chat.members.read': 'plugins.perms.chat.members.read',
+  'chat.files.read': 'plugins.perms.chat.files.read',
+  'chat.files.write': 'plugins.perms.chat.files.write',
+  'webhooks.send': 'plugins.perms.webhooks.send',
 };
 
 export const PLUGIN_MODE_LABEL: Record<PluginMode, MessageKey> = {

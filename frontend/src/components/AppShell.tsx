@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppConfig } from '../config/env';
+import { describeError } from '../domain/errors';
 import { railSpaces, sumUnread } from '../domain/unread';
 import { t } from '../i18n/ru';
 import { useNavigate, useLocation } from '../router/router';
 import { parseView, withView, type AppView } from '../router/views';
-import { useChatState, useChatStore } from '../store/ChatProvider';
+import {
+  useAvatarsState,
+  useAvatarsStore,
+  useChatState,
+  useChatStore,
+} from '../store/ChatProvider';
 import type { AppState } from '../store/chatStore';
 import { useTheme } from '../hooks/useTheme';
 import { ChatScreen } from './ChatScreen';
 import { CallLayer } from './CallLayer';
+import { WorkspaceCreateDialog } from './WorkspaceCreateDialog';
 import { FilesPage } from './pages/FilesPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PluginsPage } from './pages/PluginsPage';
@@ -37,6 +44,14 @@ export function workspaceUnreadTotals(state: AppState): Record<string, number> {
   return totals;
 }
 
+/** Dialog error text for a failed create; the dialog stays open on failure. */
+function workspaceCreateErrorText(state: AppState): string | null {
+  const error = state.onboardingError;
+  if (!error) return null;
+  if (error.status === 422) return t('workspace.create.invalid');
+  return describeError(error).message || t('workspace.create.error');
+}
+
 /**
  * D1-FE1 shell: space rail + sidebar (drawer on mobile), section pages and the
  * preserved chat surface. The chat stays mounted only on the chat view, but its
@@ -52,11 +67,16 @@ export function AppShell({
 }: AppShellProps) {
   const store = useChatStore();
   const currentState = useChatState();
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
   const navigate = useNavigate();
   const location = useLocation();
   const view = parseView(location);
   const { theme, setTheme } = useTheme();
   const [navOpen, setNavOpen] = useState(false);
+  const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
+  const [workspaceCreateBusy, setWorkspaceCreateBusy] = useState(false);
+  const [workspaceCreateError, setWorkspaceCreateError] = useState<string | null>(null);
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try {
       return globalThis.localStorage?.getItem('krug.navCollapsed') === '1';
@@ -73,6 +93,13 @@ export function AppShell({
   const unread = useMemo(() => workspaceUnreadTotals(currentState), [currentState]);
   const activeSpaceId =
     currentState.activeWorkspaceId ?? currentState.session?.workspace.id ?? null;
+  const workspaceLogoUrls = useMemo(() => {
+    const urls: Record<string, string | null> = {};
+    for (const space of spaces) {
+      urls[space.id] = avatars.workspaces[space.id]?.url ?? null;
+    }
+    return urls;
+  }, [avatars.workspaces, spaces]);
   const workspaceName =
     currentState.activeWorkspace?.name ?? currentState.session?.workspace.name ?? t('app.tagline');
 
@@ -83,6 +110,14 @@ export function AppShell({
     if (currentState.workspaces.length < 2) return;
     void store.loadWorkspaceUnread();
   }, [store, currentState.sessionStatus, currentState.workspaces, currentState.activeWorkspaceId]);
+
+  // One logo read per workspace that has `logo_file_id`; the avatar store
+  // dedupes the rail, switcher and settings-panel callers.
+  useEffect(() => {
+    for (const space of spaces) {
+      if (space.logo_file_id) void avatarsStore.ensureWorkspace(space.id, space.logo_file_id);
+    }
+  }, [avatarsStore, spaces]);
 
   const go = useCallback(
     (next: AppView) => {
@@ -123,6 +158,11 @@ export function AppShell({
     onSelectWorkspace?.(workspaceId);
   };
 
+  const openWorkspaceCreate = () => {
+    setWorkspaceCreateError(null);
+    setWorkspaceCreateOpen(true);
+  };
+
   const page = view === 'chat' ? null : view;
 
   return (
@@ -150,6 +190,8 @@ export function AppShell({
           activeSpaceId={activeSpaceId}
           unreadBySpace={unread}
           onSelect={handleWorkspace}
+          onCreateWorkspace={openWorkspaceCreate}
+          logoUrls={workspaceLogoUrls}
         />
         <Sidebar
           state={currentState}
@@ -162,6 +204,7 @@ export function AppShell({
           onLogout={onLogout}
           onSelectWorkspace={handleWorkspace}
           onCreateChat={onCreateChat}
+          onCreateWorkspace={openWorkspaceCreate}
           onOpenAdmin={onOpenAdmin}
           onOpenMembers={onOpenMembers}
           onOpenProfile={() => setProfileOpen(true)}
@@ -233,6 +276,29 @@ export function AppShell({
         onLogout={onLogout}
       />
       <CallLayer />
+      <WorkspaceCreateDialog
+        open={workspaceCreateOpen}
+        busy={workspaceCreateBusy}
+        error={workspaceCreateError}
+        onClose={() => {
+          if (!workspaceCreateBusy) setWorkspaceCreateOpen(false);
+        }}
+        onCreate={async (name) => {
+          setWorkspaceCreateBusy(true);
+          setWorkspaceCreateError(null);
+          const ok = await store.createWorkspace(name);
+          setWorkspaceCreateBusy(false);
+          const next = store.getSnapshot();
+          if (!ok) {
+            setWorkspaceCreateError(workspaceCreateErrorText(next));
+            return;
+          }
+          // `createWorkspace` already activated the new space (`activateWorkspace`),
+          // so the rail/switcher and the chat list now point at it.
+          setWorkspaceCreateOpen(false);
+          setWorkspaceCreateError(null);
+        }}
+      />
     </div>
   );
 }

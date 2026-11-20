@@ -1,5 +1,10 @@
-import { useMemo, type ReactNode } from 'react';
-import { parseRichText, type RichBlockNode, type RichInlineNode } from '../domain/richText';
+import { useMemo, useState, type ReactNode } from 'react';
+import {
+  parseRichText,
+  type RichBlockNode,
+  type RichInlineNode,
+  type RichTableAlign,
+} from '../domain/richText';
 import { t } from '../i18n/ru';
 import { CodeBlock } from './CodeBlock';
 
@@ -7,6 +12,25 @@ interface RichTextProps {
   readonly text: string;
   readonly mentions?: readonly string[];
   readonly className?: string;
+}
+
+function RichImage({ src, alt }: { readonly src: string; readonly alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    // The alt text is the fallback: no broken-image icon, no layout jump.
+    return <span className="rich-image-fallback">{alt.trim() || src}</span>;
+  }
+  return (
+    <img
+      className="rich-image"
+      src={src}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function renderInlineNodes(nodes: readonly RichInlineNode[]): ReactNode[] {
@@ -38,6 +62,8 @@ function renderInlineNodes(nodes: readonly RichInlineNode[]): ReactNode[] {
             {renderInlineNodes(node.children)}
           </a>
         );
+      case 'image':
+        return <RichImage key={index} src={node.src} alt={node.alt} />;
       case 'mention':
         return (
           <span
@@ -60,6 +86,10 @@ export function InlineContent({ nodes }: { readonly nodes: readonly RichInlineNo
   return <>{renderInlineNodes(nodes)}</>;
 }
 
+function alignClass(align: RichTableAlign | null): string {
+  return align === null ? '' : ` rich-table__cell--${align}`;
+}
+
 function renderBlock(block: RichBlockNode, index: number): ReactNode {
   switch (block.type) {
     case 'paragraph':
@@ -68,28 +98,96 @@ function renderBlock(block: RichBlockNode, index: number): ReactNode {
           <InlineContent nodes={block.children} />
         </p>
       );
+    case 'heading': {
+      const Tag = `h${block.level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6';
+      return (
+        <Tag className={`rich-heading rich-heading--${block.level}`} key={index}>
+          <InlineContent nodes={block.children} />
+        </Tag>
+      );
+    }
+    case 'thematicBreak':
+      return <hr className="rich-hr" key={index} />;
     case 'quote':
       return (
         <blockquote className="rich-quote" key={index}>
-          <InlineContent nodes={block.children} />
+          {block.children.map(renderBlock)}
         </blockquote>
       );
+    case 'table':
+      return (
+        <div
+          className="rich-table-wrap"
+          key={index}
+          role="region"
+          aria-label={t('rich.tableRegion')}
+          tabIndex={0}
+        >
+          <table className="rich-table">
+            <thead>
+              <tr>
+                {block.header.map((cell, column) => (
+                  <th
+                    key={column}
+                    scope="col"
+                    className={`rich-table__cell${alignClass(block.align[column] ?? null)}`}
+                  >
+                    <InlineContent nodes={cell} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {block.header.map((_, column) => (
+                    <td
+                      key={column}
+                      className={`rich-table__cell${alignClass(block.align[column] ?? null)}`}
+                    >
+                      <InlineContent nodes={row[column] ?? []} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
     case 'list': {
+      const allTasks = block.items.length > 0 && block.items.every((item) => item.task !== null);
       const items = block.items.map((item, itemIndex) => (
-        <li className="rich-li" key={itemIndex}>
-          <InlineContent nodes={item} />
+        <li
+          className={`rich-li${item.task === null ? '' : ' rich-li--task'}`}
+          key={itemIndex}
+          data-task={item.task ?? undefined}
+        >
+          {item.task === null ? null : (
+            <span
+              className={`rich-task${item.task === 'checked' ? ' rich-task--checked' : ''}`}
+              role="checkbox"
+              aria-checked={item.task === 'checked'}
+              aria-disabled="true"
+              aria-label={item.task === 'checked' ? t('rich.taskDone') : t('rich.taskOpen')}
+            />
+          )}
+          <InlineContent nodes={item.children} />
+          {item.blocks.map(renderBlock)}
         </li>
       ));
       return block.ordered ? (
         <ol
-          className="rich-list rich-list--ordered"
+          className={`rich-list rich-list--ordered${allTasks ? ' rich-list--tasks' : ''}`}
           key={index}
           start={block.start === 1 ? undefined : block.start}
         >
           {items}
         </ol>
       ) : (
-        <ul className="rich-list rich-list--unordered" key={index}>
+        <ul
+          className={`rich-list rich-list--unordered${allTasks ? ' rich-list--tasks' : ''}`}
+          key={index}
+        >
           {items}
         </ul>
       );
@@ -102,10 +200,11 @@ function renderBlock(block: RichBlockNode, index: number): ReactNode {
 /**
  * Safe Markdown renderer for managed messages.
  *
- * Every text run is a React text node (no HTML sink),
- * links are restricted to `http(s)` by the parser, and the only elements
- * produced are `p`, `blockquote`, `ul/ol/li`, `strong`, `em`, `del`, `code`,
- * `a`, spans for mentions/tokens and the code-block figure.
+ * Every text run is a React text node (no HTML sink), links and image sources
+ * are restricted to `http(s)` by the parser, and the only elements produced are
+ * `p`, `h1`–`h6`, `hr`, `blockquote`, `ul/ol/li`, `strong`, `em`, `del`, `code`,
+ * `a`, `img`, `table` (+ wrapper), spans for mentions/task boxes and the
+ * code-block figure.
  */
 export function RichText({ text, mentions = [], className }: RichTextProps) {
   const blocks = useMemo(() => parseRichText(text, { mentions }), [text, mentions]);

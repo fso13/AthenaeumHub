@@ -85,16 +85,16 @@ public final class ChatApiMapper {
         return new ChatSummaryResponse(view.id(), view.name(), view.description(), view.type(),
                 view.securityMode(), view.visibility(), view.peerId(),
                 view.peerHasE2eeCapableDevices(), view.lastMessageAt(), view.unreadCount(),
-                view.lastSeq(), view.coverFileId(), view.readOnly(), view.joinPolicy(),
-                view.archived());
+                view.lastSeq(), view.coverFileId(), view.avatarFileId(), view.readOnly(),
+                view.joinPolicy(), view.archived());
     }
 
     public static ChatResponse toResponse(ChatView view) {
         return new ChatResponse(view.id(), view.type(), view.securityMode(), view.visibility(),
                 view.peerId(), view.peerHasE2eeCapableDevices(), view.name(),
                 view.description(), view.keyEpoch(), view.lastSeq(), view.unreadCount(),
-                view.createdAt(), view.coverFileId(), view.readOnly(), view.joinPolicy(),
-                view.archived());
+                view.createdAt(), view.coverFileId(), view.avatarFileId(), view.readOnly(),
+                view.joinPolicy(), view.archived());
     }
 
     public static ChatPermissionsResponse toResponse(ChatPermissionsView view) {

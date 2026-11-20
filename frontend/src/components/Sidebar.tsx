@@ -1,11 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AppState } from '../store/chatStore';
 import type { AppView, PageView } from '../router/views';
 import type { Theme } from '../theme/themePreference';
 import { chatDisplayName } from '../domain/chatLabel';
 import { formatUnreadBadge } from '../domain/unread';
 import { t, type MessageKey } from '../i18n/ru';
-import { useChatStore } from '../store/ChatProvider';
+import {
+  useAvatarsState,
+  useAvatarsStore,
+  useChatStore,
+  useProfileWorkspaceState,
+  useProfileWorkspaceStore,
+} from '../store/ChatProvider';
 import { Avatar } from './Avatar';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 import {
@@ -44,6 +50,8 @@ interface SidebarProps {
   onLogout?: () => void;
   onSelectWorkspace?: (workspaceId: string) => void;
   onCreateChat?: () => void;
+  /** Workspace switcher "Создать пространство" (same dialog as the rail "+"). */
+  onCreateWorkspace?: () => void;
   onOpenAdmin?: () => void;
   onOpenMembers?: () => void;
   /** D1-FE5: opens the profile modal from the signed-in user row. */
@@ -63,6 +71,7 @@ export function Sidebar({
   onLogout,
   onSelectWorkspace,
   onCreateChat,
+  onCreateWorkspace,
   onOpenMembers,
   onOpenProfile,
   navCollapsed = false,
@@ -80,6 +89,11 @@ export function Sidebar({
   const channels = state.chats.filter((chat) => chat.type === 'GROUP');
   const directs = state.chats.filter((chat) => chat.type === 'DIRECT');
   const store = useChatStore();
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
+  const profileStore = useProfileWorkspaceStore();
+  const profileState = useProfileWorkspaceState();
+  const userAvatarUrl = profileState.avatar.previewUrl;
   const [collapsed, setCollapsed] = useState<{ channels: boolean; directs: boolean }>({
     channels: false,
     directs: false,
@@ -87,6 +101,28 @@ export function Sidebar({
   // #80: the personal archive is a separate list; it never mixes with `chats`.
   const [archivedOpen, setArchivedOpen] = useState(false);
   const archived = state.archivedChats;
+
+  // Own avatar: the authenticated `GET /me/avatar` blob is resolved once per
+  // session (deduped in the store) and shared with the profile dialog.
+  useEffect(() => {
+    if (state.sessionStatus !== 'ready') return;
+    void profileStore.loadMyAvatarPreview();
+  }, [profileStore, state.sessionStatus]);
+
+  // Chat icons: one `GET /chats/{id}/avatar` per chat that actually has one;
+  // the avatar store dedupes every header/sidebar/settings caller.
+  useEffect(() => {
+    for (const chat of state.chats) {
+      if (chat.avatar_file_id && chat.type !== 'DIRECT') {
+        void avatarsStore.ensureChat(chat.id);
+      }
+    }
+    for (const chat of state.archivedChats.items) {
+      if (chat.avatar_file_id && chat.type !== 'DIRECT') {
+        void avatarsStore.ensureChat(chat.id);
+      }
+    }
+  }, [avatarsStore, state.archivedChats.items, state.chats]);
 
   const renderChatItem = (chat: AppState['chats'][number]) => {
     const active = chat.id === state.activeChatId;
@@ -104,7 +140,7 @@ export function Sidebar({
           title={`${label} · ${typeLabel}`}
           onClick={() => onSelect(chat.id)}
         >
-          <Avatar name={label} seed={chat.id} size="sm" />
+          <Avatar name={label} seed={chat.id} size="sm" src={avatars.chats[chat.id]?.url ?? null} />
           <span className="chat-item__name">{label}</span>
           {badge ? (
             <span
@@ -168,6 +204,7 @@ export function Sidebar({
             activeWorkspaceId={state.activeWorkspaceId}
             currentName={workspaceName ?? (loading ? t('common.loading') : t('app.tagline'))}
             onSelect={onSelectWorkspace}
+            onCreateWorkspace={onCreateWorkspace}
           />
         ) : (
           <div className="ws-btn">
@@ -330,7 +367,7 @@ export function Sidebar({
                 aria-label={t('profile.open')}
                 title={t('profile.open')}
               >
-                <Avatar name={user.display_name} seed={user.id} size="sm" />
+                <Avatar name={user.display_name} seed={user.id} size="sm" src={userAvatarUrl} />
                 <span className="me-text">
                   <b>{user.display_name}</b>
                   <span className={`me-status${state.online ? '' : ' is-offline'}`} role="status">
@@ -341,7 +378,7 @@ export function Sidebar({
               </button>
             ) : (
               <div className="me-btn">
-                <Avatar name={user.display_name} seed={user.id} size="sm" />
+                <Avatar name={user.display_name} seed={user.id} size="sm" src={userAvatarUrl} />
                 <div className="me-text">
                   <b>{user.display_name}</b>
                   <span className={`me-status${state.online ? '' : ' is-offline'}`}>

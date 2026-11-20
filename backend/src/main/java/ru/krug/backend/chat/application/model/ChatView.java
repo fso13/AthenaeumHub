@@ -6,6 +6,6 @@ import java.util.UUID;
 public record ChatView(UUID id, String type, String securityMode, String visibility, UUID peerId,
                        boolean peerHasE2eeCapableDevices, String name, String description,
                        Integer keyEpoch, long lastSeq, long unreadCount, Instant createdAt,
-                       UUID coverFileId, boolean readOnly, String joinPolicy,
+                       UUID coverFileId, UUID avatarFileId, boolean readOnly, String joinPolicy,
                        boolean archived) {
 }

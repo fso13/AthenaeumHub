@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import type { WorkspaceSummary } from '../api/types';
+import { useAvatarsState, useAvatarsStore } from '../store/ChatProvider';
 import { workspaceInitial } from '../domain/workspace';
 import { t } from '../i18n/ru';
 import { Avatar } from './Avatar';
@@ -17,6 +18,8 @@ interface WorkspaceSwitcherProps {
   activeWorkspaceId: string | null;
   currentName: string;
   onSelect: (workspaceId: string) => void;
+  /** Opens the shared create-workspace dialog (same as the rail "+"). */
+  onCreateWorkspace?: () => void;
 }
 
 function modeLabel(workspace: WorkspaceSummary): string {
@@ -39,7 +42,10 @@ export function WorkspaceSwitcher({
   activeWorkspaceId,
   currentName,
   onSelect,
+  onCreateWorkspace,
 }: WorkspaceSwitcherProps) {
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -47,6 +53,15 @@ export function WorkspaceSwitcher({
   const menuId = useId();
 
   const activeIndex = workspaces.findIndex((workspace) => workspace.id === activeWorkspaceId);
+
+  // Workspace logos are existing attachments (`logo_file_id`), deduped per id.
+  useEffect(() => {
+    for (const workspace of workspaces) {
+      if (workspace.logo_file_id) {
+        void avatarsStore.ensureWorkspace(workspace.id, workspace.logo_file_id);
+      }
+    }
+  }, [avatarsStore, workspaces]);
 
   const close = useCallback((returnFocus = false) => {
     setOpen(false);
@@ -170,6 +185,7 @@ export function WorkspaceSwitcher({
                   seed={workspace.id}
                   size="sm"
                   short={workspaceInitial(workspace.name)}
+                  src={avatars.workspaces[workspace.id]?.url ?? null}
                 />
                 <span className="ws-switch__name">{workspace.name}</span>
                 <span
@@ -187,8 +203,13 @@ export function WorkspaceSwitcher({
             type="button"
             role="menuitem"
             className="ws-switch__create"
-            disabled
-            title={t('rail.addUnavailable')}
+            disabled={!onCreateWorkspace}
+            title={onCreateWorkspace ? t('rail.add') : t('rail.addUnavailable')}
+            onClick={() => {
+              if (!onCreateWorkspace) return;
+              close(false);
+              onCreateWorkspace();
+            }}
           >
             <PlusIcon aria-hidden="true" />
             <span>{t('rail.add')}</span>

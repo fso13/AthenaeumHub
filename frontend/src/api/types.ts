@@ -82,6 +82,8 @@ export type ChatCreateRequest = components['schemas']['ChatCreateRequest'];
 export type ChatUpdateRequest = components['schemas']['ChatUpdateRequest'];
 /** #80: `POST /chats/{chatId}/cover` — an existing image attachment id. */
 export type ChatCoverRequest = components['schemas']['ChatCoverRequest'];
+/** Channel icon/avatar (`POST /chats/{chatId}/avatar`) — an existing image id. */
+export type ChatAvatarRequest = components['schemas']['ChatAvatarRequest'];
 /** #80: effective rights of one channel role (always complete). */
 export type ChatRolePermissions = components['schemas']['ChatRolePermissions'];
 /** #80: effective 6×5 rights matrix (`owner` is fixed to all-true). */
@@ -295,6 +297,16 @@ export type ChatPluginState = components['schemas']['ChatPluginState'];
 export type ChatPluginStateList = components['schemas']['ChatPluginStateList'];
 export type ChatPluginUnavailableReason = NonNullable<ChatPluginState['reason']>;
 export type ChatPluginUpdateRequest = components['schemas']['ChatPluginUpdateRequest'];
+
+/* ------------------------------------------------------------------------- */
+/* D1.2 (#86): external plugin packages (admin ZIP install)                  */
+/* ------------------------------------------------------------------------- */
+
+/** Metadata of one installed external package; never asset bytes/object keys. */
+export type AdminPluginPackage = components['schemas']['AdminPluginPackage'];
+export type AdminPluginPackageList = components['schemas']['AdminPluginPackageList'];
+/** Closed manifest v1 permission vocabulary (external packages only). */
+export type PluginPackagePermission = AdminPluginPackage['permissions'][number];
 
 /* ------------------------------------------------------------------------- */
 /* D1.1 (#76): plugin actions — polls, tasks, translation                    */

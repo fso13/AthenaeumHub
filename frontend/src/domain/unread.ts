@@ -28,7 +28,7 @@ export function unreadLabel(count: number): string {
 }
 
 export type RailSpace = Pick<WorkspaceSummary, 'id' | 'name' | 'security_mode'> &
-  Partial<Pick<WorkspaceSummary, 'slug' | 'role'>>;
+  Partial<Pick<WorkspaceSummary, 'slug' | 'role' | 'logo_file_id'>>;
 
 /**
  * Workspaces normally come from `/me`; the dev session only exposes the single

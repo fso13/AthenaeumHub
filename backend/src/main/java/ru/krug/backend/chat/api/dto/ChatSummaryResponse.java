@@ -16,6 +16,7 @@ public record ChatSummaryResponse(
         long unreadCount,
         long lastSeq,
         UUID coverFileId,
+        UUID avatarFileId,
         boolean readOnly,
         String joinPolicy,
         boolean archived) {

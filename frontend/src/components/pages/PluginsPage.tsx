@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ChatPluginState, Plugin, SecurityMode } from '../../api/types';
 import { chatDisplayName } from '../../domain/chatLabel';
 import { describeError } from '../../domain/errors';
@@ -26,6 +26,8 @@ import {
   TaskIcon,
   TranslateIcon,
 } from '../Icons';
+import { useNavigate } from '../../router/router';
+import { ExternalPluginRunner } from '../plugins/ExternalPluginRunner';
 import { PageShell } from './PageShell';
 import { securityModeLabel } from './pageData';
 
@@ -68,6 +70,8 @@ interface PluginCardProps {
   canManage: boolean;
   pending: boolean;
   onToggle: (plugin: Plugin, enabled: boolean) => void;
+  /** Present only for `kind=EXTERNAL` catalog rows. */
+  onOpen?: (plugin: Plugin) => void;
 }
 
 function PluginCard({
@@ -80,6 +84,7 @@ function PluginCard({
   canManage,
   pending,
   onToggle,
+  onOpen,
 }: PluginCardProps) {
   const available = stateItem?.available ?? false;
   const checked = stateItem?.enabled ?? false;
@@ -127,16 +132,58 @@ function PluginCard({
         <div className="plugin-copy">
           <h3 id={`plugin-title-${plugin.id}`}>{plugin.name}</h3>
           <p>{plugin.description}</p>
+          {plugin.kind === 'EXTERNAL' ? (
+            <div className="plugin-external-meta">
+              <span className="perm plugin-external-meta__badge">
+                {t('plugins.external.badge')}
+              </span>
+              {plugin.version ? (
+                <span className="perm">
+                  {t('plugins.external.version', { version: plugin.version })}
+                </span>
+              ) : null}
+              {plugin.author ? (
+                <span className="perm">
+                  {t('plugins.external.author', { author: plugin.author })}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 
+      {onOpen ? (
+        <div className="plugin-actions">
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            onClick={() => onOpen(plugin)}
+            disabled={plugin.state === 'DISABLED' || !plugin.entry_url}
+            aria-label={t('plugins.external.openHint', { name: plugin.name })}
+            title={
+              !plugin.entry_url
+                ? t('plugins.external.noEntry')
+                : plugin.state === 'DISABLED'
+                  ? t('plugins.external.disabled')
+                  : t('plugins.external.openHint', { name: plugin.name })
+            }
+          >
+            {t('plugins.external.open')}
+          </button>
+        </div>
+      ) : null}
+
       <div className="plugin-foot">
         <span className="visually-hidden">{t('plugins.permsLabel')}: </span>
-        {plugin.permissions.map((permission) => (
-          <span className="perm" key={permission}>
-            {t(permissionLabel(permission))}
-          </span>
-        ))}
+        {plugin.permissions.length === 0 ? (
+          <span className="perm">{t('plugins.external.noPermissions')}</span>
+        ) : (
+          plugin.permissions.map((permission) => (
+            <span className="perm" key={permission}>
+              {t(permissionLabel(permission))}
+            </span>
+          ))
+        )}
         <span className="visually-hidden">{t('plugins.modesLabel')}: </span>
         {plugin.modes.map((mode) => (
           <span
@@ -190,6 +237,14 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
   const chatStore = useChatStore();
   const store = usePluginsStore();
   const plugins = usePluginsState();
+  const navigate = useNavigate();
+  const isAdmin = state.me?.user.is_platform_admin === true;
+  const [activeExternal, setActiveExternal] = useState<Plugin | null>(null);
+  const loadEntry = useCallback((entryUrl: string) => store.readPluginEntry(entryUrl), [store]);
+  const loadAsset = useCallback(
+    (entryUrl: string, assetPath: string) => store.readPluginAsset(entryUrl, assetPath),
+    [store],
+  );
 
   const workspaceName =
     state.activeWorkspace?.name ?? state.session?.workspace.name ?? t('app.tagline');
@@ -210,6 +265,14 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
     state.workspaceMembers.items.find((member) => member.user_id === viewerId)?.role ??
     null;
   const canManage = workspaceRole === 'OWNER' || workspaceRole === 'ADMIN';
+  const builtinPlugins = useMemo(
+    () => plugins.catalog.filter((plugin) => plugin.kind !== 'EXTERNAL'),
+    [plugins.catalog],
+  );
+  const externalPlugins = useMemo(
+    () => plugins.catalog.filter((plugin) => plugin.kind === 'EXTERNAL'),
+    [plugins.catalog],
+  );
 
   const groupChats = useMemo(
     () => state.chats.filter((chat) => chat.type === 'GROUP'),
@@ -291,16 +354,28 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
       eyebrow={`${workspaceName} · ${securityModeLabel(workspaceMode)}`}
       onBack={onBack}
       actions={
-        <button
-          type="button"
-          className="btn"
-          onClick={refresh}
-          aria-label={t('plugins.refresh')}
-          title={t('plugins.refreshHint')}
-        >
-          <RefreshIcon aria-hidden="true" />
-          <span>{t('plugins.refresh')}</span>
-        </button>
+        <>
+          {isAdmin ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => navigate('/admin?tab=plugins')}
+              title={t('plugins.external.manageHint')}
+            >
+              <span>{t('plugins.external.manage')}</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn"
+            onClick={refresh}
+            aria-label={t('plugins.refresh')}
+            title={t('plugins.refreshHint')}
+          >
+            <RefreshIcon aria-hidden="true" />
+            <span>{t('plugins.refresh')}</span>
+          </button>
+        </>
       }
     >
       {groupChats.length === 0 ? (
@@ -453,31 +528,100 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
         </section>
       ) : null}
 
-      {catalogReady && plugins.catalog.length > 0 ? (
-        <div className="plugin-grid" aria-busy={plugins.chatStatus === 'loading'}>
-          {plugins.catalog.map((plugin) => (
-            <PluginCard
-              key={plugin.id}
-              plugin={plugin}
-              stateItem={stateMap.get(plugin.id)}
-              chatReady={chatReady}
-              chatLoading={chatLoading}
-              chatFailed={chatError !== null}
-              hasChat={selectedChat !== null}
-              canManage={canManage}
-              pending={plugins.pendingPluginIds.includes(plugin.id)}
-              onToggle={(target, enabled) => {
-                if (selectedChatId) void store.toggle(selectedChatId, target.id, enabled);
-              }}
-            />
-          ))}
-        </div>
+      {catalogReady && builtinPlugins.length > 0 ? (
+        <section className="plugin-section" aria-labelledby="plugins-builtin-title">
+          <div className="plugin-section__head">
+            <h2 className="plugin-section__title" id="plugins-builtin-title">
+              {t('plugins.external.sectionBuiltin')}
+            </h2>
+            <span className="chip">
+              {t('plugins.catalogCount', { count: builtinPlugins.length })}
+            </span>
+          </div>
+          <div className="plugin-grid" aria-busy={plugins.chatStatus === 'loading'}>
+            {builtinPlugins.map((plugin) => (
+              <PluginCard
+                key={plugin.id}
+                plugin={plugin}
+                stateItem={stateMap.get(plugin.id)}
+                chatReady={chatReady}
+                chatLoading={chatLoading}
+                chatFailed={chatError !== null}
+                hasChat={selectedChat !== null}
+                canManage={canManage}
+                pending={plugins.pendingPluginIds.includes(plugin.id)}
+                onToggle={(target, enabled) => {
+                  if (selectedChatId) void store.toggle(selectedChatId, target.id, enabled);
+                }}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {catalogReady ? (
+        <section className="plugin-section" aria-labelledby="plugins-external-title">
+          <div className="plugin-section__head">
+            <h2 className="plugin-section__title" id="plugins-external-title">
+              {t('plugins.external.sectionExternal')}
+            </h2>
+            <span className="chip">
+              {t('plugins.external.count', { count: externalPlugins.length })}
+            </span>
+          </div>
+          {externalPlugins.length === 0 ? (
+            <section className="card pg-empty-banner" aria-labelledby="plugins-external-empty">
+              <span className="empty-panel__icon" aria-hidden="true">
+                <PlugIcon />
+              </span>
+              <div>
+                <h3 className="card-title" id="plugins-external-empty">
+                  {t('plugins.external.emptyTitle')}
+                </h3>
+                <p className="card-empty">{t('plugins.external.emptyText')}</p>
+              </div>
+            </section>
+          ) : (
+            <div
+              className="plugin-grid plugin-grid--external"
+              aria-busy={plugins.chatStatus === 'loading'}
+            >
+              {externalPlugins.map((plugin) => (
+                <PluginCard
+                  key={plugin.id}
+                  plugin={plugin}
+                  stateItem={stateMap.get(plugin.id)}
+                  chatReady={chatReady}
+                  chatLoading={chatLoading}
+                  chatFailed={chatError !== null}
+                  hasChat={selectedChat !== null}
+                  canManage={canManage}
+                  pending={plugins.pendingPluginIds.includes(plugin.id)}
+                  onOpen={(target) => setActiveExternal(target)}
+                  onToggle={(target, enabled) => {
+                    if (selectedChatId) void store.toggle(selectedChatId, target.id, enabled);
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </section>
       ) : null}
 
       <div className="plugin-note">
         <LockIcon aria-hidden="true" />
         <span>{isE2ee ? t('plugins.noteE2ee') : t('plugins.note')}</span>
       </div>
+
+      {activeExternal ? (
+        <ExternalPluginRunner
+          plugin={activeExternal}
+          chatId={selectedChatId}
+          onClose={() => setActiveExternal(null)}
+          loadEntry={loadEntry}
+          loadAsset={loadAsset}
+        />
+      ) : null}
     </PageShell>
   );
 }

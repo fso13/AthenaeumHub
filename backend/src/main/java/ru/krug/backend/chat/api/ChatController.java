@@ -4,6 +4,7 @@ import java.util.UUID;
 
 import jakarta.validation.Valid;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +17,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import ru.krug.backend.chat.api.dto.ChatAvatarRequest;
+import ru.krug.backend.chat.api.dto.ChatAvatarResponse;
 import ru.krug.backend.chat.api.dto.ChatCoverRequest;
 import ru.krug.backend.chat.api.dto.ChatCreateRequest;
 import ru.krug.backend.chat.api.dto.ChatListResponse;
@@ -26,8 +29,10 @@ import ru.krug.backend.chat.api.dto.ChatResponse;
 import ru.krug.backend.chat.api.dto.ChatUpdateRequest;
 import ru.krug.backend.chat.api.dto.ReadRequest;
 import ru.krug.backend.chat.api.mapper.ChatApiMapper;
+import ru.krug.backend.chat.application.model.ChatAvatarView;
 import ru.krug.backend.chat.application.model.CreateChatResult;
 import ru.krug.backend.chat.application.usecase.ChatArchiveService;
+import ru.krug.backend.chat.application.usecase.ChatAvatarService;
 import ru.krug.backend.chat.application.usecase.ChatCoverService;
 import ru.krug.backend.chat.application.usecase.ChatCreateService;
 import ru.krug.backend.chat.application.usecase.ChatDeletionService;
@@ -49,6 +54,9 @@ import ru.krug.backend.shared.application.model.Principal;
  * DELETE /chats/{chatId}                            — soft delete (channel OWNER)
  * POST   /chats/{chatId}/cover                      — set a cover from an existing attachment
  * DELETE /chats/{chatId}/cover                      — clear the cover
+ * POST   /chats/{chatId}/avatar                     — set the channel icon/avatar
+ * DELETE /chats/{chatId}/avatar                     — clear the avatar
+ * GET    /chats/{chatId}/avatar                     — 302 to a presigned object URL
  * GET    /chats/{chatId}/permissions                — effective rights matrix
  * PATCH  /chats/{chatId}/permissions                — change rights (chat OWNER/ADMIN)
  * POST   /chats/{chatId}/archive                    — per-user archive
@@ -67,6 +75,7 @@ public class ChatController {
     private final ChatCreateService chatCreateService;
     private final ChatUpdateService chatUpdateService;
     private final ChatCoverService chatCoverService;
+    private final ChatAvatarService chatAvatarService;
     private final ChatPermissionsService chatPermissionsService;
     private final ChatArchiveService chatArchiveService;
     private final ChatDeletionService chatDeletionService;
@@ -76,6 +85,7 @@ public class ChatController {
                           ChatCreateService chatCreateService,
                           ChatUpdateService chatUpdateService,
                           ChatCoverService chatCoverService,
+                          ChatAvatarService chatAvatarService,
                           ChatPermissionsService chatPermissionsService,
                           ChatArchiveService chatArchiveService,
                           ChatDeletionService chatDeletionService,
@@ -85,6 +95,7 @@ public class ChatController {
         this.chatCreateService = chatCreateService;
         this.chatUpdateService = chatUpdateService;
         this.chatCoverService = chatCoverService;
+        this.chatAvatarService = chatAvatarService;
         this.chatPermissionsService = chatPermissionsService;
         this.chatArchiveService = chatArchiveService;
         this.chatDeletionService = chatDeletionService;
@@ -144,6 +155,29 @@ public class ChatController {
     public ResponseEntity<Void> removeCover(@PathVariable UUID chatId, Principal principal) {
         chatCoverService.removeCover(principal, chatId);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/chats/{chatId}/avatar")
+    public ChatResponse setAvatar(@PathVariable UUID chatId,
+                                  @Valid @RequestBody ChatAvatarRequest request,
+                                  Principal principal) {
+        return ChatApiMapper.toResponse(
+                chatAvatarService.setAvatar(principal, chatId, request.fileId()));
+    }
+
+    @DeleteMapping("/chats/{chatId}/avatar")
+    public ResponseEntity<Void> removeAvatar(@PathVariable UUID chatId, Principal principal) {
+        chatAvatarService.removeAvatar(principal, chatId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/chats/{chatId}/avatar")
+    public ResponseEntity<ChatAvatarResponse> downloadAvatar(@PathVariable UUID chatId,
+                                                             Principal principal) {
+        ChatAvatarView view = chatAvatarService.download(principal, chatId);
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .header("Location", view.url())
+                .body(new ChatAvatarResponse(view.url(), view.expiresAt()));
     }
 
     @GetMapping("/chats/{chatId}/permissions")
