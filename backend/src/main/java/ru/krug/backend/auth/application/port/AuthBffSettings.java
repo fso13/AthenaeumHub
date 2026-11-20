@@ -32,4 +32,11 @@ public interface AuthBffSettings {
     int twoFactorWindow();
 
     String twoFactorIssuer();
+
+    /**
+     * Global installation policy (#91). When true every interactive login needs a second
+     * factor: accounts with an authenticator get the TOTP challenge, the rest get an
+     * ENROLL challenge and no session before enrollment completes.
+     */
+    boolean requireTwoFactor();
 }

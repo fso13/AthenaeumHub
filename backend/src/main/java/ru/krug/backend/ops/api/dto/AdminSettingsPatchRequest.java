@@ -1,5 +1,7 @@
 package ru.krug.backend.ops.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 import jakarta.validation.constraints.Max;
@@ -27,6 +29,7 @@ public record AdminSettingsPatchRequest(
         @Min(1) @Max(1000000) Integer maxChatsPerWorkspace,
         @Min(1) @Max(1000000) Integer maxWorkspaceMembers,
         Boolean registrationOpen,
+        @JsonProperty("require_2fa") Boolean requireTwoFactor,
         Boolean completeSetup,
         Boolean setupCompleted) {
 }

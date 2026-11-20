@@ -290,6 +290,21 @@ describe('Auth BFF password flow', () => {
     expect(mockDb.authResendRequests).toEqual([pending.id]);
   });
 
+  it('continues email verification into ENROLL when the server requires 2FA', async () => {
+    mockDb.admin.require2fa = true;
+    const { user } = renderPasswordApp();
+    await register(user);
+
+    await user.type(screen.getByLabelText('Код из письма'), MOCK_EMAIL_CODE);
+    await user.click(screen.getByRole('button', { name: 'Подтвердить' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Настройте двухфакторную защиту' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /QR-код/ })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/2fa');
+  });
+
   it('bootstraps from the stored session via /me without a login screen', async () => {
     writeAuthSession({
       accessToken: 'stored-access-token',
@@ -331,6 +346,36 @@ describe('Auth BFF password flow', () => {
     expect(meCalls).toBe(2);
     expect(mockDb.authRefreshRequests).toHaveLength(1);
     expect(readAuthSession()?.refreshToken).toMatch(/^mock-refresh-/);
+  });
+
+  it('blocks a password-only session when refresh requires the second factor', async () => {
+    server.use(
+      http.get('*/api/v1/me', () =>
+        HttpResponse.json(
+          { code: 'TOKEN_EXPIRED', message: 'expired', request_id: 'req_401' },
+          { status: 401 },
+        ),
+      ),
+      http.post('*/api/v1/auth/refresh', () =>
+        HttpResponse.json(
+          {
+            code: 'TWO_FACTOR_REQUIRED',
+            message: 'second factor required',
+            request_id: 'req_2fa',
+          },
+          { status: 403 },
+        ),
+      ),
+    );
+
+    const { user } = renderPasswordApp();
+    await login(user);
+
+    expect(await screen.findByRole('heading', { name: LOGIN_HEADING })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Сессия требует повторного входа с двухфакторной аутентификацией/),
+    ).toBeInTheDocument();
+    expect(readAuthSession()).toBeNull();
   });
 
   it('returns to the login screen and clears tokens when refresh fails', async () => {

@@ -17,6 +17,7 @@ public final class SystemSettingsMapper {
         return new SystemSettingsView(settings.setupCompletedAt(), smtp,
                 settings.allowedFileExtensions().values(), settings.maxChatsPerUser(),
                 settings.maxChatsPerWorkspace(), settings.maxWorkspaceMembers(),
-                settings.registrationOpen(), settings.updatedAt(), settings.updatedBy());
+                settings.registrationOpen(), settings.requireTwoFactor(), settings.updatedAt(),
+                settings.updatedBy());
     }
 }

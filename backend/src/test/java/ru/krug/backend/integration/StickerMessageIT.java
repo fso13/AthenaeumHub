@@ -95,26 +95,26 @@ class StickerMessageIT extends IntegrationTestBase {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("client_message_id", UUID.randomUUID().toString());
         body.put("type", "STICKER");
-        body.put("sticker_id", StickerTestSupport.CATS_01.toString());
+        body.put("sticker_id", StickerTestSupport.KRUG_02.toString());
         body.put("reply_to_id", root.get("id").asText());
         MvcResult sent = postMessage(session, chatId, UUID.randomUUID().toString(), body);
         assertThat(sent.getResponse().getStatus()).isEqualTo(201);
         assertThat(json(sent).get("reply_to_id").asText()).isEqualTo(root.get("id").asText());
         assertThat(json(sent).get("sticker").get("pack_id").asText())
-                .isEqualTo(StickerTestSupport.CATS_PACK_ID.toString());
+                .isEqualTo(StickerTestSupport.KRUG_PACK_ID.toString());
 
         try {
             migrator().update("UPDATE sticker.sticker_packs SET status = 'DISABLED' WHERE id = ?",
-                    StickerTestSupport.CATS_PACK_ID);
+                    StickerTestSupport.KRUG_PACK_ID);
             MvcResult history = mockMvc.perform(authed(
                             get("/api/v1/chats/{chatId}/messages", chatId), session))
                     .andExpect(status().isOk()).andReturn();
             JsonNode items = json(history).get("items");
             assertThat(items.get(0).get("sticker").get("id").asText())
-                    .isEqualTo(StickerTestSupport.CATS_01.toString());
+                    .isEqualTo(StickerTestSupport.KRUG_02.toString());
         } finally {
             migrator().update("UPDATE sticker.sticker_packs SET status = 'ACTIVE' WHERE id = ?",
-                    StickerTestSupport.CATS_PACK_ID);
+                    StickerTestSupport.KRUG_PACK_ID);
         }
     }
 

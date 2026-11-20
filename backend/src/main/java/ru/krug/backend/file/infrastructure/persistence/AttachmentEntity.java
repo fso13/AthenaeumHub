@@ -13,6 +13,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import ru.krug.backend.file.domain.model.Attachment;
+import ru.krug.backend.file.domain.model.AttachmentSource;
 import ru.krug.backend.file.domain.model.AttachmentStatus;
 import ru.krug.backend.file.domain.model.MediaMetadata;
 import ru.krug.backend.file.domain.model.ScanStatus;
@@ -28,10 +29,12 @@ public class AttachmentEntity {
     @Column(name = "workspace_id", nullable = false)
     private UUID workspaceId;
 
-    @Column(name = "chat_id", nullable = false)
+    /** Null only for an unbound direct image; V48 enforces the source shape. */
+    @Column(name = "chat_id")
     private UUID chatId;
 
-    @Column(name = "upload_id", nullable = false)
+    /** Null only for a direct image (no upload session). */
+    @Column(name = "upload_id")
     private UUID uploadId;
 
     @Column(name = "user_id", nullable = false)
@@ -66,6 +69,9 @@ public class AttachmentEntity {
     @Column(name = "scan_status", nullable = false)
     private String scanStatus;
 
+    @Column(name = "source", nullable = false)
+    private String source;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -94,6 +100,7 @@ public class AttachmentEntity {
         entity.objectKey = attachment.objectKey();
         entity.status = attachment.status().name();
         entity.scanStatus = attachment.scanStatus().name();
+        entity.source = attachment.source().name();
         entity.createdAt = attachment.createdAt();
         entity.updatedAt = attachment.updatedAt();
         entity.deletedAt = attachment.deletedAt();
@@ -104,7 +111,8 @@ public class AttachmentEntity {
         return Attachment.reconstitute(id, workspaceId, chatId, uploadId, userId, messageId,
                 filename, mimeType, MediaMetadata.fromMap(media), sizeBytes,
                 Sha256.of(sha256), objectKey, AttachmentStatus.valueOf(status),
-                ScanStatus.valueOf(scanStatus), createdAt, updatedAt, deletedAt);
+                ScanStatus.valueOf(scanStatus), AttachmentSource.valueOf(source), createdAt,
+                updatedAt, deletedAt);
     }
 
     public UUID getId() {
@@ -161,6 +169,10 @@ public class AttachmentEntity {
 
     public String getScanStatus() {
         return scanStatus;
+    }
+
+    public String getSource() {
+        return source;
     }
 
     public Instant getCreatedAt() {

@@ -47,6 +47,11 @@ public class InMemoryObjectStorageAdapter implements ObjectStoragePort {
     }
 
     @Override
+    public void putObject(String objectKey, byte[] content, String contentType) {
+        objects.put(objectKey, new StoredObject(content.clone(), contentType));
+    }
+
+    @Override
     public String uploadPart(String objectKey, String multipartId, int partNo, byte[] content) {
         MultipartState state = multiparts.get(multipartId);
         if (state == null) {

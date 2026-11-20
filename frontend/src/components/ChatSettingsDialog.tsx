@@ -31,6 +31,7 @@ import { Avatar } from './Avatar';
 import { AdminConfirmDialog } from './admin/AdminConfirmDialog';
 import type { AdminActionErrorInfo } from './admin/actionErrors';
 import { ChatInvitesPanel } from './chat-settings/ChatInvitesPanel';
+import { DeviceImageUpload } from './DeviceImageUpload';
 import { ChatMembersPanel } from './chat-settings/ChatMembersPanel';
 import { blockErrorText, chatMembershipErrorText } from './chat-settings/errors';
 import { CloseIcon, LockIcon } from './Icons';
@@ -876,6 +877,11 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
       {coverPickerOpen && !isDirect && !isE2ee ? (
         <section className="cover-picker" aria-label={t('chatSettings.cover.pickerTitle')}>
           <p className="cover-picker__title">{t('chatSettings.cover.pickerTitle')}</p>
+          <DeviceImageUpload
+            chatId={chat.id}
+            disabled={coverBusy || saving}
+            onUploaded={(fileId) => handleSelectCover(fileId)}
+          />
           {coverImagesLoading ? (
             <p className="pane-sub">{t('chatSettings.cover.loading')}</p>
           ) : coverImagesError ? (
@@ -928,6 +934,11 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
       {avatarPickerOpen && !isDirect && !isE2ee ? (
         <section className="cover-picker" aria-label={t('chatSettings.avatar.pickerTitle')}>
           <p className="cover-picker__title">{t('chatSettings.avatar.pickerTitle')}</p>
+          <DeviceImageUpload
+            chatId={chat.id}
+            disabled={avatarBusy || saving}
+            onUploaded={(fileId) => handleSelectAvatar(fileId)}
+          />
           {coverImagesLoading ? (
             <p className="pane-sub">{t('chatSettings.avatar.loading')}</p>
           ) : coverImagesError ? (

@@ -77,10 +77,13 @@ describe('Auth BFF client', () => {
       password: 'Krug-password-2026',
     });
 
-    const session = await api.verifyEmail({
+    const result = await api.verifyEmail({
       verification_id: firstVerificationId(),
       code: MOCK_EMAIL_CODE,
     });
+    expect(result.kind).toBe('session');
+    if (result.kind !== 'session') throw new Error('expected a session');
+    const session = result.session;
 
     expect(session.token_type).toBe('Bearer');
     expect(session.access_token).toMatch(/^mock-access-/);

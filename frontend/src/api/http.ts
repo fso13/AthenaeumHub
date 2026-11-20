@@ -135,6 +135,7 @@ export class ApiClient {
     options: {
       idempotencyKey?: string;
       auth?: boolean;
+      headers?: Record<string, string>;
       timeoutMs?: number;
       signal?: AbortSignal;
     } = {},
@@ -145,6 +146,7 @@ export class ApiClient {
       body,
       idempotencyKey: options.idempotencyKey,
       auth: options.auth,
+      headers: options.headers,
       timeoutMs: options.timeoutMs,
       signal: options.signal,
     });

@@ -52,6 +52,8 @@ public final class ErrorCode {
     public static final String ATTACHMENT_QUARANTINED = "ATTACHMENT_QUARANTINED";
     public static final String ATTACHMENT_DELETED = "ATTACHMENT_DELETED";
     public static final String MALWARE_DETECTED = "MALWARE_DETECTED";
+    /** Direct image bytes are malformed/truncated/animated or contradict the extension. */
+    public static final String IMAGE_INVALID = "IMAGE_INVALID";
 
     // E2EE (E7-B1 / E2EE-SPEC §4.8). No server crypto beyond public Ed25519 verification.
     public static final String INVALID_KEY_FORMAT = "INVALID_KEY_FORMAT";
@@ -198,6 +200,10 @@ public final class ErrorCode {
             "TWO_FACTOR_RECOVERY_CODE_INVALID";
     public static final String TWO_FACTOR_CHALLENGE_INVALID = "TWO_FACTOR_CHALLENGE_INVALID";
     public static final String TWO_FACTOR_CHALLENGE_EXPIRED = "TWO_FACTOR_CHALLENGE_EXPIRED";
+    /** #91: the current refresh/session did not pass the required second factor. */
+    public static final String TWO_FACTOR_REQUIRED = "TWO_FACTOR_REQUIRED";
+    /** #91: an ENROLL challenge must be completed through /auth/2fa/enroll/verify. */
+    public static final String TWO_FACTOR_ENROLLMENT_REQUIRED = "TWO_FACTOR_ENROLLMENT_REQUIRED";
     public static final String REAUTH_FAILED = "REAUTH_FAILED";
     public static final String WORKSPACE_INVITE_NOT_FOUND = "WORKSPACE_INVITE_NOT_FOUND";
     public static final String WORKSPACE_INVITE_REVOKED = "WORKSPACE_INVITE_REVOKED";

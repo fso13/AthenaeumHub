@@ -142,11 +142,20 @@ export type AuthLogoutRequest = components['schemas']['AuthLogoutRequest'];
 export type AvatarUpdate = components['schemas']['AvatarUpdate'];
 /** `GET /me/avatar` body (the authenticated read also answers `302`). */
 export type ProfileAvatar = components['schemas']['ProfileAvatar'];
-/** `GET /me/2fa`: never carries the secret or the recovery codes. */
-export type TwoFactorStatus = components['schemas']['TwoFactorStatus'];
 /**
- * `POST /me/2fa/setup` result. The secret/otpauth URI are shown exactly once and
- * must never be persisted; they are kept only in component/store memory.
+ * `GET /me/2fa`: never carries the secret or the recovery codes. The published
+ * contract has no policy projection, so the authenticated-session gate reads an
+ * optional additive `required`/`enrollment_required` and stays dormant without
+ * it; login/refresh enforcement does not depend on these fields.
+ */
+export type TwoFactorStatus = components['schemas']['TwoFactorStatus'] & {
+  required?: boolean;
+  enrollment_required?: boolean;
+};
+/**
+ * `POST /me/2fa/setup` / `POST /auth/2fa/enroll/start` result. The
+ * secret/otpauth URI are shown exactly once and must never be persisted; they
+ * are kept only in component/store memory.
  */
 export type TwoFactorSetup = components['schemas']['TwoFactorSetup'];
 export type TwoFactorSetupRequest = components['schemas']['TwoFactorSetupRequest'];
@@ -155,10 +164,47 @@ export type TwoFactorDisableRequest = components['schemas']['TwoFactorDisableReq
 export type TwoFactorRecoveryCodesRequest = components['schemas']['TwoFactorRecoveryCodesRequest'];
 /** One-time recovery codes; the server keeps only hashes. */
 export type TwoFactorRecoveryCodes = components['schemas']['TwoFactorRecoveryCodes'];
-/** `202` response of `POST /auth/login` when the account has TOTP enabled. */
-export type AuthTwoFactorChallenge = components['schemas']['AuthTwoFactorChallenge'];
+/**
+ * `202` response of `POST /auth/login` / `POST /auth/verify-email`.
+ * `mode=ENROLL` means the server-wide policy requires setup and the account has
+ * no authenticator yet; `TOTP` is the ordinary challenge.
+ */
+export type AuthTwoFactorChallenge = components['schemas']['AuthTwoFactorChallenge'] & {
+  /** Additive alias some proxies send alongside `mode=ENROLL`. */
+  enrollment_required?: boolean;
+};
 export type AuthTwoFactorVerifyRequest = components['schemas']['AuthTwoFactorVerifyRequest'];
 export type TwoFactorMethod = AuthTwoFactorChallenge['methods'][number];
+
+/**
+ * #93 login-time enrollment. The password step already proved possession, so
+ * these endpoints carry the single-use `challenge_id` instead of a password.
+ */
+export interface AuthTwoFactorEnrollStartRequest {
+  challenge_id: string;
+}
+export interface AuthTwoFactorEnrollVerifyRequest {
+  challenge_id: string;
+  code: string;
+}
+/** Normalized `POST /auth/2fa/enroll/verify`: session + any inline codes (normally none). */
+export interface AuthTwoFactorEnrollmentResult {
+  session: AuthSession;
+  recoveryCodes: string[];
+}
+
+/**
+ * #93 `POST /media/images` multipart result. Only `file_id` is required; the
+ * client passes it to the existing avatar/cover/logo setters. Metadata is
+ * display-only and may be omitted by the server.
+ */
+export interface MediaImage {
+  file_id: string;
+  filename?: string | null;
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  scan_status?: string | null;
+}
 
 /* ------------------------------------------------------------------------- */
 /* P0-4 (#82): workspace settings, logo, invites and the permission matrix  */

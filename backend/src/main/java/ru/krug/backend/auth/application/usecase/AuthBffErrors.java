@@ -68,6 +68,11 @@ final class AuthBffErrors {
                 "Authentication service is unavailable", Map.of("reason", reason), 5L);
     }
 
+    static DomainException twoFactorRequired() {
+        return DomainException.forbidden(ErrorCode.TWO_FACTOR_REQUIRED,
+                "Two-factor authentication is required", Map.of());
+    }
+
     static DomainException passwordRejected() {
         return DomainException.unprocessable(ErrorCode.VALIDATION_FAILED,
                 "Password does not meet the identity provider policy",

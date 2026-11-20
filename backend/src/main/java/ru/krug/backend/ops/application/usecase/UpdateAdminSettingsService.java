@@ -118,6 +118,8 @@ public class UpdateAdminSettingsService {
                 : requireLimit(command.maxWorkspaceMembers(), "max_workspace_members");
         boolean registrationOpen = command.registrationOpen() == null
                 ? current.registrationOpen() : command.registrationOpen();
+        boolean requireTwoFactor = command.requireTwoFactor() == null
+                ? current.requireTwoFactor() : command.requireTwoFactor();
         AllowedFileExtensions allowedFileExtensions = current.allowedFileExtensions();
         if (command.allowedFileExtensions() != null) {
             try {
@@ -132,7 +134,8 @@ public class UpdateAdminSettingsService {
 
         return new SystemSettings(current.setupCompletedAt(), updatedSmtp,
                 allowedFileExtensions, maxChatsPerUser, maxChatsPerWorkspace,
-                maxWorkspaceMembers, registrationOpen, now, principal.userId());
+                maxWorkspaceMembers, registrationOpen, requireTwoFactor, now,
+                principal.userId());
     }
 
     private void appendUpdatedAudit(Principal principal, SystemSettingsUpdateCommand command,
@@ -182,6 +185,10 @@ public class UpdateAdminSettingsService {
         }
         if (command.registrationOpen() != null) {
             fields.add("registration_open");
+        }
+        if (command.requireTwoFactor() != null) {
+            // Field name only: the boolean value is not copied into audit metadata.
+            fields.add("require_2fa");
         }
         if (complete) {
             fields.add("setup_completed_at");

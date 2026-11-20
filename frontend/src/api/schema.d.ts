@@ -401,7 +401,7 @@ export interface paths {
         put?: never;
         /**
          * Подтвердить email 6-значным TOTP-кодом и получить сессию
-         * @description Неверный код — `422 CODE_INVALID` (до 5 попыток), истёкший/использованный — `410 CODE_EXPIRED`, исчерпанные попытки — `429 RATE_LIMITED`. Успех включает пользователя в Keycloak (`enabled=true`, `emailVerified=true`) и возвращает токены Keycloak. Пароль в запросе отсутствует.
+         * @description Неверный код — `422 CODE_INVALID` (до 5 попыток), истёкший/использованный — `410 CODE_EXPIRED`, исчерпанные попытки — `429 RATE_LIMITED`. Успех включает пользователя в Keycloak (`enabled=true`, `emailVerified=true`) и возвращает токены Keycloak. Пароль в запросе отсутствует. Если установка требует 2FA, вместо сессии выдаётся `202` challenge (`mode=ENROLL`/`TOTP`); email-код не является вторым фактором.
          */
         post: operations["authVerifyEmail"];
         delete?: never;
@@ -1112,6 +1112,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Прямая загрузка изображения для аватара/обложки/логотипа
+         * @description `multipart/form-data`: обязательная часть `file` и необязательный `chat_id`. Принимаются только статические PNG/JPEG/WebP не больше 5 MiB. Формат определяется по magic bytes, а не по `Content-Type`; расширение имени файла должно совпадать с содержимым. SVG/GIF и анимированные PNG/WebP отклоняются. Исходные метаданные (например, EXIF) не вырезаются и не возвращаются: ответ содержит только `file_id`, `width`, `height`, `mime`, `size`. Объект хранится в приватном бакете; создаётся attachment вызывающего со статусом `READY` и `scan_status=SKIPPED` (доверенный image-пайплайн, `source=DIRECT_IMAGE`), поэтому он сразу проходит проверки `POST /me/avatar`, `POST /chats/{chatId}/cover`, `POST /chats/{chatId}/avatar` и `POST /workspaces/{workspaceId}/avatar`. Без `chat_id` изображение привязывается к текущему (первому активному) воркспейсу вызывающего и доступно для его аватара/логотипа; с `chat_id` требуется активное участие в чате, и изображение можно использовать как обложку/аватар этого чата. E2EE-чат — `422 E2EE_PLAINTEXT_FORBIDDEN`. Превышение размера — `413 FILE_TOO_LARGE`, неподдерживаемый формат — `415 UNSUPPORTED_TYPE`, повреждённое изображение или несовпадение расширения — `422 IMAGE_INVALID`. Имя файла с путём/`..` отклоняется (`400`).
+         */
+        post: operations["uploadImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/attachments/{attachmentId}/download-url": {
         parameters: {
             query?: never;
@@ -1186,7 +1206,7 @@ export interface paths {
         put?: never;
         /**
          * Обложка канала из существующего вложения
-         * @description OWNER/ADMIN канала. `file_id` — существующее managed-вложение этого же чата: изображение (`image/*` или `media.kind=IMAGE`) в состоянии READY/BOUND и CLEAN/SKIPPED. Нового upload-эндпоинта нет: файл загружается обычным flow и передаётся ссылкой. Неизвестное/чужое/из другого чата вложение — `404` без раскрытия существования; не изображение — `422 CHAT_COVER_INVALID`; не просканировано — `409 ATTACHMENT_NOT_READY`; карантин — `423 ATTACHMENT_QUARANTINED`. E2EE-чат — `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`, DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Повтор той же обложки идемпотентен (`200`) и не пишет новый аудит. Аудит `chat.cover.updated` без file id.
+         * @description OWNER/ADMIN канала. `file_id` — существующее managed-вложение этого же чата: изображение (`image/*` или `media.kind=IMAGE`) в состоянии READY/BOUND и CLEAN/SKIPPED. Файл загружается с устройства через `POST /media/images` с `chat_id` этого чата (создаётся `source=DIRECT_IMAGE`, `scan_status=SKIPPED`) или обычным файловым flow и передаётся ссылкой. Неизвестное/чужое/из другого чата вложение — `404` без раскрытия существования; не изображение — `422 CHAT_COVER_INVALID`; не просканировано — `409 ATTACHMENT_NOT_READY`; карантин — `423 ATTACHMENT_QUARANTINED`. E2EE-чат — `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`, DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Повтор той же обложки идемпотентен (`200`) и не пишет новый аудит. Аудит `chat.cover.updated` без file id.
          */
         post: operations["setChatCover"];
         /**
@@ -1218,7 +1238,7 @@ export interface paths {
         put?: never;
         /**
          * Иконка/аватар канала из существующего вложения
-         * @description OWNER/ADMIN канала. `file_id` — существующее managed-вложение этого же чата: изображение (`image/*` или `media.kind=IMAGE`) в состоянии READY/BOUND и CLEAN/SKIPPED — ровно те же правила, что у обложки. Нового upload-эндпоинта нет: файл загружается обычным flow и передаётся ссылкой. Неизвестное/чужое/из другого чата вложение — `404` без раскрытия существования; не изображение — `422 CHAT_AVATAR_INVALID`; не просканировано — `409 ATTACHMENT_NOT_READY`; карантин — `423 ATTACHMENT_QUARANTINED`. E2EE-чат — `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`, DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Повтор того же аватара идемпотентен (`200`) и не пишет новый аудит. Аудит `chat.avatar.updated` без file id.
+         * @description OWNER/ADMIN канала. `file_id` — существующее managed-вложение этого же чата: изображение (`image/*` или `media.kind=IMAGE`) в состоянии READY/BOUND и CLEAN/SKIPPED — ровно те же правила, что у обложки. Файл загружается с устройства через `POST /media/images` с `chat_id` этого чата или обычным файловым flow и передаётся ссылкой. Неизвестное/чужое/из другого чата вложение — `404` без раскрытия существования; не изображение — `422 CHAT_AVATAR_INVALID`; не просканировано — `409 ATTACHMENT_NOT_READY`; карантин — `423 ATTACHMENT_QUARANTINED`. E2EE-чат — `422 CHAT_SETTINGS_E2EE_UNSUPPORTED`, DIRECT — `422 CHAT_MEMBERSHIP_UNSUPPORTED`. Повтор того же аватара идемпотентен (`200`) и не пишет новый аудит. Аудит `chat.avatar.updated` без file id.
          */
         post: operations["setChatAvatar"];
         /**
@@ -1941,7 +1961,7 @@ export interface paths {
         put?: never;
         /**
          * Установить аватар из существующего CLEAN-изображения
-         * @description Нового upload-пайплайна нет: тело ссылается на уже загруженное managed-вложение, которое принадлежит вызывающему, является изображением и прошло AV-проверку (`READY`/`BOUND` + `CLEAN`/`SKIPPED`). Чужое/отсутствующее вложение — скрытый `404`; не изображение — `422 AVATAR_INVALID`; `PENDING` — `409 ATTACHMENT_NOT_READY`; заражённое — `423 ATTACHMENT_QUARANTINED`. `avatar_url` в профиле — стабильный относительный URL, а не ключ хранения.
+         * @description Изображение загружается с устройства через `POST /media/images` (`multipart/form-data`, до 5 MiB, PNG/JPEG/WebP) либо обычным файловым flow; тело ссылается на уже созданное managed-вложение, которое принадлежит вызывающему, является изображением и прошло AV-проверку (`READY`/`BOUND` + `CLEAN`/`SKIPPED`). Чужое/отсутствующее вложение — скрытый `404`; не изображение — `422 AVATAR_INVALID`; `PENDING` — `409 ATTACHMENT_NOT_READY`; заражённое — `423 ATTACHMENT_QUARANTINED`. `avatar_url` в профиле — стабильный относительный URL, а не ключ хранения.
          */
         post: operations["setMyAvatar"];
         /** Удалить аватар (идемпотентно) */
@@ -2055,6 +2075,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/2fa/enroll/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Начать enrollment TOTP по login challenge
+         * @description Принимает `challenge_id` из `202` ответа `POST /auth/login` (или `POST /auth/verify-email`) с `mode=ENROLL`. Пароль уже проверен на шаге входа, поэтому повторная re-auth не требуется. Возвращает секрет, `otpauth://` URI и `qr_payload` один раз за challenge; в БД секрет хранится только как AES-256-GCM ciphertext. Повторный вызов до подтверждения возвращает тот же ожидающий секрет (без ротации). Чужой/истёкший/потреблённый challenge — `401 TWO_FACTOR_CHALLENGE_INVALID`; уже включённый аутентификатор — `409 TWO_FACTOR_ALREADY_ENABLED`. Секрет и коды не логируются.
+         */
+        post: operations["authStartTwoFactorEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/2fa/enroll/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Завершить enrollment и получить сессию
+         * @description Подтверждает ожидающий секрет шестизначным TOTP-кодом и возвращает `AuthSession` из токенов, удерживаемых server-side. Challenge одноразовый, живёт ограниченное время и имеет лимит попыток: неверный код — `422 TWO_FACTOR_CODE_INVALID`, исчерпанные попытки/истёкший/потреблённый challenge — `401 TWO_FACTOR_CHALLENGE_INVALID`. Неверный код не включает аутентификатор. Принятый time step сохраняется, поэтому повторное использование кода отклоняется.
+         */
+        post: operations["authVerifyTwoFactorEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{workspaceId}": {
         parameters: {
             query?: never;
@@ -2084,7 +2144,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Установить логотип воркспейса из CLEAN-изображения */
+        /**
+         * Установить логотип воркспейса из CLEAN-изображения
+         * @description Требуется `manage_workspace`. `file_id` — изображение `READY`/`BOUND` + `CLEAN`/`SKIPPED`: вложение этого воркспейса либо `source=DIRECT_IMAGE`, загруженное вызывающим через `POST /media/images` (в том числе в другом его воркспейсе). Чужое/произвольное вложение из другого воркспейса — скрытый `404`; не изображение — `422 WORKSPACE_LOGO_INVALID`; `PENDING` — `409 ATTACHMENT_NOT_READY`; заражённое — `423 ATTACHMENT_QUARANTINED`.
+         */
         post: operations["setWorkspaceAvatar"];
         /** Удалить логотип (идемпотентно) */
         delete: operations["deleteWorkspaceAvatar"];
@@ -2371,6 +2434,8 @@ export interface components {
             max_chats_per_workspace: number;
             max_workspace_members: number;
             registration_open: boolean;
+            /** @description Глобальная политика 2FA (#91): `false` — второй фактор требуется только аккаунтам с включённым аутентификатором; `true` — каждый вход обязан завершиться TOTP-challenge или enrollment. Значение применяется со следующей аутентификации; выданные ранее access-токены не отзываются, а refresh парольной сессии отклоняется (`TWO_FACTOR_REQUIRED`). */
+            require_2fa: boolean;
             /** @description Разрешённые расширения файлов в нижнем регистре, без ведущей точки. Управляется platform_admin; применяется без перезапуска. */
             allowed_file_extensions?: string[];
             /** Format: date-time */
@@ -2392,6 +2457,8 @@ export interface components {
             max_chats_per_workspace?: number | null;
             max_workspace_members?: number | null;
             registration_open?: boolean | null;
+            /** @description Глобальная политика 2FA (#91). `null`/отсутствие — не менять. Значение проверяется как boolean; строка/число отклоняются `400 VALIDATION_FAILED`. */
+            require_2fa?: boolean | null;
             complete_setup?: boolean | null;
             /** @description Алиас `complete_setup` (совместимость с именем поля ответа) */
             setup_completed?: boolean | null;
@@ -3102,6 +3169,17 @@ export interface components {
             /** Format: uuid */
             attachment_id?: string | null;
         };
+        /** @description Метаданные прямого изображения (`POST /media/images`). Никогда не содержит object key, имя файла, EXIF или иные метаданные исходника; `size` — ровно размер сохранённого объекта. */
+        UploadedImage: {
+            /** Format: uuid */
+            file_id: string;
+            width: number;
+            height: number;
+            /** @enum {string} */
+            mime: "image/png" | "image/jpeg" | "image/webp";
+            /** Format: int64 */
+            size: number;
+        };
         UploadPart: {
             part_no: number;
             received: boolean;
@@ -3737,11 +3815,26 @@ export interface components {
             codes: string[];
             remaining: number;
         };
+        /** @description Одноразовый login challenge. `mode=TOTP` завершается через `POST /auth/2fa/verify` (TOTP или recovery-код), `mode=ENROLL` — через `POST /auth/2fa/enroll/start` + `POST /auth/2fa/enroll/verify`. В ответе нет access/refresh токенов. */
         AuthTwoFactorChallenge: {
             /** Format: uuid */
             challenge_id: string;
             expires_in: number;
+            /**
+             * @description TOTP — аутентификатор уже включён; ENROLL — его нужно создать.
+             * @enum {string}
+             */
+            mode: "TOTP" | "ENROLL";
             methods: ("TOTP" | "RECOVERY_CODE")[];
+        };
+        AuthTwoFactorEnrollStartRequest: {
+            /** Format: uuid */
+            challenge_id: string;
+        };
+        AuthTwoFactorEnrollVerifyRequest: {
+            /** Format: uuid */
+            challenge_id: string;
+            code: string;
         };
         AuthTwoFactorVerifyRequest: {
             /** Format: uuid */
@@ -4713,13 +4806,22 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Email подтверждён, сессия выдана */
+            /** @description Email подтверждён, сессия выдана (2FA не требуется) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["AuthSession"];
+                };
+            };
+            /** @description Email подтверждён, но требуется второй фактор: выдан login challenge, токены до его завершения не возвращаются. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthTwoFactorChallenge"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -4805,7 +4907,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthSession"];
                 };
             };
-            /** @description Пароль верен, но у аккаунта включён TOTP: вместо сессии выдан одноразовый login challenge. Токены Keycloak до второго фактора не возвращаются. */
+            /** @description Пароль верен, но нужен второй фактор: вместо сессии выдан одноразовый login challenge (`mode=TOTP` при включённом аутентификаторе, `mode=ENROLL` когда установка требует 2FA, а аутентификатор ещё не создан). Токены Keycloak до завершения challenge не возвращаются. Enrollment завершается через `POST /auth/2fa/enroll/start` и `POST /auth/2fa/enroll/verify`. */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -4862,6 +4964,15 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             /** @description Refresh-токен недействителен (`INVALID_CREDENTIALS`) */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Сессия не проходила обязательный второй фактор (`TWO_FACTOR_REQUIRED`). Такой refresh-токен нельзя использовать для продления парольной сессии; нужен новый вход с TOTP/ENROLL. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6020,6 +6131,47 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             410: components["responses"]["Gone"];
+        };
+    };
+    uploadImage: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /**
+                     * Format: uuid
+                     * @description Необязательная привязка к чату. Требуется активное участие вызывающего в этом чате.
+                     */
+                    chat_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Изображение сохранено */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadedImage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            413: components["responses"]["TooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            422: components["responses"]["Unprocessable"];
         };
     };
     attachmentDownloadUrl: {
@@ -7846,7 +7998,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description 2FA больше не включена */
+            /** @description 2FA больше не включена (`TWO_FACTOR_NOT_ENABLED`) либо challenge имеет `mode=ENROLL` и должен завершаться через `/auth/2fa/enroll/verify` (`TWO_FACTOR_ENROLLMENT_REQUIRED`). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -7856,6 +8008,105 @@ export interface operations {
                 };
             };
             /** @description Неверный TOTP/recovery-код */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    authStartTwoFactorEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthTwoFactorEnrollStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Параметры enrollment (секрет показывается клиенту один раз) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwoFactorSetup"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description Challenge недействителен/истёк/уже использован */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Аутентификатор уже включён (`TWO_FACTOR_ALREADY_ENABLED`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    authVerifyTwoFactorEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthTwoFactorEnrollVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Аутентификатор включён, сессия выдана */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description Challenge недействителен/истёк/исчерпан */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Enrollment не начат (`TWO_FACTOR_NOT_SETUP`) или аутентификатор уже включён (`TWO_FACTOR_ALREADY_ENABLED`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Неверный код (`TWO_FACTOR_CODE_INVALID`) */
             422: {
                 headers: {
                     [name: string]: unknown;

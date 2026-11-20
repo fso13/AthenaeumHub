@@ -1,4 +1,4 @@
-import type { ChatApi, ListMessagesQuery } from '../api/endpoints';
+import type { ChatApi, ImageUploadOptions, ListMessagesQuery } from '../api/endpoints';
 import { ApiError, isApiError, toApiError } from '../api/problem';
 import type {
   AddChatMemberRequest,
@@ -32,6 +32,7 @@ import type {
   Device,
   FileItem,
   InviteAcceptResult,
+  MediaImage,
   MeResponse,
   MeUser,
   MessageCreateBody,
@@ -3979,6 +3980,11 @@ export class ChatStore {
   /* ------------------------------------------------------------------ */
   /* P0-4 (#82): profile/workspace server rows                         */
   /* ------------------------------------------------------------------ */
+
+  /** #93: device image upload (multipart); the caller applies the file_id. */
+  uploadImage(file: File, options: ImageUploadOptions = {}): Promise<MediaImage> {
+    return this.api.uploadImage(file, options);
+  }
 
   /**
    * P0-4 (#82): accept a workspace invite link. The server enforces

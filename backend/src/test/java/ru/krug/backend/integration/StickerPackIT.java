@@ -36,16 +36,12 @@ class StickerPackIT extends IntegrationTestBase {
         JsonNode body = json(result);
         CONTRACT.assertValid("StickerPackList", body);
 
-        assertThat(body.get("items").size()).isEqualTo(2);
+        assertThat(body.get("items").size()).isEqualTo(1);
         JsonNode krug = pack(body, "Сова");
-        JsonNode cats = pack(body, "Коты");
         assertThat(krug.get("id").asText()).isEqualTo(StickerTestSupport.KRUG_PACK_ID.toString());
-        assertThat(krug.get("cover_url").asText()).isEqualTo("/stickers/krug/cover.png");
-        assertThat(cats.get("id").asText()).isEqualTo(StickerTestSupport.CATS_PACK_ID.toString());
-        assertThat(cats.get("cover_url").asText()).isEqualTo("/stickers/cats/cover.png");
+        assertThat(krug.get("cover_url").asText()).isEqualTo("/stickers/krug/09.png");
 
-        assertThat(krug.get("stickers").size()).isEqualTo(8);
-        assertThat(cats.get("stickers").size()).isEqualTo(8);
+        assertThat(krug.get("stickers").size()).isEqualTo(11);
         JsonNode first = krug.get("stickers").get(0);
         assertThat(first.get("id").asText()).isEqualTo(StickerTestSupport.KRUG_01.toString());
         assertThat(first.get("pack_id").asText()).isEqualTo(StickerTestSupport.KRUG_PACK_ID.toString());
@@ -55,18 +51,18 @@ class StickerPackIT extends IntegrationTestBase {
         assertThat(krug.get("stickers").get(7).get("url").asText())
                 .isEqualTo("/stickers/krug/08.png");
 
-        // V14: exactly 2 built-in ACTIVE packs x 8 PNG 512x512 <= 512 KiB.
+        // V46: one built-in ACTIVE pack with eleven owl PNG 512x512 <= 512 KiB.
         assertThat(migrator().queryForObject("""
                 SELECT count(*) FROM sticker.sticker_packs
                  WHERE builtin AND status = 'ACTIVE'
-                """, Integer.class)).isEqualTo(2);
+                """, Integer.class)).isEqualTo(1);
         List<Map<String, Object>> counts = migrator().queryForList("""
                 SELECT pack_id, count(*) AS stickers FROM sticker.stickers
                  WHERE status = 'ACTIVE' GROUP BY pack_id
                 """);
-        assertThat(counts).hasSize(2);
+        assertThat(counts).hasSize(1);
         assertThat(counts).allSatisfy(row -> assertThat(((Number) row.get("stickers")).intValue())
-                .isEqualTo(8));
+                .isEqualTo(11));
         Integer invalid = migrator().queryForObject("""
                 SELECT count(*) FROM sticker.stickers
                  WHERE format <> 'PNG' OR width <> 512 OR height <> 512
@@ -173,7 +169,7 @@ class StickerPackIT extends IntegrationTestBase {
             migrator().update("UPDATE sticker.sticker_packs SET status = 'DISABLED' WHERE id = ?",
                     StickerTestSupport.KRUG_PACK_ID);
             JsonNode packs = stickerPacks(session, chatId);
-            assertThat(packs.get("items").size()).isEqualTo(1);
+            assertThat(packs.get("items").size()).isEqualTo(0);
             assertThat(pack(packs, "Сова")).isNull();
 
             MvcResult history = mockMvc.perform(authed(

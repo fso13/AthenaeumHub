@@ -33,7 +33,7 @@ final class ChatImageAttachmentRules {
             return Optional.empty();
         }
         return attachments.findById(workspaceId, attachmentId)
-                .filter(candidate -> candidate.chatId().equals(chatId))
+                .filter(candidate -> candidate.belongsToChat(chatId))
                 .filter(candidate -> candidate.deletedAt() == null);
     }
 

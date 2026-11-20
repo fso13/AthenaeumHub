@@ -77,6 +77,23 @@ public class S3ObjectStorageAdapter implements ObjectStoragePort {
     }
 
     @Override
+    public void putObject(String objectKey, byte[] content, String contentType) {
+        ensureBucket();
+        try {
+            s3.putObject(software.amazon.awssdk.services.s3.model.PutObjectRequest.builder()
+                            .bucket(properties.getBucket())
+                            .key(objectKey)
+                            .contentType(contentType == null
+                                    ? "application/octet-stream" : contentType)
+                            .contentLength((long) content.length)
+                            .build(),
+                    RequestBody.fromBytes(content));
+        } catch (S3Exception ex) {
+            throw new StorageException("put object failed", ex);
+        }
+    }
+
+    @Override
     public String uploadPart(String objectKey, String multipartId, int partNo, byte[] content) {
         try {
             return s3.uploadPart(UploadPartRequest.builder()

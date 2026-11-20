@@ -224,6 +224,47 @@ class AdminSettingsIT extends IntegrationTestBase {
     }
 
     @Test
+    void requireTwoFactorSettingIsExposedPatchableAndValidated() throws Exception {
+        SessionResponse admin = adminSession();
+
+        JsonNode initial = json(mockMvc.perform(authed(get("/api/v1/admin/settings"), admin))
+                .andExpect(status().isOk()).andReturn());
+        CONTRACT.assertValid("AdminSettings", initial);
+        assertThat(initial.get("require_2fa").asBoolean()).isFalse();
+
+        MvcResult enabled = mockMvc.perform(authed(patch("/api/v1/admin/settings"), admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"require_2fa\":true}"))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(json(enabled).get("require_2fa").asBoolean()).isTrue();
+        assertThat(migrator().queryForObject(
+                "SELECT require_2fa FROM ops.system_settings WHERE id = 1", Boolean.class))
+                .isTrue();
+
+        MvcResult disabled = mockMvc.perform(authed(patch("/api/v1/admin/settings"), admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"require_2fa\":false}"))
+                .andExpect(status().isOk()).andReturn();
+        assertThat(json(disabled).get("require_2fa").asBoolean()).isFalse();
+
+        MvcResult invalid = mockMvc.perform(authed(patch("/api/v1/admin/settings"), admin)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"require_2fa\":\"not-a-boolean\"}"))
+                .andExpect(status().isBadRequest()).andReturn();
+        CONTRACT.assertValid("Error", json(invalid));
+        assertThat(json(invalid).get("code").asText()).isEqualTo("VALIDATION_FAILED");
+        assertThat(migrator().queryForObject(
+                "SELECT require_2fa FROM ops.system_settings WHERE id = 1", Boolean.class))
+                .isFalse();
+
+        String metadata = migrator().queryForObject("""
+                SELECT string_agg(metadata::text, ' ')
+                  FROM audit.audit_events WHERE action = 'settings.updated' AND actor_id = ?
+                """, String.class, admin.user().id());
+        assertThat(metadata).contains("require_2fa");
+    }
+
+    @Test
     void registrationOpenSwitchClosesAuthRegister() throws Exception {
         SessionResponse admin = adminSession();
         mockMvc.perform(authed(patch("/api/v1/admin/settings"), admin)
@@ -379,6 +420,7 @@ class AdminSettingsIT extends IntegrationTestBase {
                        max_chats_per_workspace = 1000,
                        max_workspace_members = 100,
                        registration_open = true,
+                       require_2fa = false,
                        allowed_file_extensions = DEFAULT,
                        updated_by = NULL,
                        updated_at = now()

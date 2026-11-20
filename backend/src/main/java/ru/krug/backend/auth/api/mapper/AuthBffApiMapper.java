@@ -27,7 +27,7 @@ public final class AuthBffApiMapper {
 
     public static AuthTwoFactorChallengeResponse toResponse(TwoFactorChallengeView view) {
         return new AuthTwoFactorChallengeResponse(view.challengeId(), view.expiresIn(),
-                view.methods());
+                view.methods(), view.mode() == null ? null : view.mode().name());
     }
 
     public static AuthSessionResponse toResponse(AuthSessionView view) {

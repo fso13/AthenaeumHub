@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react';
+import type { TwoFactorSetup } from '../api/types';
 import type { MessageKey } from '../i18n/ru';
 import type { AuthErrorInfo } from './errors';
 import type { AuthUser, PendingTwoFactorChallenge } from './types';
@@ -46,12 +47,25 @@ export interface RegisterInput {
  * Form-level API of the password-mode provider. Screens use this context;
  * the rest of the app only needs `useAppAuth()`.
  */
+/**
+ * #93 login-time enrollment stages. `recovery` holds the session in memory
+ * until the user confirms the one-time codes; nothing is persisted before the
+ * final `finishEnrollment()`.
+ */
+export type EnrollmentStatus = 'idle' | 'starting' | 'ready' | 'verifying' | 'recovery' | 'error';
+
 export interface PasswordAuthValue {
   status: AuthStatus;
   user: AuthUser | null;
   pending: PendingVerification | null;
   /** P0-4: a `202` TOTP login challenge waiting for the second factor. */
   challenge: PendingTwoFactorChallenge | null;
+  /** #93: one-time ENROLL setup payload (secret/QR), memory only. */
+  enrollmentSetup: TwoFactorSetup | null;
+  /** #93: one-time recovery codes returned with the enrollment session. */
+  enrollmentRecoveryCodes: string[] | null;
+  enrollmentStatus: EnrollmentStatus;
+  enrollmentError: AuthErrorInfo | null;
   busy: boolean;
   error: AuthErrorInfo | null;
   /** One-off success message (e.g. code resent); translated by the screen. */
@@ -62,6 +76,12 @@ export interface PasswordAuthValue {
   resendCode: () => Promise<boolean>;
   /** P0-4: complete the login challenge with a TOTP/recovery code. */
   verifyTwoFactor: (code: string) => Promise<boolean>;
+  /** #93: start TOTP setup for an `ENROLL` login challenge. */
+  startEnrollment: () => Promise<boolean>;
+  /** #93: confirm the first code; the session waits behind the recovery step. */
+  verifyEnrollment: (code: string) => Promise<boolean>;
+  /** #93: accept the one-time codes and commit the held session. */
+  finishEnrollment: () => void;
   /**
    * P0-4 "resend": request a fresh challenge by re-submitting the already
    * verified password. No new email/code is sent and no secret is exposed.

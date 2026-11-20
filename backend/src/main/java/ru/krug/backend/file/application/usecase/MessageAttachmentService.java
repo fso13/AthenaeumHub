@@ -76,6 +76,14 @@ public class MessageAttachmentService implements MessageAttachmentPort {
                 // Hide a foreign chat's attachment rather than disclosing its existence.
                 throw new UploadNotFoundException();
             }
+            if (attachment.isDirectImage()) {
+                // #92: the direct-image pipeline exists only for avatars/covers/logos. It
+                // must never become a message attachment (no upload/quota row exists).
+                throw DomainException.unprocessable(ErrorCode.IMAGE_INVALID,
+                        "A direct image cannot be a message attachment",
+                        Map.of("field", "attachment_ids",
+                                "reason", "direct_image_not_bindable"));
+            }
             attachment.assertBindable();
             Attachment stored = attachment.bindTo(messageId, now);
             attachmentRepository.save(stored);

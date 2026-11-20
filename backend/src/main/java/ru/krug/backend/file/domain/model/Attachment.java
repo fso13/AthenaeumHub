@@ -30,6 +30,7 @@ public final class Attachment {
     private final String objectKey;
     private final AttachmentStatus status;
     private final ScanStatus scanStatus;
+    private final AttachmentSource source;
     private final Instant createdAt;
     private final Instant updatedAt;
     private final Instant deletedAt;
@@ -37,12 +38,15 @@ public final class Attachment {
     private Attachment(UUID id, UUID workspaceId, UUID chatId, UUID uploadId, UUID userId,
                        UUID messageId, String filename, String mimeType, MediaMetadata media,
                        long sizeBytes, Sha256 sha256, String objectKey, AttachmentStatus status,
-                       ScanStatus scanStatus, Instant createdAt, Instant updatedAt,
-                       Instant deletedAt) {
+                       ScanStatus scanStatus, AttachmentSource source, Instant createdAt,
+                       Instant updatedAt, Instant deletedAt) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
-        this.chatId = Objects.requireNonNull(chatId, "chatId");
-        this.uploadId = Objects.requireNonNull(uploadId, "uploadId");
+        // chatId is null only for an unbound DIRECT_IMAGE; uploadId is null only for
+        // DIRECT_IMAGE (there is no upload session on that path). Both are re-checked by
+        // the V48 source-shape constraint.
+        this.chatId = chatId;
+        this.uploadId = uploadId;
         this.userId = Objects.requireNonNull(userId, "userId");
         this.messageId = messageId;
         this.filename = Objects.requireNonNull(filename, "filename");
@@ -53,6 +57,7 @@ public final class Attachment {
         this.objectKey = Objects.requireNonNull(objectKey, "objectKey");
         this.status = Objects.requireNonNull(status, "status");
         this.scanStatus = Objects.requireNonNull(scanStatus, "scanStatus");
+        this.source = Objects.requireNonNull(source, "source");
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt");
         this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
         this.deletedAt = deletedAt;
@@ -75,7 +80,22 @@ public final class Attachment {
                                       String objectKey, Instant now) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, null, filename, mimeType,
                 media, sizeBytes, sha256, objectKey, AttachmentStatus.READY, ScanStatus.PENDING,
-                now, now, null);
+                AttachmentSource.UPLOAD, now, now, null);
+    }
+
+    /**
+     * Trusted direct-image row ({@code POST /media/images}): already READY and SKIPPED, with
+     * no upload session and an optional chat binding. The source marker is what distinguishes
+     * it from a generic upload, so avatar/cover/logo validation is not weakened for arbitrary
+     * attachments.
+     */
+    public static Attachment directImage(UUID id, UUID workspaceId, UUID chatId, UUID userId,
+                                         String filename, String mimeType, MediaMetadata media,
+                                         long sizeBytes, Sha256 sha256, String objectKey,
+                                         Instant now) {
+        return new Attachment(id, workspaceId, chatId, null, userId, null, filename, mimeType,
+                media, sizeBytes, sha256, objectKey, AttachmentStatus.READY, ScanStatus.SKIPPED,
+                AttachmentSource.DIRECT_IMAGE, now, now, null);
     }
 
     public static Attachment reconstitute(UUID id, UUID workspaceId, UUID chatId, UUID uploadId,
@@ -83,11 +103,11 @@ public final class Attachment {
                                           String mimeType, MediaMetadata media, long sizeBytes,
                                           Sha256 sha256, String objectKey,
                                           AttachmentStatus status, ScanStatus scanStatus,
-                                          Instant createdAt, Instant updatedAt,
-                                          Instant deletedAt) {
+                                          AttachmentSource source, Instant createdAt,
+                                          Instant updatedAt, Instant deletedAt) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, messageId, filename,
-                mimeType, media, sizeBytes, sha256, objectKey, status, scanStatus, createdAt,
-                updatedAt, deletedAt);
+                mimeType, media, sizeBytes, sha256, objectKey, status, scanStatus, source,
+                createdAt, updatedAt, deletedAt);
     }
 
     public Attachment markClean(Instant now) {
@@ -114,7 +134,7 @@ public final class Attachment {
     public Attachment markDeleted(Instant now) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, messageId, filename,
                 mimeType, media, sizeBytes, sha256, objectKey, AttachmentStatus.DELETED,
-                scanStatus, createdAt, now, now);
+                scanStatus, source, createdAt, now, now);
     }
 
     /**
@@ -148,7 +168,12 @@ public final class Attachment {
     }
 
     public boolean belongsToChat(UUID chat) {
-        return chatId.equals(chat);
+        return chatId != null && chat != null && chatId.equals(chat);
+    }
+
+    /** Direct images are never message attachments (checked before a message bind). */
+    public boolean isDirectImage() {
+        return source == AttachmentSource.DIRECT_IMAGE;
     }
 
     public boolean isBound() {
@@ -162,8 +187,8 @@ public final class Attachment {
     private Attachment with(AttachmentStatus nextStatus, ScanStatus nextScan, Instant now,
                             UUID nextMessageId) {
         return new Attachment(id, workspaceId, chatId, uploadId, userId, nextMessageId, filename,
-                mimeType, media, sizeBytes, sha256, objectKey, nextStatus, nextScan, createdAt,
-                now, deletedAt);
+                mimeType, media, sizeBytes, sha256, objectKey, nextStatus, nextScan, source,
+                createdAt, now, deletedAt);
     }
 
     public UUID id() {
@@ -220,6 +245,10 @@ public final class Attachment {
 
     public ScanStatus scanStatus() {
         return scanStatus;
+    }
+
+    public AttachmentSource source() {
+        return source;
     }
 
     public Instant createdAt() {

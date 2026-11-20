@@ -41,6 +41,7 @@ export function LoginScreen() {
   const params = new URLSearchParams(location.split('?')[1] ?? '');
   const loggedOut = params.get('logged_out') === '1';
   const verificationMissing = params.get('verification') === 'missing';
+  const twoFactorRequired = params.get('2fa') === 'required';
 
   const [rememberedEmail] = useState(() => readRememberedEmail());
   const [email, setEmail] = useState(rememberedEmail ?? '');
@@ -93,6 +94,12 @@ export function LoginScreen() {
             {verificationMissing ? (
               <p className="login-status login-status--error" role="status">
                 {t('auth.verify.missing')}
+              </p>
+            ) : null}
+
+            {twoFactorRequired ? (
+              <p className="login-status login-status--error" role="status">
+                {t('auth.login.twoFactorRequired')}
               </p>
             ) : null}
 

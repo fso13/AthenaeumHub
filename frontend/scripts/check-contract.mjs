@@ -202,6 +202,9 @@ const operations = {
   'POST /me/2fa/verify': spec.paths?.['/me/2fa/verify']?.post,
   'POST /me/2fa/recovery-codes': spec.paths?.['/me/2fa/recovery-codes']?.post,
   'POST /auth/2fa/verify': spec.paths?.['/auth/2fa/verify']?.post,
+  // #91: server-side 2FA policy + login enrollment flow.
+  'POST /auth/2fa/enroll/start': spec.paths?.['/auth/2fa/enroll/start']?.post,
+  'POST /auth/2fa/enroll/verify': spec.paths?.['/auth/2fa/enroll/verify']?.post,
   'PATCH /workspaces/{workspaceId}': spec.paths?.['/workspaces/{workspaceId}']?.patch,
   'POST /workspaces/{workspaceId}/avatar': spec.paths?.['/workspaces/{workspaceId}/avatar']?.post,
   'DELETE /workspaces/{workspaceId}/avatar':
@@ -242,6 +245,7 @@ const requiredFields = {
     'max_chats_per_workspace',
     'max_workspace_members',
     'registration_open',
+    'require_2fa',
   ],
   AdminOverview: ['users', 'workspaces', 'chats'],
   AdminUser: [
@@ -743,18 +747,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 102,
-  'Contract must expose exactly 102 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security)',
+  Object.keys(spec.paths ?? {}).length === 105,
+  'Contract must expose exactly 105 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 134,
-  'Contract check must cover exactly 134 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security)',
+  Object.keys(operations).length === 136,
+  'Contract check must cover exactly 136 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy)',
 );
 check(
-  Object.keys(schemas).length === 173,
-  'Contract must expose exactly 173 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security)',
+  Object.keys(schemas).length === 176,
+  'Contract must expose exactly 176 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy)',
 );
 
 check(
@@ -1140,6 +1144,39 @@ check(
   String(spec.paths?.['/chats/{chatId}/messages']?.post?.description ?? '').includes('DLP_BLOCKED'),
   'POST /chats/{chatId}/messages must document the DLP_BLOCKED send gate',
 );
+
+// --- #91: server-side 2FA policy + enrollment challenge ------------------
+check(
+  schemas.AdminSettings?.properties?.require_2fa?.type === 'boolean' &&
+    schemas.AdminSettingsPatch?.properties?.require_2fa !== undefined,
+  'AdminSettings require_2fa must be exposed and patchable',
+);
+check(
+  schemas.AuthTwoFactorChallenge?.required?.includes('mode') &&
+    ['TOTP', 'ENROLL'].every((mode) =>
+      schemas.AuthTwoFactorChallenge?.properties?.mode?.enum?.includes(mode),
+    ),
+  'AuthTwoFactorChallenge must expose the TOTP/ENROLL mode',
+);
+check(
+  Boolean(spec.paths?.['/auth/2fa/enroll/start']?.post?.responses?.['200']) &&
+    Boolean(spec.paths?.['/auth/2fa/enroll/verify']?.post?.responses?.['200']),
+  'Enrollment start/verify must document their success responses',
+);
+check(
+  Boolean(spec.paths?.['/auth/refresh']?.post?.responses?.['403']) &&
+    Boolean(spec.paths?.['/auth/verify-email']?.post?.responses?.['202']),
+  'Refresh must document TWO_FACTOR_REQUIRED and verify-email must document the 202 challenge',
+);
+for (const forbidden of ['secret', 'otpauth_uri', 'qr_payload', 'access_token', 'refresh_token']) {
+  check(
+    !Object.prototype.hasOwnProperty.call(
+      schemas.AuthTwoFactorChallenge?.properties ?? {},
+      forbidden,
+    ),
+    `AuthTwoFactorChallenge must not expose ${forbidden}`,
+  );
+}
 
 console.log(
   `Contract check passed: ${Object.keys(operations).length} operations, ` +

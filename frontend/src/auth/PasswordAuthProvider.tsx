@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createAuthApi, type AuthApi } from '../api/authApi';
 import { ApiClient } from '../api/http';
-import type { AuthSession } from '../api/types';
+import { isApiError } from '../api/problem';
+import type { AuthSession, AuthTwoFactorChallenge, TwoFactorSetup } from '../api/types';
 import type { AppConfig } from '../config/env';
 import type { MessageKey } from '../i18n/ru';
 import { useNavigate } from '../router/router';
@@ -10,6 +11,7 @@ import {
   PasswordAuthContext,
   type AppAuthValue,
   type AuthStatus,
+  type EnrollmentStatus,
   type PasswordAuthValue,
   type PendingVerification,
   type RegisterInput,
@@ -39,6 +41,11 @@ interface AuthState {
   pending: PendingVerification | null;
   /** P0-4: in-memory `202` login challenge (never persisted). */
   challenge: PendingTwoFactorChallenge | null;
+  /** #93: login-time ENROLL setup; optional so older full-state sets stay valid. */
+  enrollmentSetup?: TwoFactorSetup | null;
+  enrollmentRecoveryCodes?: string[] | null;
+  enrollmentStatus?: EnrollmentStatus;
+  enrollmentError?: AuthErrorInfo | null;
   busy: boolean;
   error: AuthErrorInfo | null;
   notice: MessageKey | null;
@@ -51,10 +58,32 @@ function storedSessionState(): AuthState {
     user: session ? toAuthUser(session) : null,
     pending: readPendingVerification(),
     challenge: null,
+    enrollmentSetup: null,
+    enrollmentRecoveryCodes: null,
+    enrollmentStatus: 'idle',
+    enrollmentError: null,
     busy: false,
     error: null,
     notice: null,
   };
+}
+
+/**
+ * #93: map the `202` challenge projection to the screen mode. `mode` is the
+ * documented field; `enrollment_required` and an `ENROLL` method entry are
+ * accepted so a forward-compatible backend cannot silently skip enrollment.
+ */
+function toChallengeMode(challenge: AuthTwoFactorChallenge): 'TOTP' | 'ENROLL' {
+  const mode = typeof challenge.mode === 'string' ? challenge.mode.toUpperCase() : '';
+  const methods = Array.isArray(challenge.methods) ? challenge.methods : [];
+  if (
+    mode === 'ENROLL' ||
+    challenge.enrollment_required === true ||
+    methods.some((method) => String(method).toUpperCase() === 'ENROLL')
+  ) {
+    return 'ENROLL';
+  }
+  return 'TOTP';
 }
 
 function isPendingExpired(pending: PendingVerification, now: number): boolean {
@@ -97,6 +126,12 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
    * resend endpoint.
    */
   const challengeCredentials = useRef<{ email: string; password: string } | null>(null);
+  /**
+   * #93: the session returned with the enrollment verification is held in
+   * memory until the user acknowledges the one-time recovery codes. It is never
+   * written to storage before `finishEnrollment()`.
+   */
+  const pendingEnrollmentSession = useRef<AuthSession | null>(null);
 
   const api = useMemo<AuthApi>(
     () =>
@@ -127,11 +162,16 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
     clearPendingVerification();
     setRuntimeAccessToken(stored.accessToken);
     challengeCredentials.current = null;
+    pendingEnrollmentSession.current = null;
     setState({
       status: 'authenticated',
       user: toAuthUser(stored),
       pending: null,
       challenge: null,
+      enrollmentSetup: null,
+      enrollmentRecoveryCodes: null,
+      enrollmentStatus: 'idle',
+      enrollmentError: null,
       busy: false,
       error: null,
       notice: null,
@@ -142,11 +182,16 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
     await clearRuntimeAuth({ userId });
     clearSession();
     challengeCredentials.current = null;
+    pendingEnrollmentSession.current = null;
     setState({
       status: 'anonymous',
       user: null,
       pending: null,
       challenge: null,
+      enrollmentSetup: null,
+      enrollmentRecoveryCodes: null,
+      enrollmentStatus: 'idle',
+      enrollmentError: null,
       busy: false,
       error: null,
       notice: null,
@@ -163,7 +208,12 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
         const session = await api.refresh(stored.refreshToken);
         applySession(session);
         return true;
-      } catch {
+      } catch (error) {
+        // #91: an access/refresh token minted before the server-wide policy was
+        // enabled cannot be extended. The backend answers
+        // `403 TWO_FACTOR_REQUIRED`; block the shell and ask for a fresh login,
+        // which will return the ENROLL/TOTP challenge.
+        const requiresTwoFactor = isApiError(error) && error.code === 'TWO_FACTOR_REQUIRED';
         // Keep the device id/E2EE account: this is an expired session, not a
         // logout. The next successful login reuses the same device.
         setRuntimeAccessToken(null);
@@ -174,17 +224,22 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
           user: null,
           pending: readPendingVerification(),
           challenge: null,
+          enrollmentSetup: null,
+          enrollmentRecoveryCodes: null,
+          enrollmentStatus: 'idle',
+          enrollmentError: null,
           busy: false,
           error: null,
           notice: null,
         });
+        if (requiresTwoFactor) navigate('/login?2fa=required', { replace: true });
         return false;
       }
     })().finally(() => {
       refreshPromise.current = null;
     });
     return refreshPromise.current;
-  }, [api, applySession]);
+  }, [api, applySession, navigate]);
 
   useEffect(() => {
     setReauthHandler(refresh);
@@ -205,6 +260,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
             id: result.challenge.challenge_id,
             expiresAt: now + Math.max(1, result.challenge.expires_in) * 1000,
             methods: result.challenge.methods,
+            mode: toChallengeMode(result.challenge),
           };
           setState((current) => ({
             ...current,
@@ -212,6 +268,10 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
             user: null,
             pending: null,
             challenge,
+            enrollmentSetup: null,
+            enrollmentRecoveryCodes: null,
+            enrollmentStatus: 'idle',
+            enrollmentError: null,
             busy: false,
             error: null,
             notice: null,
@@ -284,6 +344,115 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
     [api, applySession, state.challenge],
   );
 
+  const startEnrollment = useCallback(async (): Promise<boolean> => {
+    const challenge = state.challenge;
+    if (!challenge || challenge.mode !== 'ENROLL') return false;
+    if (state.enrollmentStatus === 'starting' || state.enrollmentSetup) return false;
+    setState((current) => ({
+      ...current,
+      enrollmentStatus: 'starting',
+      enrollmentError: null,
+    }));
+    try {
+      const setup = await api.startTwoFactorEnrollment({ challenge_id: challenge.id });
+      setState((current) => ({
+        ...current,
+        enrollmentSetup: setup,
+        enrollmentStatus: 'ready',
+        enrollmentError: null,
+      }));
+      return true;
+    } catch (error) {
+      const info = toAuthError(error);
+      // An invalid/expired challenge has to return to the credentials form.
+      const invalidChallenge = info.code === 'TWO_FACTOR_CHALLENGE_INVALID' || info.status === 401;
+      if (invalidChallenge) {
+        challengeCredentials.current = null;
+        pendingEnrollmentSession.current = null;
+      }
+      setState((current) => ({
+        ...current,
+        challenge: invalidChallenge ? null : current.challenge,
+        enrollmentSetup: null,
+        enrollmentStatus: 'error',
+        enrollmentError: info,
+      }));
+      return false;
+    }
+  }, [api, state.challenge, state.enrollmentSetup, state.enrollmentStatus]);
+
+  const verifyEnrollment = useCallback(
+    async (code: string): Promise<boolean> => {
+      const challenge = state.challenge;
+      if (!challenge || challenge.mode !== 'ENROLL' || !state.enrollmentSetup) return false;
+      setState((current) => ({
+        ...current,
+        enrollmentStatus: 'verifying',
+        enrollmentError: null,
+      }));
+      try {
+        const result = await api.verifyTwoFactorEnrollment({
+          challenge_id: challenge.id,
+          code: code.trim(),
+        });
+        // The contract returns only the session; issue the one-time recovery
+        // codes with the freshly minted token and the password already held
+        // from the login step. A failure is not fatal: the recovery step
+        // explains that codes can be reissued from the profile.
+        let recoveryCodes = result.recoveryCodes;
+        const password = challengeCredentials.current?.password;
+        if (recoveryCodes.length === 0 && password) {
+          try {
+            const issued = await api.regenerateRecoveryCodesForSession(
+              result.session.access_token,
+              password,
+            );
+            recoveryCodes = issued.codes;
+          } catch {
+            recoveryCodes = [];
+          }
+        }
+        // Hold the session in memory: the user has to save the one-time
+        // recovery codes before the app shell (and its storage) is opened.
+        pendingEnrollmentSession.current = result.session;
+        setState((current) => ({
+          ...current,
+          enrollmentRecoveryCodes: recoveryCodes,
+          enrollmentStatus: 'recovery',
+          enrollmentError: null,
+          busy: false,
+          error: null,
+        }));
+        return true;
+      } catch (error) {
+        const info = toAuthError(error);
+        const invalidChallenge =
+          info.code === 'TWO_FACTOR_CHALLENGE_INVALID' || info.status === 401;
+        if (invalidChallenge) {
+          challengeCredentials.current = null;
+          pendingEnrollmentSession.current = null;
+        }
+        setState((current) => ({
+          ...current,
+          challenge: invalidChallenge ? null : current.challenge,
+          enrollmentSetup: invalidChallenge ? null : current.enrollmentSetup,
+          enrollmentStatus: invalidChallenge ? 'error' : 'ready',
+          enrollmentError: info,
+          busy: false,
+        }));
+        return false;
+      }
+    },
+    [api, state.challenge, state.enrollmentSetup],
+  );
+
+  const finishEnrollment = useCallback(() => {
+    const session = pendingEnrollmentSession.current;
+    if (!session) return;
+    applySession(session);
+    navigate('/', { replace: true });
+  }, [applySession, navigate]);
+
   const resendChallenge = useCallback(async (): Promise<boolean> => {
     const credentials = challengeCredentials.current;
     if (!credentials) {
@@ -301,10 +470,16 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
         id: result.challenge.challenge_id,
         expiresAt: Date.now() + Math.max(1, result.challenge.expires_in) * 1000,
         methods: result.challenge.methods,
+        mode: toChallengeMode(result.challenge),
       };
       setState((current) => ({
         ...current,
         challenge,
+        // A renewed challenge invalidates the old enrollment setup and codes.
+        enrollmentSetup: null,
+        enrollmentRecoveryCodes: null,
+        enrollmentStatus: 'idle',
+        enrollmentError: null,
         busy: false,
         error: null,
         notice: 'auth.twoFactor.challengeRenewed',
@@ -319,9 +494,14 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
 
   const cancelChallenge = useCallback(() => {
     challengeCredentials.current = null;
+    pendingEnrollmentSession.current = null;
     setState((current) => ({
       ...current,
       challenge: null,
+      enrollmentSetup: null,
+      enrollmentRecoveryCodes: null,
+      enrollmentStatus: 'idle',
+      enrollmentError: null,
       busy: false,
       error: null,
       notice: null,
@@ -344,6 +524,13 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
           email: input.email.trim(),
           expiresAt: now + response.expires_in * 1000,
           resendUntil: now + response.resend_after * 1000,
+        };
+        // #93: keep the password in memory through email verification so an
+        // ENROLL challenge can issue recovery codes via the re-auth endpoint;
+        // it is never persisted and is dropped on success/cancel/logout.
+        challengeCredentials.current = {
+          email: input.email.trim(),
+          password: input.password,
         };
         writePendingVerification(pending);
         setState({
@@ -377,15 +564,41 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       }
       setState((current) => ({ ...current, busy: true, error: null, notice: null }));
       try {
-        const session = await api.verifyEmail({ verification_id: pending.id, code });
-        applySession(session);
+        const result = await api.verifyEmail({ verification_id: pending.id, code });
+        if (result.kind === 'challenge') {
+          // #91/#93: email verification can require the second factor too.
+          clearPendingVerification();
+          const challenge: PendingTwoFactorChallenge = {
+            id: result.challenge.challenge_id,
+            expiresAt: Date.now() + Math.max(1, result.challenge.expires_in) * 1000,
+            methods: result.challenge.methods,
+            mode: toChallengeMode(result.challenge),
+          };
+          setState((current) => ({
+            ...current,
+            status: 'anonymous',
+            user: null,
+            pending: null,
+            challenge,
+            enrollmentSetup: null,
+            enrollmentRecoveryCodes: null,
+            enrollmentStatus: 'idle',
+            enrollmentError: null,
+            busy: false,
+            error: null,
+            notice: null,
+          }));
+          navigate('/2fa');
+          return true;
+        }
+        applySession(result.session);
         return true;
       } catch (error) {
         setState((current) => ({ ...current, busy: false, error: toAuthError(error) }));
         return false;
       }
     },
-    [api, applySession, state.pending],
+    [api, applySession, navigate, state.pending],
   );
 
   const resendCode = useCallback(async (): Promise<boolean> => {
@@ -460,6 +673,10 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       user: state.user,
       pending: state.pending,
       challenge: state.challenge,
+      enrollmentSetup: state.enrollmentSetup ?? null,
+      enrollmentRecoveryCodes: state.enrollmentRecoveryCodes ?? null,
+      enrollmentStatus: state.enrollmentStatus ?? 'idle',
+      enrollmentError: state.enrollmentError ?? null,
       busy: state.busy,
       error: state.error,
       notice: state.notice,
@@ -468,6 +685,9 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       verify,
       resendCode,
       verifyTwoFactor,
+      startEnrollment,
+      verifyEnrollment,
+      finishEnrollment,
       resendChallenge,
       cancelChallenge,
       signOut,
@@ -481,6 +701,10 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       state.user,
       state.pending,
       state.challenge,
+      state.enrollmentSetup,
+      state.enrollmentRecoveryCodes,
+      state.enrollmentStatus,
+      state.enrollmentError,
       state.busy,
       state.error,
       state.notice,
@@ -489,6 +713,9 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       verify,
       resendCode,
       verifyTwoFactor,
+      startEnrollment,
+      verifyEnrollment,
+      finishEnrollment,
       resendChallenge,
       cancelChallenge,
       signOut,

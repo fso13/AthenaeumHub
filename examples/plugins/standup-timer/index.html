@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Standup Timer</title>
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <main class="card">
+    <p class="eyebrow">Sova · внешний плагин</p>
+    <h1>Standup Timer</h1>
+    <p class="lead">Пять минут на стендап. Запускайте, ставьте паузу и сбрасывайте.</p>
+    <output id="timer" class="timer" aria-live="polite">05:00</output>
+    <div class="actions">
+      <button id="toggle" class="primary" type="button">Старт</button>
+      <button id="reset" type="button">Сбросить</button>
+    </div>
+    <p id="status" class="status" role="status">Готов к запуску</p>
+  </main>
+  <script src="assets/app.js"></script>
+</body>
+</html>

@@ -76,19 +76,19 @@ class MigrationsIT extends IntegrationTestBase {
     void seedsBuiltInStickerCatalogAndStickerMessageColumn() {
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM sticker.sticker_packs WHERE builtin
-                """, Integer.class)).isEqualTo(2);
+                """, Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM sticker.stickers
-                """, Integer.class)).isEqualTo(16);
+                """, Integer.class)).isEqualTo(11);
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM sticker.stickers
                  WHERE format = 'PNG' AND width = 512 AND height = 512
                    AND size_bytes <= 524288
-                """, Integer.class)).isEqualTo(16);
+                """, Integer.class)).isEqualTo(11);
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM sticker.sticker_packs
                  WHERE slug IN ('krug', 'cats') AND status = 'ACTIVE' AND builtin
-                """, Integer.class)).isEqualTo(2);
+                """, Integer.class)).isEqualTo(1);
 
         // Global built-in catalog is not RLS-scoped; favorites are.
         assertThat(jdbc.queryForObject("""
@@ -210,6 +210,28 @@ class MigrationsIT extends IntegrationTestBase {
                     "SELECT ops.allowed_file_extensions_valid(" + invalid + ")",
                     Boolean.class)).as(invalid).isFalse();
         }
+    }
+
+    @Test
+    void addsRequireTwoFactorSettingWithSafeDefault() {
+        assertThat(jdbc.queryForObject("""
+                SELECT udt_name FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'system_settings'
+                   AND column_name = 'require_2fa'
+                """, String.class)).isEqualTo("bool");
+        assertThat(jdbc.queryForObject("""
+                SELECT is_nullable FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'system_settings'
+                   AND column_name = 'require_2fa'
+                """, String.class)).isEqualTo("NO");
+        assertThat(jdbc.queryForObject("""
+                SELECT column_default FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'system_settings'
+                   AND column_name = 'require_2fa'
+                """, String.class)).isEqualTo("false");
+        assertThat(jdbc.queryForObject(
+                "SELECT require_2fa FROM ops.system_settings WHERE id = 1", Boolean.class))
+                .isFalse();
     }
 
     @Test

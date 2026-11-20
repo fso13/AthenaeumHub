@@ -19,13 +19,17 @@ import ru.krug.backend.auth.api.dto.AuthResendEmailCodeRequest;
 import ru.krug.backend.auth.api.dto.AuthResendEmailCodeResponse;
 import ru.krug.backend.auth.api.dto.AuthSessionResponse;
 import ru.krug.backend.auth.api.dto.AuthTwoFactorChallengeResponse;
+import ru.krug.backend.auth.api.dto.AuthTwoFactorEnrollStartRequest;
+import ru.krug.backend.auth.api.dto.AuthTwoFactorEnrollVerifyRequest;
 import ru.krug.backend.auth.api.dto.AuthTwoFactorVerifyRequest;
 import ru.krug.backend.auth.api.dto.AuthVerifyEmailRequest;
+import ru.krug.backend.auth.api.dto.TwoFactorSetupResponse;
 import ru.krug.backend.auth.api.mapper.AuthBffApiMapper;
 import ru.krug.backend.auth.application.command.LoginCommand;
 import ru.krug.backend.auth.application.command.RegisterCommand;
 import ru.krug.backend.auth.application.command.VerifyEmailCommand;
 import ru.krug.backend.auth.application.model.LoginOutcome;
+import ru.krug.backend.auth.application.model.TwoFactorSetupView;
 import ru.krug.backend.auth.application.port.AuthBffSettings;
 import ru.krug.backend.auth.application.usecase.LoginService;
 import ru.krug.backend.auth.application.usecase.LogoutService;
@@ -81,11 +85,16 @@ public class AuthBffController {
     }
 
     @PostMapping("/verify-email")
-    public AuthSessionResponse verifyEmail(@Valid @RequestBody AuthVerifyEmailRequest request,
-                                           HttpServletRequest http) {
-        return AuthBffApiMapper.toResponse(verifyEmailService.verify(
+    public ResponseEntity<Object> verifyEmail(@Valid @RequestBody AuthVerifyEmailRequest request,
+                                              HttpServletRequest http) {
+        LoginOutcome outcome = verifyEmailService.verify(
                 new VerifyEmailCommand(request.verificationId(), request.code()),
-                RequestIdFilter.requestId(http)));
+                RequestIdFilter.requestId(http));
+        if (outcome.requiresSecondFactor()) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(AuthBffApiMapper.toResponse(outcome.challenge()));
+        }
+        return ResponseEntity.ok(AuthBffApiMapper.toResponse(outcome.session()));
     }
 
     @PostMapping("/resend-email-code")
@@ -114,6 +123,22 @@ public class AuthBffController {
     public AuthSessionResponse verifyTwoFactor(
             @Valid @RequestBody AuthTwoFactorVerifyRequest request, HttpServletRequest http) {
         return AuthBffApiMapper.toResponse(twoFactor.verifyChallenge(request.challengeId(),
+                request.code(), clientIp(http), RequestIdFilter.requestId(http)));
+    }
+
+    @PostMapping("/2fa/enroll/start")
+    public TwoFactorSetupResponse startTwoFactorEnrollment(
+            @Valid @RequestBody AuthTwoFactorEnrollStartRequest request, HttpServletRequest http) {
+        TwoFactorSetupView view = twoFactor.startEnrollment(request.challengeId(),
+                clientIp(http), RequestIdFilter.requestId(http));
+        return new TwoFactorSetupResponse(view.secret(), view.otpauthUri(), view.qrPayload());
+    }
+
+    @PostMapping("/2fa/enroll/verify")
+    public AuthSessionResponse verifyTwoFactorEnrollment(
+            @Valid @RequestBody AuthTwoFactorEnrollVerifyRequest request,
+            HttpServletRequest http) {
+        return AuthBffApiMapper.toResponse(twoFactor.verifyEnrollment(request.challengeId(),
                 request.code(), clientIp(http), RequestIdFilter.requestId(http)));
     }
 

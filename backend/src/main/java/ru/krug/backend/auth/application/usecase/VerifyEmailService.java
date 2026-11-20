@@ -5,14 +5,15 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 import ru.krug.backend.auth.application.command.VerifyEmailCommand;
-import ru.krug.backend.auth.application.model.AuthSessionView;
 import ru.krug.backend.auth.application.model.KeycloakIdentity;
+import ru.krug.backend.auth.application.model.LoginOutcome;
 import ru.krug.backend.auth.application.model.TokenSet;
 import ru.krug.backend.auth.application.port.InvalidGrantException;
 import ru.krug.backend.auth.application.port.KeycloakAdminPort;
 import ru.krug.backend.auth.application.port.PendingSessionPort;
 import ru.krug.backend.auth.application.port.ProviderUnavailableException;
 import ru.krug.backend.auth.application.port.TokenExchangePort;
+import ru.krug.backend.auth.application.service.KeycloakIdentityFactory;
 import ru.krug.backend.auth.domain.model.EmailVerification;
 
 /**
@@ -26,19 +27,27 @@ public class VerifyEmailService {
     private final KeycloakAdminPort keycloak;
     private final TokenExchangePort tokenExchange;
     private final PendingSessionPort pendingSessions;
-    private final AuthSessionService sessions;
+    private final LoginService loginGate;
+    private final KeycloakIdentityFactory identities;
 
     public VerifyEmailService(VerifyEmailTx verificationTx, KeycloakAdminPort keycloak,
                               TokenExchangePort tokenExchange,
-                              PendingSessionPort pendingSessions, AuthSessionService sessions) {
+                              PendingSessionPort pendingSessions, LoginService loginGate,
+                              KeycloakIdentityFactory identities) {
         this.verificationTx = verificationTx;
         this.keycloak = keycloak;
         this.tokenExchange = tokenExchange;
         this.pendingSessions = pendingSessions;
-        this.sessions = sessions;
+        this.loginGate = loginGate;
+        this.identities = identities;
     }
 
-    public AuthSessionView verify(VerifyEmailCommand command, String requestId) {
+    /**
+     * Verifies the email code and then applies the same second-factor gate as
+     * {@code /auth/login} (#91): with the installation policy on, the response is a
+     * {@code 202} ENROLL/TOTP challenge and no session, never a direct session.
+     */
+    public LoginOutcome verify(VerifyEmailCommand command, String requestId) {
         EmailVerification verification = verificationTx.attempt(command.verificationId(),
                 command.code());
 
@@ -71,6 +80,7 @@ public class VerifyEmailService {
         KeycloakIdentity identity = new KeycloakIdentity(
                 verification.keycloakUserId().toString(), verification.email(), true,
                 verification.email(), verification.displayName());
-        return sessions.session(identity, tokens, requestId);
+        return loginGate.complete(identity, tokens,
+                identities.localUserId(identity.subject()), requestId);
     }
 }

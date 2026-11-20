@@ -163,6 +163,60 @@ async function readMultipartFile(request: Request): Promise<MultipartFilePart | 
   return null;
 }
 
+interface MultipartFormPart {
+  fileName: string;
+  contentType: string | null;
+  bytes: Uint8Array;
+}
+
+interface MultipartFormBody {
+  file: MultipartFormPart | null;
+  fields: Record<string, string>;
+}
+
+/**
+ * #93: parse one multipart request into the `file` part plus plain text fields
+ * (currently `chat_id`). Mirrors `readMultipartFile` byte handling so a binary
+ * image is never decoded as UTF-8.
+ */
+async function readMultipartForm(request: Request): Promise<MultipartFormBody | null> {
+  const contentType = request.headers.get('content-type') ?? '';
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
+  if (!boundary) return null;
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  let raw = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    raw += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  const fields: Record<string, string> = {};
+  let file: MultipartFormPart | null = null;
+  for (const part of raw.split(`--${boundary}`)) {
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd < 0) continue;
+    const headers = part.slice(0, headerEnd);
+    const disposition = /content-disposition:([^\r\n]+)/i.exec(headers)?.[1] ?? '';
+    const name = /name="([^"]*)"/i.exec(disposition)?.[1];
+    if (!name) continue;
+    let body = part.slice(headerEnd + 4);
+    if (body.endsWith('\r\n')) body = body.slice(0, -2);
+    const fileName = /filename="([^"]*)"/i.exec(disposition)?.[1];
+    if (fileName !== undefined) {
+      if (name === 'file') {
+        const partContentType = /content-type:\s*([^\r\n]+)/i.exec(headers)?.[1]?.trim();
+        file = {
+          fileName: fileName || 'image',
+          contentType: partContentType ?? null,
+          bytes: Uint8Array.from(body, (char) => char.charCodeAt(0)),
+        };
+      }
+      continue;
+    }
+    fields[name] = body;
+  }
+  return { file, fields };
+}
+
 interface ErrorOptions {
   details?: Record<string, unknown>;
   retryAfterSeconds?: number;
@@ -234,8 +288,39 @@ function workspaceRight(db: MockDb, workspaceId: string, permission: string): bo
   return row ? row[permission as keyof typeof row] === true : false;
 }
 
+/**
+ * #93: uploaded media images are standalone until a setter references them.
+ * They are projected as a FileItem-shaped row for the shared validation; the
+ * provenance fields are synthetic because this image has no message yet.
+ */
+function mediaImageAsFileItem(db: MockDb, fileId: string): FileItem | null {
+  const media = db.mediaImages.get(fileId);
+  if (!media) return null;
+  return {
+    id: media.id,
+    filename: media.filename,
+    size_bytes: media.size,
+    mime_type: media.mime,
+    scan_status: media.scanStatus,
+    media: { kind: 'IMAGE', metadata_source: 'NONE' },
+    chat_id: media.chatId ?? IDS.groupChat,
+    chat_name: null,
+    message_id: '00000000-0000-4000-8000-000000000000',
+    created_at: media.createdAt,
+  };
+}
+
 function imageFileView(db: MockDb, fileId: string): FileItem | null {
-  return db.fileCenterItems.find((item) => item.id === fileId) ?? null;
+  return db.fileCenterItems.find((item) => item.id === fileId) ?? mediaImageAsFileItem(db, fileId);
+}
+
+/** Chat-scoped image lookup: file-center row or a #93 upload with `chat_id`. */
+function chatImageFileView(db: MockDb, fileId: string, chatId: string): FileItem | null {
+  const item = db.fileCenterItems.find((file) => file.id === fileId);
+  if (item) return item.chat_id === chatId ? item : null;
+  const media = db.mediaImages.get(fileId);
+  if (!media || media.chatId !== chatId) return null;
+  return mediaImageAsFileItem(db, fileId);
 }
 
 /** Shared avatar/logo gate: existing, image, scan-approved. */
@@ -261,10 +346,13 @@ function imageValidationError(
 
 function twoFactorStatusView(db: MockDb): TwoFactorStatus {
   const remaining = [...db.twoFactor.recoveryCodes.values()].filter((used) => !used).length;
+  const required = db.admin.require2fa;
   return {
     enabled: db.twoFactor.enabled,
     enabled_at: db.twoFactor.enabledAt,
     recovery_codes_remaining: remaining,
+    required,
+    enrollment_required: required && !db.twoFactor.enabled,
   };
 }
 
@@ -848,6 +936,7 @@ function adminSettingsView(db: MockDb): AdminSettings {
     max_chats_per_workspace: admin.maxChatsPerWorkspace,
     max_workspace_members: admin.maxWorkspaceMembers,
     registration_open: admin.registrationOpen,
+    require_2fa: admin.require2fa,
     allowed_file_extensions: admin.allowedFileExtensions,
     updated_at: admin.updatedAt,
     updated_by: admin.updatedBy,
@@ -1538,6 +1627,28 @@ export function createHandlers(db: MockDb) {
       if (!user) return errorResponse(404, 'NOT_FOUND', 'User not found');
       user.verified = true;
       verification.consumed = true;
+      if (db.admin.require2fa) {
+        // #91: verification cannot mint a session past the installation policy.
+        const challenge = {
+          id: newUuid(),
+          userId: user.id,
+          expiresAt: Date.now() + TWO_FACTOR_CHALLENGE_TTL_SECONDS * 1000,
+          attempts: TWO_FACTOR_MAX_ATTEMPTS,
+          mode: 'ENROLL' as const,
+          pendingSecret: null,
+        };
+        db.twoFactorChallenge = challenge;
+        return HttpResponse.json(
+          {
+            challenge_id: challenge.id,
+            expires_in: TWO_FACTOR_CHALLENGE_TTL_SECONDS,
+            methods: [],
+            mode: 'ENROLL',
+            enrollment_required: true,
+          },
+          { status: 202 },
+        );
+      }
       return HttpResponse.json(issueAuthSession(db, user));
     }),
 
@@ -1593,14 +1704,18 @@ export function createHandlers(db: MockDb) {
           details: verification ? { verification_id: verification.id } : undefined,
         });
       }
-      if (db.twoFactor.enabled) {
-        // P0-4: the password is valid but the account has TOTP enabled. Tokens
-        // stay server-side until `POST /auth/2fa/verify` accepts the code.
+      if (db.twoFactor.enabled || db.admin.require2fa) {
+        // P0-4/#93: the password is valid but a second factor is required.
+        // Tokens stay server-side until `POST /auth/2fa/verify` (TOTP) or
+        // `POST /auth/2fa/enroll/verify` (mandatory enrollment) succeeds.
+        const mode: 'TOTP' | 'ENROLL' = db.twoFactor.enabled ? 'TOTP' : 'ENROLL';
         const challenge = {
           id: newUuid(),
           userId: user.id,
           expiresAt: Date.now() + TWO_FACTOR_CHALLENGE_TTL_SECONDS * 1000,
           attempts: TWO_FACTOR_MAX_ATTEMPTS,
+          mode,
+          pendingSecret: null,
         };
         db.twoFactorChallenge = challenge;
         db.twoFactorRequests.push({
@@ -1613,7 +1728,9 @@ export function createHandlers(db: MockDb) {
           {
             challenge_id: challenge.id,
             expires_in: TWO_FACTOR_CHALLENGE_TTL_SECONDS,
-            methods: ['TOTP', 'RECOVERY_CODE'],
+            methods: mode === 'TOTP' ? ['TOTP', 'RECOVERY_CODE'] : [],
+            mode,
+            enrollment_required: mode === 'ENROLL',
           },
           { status: 202 },
         );
@@ -1634,6 +1751,7 @@ export function createHandlers(db: MockDb) {
       if (
         !challenge ||
         challenge.id !== challengeId ||
+        challenge.mode !== 'TOTP' ||
         challenge.expiresAt <= Date.now() ||
         challenge.attempts <= 0
       ) {
@@ -1659,6 +1777,118 @@ export function createHandlers(db: MockDb) {
       if (!user) {
         return errorResponse(401, 'TWO_FACTOR_CHALLENGE_INVALID', 'Challenge user is gone');
       }
+      return HttpResponse.json(issueAuthSession(db, user));
+    }),
+
+    /* #93: mandatory TOTP enrollment during login (server-wide require_2fa). */
+    http.post(`${API}/auth/2fa/enroll/start`, async ({ request }) => {
+      const body = asRecord(await readJson(request));
+      const challengeId = readStringField(body, 'challenge_id');
+      if (!challengeId) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'challenge_id is required');
+      }
+      const challenge = db.twoFactorChallenge;
+      db.twoFactorRequests.push({
+        action: 'ENROLL_START',
+        password: null,
+        code: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTwoFactorError) {
+        const forced = db.forceTwoFactorError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (
+        !challenge ||
+        challenge.id !== challengeId ||
+        challenge.mode !== 'ENROLL' ||
+        challenge.expiresAt <= Date.now() ||
+        challenge.attempts <= 0
+      ) {
+        db.twoFactorChallenge = null;
+        return errorResponse(
+          401,
+          'TWO_FACTOR_CHALLENGE_INVALID',
+          'The two-factor challenge is invalid or expired',
+        );
+      }
+      if (db.twoFactor.enabled) {
+        return errorResponse(409, 'TWO_FACTOR_ALREADY_ENABLED', 'Two-factor is already enabled');
+      }
+      const secret = `${MOCK_TOTP_SECRET}${newUuid().slice(0, 4)}`;
+      challenge.pendingSecret = secret;
+      const uri = `otpauth://totp/Сова:${encodeURIComponent(MOCK_DEMO_EMAIL)}?secret=${secret}&issuer=Сова&algorithm=SHA1&digits=6&period=30`;
+      return HttpResponse.json({
+        secret,
+        otpauth_uri: uri,
+        qr_payload: uri,
+        expires_in: Math.max(1, Math.ceil((challenge.expiresAt - Date.now()) / 1000)),
+      });
+    }),
+
+    http.post(`${API}/auth/2fa/enroll/verify`, async ({ request }) => {
+      const body = asRecord(await readJson(request));
+      const challengeId = readStringField(body, 'challenge_id');
+      const code = readStringField(body, 'code');
+      if (!challengeId || !code) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Invalid two-factor payload');
+      }
+      const challenge = db.twoFactorChallenge;
+      db.twoFactorRequests.push({
+        action: 'ENROLL_VERIFY',
+        password: null,
+        code,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceTwoFactorError) {
+        const forced = db.forceTwoFactorError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (
+        !challenge ||
+        challenge.id !== challengeId ||
+        challenge.mode !== 'ENROLL' ||
+        challenge.expiresAt <= Date.now() ||
+        challenge.attempts <= 0
+      ) {
+        db.twoFactorChallenge = null;
+        return errorResponse(
+          401,
+          'TWO_FACTOR_CHALLENGE_INVALID',
+          'The two-factor challenge is invalid or expired',
+        );
+      }
+      if (!challenge.pendingSecret) {
+        return errorResponse(409, 'TWO_FACTOR_NOT_SETUP', 'Two-factor setup was not started');
+      }
+      if (code.trim() !== MOCK_TOTP_CODE) {
+        challenge.attempts -= 1;
+        if (challenge.attempts <= 0) {
+          db.twoFactorChallenge = null;
+          return errorResponse(429, 'RATE_LIMITED', 'Too many invalid codes');
+        }
+        return errorResponse(422, 'TWO_FACTOR_CODE_INVALID', 'Invalid authenticator code');
+      }
+      const user = db.authUsers.find((candidate) => candidate.id === challenge.userId);
+      if (!user) {
+        db.twoFactorChallenge = null;
+        return errorResponse(401, 'TWO_FACTOR_CHALLENGE_INVALID', 'Challenge user is gone');
+      }
+      db.twoFactor.enabled = true;
+      db.twoFactor.enabledAt = new Date().toISOString();
+      db.twoFactor.secret = challenge.pendingSecret;
+      db.twoFactor.pendingSecret = null;
+      db.twoFactor.lastStep = 1;
+      db.twoFactor.recoveryCodes = new Map(MOCK_RECOVERY_CODES.map((value) => [value, false]));
+      db.twoFactorChallenge = null;
+      // Contract: a bare `AuthSession`; codes are issued separately through
+      // `POST /me/2fa/recovery-codes` with the held token + password.
       return HttpResponse.json(issueAuthSession(db, user));
     }),
 
@@ -2014,7 +2244,7 @@ export function createHandlers(db: MockDb) {
       if (!db.twoFactor.enabled) {
         return errorResponse(409, 'TWO_FACTOR_NOT_ENABLED', 'Two-factor is not enabled');
       }
-      db.twoFactor.recoveryCodes = new Map(MOCK_RECOVERY_CODES.map((code) => [code, false]));
+      db.twoFactor.recoveryCodes = new Map(MOCK_RECOVERY_CODES.map((value) => [value, false]));
       return HttpResponse.json({
         codes: [...MOCK_RECOVERY_CODES],
         remaining: MOCK_RECOVERY_CODES.length,
@@ -2053,6 +2283,88 @@ export function createHandlers(db: MockDb) {
       }
       db.twoFactor = createMockTwoFactor();
       return new HttpResponse(null, { status: 204 });
+    }),
+
+    /*
+     * #93: one-shot device image upload. A standalone image is created (no
+     * message binding) and the returned id is applied by the existing avatar,
+     * cover or logo setters. Bytes stay in memory only.
+     */
+    http.post(`${API}/media/images`, async ({ request }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      if (db.mediaImageDelayMs > 0) await delay(db.mediaImageDelayMs);
+      const form = await readMultipartForm(request);
+      if (!form?.file) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'Multipart part "file" is missing');
+      }
+      const chatId = form.fields.chat_id ?? null;
+      db.mediaImageUploadRequests.push({
+        filename: form.file.fileName,
+        mime: form.file.contentType ?? '',
+        size: form.file.bytes.byteLength,
+        chatId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceMediaImageError) {
+        const forced = db.forceMediaImageError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (form.file.bytes.byteLength === 0) {
+        return errorResponse(422, 'IMAGE_INVALID', 'Image is empty');
+      }
+      if (form.file.bytes.byteLength > 5 * 1024 * 1024) {
+        return errorResponse(413, 'IMAGE_TOO_LARGE', 'Image is larger than 5 MiB');
+      }
+      const declared = (form.file.contentType ?? '').toLowerCase();
+      const filename = form.file.fileName.split(/[\\/]/).pop()?.slice(0, 180) ?? 'image';
+      const extension = filename.split('.').pop()?.toLowerCase() ?? '';
+      const byExtension: Record<string, string> = {
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        webp: 'image/webp',
+      };
+      const mime =
+        declared === 'image/png' || declared === 'image/jpeg' || declared === 'image/webp'
+          ? declared
+          : (byExtension[extension] ?? null);
+      if (!mime) {
+        return errorResponse(
+          415,
+          'IMAGE_TYPE_INVALID',
+          'Only PNG, JPEG or WebP images are accepted',
+        );
+      }
+      if (chatId !== null) {
+        if (!UUID_RE.test(chatId) || !db.chats[chatId]) {
+          return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+        }
+      }
+      const id = newUuid();
+      db.mediaImages.set(id, {
+        id,
+        filename,
+        mime,
+        size: form.file.bytes.byteLength,
+        scanStatus: 'CLEAN',
+        chatId,
+        createdAt: db.serverTime(),
+      });
+      // Contract `UploadedImage`: no filename/object key/EXIF.
+      return HttpResponse.json(
+        {
+          file_id: id,
+          width: 2,
+          height: 2,
+          mime,
+          size: form.file.bytes.byteLength,
+        },
+        { status: 201 },
+      );
     }),
 
     /* E8/R-03..R-04: public setup status + platform admin. */
@@ -2142,6 +2454,14 @@ export function createHandlers(db: MockDb) {
           });
         }
         next.registrationOpen = body.registration_open;
+      }
+      if (body.require_2fa !== undefined && body.require_2fa !== null) {
+        if (typeof body.require_2fa !== 'boolean') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'require_2fa must be a boolean', {
+            details: { field: 'require_2fa' },
+          });
+        }
+        next.require2fa = body.require_2fa;
       }
       if (body.allowed_file_extensions !== undefined && body.allowed_file_extensions !== null) {
         if (
@@ -4411,8 +4731,11 @@ export function createHandlers(db: MockDb) {
         next.join_policy = body.join_policy;
       }
       if (hasCover) {
-        const file = db.fileCenterItems.find((item) => item.id === body.cover_file_id);
-        if (!file || file.chat_id !== chatId) {
+        const file =
+          typeof body.cover_file_id === 'string'
+            ? chatImageFileView(db, body.cover_file_id, chatId)
+            : null;
+        if (!file) {
           return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
         }
         next.cover_file_id = file.id;
@@ -4548,8 +4871,8 @@ export function createHandlers(db: MockDb) {
           details: { field: 'file_id' },
         });
       }
-      const file = db.fileCenterItems.find((item) => item.id === fileId);
-      if (!file || file.chat_id !== chatId) {
+      const file = chatImageFileView(db, fileId, chatId);
+      if (!file) {
         return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
       }
       const isImage = (file.mime_type ?? '').startsWith('image/');
@@ -4630,8 +4953,8 @@ export function createHandlers(db: MockDb) {
           details: { field: 'file_id' },
         });
       }
-      const file = db.fileCenterItems.find((item) => item.id === fileId);
-      if (!file || file.chat_id !== chatId) {
+      const file = chatImageFileView(db, fileId, chatId);
+      if (!file) {
         return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
       }
       const isImage = (file.mime_type ?? '').startsWith('image/');

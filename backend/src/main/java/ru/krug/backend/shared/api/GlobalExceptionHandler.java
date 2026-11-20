@@ -83,9 +83,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiError> handleUploadTooLarge(MaxUploadSizeExceededException ex,
                                                          HttpServletRequest request) {
+        // The servlet multipart backstop fires before the controller for bodies above the
+        // transport limit. The direct-image API documents FILE_TOO_LARGE, not the plugin
+        // package code, so keep the error code route-specific.
+        String path = request == null ? "" : request.getRequestURI();
+        String code = path != null && path.startsWith("/api/v1/media/images")
+                ? ErrorCode.FILE_TOO_LARGE : ErrorCode.PLUGIN_PACKAGE_TOO_LARGE;
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
-                .body(error(ErrorCode.PLUGIN_PACKAGE_TOO_LARGE,
-                        "Uploaded file exceeds the size limit", Map.of(), request));
+                .body(error(code, "Uploaded file exceeds the size limit", Map.of(), request));
     }
 
     @ExceptionHandler(Exception.class)

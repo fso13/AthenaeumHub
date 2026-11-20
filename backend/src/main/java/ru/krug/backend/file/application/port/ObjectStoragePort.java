@@ -14,6 +14,13 @@ public interface ObjectStoragePort {
 
     Multipart createMultipart(String objectKey, String contentType);
 
+    /**
+     * Stores a small object in one request (the trusted direct-image pipeline). Idempotent
+     * for the same key/bytes; callers generate a fresh UUID key so a retry never overwrites
+     * another attachment.
+     */
+    void putObject(String objectKey, byte[] content, String contentType);
+
     String uploadPart(String objectKey, String multipartId, int partNo, byte[] content);
 
     void completeMultipart(String objectKey, String multipartId, List<Part> parts);

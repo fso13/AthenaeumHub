@@ -54,6 +54,17 @@ public class AttachmentDownloadHandler {
         if (attachment.messageId() != null) {
             chatAccess.requireActiveChat(scoped.workspaceId(), attachment.chatId(),
                     scoped.userId());
+        } else if (attachment.isDirectImage()) {
+            // #92: a direct image is a channel/workspace asset, not a private upload.
+            // A chat-bound one is visible to active participants of that chat; an unbound
+            // one (channel cover, workspace logo) is visible to active workspace members.
+            // The id remains unguessable and the bytes are validated static images only.
+            if (attachment.chatId() != null) {
+                chatAccess.requireActiveChat(scoped.workspaceId(), attachment.chatId(),
+                        scoped.userId());
+            } else {
+                accessGuard.requireWorkspaceAccess(scoped, attachment.workspaceId());
+            }
         } else if (!attachment.isOwnedBy(scoped.userId())) {
             throw new UploadNotFoundException();
         }

@@ -26,7 +26,7 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
             smtp_password_ciphertext, smtp_from, smtp_starttls,
             array_to_string(allowed_file_extensions, ',') AS allowed_file_extensions,
             max_chats_per_user, max_chats_per_workspace, max_workspace_members,
-            registration_open, updated_at, updated_by
+            registration_open, require_2fa, updated_at, updated_by
             """;
 
     private final EntityManager entityManager;
@@ -71,8 +71,9 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
                                max_chats_per_workspace = ?10,
                                max_workspace_members = ?11,
                                registration_open = ?12,
-                               updated_at = ?13,
-                               updated_by = ?14
+                               require_2fa = ?13,
+                               updated_at = ?14,
+                               updated_by = ?15
                          WHERE id = 1
                         """)
                 .setParameter(1, settings.setupCompletedAt() == null ? null
@@ -88,8 +89,9 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
                 .setParameter(10, settings.maxChatsPerWorkspace())
                 .setParameter(11, settings.maxWorkspaceMembers())
                 .setParameter(12, settings.registrationOpen())
-                .setParameter(13, Timestamp.from(settings.updatedAt()))
-                .setParameter(14, settings.updatedBy())
+                .setParameter(13, settings.requireTwoFactor())
+                .setParameter(14, Timestamp.from(settings.updatedAt()))
+                .setParameter(15, settings.updatedBy())
                 .executeUpdate();
     }
 
@@ -110,8 +112,9 @@ public class SystemSettingsRepositoryAdapter implements SystemSettingsRepository
                 ((Number) row[9]).intValue(),
                 ((Number) row[10]).intValue(),
                 Boolean.TRUE.equals(row[11]),
-                instant(row[12]),
-                (UUID) row[13]);
+                Boolean.TRUE.equals(row[12]),
+                instant(row[13]),
+                (UUID) row[14]);
     }
 
     private static AllowedFileExtensions allowedFileExtensions(String csv) {

@@ -1,5 +1,7 @@
 package ru.krug.backend.ops.api.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.List;
 
 /**
@@ -20,6 +22,7 @@ public record AdminSettingsResponse(
         int maxChatsPerWorkspace,
         int maxWorkspaceMembers,
         boolean registrationOpen,
+        @JsonProperty("require_2fa") boolean requireTwoFactor,
         java.time.Instant updatedAt,
         java.util.UUID updatedBy) {
 }

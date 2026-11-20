@@ -3,6 +3,7 @@ import { usePasswordAuth } from '../../auth/AuthContext';
 import { authErrorMessage } from '../../auth/errors';
 import { useCountdown } from '../../hooks/useCountdown';
 import { t } from '../../i18n/ru';
+import { TwoFactorEnrollPanel } from './TwoFactorEnrollPanel';
 
 const TOTP_RE = /^[0-9]{6}$/;
 const RECOVERY_RE = /^[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$/;
@@ -42,9 +43,11 @@ export function TwoFactorChallengeScreen() {
   const errorId = useId();
   const codeRef = useRef<HTMLInputElement>(null);
   const challenge = auth.challenge;
+  const enroll = challenge?.mode === 'ENROLL';
   const methods = challenge?.methods ?? ['TOTP'];
-  const supportsTotp = methods.includes('TOTP');
-  const supportsRecovery = methods.includes('RECOVERY_CODE');
+  const supportsTotp = !enroll && methods.includes('TOTP');
+  const supportsRecovery = !enroll && methods.includes('RECOVERY_CODE');
+  const enrollmentStartedFor = useRef<string | null>(null);
 
   const [mode, setMode] = useState<'TOTP' | 'RECOVERY_CODE'>(
     supportsTotp ? 'TOTP' : 'RECOVERY_CODE',
@@ -69,7 +72,77 @@ export function TwoFactorChallengeScreen() {
     setCode('');
   }, [expired]);
 
+  useEffect(() => {
+    // ENROLL has no code to enter before setup: request the one-time secret as
+    // soon as the screen appears. The ref makes this idempotent across the
+    // provider's re-renders and StrictMode-style double effects.
+    const challengeId = challenge?.id ?? null;
+    if (!enroll || !challengeId) {
+      enrollmentStartedFor.current = null;
+      return;
+    }
+    if (enrollmentStartedFor.current === challengeId) return;
+    enrollmentStartedFor.current = challengeId;
+    void auth.startEnrollment();
+  }, [auth, challenge?.id, enroll]);
+
   if (!challenge) return null;
+
+  if (enroll) {
+    return (
+      <main className="login-shell" aria-label={t('auth.enroll.title')}>
+        <section className="login-card">
+          <aside className="login-hero" aria-hidden="true">
+            <div className="login-hero__brand">
+              <span className="login-wordmark">{t('app.name')}</span>
+            </div>
+            <p className="login-hero__title">
+              <span>{t('auth.enroll.heroLead')}</span>
+              <strong>{t('auth.enroll.heroStrong')}</strong>
+            </p>
+          </aside>
+
+          <div className="login-pane">
+            <div className="login-form-wrap">
+              {expired ? (
+                <p className="login-status login-status--error" role="alert">
+                  {t('auth.twoFactor.expired')}
+                </p>
+              ) : (
+                <p className="login-status" role="status">
+                  {t('auth.twoFactor.expiresIn', { time: formatSeconds(secondsLeft) })}
+                </p>
+              )}
+
+              <TwoFactorEnrollPanel
+                setup={auth.enrollmentSetup}
+                status={auth.enrollmentStatus === 'idle' ? 'starting' : auth.enrollmentStatus}
+                recoveryCodes={auth.enrollmentRecoveryCodes}
+                errorText={auth.enrollmentError ? authErrorMessage(auth.enrollmentError) : null}
+                onRetry={() => void auth.startEnrollment()}
+                onVerify={async (value) => {
+                  await auth.verifyEnrollment(value);
+                }}
+                onFinish={auth.finishEnrollment}
+                finishLabel={t('auth.enroll.continueApp')}
+              />
+
+              <div className="login-switch login-switch--column">
+                <button
+                  type="button"
+                  className="login-switch__link"
+                  onClick={auth.cancelChallenge}
+                  disabled={auth.enrollmentStatus === 'verifying'}
+                >
+                  {t('auth.enroll.back')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   const normalized = mode === 'TOTP' ? code.trim() : normalizeRecoveryCode(code);
   const formatError =

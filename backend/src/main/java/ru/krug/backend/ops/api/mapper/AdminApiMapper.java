@@ -43,7 +43,8 @@ public final class AdminApiMapper {
                 view.smtp().from(), view.smtp().starttls(), view.smtp().configured(),
                 view.allowedFileExtensions(), view.maxChatsPerUser(),
                 view.maxChatsPerWorkspace(), view.maxWorkspaceMembers(),
-                view.registrationOpen(), view.updatedAt(), view.updatedBy());
+                view.registrationOpen(), view.requireTwoFactor(), view.updatedAt(),
+                view.updatedBy());
     }
 
     public static AdminOverviewResponse toResponse(AdminOverviewView view) {
@@ -106,6 +107,7 @@ public final class AdminApiMapper {
                 request.smtpStarttls(), request.allowedFileExtensions(),
                 request.maxChatsPerUser(), request.maxChatsPerWorkspace(),
                 request.maxWorkspaceMembers(), request.registrationOpen(),
-                request.completeSetup(), request.setupCompleted());
+                request.requireTwoFactor(), request.completeSetup(),
+                request.setupCompleted());
     }
 }

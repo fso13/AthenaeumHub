@@ -5,6 +5,7 @@ import ru.krug.backend.file.api.dto.FileItemResponse;
 import ru.krug.backend.file.api.dto.FileMediaResponse;
 import ru.krug.backend.file.api.dto.FilePageResponse;
 import ru.krug.backend.file.api.dto.FileQuotaSummaryResponse;
+import ru.krug.backend.file.api.dto.ImageUploadResponse;
 import ru.krug.backend.file.api.dto.MediaMetadataRequest;
 import ru.krug.backend.file.api.dto.PreflightDecisionResponse;
 import ru.krug.backend.file.api.dto.PreflightQuotaResponse;
@@ -18,6 +19,7 @@ import ru.krug.backend.file.application.model.FileItemView;
 import ru.krug.backend.file.application.model.FileMediaView;
 import ru.krug.backend.file.application.model.FilePageView;
 import ru.krug.backend.file.application.model.FileQuotaSummaryView;
+import ru.krug.backend.file.application.model.ImageUploadView;
 import ru.krug.backend.file.application.model.MediaMetadataInput;
 import ru.krug.backend.file.application.model.PreflightView;
 import ru.krug.backend.file.application.model.UploadPartView;
@@ -43,6 +45,11 @@ public final class FileApiMapper {
     public static DownloadUrlResponse toResponse(DownloadUrlView view) {
         return new DownloadUrlResponse(view.url(), view.expiresAt(), view.sizeBytes(),
                 view.sha256());
+    }
+
+    public static ImageUploadResponse toResponse(ImageUploadView view) {
+        return new ImageUploadResponse(view.fileId(), view.width(), view.height(), view.mime(),
+                view.size());
     }
 
     public static WorkspaceLimitsResponse toResponse(WorkspaceLimitsView view) {

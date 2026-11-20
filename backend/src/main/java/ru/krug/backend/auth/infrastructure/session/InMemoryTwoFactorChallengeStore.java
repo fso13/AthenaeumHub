@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import ru.krug.backend.auth.application.model.KeycloakIdentity;
 import ru.krug.backend.auth.application.model.TokenSet;
+import ru.krug.backend.auth.application.model.TwoFactorChallengeMode;
 import ru.krug.backend.auth.application.port.AuthBffSettings;
 import ru.krug.backend.auth.application.port.TwoFactorChallengePort;
 import ru.krug.backend.shared.application.port.ClockPort;
@@ -23,7 +24,7 @@ public class InMemoryTwoFactorChallengeStore implements TwoFactorChallengePort {
     private static final int MAX_ENTRIES = 20_000;
 
     private record Stored(UUID userId, KeycloakIdentity identity, TokenSet tokens, int attempts,
-                          Instant expiresAt) {
+                          Instant expiresAt, TwoFactorChallengeMode mode) {
     }
 
     private final ConcurrentHashMap<UUID, Stored> challenges = new ConcurrentHashMap<>();
@@ -37,13 +38,13 @@ public class InMemoryTwoFactorChallengeStore implements TwoFactorChallengePort {
 
     @Override
     public UUID store(UUID userId, KeycloakIdentity identity, TokenSet tokens,
-                      Instant expiresAt) {
+                      Instant expiresAt, TwoFactorChallengeMode mode) {
         if (challenges.size() > MAX_ENTRIES) {
             Instant now = clock.now();
             challenges.entrySet().removeIf(entry -> !now.isBefore(entry.getValue().expiresAt()));
         }
         UUID id = UUID.randomUUID();
-        challenges.put(id, new Stored(userId, identity, tokens, 0, expiresAt));
+        challenges.put(id, new Stored(userId, identity, tokens, 0, expiresAt, mode));
         return id;
     }
 
@@ -71,7 +72,7 @@ public class InMemoryTwoFactorChallengeStore implements TwoFactorChallengePort {
                 return null;
             }
             return new Stored(value.userId(), value.identity(), value.tokens(), attempts,
-                    value.expiresAt());
+                    value.expiresAt(), value.mode());
         });
     }
 
@@ -93,6 +94,6 @@ public class InMemoryTwoFactorChallengeStore implements TwoFactorChallengePort {
 
     private static Challenge toChallenge(UUID id, Stored value) {
         return new Challenge(id, value.userId(), value.identity(), value.tokens(),
-                value.attempts(), value.expiresAt());
+                value.attempts(), value.expiresAt(), value.mode());
     }
 }

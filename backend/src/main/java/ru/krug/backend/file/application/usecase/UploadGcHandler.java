@@ -110,6 +110,11 @@ public class UploadGcHandler {
                 || attachment.messageId() != null) {
             return;
         }
+        // #92: direct images have no upload session and are referenced by avatar/cover/logo
+        // rows, not by messages. They must not be deleted by the upload TTL GC.
+        if (attachment.isDirectImage() || attachment.uploadId() == null) {
+            return;
+        }
         Instant now = clock.now();
         attachmentRepository.save(attachment.markDeleted(now));
         try {

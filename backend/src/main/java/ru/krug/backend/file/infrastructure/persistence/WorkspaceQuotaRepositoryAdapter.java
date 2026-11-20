@@ -137,6 +137,9 @@ public class WorkspaceQuotaRepositoryAdapter implements WorkspaceQuotaRepository
                          WHERE workspace_id = ?1
                            AND status IN ('READY', 'BOUND')
                            AND deleted_at IS NULL
+                           -- #92: direct images are bounded (5 MiB) and have no upload/quota
+                           -- reservation; counting them here would create permanent drift.
+                           AND source = 'UPLOAD'
                         """)
                 .setParameter(1, workspaceId)
                 .getSingleResult();

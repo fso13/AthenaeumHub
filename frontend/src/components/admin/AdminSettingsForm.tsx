@@ -17,6 +17,7 @@ interface FormState {
   maxChatsPerWorkspace: string;
   maxWorkspaceMembers: string;
   registrationOpen: boolean;
+  require2fa: boolean;
   allowedFileExtensions: string;
   testEmail: string;
 }
@@ -50,6 +51,7 @@ function initialForm(settings: AdminSettings, defaultTestEmail: string): FormSta
     maxChatsPerWorkspace: String(settings.max_chats_per_workspace),
     maxWorkspaceMembers: String(settings.max_workspace_members),
     registrationOpen: settings.registration_open,
+    require2fa: settings.require_2fa === true,
     allowedFileExtensions: (settings.allowed_file_extensions ?? []).join(', '),
     testEmail: defaultTestEmail,
   };
@@ -173,6 +175,7 @@ export function AdminSettingsForm({
     maxWorkspace: useId(),
     maxMembers: useId(),
     registration: useId(),
+    require2fa: useId(),
     testEmail: useId(),
   };
 
@@ -225,6 +228,7 @@ export function AdminSettingsForm({
       max_chats_per_workspace: maxChatsPerWorkspace,
       max_workspace_members: maxWorkspaceMembers,
       registration_open: form.registrationOpen,
+      require_2fa: form.require2fa,
       allowed_file_extensions: allowedFileExtensions,
     };
   };
@@ -436,6 +440,30 @@ export function AdminSettingsForm({
           </p>
         ) : null}
       </fieldset>
+
+      {mode === 'admin' ? (
+        <fieldset className="admin-form__section" disabled={saving}>
+          <legend className="admin-form__legend">{t('admin.form.securitySection')}</legend>
+          <p className="admin-form__hint">{t('admin.form.securitySectionHint')}</p>
+          <div className="admin-form__check">
+            <input
+              id={ids.require2fa}
+              type="checkbox"
+              checked={form.require2fa}
+              aria-describedby={`${ids.require2fa}-warning`}
+              onChange={(event) => update('require2fa', event.target.checked)}
+            />
+            <label htmlFor={ids.require2fa}>{t('admin.form.require2fa')}</label>
+          </div>
+          <p
+            className={`admin-form__warning${form.require2fa ? '' : ' admin-form__hint'}`}
+            id={`${ids.require2fa}-warning`}
+            role={form.require2fa ? 'alert' : undefined}
+          >
+            {t('admin.form.require2faWarning')}
+          </p>
+        </fieldset>
+      ) : null}
 
       <fieldset className="admin-form__section" disabled={saving}>
         <legend className="admin-form__legend">{t('setup.businessSection')}</legend>

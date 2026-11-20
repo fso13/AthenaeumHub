@@ -36,7 +36,7 @@ import { E2eeBanner } from './E2eeBanner';
 import { GroupCallPicker } from './GroupCallPicker';
 import { RecordingBar } from './RecordingBar';
 import { SafetyNumberDialog } from './SafetyNumberDialog';
-import { ChatIcon, CloseIcon, LockIcon, PaperclipIcon, SearchIcon } from './Icons';
+import { ChatIcon, CloseIcon, LockIcon, PaperclipIcon, PinIcon, SearchIcon } from './Icons';
 import { MessageList } from './MessageList';
 import { PluginActionsBar } from './plugins/PluginActionsBar';
 import { PollCreateDialog } from './plugins/PollCreateDialog';
@@ -84,6 +84,7 @@ export function ChatScreen({
     return !window.matchMedia('(max-width: 1180px)').matches;
   });
   const [searchOpen, setSearchOpen] = useState(false);
+  const [pinIndex, setPinIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   // D1.1 (#76): composer plugin actions and their modal/panel handoff.
@@ -167,6 +168,41 @@ export function ChatScreen({
   }, [activeChatId, activeChatKind, store]);
 
   const readOnlyBlocked = activeChatId ? !store.canPostInChat(activeChatId) : false;
+  const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
+  const pinsState = state.chatPins;
+  const activePins =
+    activeChatId && pinsState.chatId === activeChatId
+      ? pinsState.items
+      : ([] as typeof pinsState.items);
+  const currentPin =
+    activePins.length > 0 ? activePins[Math.min(pinIndex, activePins.length - 1)] : null;
+  const currentPinnedMessage = currentPin
+    ? (slice?.messages.find((message) => message.id === currentPin.message_id) ?? null)
+    : null;
+  const currentPinPreview = currentPinnedMessage?.deleted_at
+    ? t('chat.deletedMessage')
+    : currentPinnedMessage?.text?.trim() ||
+      (currentPinnedMessage?.sticker ? t('details.pinsSticker') : t('details.pinsUnavailable'));
+
+  useEffect(() => {
+    if (!activeChatId || isE2eeChat) return;
+    if (pinsState.chatId !== activeChatId) {
+      void store.loadChatPins(activeChatId);
+    }
+  }, [activeChatId, isE2eeChat, pinsState.chatId, store]);
+
+  useEffect(() => {
+    setPinIndex(0);
+  }, [activeChatId]);
+
+  const jumpToPin = (messageId: string) => {
+    setPinIndex((index) => (activePins.length > 0 ? (index + 1) % activePins.length : 0));
+    const element = document.getElementById(`message-${messageId}`);
+    if (!element) return;
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    element.focus({ preventScroll: true });
+  };
+
   const e2eeBlock = activeChatId ? store.e2eeBlockReason(activeChatId) : null;
   const sendBlockedReason = !state.online
     ? ('offline' as const)
@@ -177,7 +213,6 @@ export function ChatScreen({
         : e2eeBlock !== null
           ? ('e2ee_blocked' as const)
           : null;
-  const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
   const callsBlockedKey = store.callDisabledReason(activeChatId);
   const callsDisabledReason = callsBlockedKey ? t(callsBlockedKey as MessageKey) : null;
   const startCall = useCallback(
@@ -555,6 +590,29 @@ export function ChatScreen({
             callActive={state.call.phase !== 'idle'}
             callDisabledReason={callsDisabledReason}
           />
+
+          {currentPin && currentPinnedMessage && !isE2eeChat ? (
+            <div className="chat-pinned-bar" role="status" aria-label={t('chat.pinnedBar')}>
+              <PinIcon aria-hidden="true" />
+              <button
+                type="button"
+                className="chat-pinned-bar__link"
+                onClick={() => jumpToPin(currentPin.message_id)}
+                title={t('chat.pinnedJump')}
+              >
+                <span className="chat-pinned-bar__label">{t('chat.pinnedMessage')}</span>
+                <span className="chat-pinned-bar__text">{currentPinPreview}</span>
+              </button>
+              {activePins.length > 1 ? (
+                <span className="chat-pinned-bar__count">
+                  {t('chat.pinnedCount', {
+                    current: Math.min(pinIndex, activePins.length - 1) + 1,
+                    total: activePins.length,
+                  })}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {searchOpen ? (
             <div className="chat-search" role="search">

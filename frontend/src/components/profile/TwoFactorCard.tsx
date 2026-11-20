@@ -1,32 +1,14 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import type { ApiError } from '../../api/problem';
-import { describeError } from '../../domain/errors';
 import { t } from '../../i18n/ru';
+import { twoFactorErrorText } from '../../profile/twoFactorErrors';
 import { useProfileWorkspaceState, useProfileWorkspaceStore } from '../../store/ChatProvider';
 import { formatDateTime } from '../admin/format';
 import { CopyIcon, RefreshIcon, ShieldIcon } from '../Icons';
+import { QrCode } from '../QrCode';
 
 type Stage = 'idle' | 'start-password' | 'setup' | 'recovery' | 'regenerate-password' | 'disable';
 
 type CopyTarget = 'secret' | 'uri' | 'codes';
-
-/**
- * P0-4 (#82) translated authenticator failures. Only documented contract codes
- * are explained; unknown details never reach the DOM.
- */
-function twoFactorErrorText(error: ApiError): string {
-  if (error.status === 403) return t('profile.twoFactor.reauthFailed');
-  if (error.status === 429) return t('profile.twoFactor.rateLimited');
-  if (error.status === 503) return t('profile.twoFactor.unavailable');
-  if (error.status === 422) return t('profile.twoFactor.codeInvalid');
-  if (error.status === 409) {
-    if (error.code === 'TWO_FACTOR_ALREADY_ENABLED') return t('profile.twoFactor.alreadyEnabled');
-    if (error.code === 'TWO_FACTOR_NOT_SETUP') return t('profile.twoFactor.notSetup');
-    return t('profile.twoFactor.notEnabled');
-  }
-  if (error.isNetwork || error.status >= 500) return describeError(error).message;
-  return t('profile.twoFactor.genericError');
-}
 
 async function writeClipboard(value: string): Promise<void> {
   if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
@@ -284,6 +266,14 @@ export function TwoFactorCard() {
         <div className="twofactor-setup">
           <h5>{t('profile.twoFactor.setupTitle')}</h5>
           <p className="mini-card__note">{t('profile.twoFactor.once')}</p>
+          <div className="twofactor-qr">
+            <QrCode
+              value={twoFactor.setup.qr_payload.trim() || twoFactor.setup.otpauth_uri}
+              label={t('profile.twoFactor.qrAlt')}
+              size={176}
+            />
+            <p className="mini-card__note">{t('profile.twoFactor.qrHint')}</p>
+          </div>
           <div className="twofactor-secret">
             <span className="mini-row mini-row--muted">{t('profile.twoFactor.secretLabel')}</span>
             <div className="twofactor-secret__row">

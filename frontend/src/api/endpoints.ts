@@ -64,6 +64,7 @@ import type {
   FilePage,
   FileScanStatusFilter,
   InviteAcceptResult,
+  MediaImage,
   MeResponse,
   MessageCreateBody,
   MessageDeleteScope,
@@ -257,6 +258,59 @@ export interface PluginPackageUploadOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * #93 device image upload. The optional `chat_id` scopes a cover/icon so the
+ * existing setters accept it; profile/logo uploads omit it and the server binds
+ * the direct image to the caller's active workspace.
+ */
+export interface ImageUploadOptions extends PluginPackageUploadOptions {
+  /** Optional chat binding for a cover/icon; profile/logo uploads omit it. */
+  chatId?: string | null;
+}
+
+/**
+ * Tolerant `POST /media/images` normalization: the only value the next request
+ * needs is `file_id`. A future nested `file`/`attachment` projection is
+ * accepted instead of surfacing a broken UI over a successful upload.
+ */
+function normalizeMediaImage(data: unknown): MediaImage {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    throw ApiError.client('INVALID_RESPONSE', 'Image upload response is not an object');
+  }
+  const record = data as Record<string, unknown>;
+  const nested =
+    record.file !== null && typeof record.file === 'object'
+      ? (record.file as Record<string, unknown>)
+      : record.attachment !== null && typeof record.attachment === 'object'
+        ? (record.attachment as Record<string, unknown>)
+        : null;
+  const fileId =
+    typeof record.file_id === 'string'
+      ? record.file_id
+      : typeof record.id === 'string'
+        ? record.id
+        : typeof nested?.file_id === 'string'
+          ? nested.file_id
+          : typeof nested?.id === 'string'
+            ? nested.id
+            : null;
+  if (!fileId) {
+    throw ApiError.client('INVALID_RESPONSE', 'Image upload response has no file_id');
+  }
+  const readString = (key: string): string | null => {
+    const value = record[key] ?? nested?.[key];
+    return typeof value === 'string' ? value : null;
+  };
+  const size = record.size_bytes ?? record.size ?? nested?.size_bytes ?? nested?.size;
+  return {
+    file_id: fileId,
+    filename: readString('filename'),
+    mime_type: readString('mime_type') ?? readString('mime'),
+    size_bytes: typeof size === 'number' ? size : null,
+    scan_status: readString('scan_status'),
+  };
+}
+
 export interface ChatApi {
   bootstrapDevSession(): Promise<Session>;
   getMe(): Promise<MeResponse>;
@@ -282,6 +336,14 @@ export interface ChatApi {
   verifyMyTwoFactor(code: string): Promise<TwoFactorStatus>;
   disableMyTwoFactor(body: TwoFactorDisableRequest): Promise<void>;
   regenerateMyRecoveryCodes(password: string): Promise<TwoFactorRecoveryCodes>;
+
+  /**
+   * #93 `POST /media/images` (multipart, one `file` part). The trusted
+   * direct-image path validates magic bytes and returns its `file_id`; the
+   * caller applies it through the existing avatar/cover/logo setters. Never
+   * sends storage keys or presigned URLs.
+   */
+  uploadImage(file: File, options?: ImageUploadOptions): Promise<MediaImage>;
 
   /*
    * P0-4 (#82): workspace settings, logo, invite links and the OWNER/ADMIN/
@@ -812,6 +874,23 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
           password,
         });
         return response.data;
+      });
+    },
+
+    uploadImage(file, options = {}) {
+      return withReauth(async () => {
+        // Multipart field name is fixed by the contract; the optional chat
+        // binding lets the chat cover/icon setters accept the new image.
+        const form = new FormData();
+        form.append('file', file, file.name);
+        if (options.chatId) form.append('chat_id', options.chatId);
+        const response = await client.postFormData<unknown>('/media/images', form, {
+          // A 5 MiB image can exceed the default request timeout on slow links.
+          timeoutMs: 120_000,
+          signal: options.signal,
+          onProgress: options.onProgress,
+        });
+        return normalizeMediaImage(response.data);
       });
     },
 

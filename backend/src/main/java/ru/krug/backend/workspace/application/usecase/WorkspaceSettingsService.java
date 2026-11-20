@@ -70,7 +70,8 @@ public class WorkspaceSettingsService {
                 ? requireDescription(command.description()) : null;
         UUID logoFileId = null;
         if (command.logoPresent() && command.logoFileId() != null) {
-            logoFileId = logos.requireLogo(workspaceId, command.logoFileId());
+            logoFileId = logos.requireLogo(workspaceId, principal.userId(),
+                    command.logoFileId());
             // The file port activates the narrow file-resolve role; restore the tenant GUC
             // before writing the workspace row and the audit chain.
             tenantContext.activate(principal.withWorkspace(workspaceId));

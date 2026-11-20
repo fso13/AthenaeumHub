@@ -19,6 +19,7 @@ public record SystemSettings(
         int maxChatsPerWorkspace,
         int maxWorkspaceMembers,
         boolean registrationOpen,
+        boolean requireTwoFactor,
         Instant updatedAt,
         UUID updatedBy) {
 
@@ -38,7 +39,7 @@ public record SystemSettings(
     public static SystemSettings defaults(Instant now) {
         return new SystemSettings(null, SmtpSettings.empty(), AllowedFileExtensions.defaults(),
                 DEFAULT_MAX_CHATS_PER_USER, DEFAULT_MAX_CHATS_PER_WORKSPACE,
-                DEFAULT_MAX_WORKSPACE_MEMBERS, true, now, null);
+                DEFAULT_MAX_WORKSPACE_MEMBERS, true, false, now, null);
     }
 
     public boolean setupCompleted() {
@@ -59,13 +60,13 @@ public record SystemSettings(
         }
         return new SystemSettings(Objects.requireNonNull(completedAt, "completedAt"), smtp,
                 allowedFileExtensions, maxChatsPerUser, maxChatsPerWorkspace,
-                maxWorkspaceMembers, registrationOpen, completedAt, actor);
+                maxWorkspaceMembers, registrationOpen, requireTwoFactor, completedAt, actor);
     }
 
     public SystemSettings updated(Instant now, UUID actor) {
         return new SystemSettings(setupCompletedAt, smtp, allowedFileExtensions,
                 maxChatsPerUser, maxChatsPerWorkspace, maxWorkspaceMembers, registrationOpen,
-                now, actor);
+                requireTwoFactor, now, actor);
     }
 
     private static void requireLimit(int value, String name) {

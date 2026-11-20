@@ -34,7 +34,9 @@ public interface AttachmentJpaRepository extends JpaRepository<AttachmentEntity,
 
     @Query("""
             select a from AttachmentEntity a
-             where a.status = 'READY' and a.messageId is null and a.createdAt < :cutoff
+             where a.status = 'READY' and a.messageId is null
+               and a.uploadId is not null and a.source = 'UPLOAD'
+               and a.createdAt < :cutoff
              order by a.createdAt asc
             """)
     List<AttachmentEntity> findUnboundReadyBefore(@Param("cutoff") Instant cutoff,

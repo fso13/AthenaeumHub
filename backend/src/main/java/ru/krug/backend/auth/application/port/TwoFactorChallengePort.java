@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import ru.krug.backend.auth.application.model.KeycloakIdentity;
 import ru.krug.backend.auth.application.model.TokenSet;
+import ru.krug.backend.auth.application.model.TwoFactorChallengeMode;
 
 /**
  * Short-lived server-side bridge between a successful password grant and the second factor
@@ -17,7 +18,14 @@ import ru.krug.backend.auth.application.model.TokenSet;
  */
 public interface TwoFactorChallengePort {
 
-    UUID store(UUID userId, KeycloakIdentity identity, TokenSet tokens, Instant expiresAt);
+    UUID store(UUID userId, KeycloakIdentity identity, TokenSet tokens, Instant expiresAt,
+               TwoFactorChallengeMode mode);
+
+    /** Back-compat overload: the pre-#91 challenge was always a TOTP challenge. */
+    default UUID store(UUID userId, KeycloakIdentity identity, TokenSet tokens,
+                       Instant expiresAt) {
+        return store(userId, identity, tokens, expiresAt, TwoFactorChallengeMode.TOTP);
+    }
 
     /** Live challenge; an expired entry is removed and answered as empty. */
     Optional<Challenge> find(UUID challengeId);
@@ -34,11 +42,12 @@ public interface TwoFactorChallengePort {
     void discard(UUID challengeId);
 
     record Challenge(UUID id, UUID userId, KeycloakIdentity identity, TokenSet tokens,
-                     int attempts, Instant expiresAt) {
+                     int attempts, Instant expiresAt, TwoFactorChallengeMode mode) {
 
         @Override
         public String toString() {
-            return "Challenge[id=" + id + ", userId=" + userId + ", attempts=" + attempts + "]";
+            return "Challenge[id=" + id + ", userId=" + userId + ", mode=" + mode
+                    + ", attempts=" + attempts + "]";
         }
     }
 }

@@ -133,6 +133,7 @@ public class DeviceBindingFilter extends OncePerRequestFilter {
                 || path.startsWith("/api/v1/chats/")
                 || path.startsWith("/api/v1/sticker-packs")
                 || path.startsWith("/api/v1/stickers/")
+                || path.startsWith("/api/v1/media/")
                 || path.equals("/api/v1/keys/claim")
                 || deviceMutation;
     }

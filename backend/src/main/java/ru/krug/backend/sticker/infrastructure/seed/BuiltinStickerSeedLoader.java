@@ -34,7 +34,7 @@ public class BuiltinStickerSeedLoader implements ApplicationRunner {
                   JOIN sticker.sticker_packs p ON p.id = s.pack_id
                  WHERE p.builtin
                 """, Integer.class);
-        if (packs == null || packs < 2 || stickers == null || stickers < 16) {
+        if (packs == null || packs < 1 || stickers == null || stickers < 11) {
             throw new IllegalStateException("Built-in sticker catalog is incomplete: packs="
                     + packs + " stickers=" + stickers);
         }

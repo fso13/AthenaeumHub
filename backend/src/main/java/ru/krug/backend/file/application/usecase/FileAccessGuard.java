@@ -123,8 +123,8 @@ public class FileAccessGuard {
             tenantContext.activate(scoped);
             return scoped;
         }
-        if (attachment.messageId() == null) {
-            // Unbound attachments are visible only to the uploader.
+        if (attachment.messageId() == null && !attachment.isDirectImage()) {
+            // Unbound regular uploads are visible only to the uploader.
             throw new UploadNotFoundException();
         }
         tenantContext.activate(scoped);

@@ -148,10 +148,10 @@ class RealtimeWebSocketIT extends WebSocketIntegrationTestBase {
         assertStickerPayload(replay, ru.krug.backend.support.StickerTestSupport.KRUG_01);
         assertThat(replay.get("seq").asLong()).isEqualTo(1);
 
-        sendSticker(session, chatId, ru.krug.backend.support.StickerTestSupport.CATS_01,
+        sendSticker(session, chatId, ru.krug.backend.support.StickerTestSupport.KRUG_02,
                 UUID.randomUUID().toString());
         JsonNode live = client.awaitEvent("message.created", TIMEOUT);
-        assertStickerPayload(live, ru.krug.backend.support.StickerTestSupport.CATS_01);
+        assertStickerPayload(live, ru.krug.backend.support.StickerTestSupport.KRUG_02);
         assertThat(live.get("seq").asLong()).isEqualTo(2);
         client.close();
     }

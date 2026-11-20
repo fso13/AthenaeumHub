@@ -1,0 +1,10 @@
+{
+  "id": "standup-timer",
+  "name": "Standup Timer",
+  "version": "1.0.0",
+  "description": "Пятиминутный таймер для стендапа и коротких встреч.",
+  "author": "Sova Examples",
+  "entry": "index.html",
+  "permissions": [],
+  "modes": ["MANAGED"]
+}

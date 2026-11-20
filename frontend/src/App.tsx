@@ -13,6 +13,7 @@ import { AuthRoot } from './auth/AuthRoot';
 import { useAppAuth } from './auth/AuthContext';
 import { useLocation, useNavigate } from './router/router';
 import { AuthGate } from './components/auth/AuthGate';
+import { TwoFactorEnrollmentGate } from './components/auth/TwoFactorEnrollmentGate';
 import {
   AccessDeniedScreen,
   AdminForbiddenScreen,
@@ -80,7 +81,12 @@ export function App({ store, config }: AppProps) {
           <DevApp store={store} config={config} />
         ) : (
           <AuthGate>
-            <PasswordApp store={store} config={config} />
+            {/* #93: optional gate for servers that project require_2fa in
+                `GET /me/2fa`; login ENROLL and refresh 403 are the contract
+                enforcement points. */}
+            <TwoFactorEnrollmentGate>
+              <PasswordApp store={store} config={config} />
+            </TwoFactorEnrollmentGate>
           </AuthGate>
         )}
       </AuthRoot>

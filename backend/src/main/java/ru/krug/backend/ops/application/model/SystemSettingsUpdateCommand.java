@@ -19,6 +19,7 @@ public record SystemSettingsUpdateCommand(
         Integer maxChatsPerWorkspace,
         Integer maxWorkspaceMembers,
         Boolean registrationOpen,
+        Boolean requireTwoFactor,
         Boolean completeSetup,
         Boolean setupCompleted) {
 }

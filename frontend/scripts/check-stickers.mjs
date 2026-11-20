@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const stickersDir = path.join(root, 'public', 'stickers');
-const PACKS = ['krug', 'cats'];
+const PACKS = ['krug'];
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MAX_BYTES = 512 * 1024;
 
@@ -20,7 +20,7 @@ const failures = [];
 
 for (const pack of PACKS) {
   const expected = [
-    ...Array.from({ length: 8 }, (_, index) => `${String(index + 1).padStart(2, '0')}.png`),
+    ...Array.from({ length: 11 }, (_, index) => `${String(index + 1).padStart(2, '0')}.png`),
     'cover.png',
   ];
   for (const file of expected) {

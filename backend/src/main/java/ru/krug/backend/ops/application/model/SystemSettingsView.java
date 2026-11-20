@@ -13,6 +13,7 @@ public record SystemSettingsView(
         int maxChatsPerWorkspace,
         int maxWorkspaceMembers,
         boolean registrationOpen,
+        boolean requireTwoFactor,
         Instant updatedAt,
         UUID updatedBy) {
 

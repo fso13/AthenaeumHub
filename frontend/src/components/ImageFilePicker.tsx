@@ -3,6 +3,7 @@ import { safeHttpUrl } from '../files/format';
 import { t } from '../i18n/ru';
 import { useProfileWorkspaceState, useProfileWorkspaceStore } from '../store/ChatProvider';
 import type { AvatarTarget } from '../profile/profileWorkspaceStore';
+import { DeviceImageUpload } from './DeviceImageUpload';
 import { RefreshIcon } from './Icons';
 
 export interface ImageFilePickerProps {
@@ -45,6 +46,8 @@ export function ImageFilePicker({
     <section className="cover-picker" aria-label={t('imagePicker.title')}>
       <p className="cover-picker__title">{t('imagePicker.title')}</p>
       <p className="pane-sub">{t('imagePicker.hint')}</p>
+
+      <DeviceImageUpload disabled={pending} onUploaded={(fileId) => onSelect(fileId)} />
 
       {status === 'loading' || status === 'idle' ? (
         <p className="pane-sub" role="status">

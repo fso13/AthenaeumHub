@@ -46,7 +46,12 @@ export interface PendingTwoFactorChallenge {
   /** Challenge expiry in epoch ms (`expires_in` from the `202` response). */
   expiresAt: number;
   /** Methods the server accepts for this account (`TOTP`/`RECOVERY_CODE`). */
-  methods: Array<'TOTP' | 'RECOVERY_CODE'>;
+  methods: Array<'TOTP' | 'RECOVERY_CODE' | 'ENROLL'>;
+  /**
+   * #93: `ENROLL` means the server-wide policy requires the account to set up
+   * TOTP before a session is issued. `TOTP` is the ordinary challenge.
+   */
+  mode: 'TOTP' | 'ENROLL';
 }
 
 export function toAuthUser(session: StoredAuthSession): AuthUser {

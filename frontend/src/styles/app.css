@@ -14423,7 +14423,7 @@ html[data-theme='dark'] .recent-thumb--video {
 
 .reaction-picker__grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(8, 1fr);
   gap: 3px;
 }
 
@@ -17991,4 +17991,284 @@ html[data-theme='dark'] .recent-thumb--video {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* Telegram-like pinned message strip under the chat header. */
+.chat-pinned-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.chat-pinned-bar > .icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--accent-strong);
+}
+.chat-pinned-bar__link {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.chat-pinned-bar__label {
+  flex: none;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 650;
+}
+.chat-pinned-bar__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.chat-pinned-bar__count {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------------- */
+/* #93: local TOTP QR, enrollment and device image upload                    */
+/* ------------------------------------------------------------------------- */
+
+.qr-code {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  image-rendering: pixelated;
+}
+
+.qr-code__error {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11.5px;
+}
+
+.twofactor-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.twofactor-qr .qr-code {
+  width: 176px;
+  max-width: 100%;
+}
+
+.twofactor-qr .mini-card__note {
+  margin: 0;
+  text-align: center;
+}
+
+.twofactor-enroll {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.twofactor-enroll h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 19px;
+  letter-spacing: -0.02em;
+}
+
+.twofactor-enroll__qr {
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.twofactor-enroll__qr .qr-code {
+  width: 208px;
+  max-width: 100%;
+}
+
+.twofactor-enroll__secret {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-size: 11px;
+}
+
+.twofactor-enroll__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.twofactor-enroll__actions .login-submit {
+  flex: 1 1 180px;
+}
+
+.device-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 10px 0 4px;
+  padding: 11px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+}
+
+.device-upload__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.device-upload__title {
+  margin: 0;
+  color: var(--text);
+  font-size: 11.8px;
+  font-weight: 650;
+}
+
+.device-upload__format {
+  color: var(--text-3);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.device-upload__choose {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.device-upload__input {
+  width: 100%;
+  max-width: 100%;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+}
+
+.device-upload__input::file-selector-button {
+  margin-right: 8px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.device-upload__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.device-upload__preview {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding-top: 4px;
+}
+
+.device-upload__preview img {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+  object-fit: cover;
+}
+
+.device-upload__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.device-upload__name {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-upload__progress {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.device-upload__progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.device-upload__done {
+  color: var(--accent-strong);
+  font-size: 10.8px;
+  font-weight: 600;
+}
+
+.device-upload__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 10.8px;
+}
+
+.admin-form__warning {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 9px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.45;
 }

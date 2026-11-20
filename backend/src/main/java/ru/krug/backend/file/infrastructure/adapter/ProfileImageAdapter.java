@@ -24,10 +24,13 @@ import ru.krug.backend.workspace.application.port.WorkspaceLogoPort;
 /**
  * Avatar and workspace-logo validation over the existing managed-attachment pipeline.
  *
- * <p>No new upload endpoint: the caller uploads through the regular file flow and
- * references the resulting id. User avatars must be owned by the caller; workspace logos
- * must be in the same workspace. Both are image-only and fail closed on AV
- * ({@code 409 ATTACHMENT_NOT_READY}, {@code 423 ATTACHMENT_QUARANTINED}).</p>
+ * <p>Images are uploaded either through the regular file flow or through the trusted
+ * {@code POST /media/images} pipeline ({@code source=DIRECT_IMAGE}, READY/SKIPPED). User
+ * avatars must be owned by the caller. Workspace logos must be in the same workspace, except
+ * that a caller-owned direct image may be reused across the caller's workspaces (the
+ * {@code manage_workspace} check happens before this port). Both are image-only and fail
+ * closed on AV ({@code 409 ATTACHMENT_NOT_READY}, {@code 423 ATTACHMENT_QUARANTINED}).
+ * Arbitrary attachments from another workspace are still hidden as 404.
  */
 @Component
 public class ProfileImageAdapter implements UserAvatarPort, WorkspaceLogoPort {
@@ -55,9 +58,10 @@ public class ProfileImageAdapter implements UserAvatarPort, WorkspaceLogoPort {
     }
 
     @Override
-    public UUID requireLogo(UUID workspaceId, UUID attachmentId) {
+    public UUID requireLogo(UUID workspaceId, UUID userId, UUID attachmentId) {
         Attachment attachment = resolve(attachmentId)
-                .filter(candidate -> candidate.workspaceId().equals(workspaceId))
+                .filter(candidate -> candidate.workspaceId().equals(workspaceId)
+                        || (candidate.isDirectImage() && candidate.userId().equals(userId)))
                 .orElseThrow(() -> DomainException.notFound("Attachment not found"));
         requireImage(attachment, ErrorCode.WORKSPACE_LOGO_INVALID, "logo");
         return attachment.id();

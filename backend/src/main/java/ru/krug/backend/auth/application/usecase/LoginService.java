@@ -110,9 +110,26 @@ public class LoginService {
             return LoginOutcome.authenticated(sessions.session(identity, tokens, requestId));
         }
         var localUserId = identities.localUserId(identity.subject());
+        return complete(identity, tokens, localUserId, requestId);
+    }
+
+    /**
+     * Shared second-factor gate for flows that already authenticated the password/email
+     * factor. Used by {@link VerifyEmailService} as well, so email verification cannot
+     * mint a session while the installation policy requires 2FA (#91).
+     */
+    public LoginOutcome complete(KeycloakIdentity identity, TokenSet tokens,
+                                 java.util.UUID localUserId, String requestId) {
+        if (twoFactor == null) {
+            return LoginOutcome.authenticated(sessions.session(identity, tokens, requestId));
+        }
         Optional<TwoFactorSettings> enabled = twoFactor.findEnabled(localUserId, requestId);
         if (enabled.isPresent()) {
             return LoginOutcome.challenge(twoFactor.challenge(localUserId, identity, tokens));
+        }
+        if (twoFactor.twoFactorRequired()) {
+            return LoginOutcome.challenge(
+                    twoFactor.enrollmentChallenge(localUserId, identity, tokens));
         }
         return LoginOutcome.authenticated(sessions.session(identity, tokens, requestId));
     }

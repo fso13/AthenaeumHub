@@ -91,4 +91,10 @@ public class AuthBffSettingsAdapter implements AuthBffSettings {
     public String twoFactorIssuer() {
         return properties.twoFactor().issuer();
     }
+
+    @Override
+    public boolean requireTwoFactor() {
+        // No database settings in unit-test/back-compat construction -> policy defaults off.
+        return systemSettings != null && systemSettings.current().requireTwoFactor();
+    }
 }
