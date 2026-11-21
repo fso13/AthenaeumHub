@@ -103,23 +103,20 @@
 
 ### Полный прогон
 
-| Команда                                                   | Результат                                                                                                                                                                                                                                                                   |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npx vitest run`                                          | **1312 passed / 1 failed / 1313**. Единственный сбой — 15-секундный таймаут axe-теста `PluginActions.test.tsx` под параллельной нагрузкой общего workspace (load average ≈ 60); отдельным прогоном файл проходит **10/10** (сам axe-тест занимает ~10.9 с при пороге 15 с). |
-| `npm run lint`                                            | 0 errors (1 pre-existing warning в `src/e2ee/app/chatBridgeSupport.test.ts`, не относится к #97).                                                                                                                                                                           |
-| `npm run format:check`                                    | passed для всех файлов #97.                                                                                                                                                                                                                                                 |
-| `npm run contract:check`                                  | passed: 155 operations, 204 schemas, generated types in sync.                                                                                                                                                                                                               |
-| `npm run security:check`                                  | passed: 412 files, no XSS sinks/token logs.                                                                                                                                                                                                                                 |
-| `npm run stickers:check`, `npm run session-writers:check` | passed.                                                                                                                                                                                                                                                                     |
-| `npm run build` (`tsc --noEmit` + vite build)             | passed.                                                                                                                                                                                                                                                                     |
+| Команда                                       | Результат                                                                                                                                                                                                                                                      |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run check`                               | **passed, exit 0**: `lint` (0 errors, 1 pre-existing warning в `src/e2ee/app/chatBridgeSupport.test.ts`), `format:check`, `contract:check` (155 operations / 204 schemas), `stickers:check`, `security:check`, `session-writers:check`, `vitest run`, `build`. |
+| `npx vitest run`                              | **1313 passed / 130 files** (в полном прогоне `check`; отдельный повтор с `--maxWorkers=2` под нагрузкой общего workspace — тоже 1313/1313).                                                                                                                   |
+| `npm run lint`                                | 0 errors.                                                                                                                                                                                                                                                      |
+| `npm run format:check`                        | passed для всех файлов.                                                                                                                                                                                                                                        |
+| `npm run contract:check`                      | passed: 155 operations, 204 schemas, generated types in sync.                                                                                                                                                                                                  |
+| `npm run security:check`                      | passed: 412 files, no XSS sinks/token logs.                                                                                                                                                                                                                    |
+| `npm run build` (`tsc --noEmit` + vite build) | passed.                                                                                                                                                                                                                                                        |
 
-`npm run check` в общем рабочем дереве доходит до тестового шага; его единственный
-сбой — описанный выше таймаут `PluginActions.test.tsx` под нагрузкой. Остальные шаги
-`check` зелёные: `lint`, `format:check`, `contract:check`, `stickers:check`,
-`security:check`, `session-writers:check`; `npm run build` (`tsc --noEmit` + vite
-build) запускался отдельно и прошёл. Тестовый шаг прогоняется повторно с низкой
-параллельностью (`npx vitest run --maxWorkers=2`), чтобы исключить таймауты из-за
-общей нагрузки. Ни один из посторонних файлов не входит в зону #97.
+> Общий workspace параллельно используется другими агентами: промежуточные прогоны
+> под load average ≈ 60 давали единичные таймауты axe-тестов в **сторонних** наборах
+> (`WorkspaceBots`, `PluginActions`); каждый такой файл отдельно проходит, а финальный
+> `npm run check` и полный прогон с низкой параллельностью — зелёные.
 
 ## 7. Ограничения и осознанные решения
 
