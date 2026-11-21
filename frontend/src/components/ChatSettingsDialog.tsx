@@ -12,7 +12,6 @@ import type {
 } from '../api/types';
 import type { ApiError } from '../api/problem';
 import { describeError } from '../domain/errors';
-import { safeHttpUrl } from '../files/format';
 import { t, type MessageKey } from '../i18n/ru';
 import {
   useAvatarsState,
@@ -28,10 +27,12 @@ import {
   defaultChatPermissions,
 } from '../store/chatStore';
 import { Avatar } from './Avatar';
+import { ArtworkImage } from './ArtworkImage';
 import { AdminConfirmDialog } from './admin/AdminConfirmDialog';
 import type { AdminActionErrorInfo } from './admin/actionErrors';
 import { ChatInvitesPanel } from './chat-settings/ChatInvitesPanel';
 import { DeviceImageUpload } from './DeviceImageUpload';
+import { ChatBotsPanel } from './bots/ChatBotsPanel';
 import { ChatMembersPanel } from './chat-settings/ChatMembersPanel';
 import { blockErrorText, chatMembershipErrorText } from './chat-settings/errors';
 import { CloseIcon, LockIcon } from './Icons';
@@ -41,7 +42,7 @@ const FOCUSABLE =
 const NAME_MAX = 120;
 const DESCRIPTION_MAX = 500;
 
-type TabId = 'main' | 'members' | 'rights' | 'privacy' | 'danger';
+type TabId = 'main' | 'members' | 'bots' | 'rights' | 'privacy' | 'danger';
 
 function codePointLength(value: string): number {
   return Array.from(value).length;
@@ -400,6 +401,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
     setActiveTab('main');
     store.clearChatSettings();
     store.clearChatMembers();
+    store.clearChatBots();
     store.clearChatInvites();
     store.clearChatPermissions();
     store.clearChatCover();
@@ -603,6 +605,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
     : [
         { id: 'main', label: t('chatSettings.tab.main') },
         { id: 'members', label: t('chatSettings.tab.members') },
+        { id: 'bots', label: t('chatSettings.tab.bots') },
         { id: 'rights', label: t('chatSettings.tab.rights') },
         { id: 'danger', label: t('chatSettings.tab.danger') },
       ];
@@ -770,6 +773,11 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
     </>
   );
 
+  // #96: bots are GROUP/MANAGED-only; E2EE shows an honest unsupported note.
+  const botsPane = (
+    <ChatBotsPanel chat={chat} actorRole={actorChatRole} onNestedModalChange={setNestedModalOpen} />
+  );
+
   const mainPane = (
     <>
       <div className="chat-settings-head">
@@ -910,17 +918,15 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
                     aria-label={`${item.filename ?? item.id}: ${t('chatSettings.cover.select')}`}
                     onClick={() => void handleSelectCover(item.id)}
                   >
-                    {safeHttpUrl(item.media?.artwork_url) ? (
-                      <img
-                        src={safeHttpUrl(item.media?.artwork_url) ?? undefined}
-                        alt=""
-                        loading="lazy"
-                      />
-                    ) : (
-                      <span className="cover-picker__fallback" aria-hidden="true">
-                        {item.filename ?? 'IMG'}
-                      </span>
-                    )}
+                    <ArtworkImage
+                      attachmentId={item.id}
+                      media={item.media}
+                      fallback={
+                        <span className="cover-picker__fallback" aria-hidden="true">
+                          {item.filename ?? 'IMG'}
+                        </span>
+                      }
+                    />
                     <span className="cover-picker__name">
                       {item.filename ?? t('chatSettings.cover.select')}
                     </span>
@@ -967,17 +973,15 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
                     aria-label={`${item.filename ?? item.id}: ${t('chatSettings.avatar.select')}`}
                     onClick={() => void handleSelectAvatar(item.id)}
                   >
-                    {safeHttpUrl(item.media?.artwork_url) ? (
-                      <img
-                        src={safeHttpUrl(item.media?.artwork_url) ?? undefined}
-                        alt=""
-                        loading="lazy"
-                      />
-                    ) : (
-                      <span className="cover-picker__fallback" aria-hidden="true">
-                        {item.filename ?? 'IMG'}
-                      </span>
-                    )}
+                    <ArtworkImage
+                      attachmentId={item.id}
+                      media={item.media}
+                      fallback={
+                        <span className="cover-picker__fallback" aria-hidden="true">
+                          {item.filename ?? 'IMG'}
+                        </span>
+                      }
+                    />
                     <span className="cover-picker__name">
                       {item.filename ?? t('chatSettings.avatar.select')}
                     </span>
@@ -1296,6 +1300,8 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
             {activeTab === 'main' ? mainPane : null}
 
             {activeTab === 'members' ? membersPane : null}
+
+            {activeTab === 'bots' ? botsPane : null}
 
             {activeTab === 'rights' ? (
               <section className="chat-rights" aria-label={t('chatSettings.rights.title')}>

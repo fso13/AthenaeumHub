@@ -41,6 +41,13 @@ public class MessageEntity {
     @Column(name = "sender_display_name")
     private String senderDisplayName;
 
+    /** #96: USER (default) or BOT. A BOT row has botId and no senderId/device. */
+    @Column(name = "sender_type", nullable = false)
+    private String senderType;
+
+    @Column(name = "bot_id")
+    private UUID botId;
+
     @Column(name = "type", nullable = false)
     private String type;
 
@@ -118,6 +125,20 @@ public class MessageEntity {
                           UUID replyToId, UUID threadRootId, Instant createdAt, Instant editedAt,
                           Instant deletedAt, UUID deletedBy, Integer version,
                           List<String> mentions, boolean mentionAll) {
+        this(id, workspaceId, chatId, seq, senderId, senderDeviceId, senderDisplayName, type,
+                cryptoScheme, bodyCiphertext, contentMeta, clientMessageId, stickerId, pollId,
+                taskId, replyToId, threadRootId, createdAt, editedAt, deletedAt, deletedBy,
+                version, mentions, mentionAll, "USER", null);
+    }
+
+    private MessageEntity(UUID id, UUID workspaceId, UUID chatId, Long seq, UUID senderId,
+                          UUID senderDeviceId, String senderDisplayName, String type,
+                          String cryptoScheme, byte[] bodyCiphertext, Map<String, Object> contentMeta,
+                          UUID clientMessageId, UUID stickerId, UUID pollId, UUID taskId,
+                          UUID replyToId, UUID threadRootId, Instant createdAt, Instant editedAt,
+                          Instant deletedAt, UUID deletedBy, Integer version,
+                          List<String> mentions, boolean mentionAll, String senderType,
+                          UUID botId) {
         this.id = id;
         this.workspaceId = workspaceId;
         this.chatId = chatId;
@@ -125,6 +146,8 @@ public class MessageEntity {
         this.senderId = senderId;
         this.senderDeviceId = senderDeviceId;
         this.senderDisplayName = senderDisplayName;
+        this.senderType = senderType;
+        this.botId = botId;
         this.type = type;
         this.cryptoScheme = cryptoScheme;
         this.bodyCiphertext = bodyCiphertext;
@@ -163,12 +186,27 @@ public class MessageEntity {
                                        UUID stickerId, UUID pollId, UUID taskId, UUID replyToId,
                                        UUID threadRootId, List<UUID> mentions, boolean mentionAll,
                                        Instant createdAt, Integer version) {
+        return create(id, workspaceId, chatId, seq, senderId, senderDeviceId, senderDisplayName,
+                type, cryptoScheme, bodyCiphertext, contentMeta, clientMessageId, stickerId,
+                pollId, taskId, replyToId, threadRootId, mentions, mentionAll, "USER", null,
+                createdAt, version);
+    }
+
+    /** #96: create with the sender type and the author bot id. */
+    public static MessageEntity create(UUID id, UUID workspaceId, UUID chatId, Long seq,
+                                       UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                       String type, String cryptoScheme, byte[] bodyCiphertext,
+                                       Map<String, Object> contentMeta, UUID clientMessageId,
+                                       UUID stickerId, UUID pollId, UUID taskId, UUID replyToId,
+                                       UUID threadRootId, List<UUID> mentions, boolean mentionAll,
+                                       String senderType, UUID botId, Instant createdAt,
+                                       Integer version) {
         List<String> serialized = mentions == null ? List.of()
                 : mentions.stream().map(UUID::toString).toList();
         return new MessageEntity(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, type, cryptoScheme, bodyCiphertext, contentMeta,
                 clientMessageId, stickerId, pollId, taskId, replyToId, threadRootId, createdAt,
-                null, null, null, version, serialized, mentionAll);
+                null, null, null, version, serialized, mentionAll, senderType, botId);
     }
 
     public UUID getId() {
@@ -197,6 +235,14 @@ public class MessageEntity {
 
     public String getSenderDisplayName() {
         return senderDisplayName;
+    }
+
+    public String getSenderType() {
+        return senderType;
+    }
+
+    public UUID getBotId() {
+        return botId;
     }
 
     public String getType() {

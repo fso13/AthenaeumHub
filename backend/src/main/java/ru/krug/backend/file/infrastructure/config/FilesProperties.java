@@ -25,6 +25,12 @@ public class FilesProperties {
     private boolean pathStyle = true;
     private Duration uploadTtl = Duration.ofHours(24);
     private Duration downloadTtl = Duration.ofMinutes(5);
+    /**
+     * Absolute public API origin used only to build {@code media.artwork_url} for
+     * server-extracted audio covers (#97). Blank disables the advertised URL; the
+     * authenticated {@code GET /attachments/{id}/artwork} endpoint keeps working.
+     */
+    private String artworkBaseUrl = "";
 
     /** noop | clamav. */
     private String scanMode = "noop";
@@ -123,6 +129,14 @@ public class FilesProperties {
 
     public void setDownloadTtl(Duration downloadTtl) {
         this.downloadTtl = downloadTtl;
+    }
+
+    public String getArtworkBaseUrl() {
+        return artworkBaseUrl;
+    }
+
+    public void setArtworkBaseUrl(String artworkBaseUrl) {
+        this.artworkBaseUrl = artworkBaseUrl;
     }
 
     public String getScanMode() {

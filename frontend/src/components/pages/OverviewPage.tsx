@@ -10,6 +10,7 @@ import {
   useWorkspaceOverviewStore,
 } from '../../store/ChatProvider';
 import type { AppView } from '../../router/views';
+import { ArtworkImage } from '../ArtworkImage';
 import { Avatar } from '../Avatar';
 import {
   FolderIcon,
@@ -589,7 +590,6 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
           <div className="recent-media">
             {recentFiles.map((entry) => {
               const kind = fileKind(entry.attachment.mime_type, entry.attachment.filename);
-              const artwork = entry.attachment.media?.artwork_url;
               return (
                 <button
                   type="button"
@@ -598,7 +598,11 @@ export function OverviewPage({ onBack, onOpenChat, onNavigate, onOpenMembers }: 
                   onClick={() => onNavigate('files')}
                 >
                   <span className={`recent-thumb recent-thumb--${kind}`} aria-hidden="true">
-                    {artwork ? <img src={artwork} alt="" loading="lazy" /> : attachmentIcon(entry)}
+                    <ArtworkImage
+                      attachmentId={entry.attachment.id}
+                      media={entry.attachment.media}
+                      fallback={attachmentIcon(entry)}
+                    />
                   </span>
                   <span className="recent-name">
                     <b>{fileName(entry.attachment)}</b>

@@ -24,11 +24,18 @@ import type {
   ApiMessage,
   AuthUser,
   BlockedUserList,
+  Bot,
+  BotCreateRequest,
+  BotList,
+  BotToken,
+  BotUpdateRequest,
   ChangeChatMemberRoleRequest,
   ChangeWorkspaceMemberRoleRequest,
   Chat,
   ChatCoverRequest,
   ChatAvatarRequest,
+  ChatBot,
+  ChatBotList,
   ChatCreateRequest,
   ChatInviteCreateRequest,
   ChatPermissions,
@@ -443,6 +450,26 @@ export interface ChatApi {
     workspaceId: string,
     body: WorkspacePermissionUpdate,
   ): Promise<WorkspacePermissionMatrix>;
+
+  /*
+   * #96 bots. Management is JWT/OWNER-ADMIN only; the one-time `token` exists
+   * exclusively in `BotToken` responses of create/rotate and is never listed,
+   * cached or persisted by this client. The UI never calls the bot-token send
+   * endpoint; it is documented as a curl snippet only.
+   */
+  listBots(workspaceId: string): Promise<BotList>;
+  createBot(workspaceId: string, body: BotCreateRequest): Promise<BotToken>;
+  updateBot(workspaceId: string, botId: string, body: BotUpdateRequest): Promise<Bot>;
+  /** Soft delete/idempotent disable (`204`): the token stops authenticating. */
+  disableBot(workspaceId: string, botId: string): Promise<void>;
+  /** Rotates the token atomically; the returned token is shown once. */
+  rotateBotToken(workspaceId: string, botId: string): Promise<BotToken>;
+  listChatBots(chatId: string): Promise<ChatBotList>;
+  /** ACTIVE chat OWNER/ADMIN only; idempotent for an already installed bot. */
+  installChatBot(chatId: string, botId: string): Promise<ChatBot>;
+  /** `204` is idempotent: a missing installation is not an error. */
+  uninstallChatBot(chatId: string, botId: string): Promise<void>;
+
   /** #73: file-center page with metadata-only rows and the workspace quota. */
   listFiles(query?: ListFilesQuery): Promise<FilePage>;
   /**
@@ -747,6 +774,14 @@ export interface ChatApi {
   ): Promise<{ session: UploadSession; status: number }>;
   abortUpload(uploadId: string, idempotencyKey: string): Promise<void>;
   attachmentDownloadUrl(attachmentId: string): Promise<DownloadUrl>;
+  /**
+   * #97: authenticated cover bytes of a server-extracted audio artwork
+   * (`GET /attachments/{attachmentId}/artwork`). Never a presigned URL, never
+   * a token in the query — the regular API client adds `Authorization`.
+   * Errors keep the contract codes (`401`, `404` no artwork, `409` scanning,
+   * `423` quarantined, `410` deleted) and surface as `ApiError`.
+   */
+  getAttachmentArtwork(attachmentId: string): Promise<Blob>;
 
   /* E5-F: built-in stickers (managed only). */
   listStickerPacks(chatId: string): Promise<StickerPackList>;
@@ -1108,6 +1143,83 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
           body,
         );
         return response.data;
+      });
+    },
+
+    /* ------------------------------------------------------------------ */
+    /* #96 bots: management responses never cache the one-time token      */
+    /* ------------------------------------------------------------------ */
+
+    listBots(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.get<BotList>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots`,
+        );
+        return response.data;
+      });
+    },
+
+    createBot(workspaceId, body) {
+      return withReauth(async () => {
+        // The only response with a raw token; the caller keeps it in memory
+        // just long enough to show/copy it once (the store clears it on close).
+        const response = await client.post<BotToken>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    updateBot(workspaceId, botId, body) {
+      return withReauth(async () => {
+        const response = await client.patch<Bot>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}`,
+          body,
+        );
+        return response.data;
+      });
+    },
+
+    disableBot(workspaceId, botId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}`,
+        );
+      });
+    },
+
+    rotateBotToken(workspaceId, botId) {
+      return withReauth(async () => {
+        // The previous token is invalid as soon as this resolves.
+        const response = await client.post<BotToken>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/token`,
+        );
+        return response.data;
+      });
+    },
+
+    listChatBots(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<ChatBotList>(`/chats/${encodeURIComponent(chatId)}/bots`);
+        return response.data;
+      });
+    },
+
+    installChatBot(chatId, botId) {
+      return withReauth(async () => {
+        const response = await client.post<ChatBot>(`/chats/${encodeURIComponent(chatId)}/bots`, {
+          bot_id: botId,
+        });
+        return response.data;
+      });
+    },
+
+    uninstallChatBot(chatId, botId) {
+      return withReauth(async () => {
+        await client.delete(
+          `/chats/${encodeURIComponent(chatId)}/bots/${encodeURIComponent(botId)}`,
+        );
       });
     },
 
@@ -2186,6 +2298,19 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
           `/attachments/${encodeURIComponent(attachmentId)}/download-url`,
         );
         return response.data;
+      });
+    },
+
+    getAttachmentArtwork(attachmentId) {
+      return withReauth(async () => {
+        // #97: authenticated raster bytes, not a JSON body and not a
+        // presigned object URL. `getBlob` never puts the token in the URL.
+        const response = await client.getBlob(
+          `/attachments/${encodeURIComponent(attachmentId)}/artwork`,
+          undefined,
+          { accept: 'image/jpeg, image/png, image/webp, image/gif, image/bmp, image/avif' },
+        );
+        return response.blob;
       });
     },
 

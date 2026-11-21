@@ -14,6 +14,7 @@ import type {
 } from '../profile/profileWorkspaceStore';
 import type { WorkspaceOverviewState, WorkspaceOverviewStore } from '../workspace/overviewStore';
 import type { AvatarStore, AvatarsState } from '../avatars/avatarStore';
+import type { BotsState, BotsStore } from '../bots/botsStore';
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
 
@@ -120,6 +121,16 @@ export function useAvatarsStore(): AvatarStore {
 
 export function useAvatarsState(): AvatarsState {
   const store = useAvatarsStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** #96: workspace bots (one-time token stays in memory) + chat installs. */
+export function useBotsStore(): BotsStore {
+  return useChatStore().bots;
+}
+
+export function useBotsState(): BotsState {
+  const store = useBotsStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 

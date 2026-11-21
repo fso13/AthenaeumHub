@@ -21,7 +21,8 @@ public final class MessageSnapshotMapper {
     public static MessageSnapshot from(UUID workspaceId, MessageView view) {
         return new MessageSnapshot(workspaceId,
                 view.id(), view.chatId(), view.seq(), view.type(), view.senderId(),
-                view.senderDisplayName(), view.text(), view.replyToId(), view.threadRootId(),
+                view.senderDisplayName(), view.senderType(), view.botId(), view.text(),
+                view.replyToId(), view.threadRootId(),
                 view.createdAt(), view.editedAt(), view.deletedAt(), view.version(),
                 view.clientMessageId(), view.crypto(), view.stickerId(),
                 view.sticker() == null ? null : new StickerSnapshot(view.sticker().id(),

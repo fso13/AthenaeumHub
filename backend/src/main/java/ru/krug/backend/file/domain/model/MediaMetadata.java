@@ -14,10 +14,10 @@ import ru.krug.backend.file.domain.exception.UnsupportedFileTypeException;
 /**
  * Sanitized, immutable media metadata attached to a managed attachment (D1-BE2).
  *
- * <p>This is deliberately a value object, not a parser: the client parses ID3/reads
- * dimensions and the server only validates and stores the result (MVP; server extraction is
- * D1.1). Nothing here touches the media bytes, and {@code artworkUrl} is never fetched, so
- * there is no server-side SSRF.
+ * <p>This is deliberately a value object, not a parser. The client may parse ID3/read
+ * dimensions; on MANAGED audio uploads the server also extracts ID3v2.2/2.3/2.4 and M4A
+ * atoms itself (#97, {@code metadata_source=SERVER}). Nothing here touches the media bytes,
+ * and {@code artworkUrl} is never fetched, so there is no server-side SSRF.
  *
  * <p>Invariants (mirrored by {@code file.media_metadata_valid} in V29 and by the OpenAPI
  * schema):
@@ -99,6 +99,24 @@ public record MediaMetadata(
                 text(year, "media.year", MAX_YEAR_LENGTH),
                 text(genre, "media.genre", MAX_GENRE_LENGTH),
                 artwork(artworkUrl), parseSource(metadataSource));
+    }
+
+    /**
+     * Server-extracted audio metadata (#97). The values come from {@code AudioMetadataParser},
+     * which already sanitizes text and bounds duration; the artwork URL is produced by the
+     * server itself (never a tag value), so host restrictions do not apply. It is still
+     * absolute http(s), control-free and bounded, and the server never fetches it.
+     */
+    public static MediaMetadata serverAudio(Long durationMs, String title, String artist,
+                                            String album, String year, String genre,
+                                            String artworkUrl) {
+        return new MediaMetadata(MediaKind.AUDIO, clampDuration(durationMs), null, null,
+                text(title, "media.title", MAX_TITLE_LENGTH),
+                text(artist, "media.artist", MAX_ARTIST_LENGTH),
+                text(album, "media.album", MAX_ALBUM_LENGTH),
+                text(year, "media.year", MAX_YEAR_LENGTH),
+                text(genre, "media.genre", MAX_GENRE_LENGTH),
+                serverArtwork(artworkUrl), MediaMetadataSource.SERVER);
     }
 
     /**
@@ -201,12 +219,19 @@ public record MediaMetadata(
             return null;
         }
         try {
-            return sanitize(string(map.get("kind")), number(map.get("duration_ms")),
-                    integer(map.get("width")), integer(map.get("height")),
-                    string(map.get("title")), string(map.get("artist")),
-                    string(map.get("album")), string(map.get("year")),
-                    string(map.get("genre")), string(map.get("artwork_url")),
-                    string(map.get("metadata_source")));
+            return new MediaMetadata(parseKind(string(map.get("kind"))),
+                    number(map.get("duration_ms")), integer(map.get("width")),
+                    integer(map.get("height")),
+                    text(string(map.get("title")), "media.title", MAX_TITLE_LENGTH),
+                    text(string(map.get("artist")), "media.artist", MAX_ARTIST_LENGTH),
+                    text(string(map.get("album")), "media.album", MAX_ALBUM_LENGTH),
+                    text(string(map.get("year")), "media.year", MAX_YEAR_LENGTH),
+                    text(string(map.get("genre")), "media.genre", MAX_GENRE_LENGTH),
+                    // Persisted values were validated at write time (including server-built
+                    // artwork URLs); read them with the server-side URL policy so a private
+                    // origin configured for artwork is not dropped on the next read.
+                    storedArtwork(string(map.get("artwork_url"))),
+                    parseSource(string(map.get("metadata_source"))));
         } catch (RuntimeException ex) {
             return null;
         }
@@ -267,12 +292,43 @@ public record MediaMetadata(
                 || c == '\u200E' || c == '\u200F';
     }
 
+    private static Long clampDuration(Long durationMs) {
+        if (durationMs == null || durationMs < 1) {
+            return null;
+        }
+        return Math.min(durationMs, MAX_DURATION_MS);
+    }
+
     /**
-     * Safe artwork policy: absolute http(s), hostname only. The server never resolves or
-     * fetches the URL (no server-side SSRF); rejecting IP literals/local names also keeps
-     * the browser-rendered card from being pointed at an intranet address by a tag payload.
+     * Safe artwork policy for untrusted client input: absolute http(s), hostname only. The
+     * server never resolves or fetches the URL (no server-side SSRF); rejecting IP
+     * literals/local names also keeps the browser-rendered card from being pointed at an
+     * intranet address by a tag payload.
      */
     private static String artwork(String value) {
+        return absoluteArtwork(value, true);
+    }
+
+    /**
+     * Artwork URL produced by the server (#97): the origin comes from configuration, not from
+     * a tag or a client payload, so local/private origins are allowed (for example a local
+     * dev API before a reverse proxy is configured). Scheme/credentials/control-character
+     * checks are identical to the client policy.
+     */
+    private static String serverArtwork(String value) {
+        return absoluteArtwork(value, false);
+    }
+
+    /**
+     * Persisted artwork URL. Rows are written only by the two policies above; reading must not
+     * drop a server-built local URL. The strict host policy is still applied to every
+     * client-supplied value at write time.
+     */
+    private static String storedArtwork(String value) {
+        return absoluteArtwork(value, false);
+    }
+
+    private static String absoluteArtwork(String value, boolean rejectLocalHosts) {
         if (value == null) {
             return null;
         }
@@ -311,12 +367,14 @@ public record MediaMetadata(
         if (host == null || host.isBlank()) {
             throw invalid("media.artwork_url", "host_required", Map.of());
         }
-        String normalizedHost = host.toLowerCase(Locale.ROOT);
-        while (normalizedHost.endsWith(".")) {
-            normalizedHost = normalizedHost.substring(0, normalizedHost.length() - 1);
-        }
-        if (isForbiddenHost(normalizedHost)) {
-            throw invalid("media.artwork_url", "host_not_allowed", Map.of());
+        if (rejectLocalHosts) {
+            String normalizedHost = host.toLowerCase(Locale.ROOT);
+            while (normalizedHost.endsWith(".")) {
+                normalizedHost = normalizedHost.substring(0, normalizedHost.length() - 1);
+            }
+            if (isForbiddenHost(normalizedHost)) {
+                throw invalid("media.artwork_url", "host_not_allowed", Map.of());
+            }
         }
         return normalized;
     }

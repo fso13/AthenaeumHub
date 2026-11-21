@@ -24,6 +24,9 @@ public final class MessageEventPayload {
         payload.put("chat_id", event.chatId());
         payload.put("seq", event.seq());
         payload.put("sender_id", event.senderId());
+        payload.put("sender_type", view.senderType());
+        payload.put("bot_id", view.botId());
+        payload.put("sender_display_name", view.senderDisplayName());
         payload.put("type", view.type());
         payload.put("thread_root_id", view.threadRootId());
         payload.put("sticker_id", view.stickerId());

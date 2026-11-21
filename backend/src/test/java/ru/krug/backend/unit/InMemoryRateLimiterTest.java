@@ -48,4 +48,24 @@ class InMemoryRateLimiterTest {
             limiter.checkMessageSend(PRINCIPAL, chat);
         }
     }
+
+    @Test
+    void botSendHasItsOwnPerBotWindow() {
+        InMemoryRateLimiter limiter = new InMemoryRateLimiter(
+                TestProperties.withBotRateLimit(2, Duration.ofSeconds(10), 100));
+        UUID bot = UUID.randomUUID();
+
+        assertThatCode(() -> {
+            limiter.checkBotSend(bot, UUID.randomUUID());
+            limiter.checkBotSend(bot, UUID.randomUUID());
+        }).doesNotThrowAnyException();
+
+        assertThatThrownBy(() -> limiter.checkBotSend(bot, UUID.randomUUID()))
+                .isInstanceOfSatisfying(DomainException.class, ex -> {
+                    assertThat(ex.category().name()).isEqualTo("RATE_LIMITED");
+                    assertThat(ex.code()).isEqualTo(ErrorCode.RATE_LIMITED);
+                    assertThat(ex.details().get("scope")).isEqualTo("bot");
+                    assertThat(ex.retryAfterSeconds()).isNotNull().isGreaterThanOrEqualTo(1);
+                });
+    }
 }

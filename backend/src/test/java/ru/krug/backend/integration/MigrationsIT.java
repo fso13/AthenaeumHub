@@ -384,4 +384,56 @@ class MigrationsIT extends IntegrationTestBase {
                                            'UPDATE')
                 """, Boolean.class)).isTrue();
     }
+
+    @Test
+    void createsBotSchemaRlsAndMessageSenderColumns() {
+        assertThat(jdbc.queryForList("""
+                SELECT tablename FROM pg_tables WHERE schemaname = 'bot'
+                """, String.class)).containsExactlyInAnyOrder("bots", "chat_bots");
+
+        for (String table : List.of("bot.bots", "bot.chat_bots")) {
+            Map<String, Object> flags = jdbc.queryForMap("""
+                    SELECT relrowsecurity, relforcerowsecurity
+                      FROM pg_class WHERE oid = ?::regclass
+                    """, table);
+            assertThat(flags.get("relrowsecurity")).as(table).isEqualTo(true);
+            assertThat(flags.get("relforcerowsecurity")).as(table).isEqualTo(true);
+        }
+
+        // The bot registry stores only a 32-byte SHA-256 hash; there is no raw-token column.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'bot' AND table_name = 'bots'
+                   AND column_name IN ('token_hash', 'scopes', 'created_by', 'status',
+                                       'avatar_file_id', 'workspace_id')
+                """, Integer.class)).isEqualTo(6);
+        for (String forbidden : List.of("token", "raw_token", "token_plain", "secret")) {
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM information_schema.columns
+                     WHERE table_schema = 'bot' AND table_name = 'bots' AND column_name = ?
+                    """, Integer.class, forbidden)).as(forbidden).isZero();
+        }
+
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'message' AND table_name = 'messages'
+                   AND column_name IN ('sender_type', 'bot_id')
+                """, Integer.class)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_constraint
+                 WHERE conrelid = 'message.messages'::regclass
+                   AND conname IN ('ck_messages_sender_type', 'ck_messages_bot_shape',
+                                   'ck_messages_bot_managed', 'ck_messages_bot_text')
+                """, Integer.class)).isEqualTo(4);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = 'message.messages'::regclass
+                   AND tgname = 'trg_messages_bot_sender' AND NOT tgisinternal
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = 'bot.chat_bots'::regclass
+                   AND tgname = 'trg_chat_bots_workspace' AND NOT tgisinternal
+                """, Integer.class)).isEqualTo(1);
+    }
 }

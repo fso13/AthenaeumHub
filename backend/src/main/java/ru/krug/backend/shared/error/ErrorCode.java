@@ -176,6 +176,15 @@ public final class ErrorCode {
     /** #84: enabling the provider requires an explicit or environment URL. */
     public static final String TRANSLATION_URL_REQUIRED = "TRANSLATION_URL_REQUIRED";
 
+    // #96: Slack-like bots (MVP backend). A bot token can only write chat messages; there is
+    // no read/call/file scope. Credential errors intentionally reuse UNAUTHENTICATED.
+    public static final String BOT_NOT_FOUND = "BOT_NOT_FOUND";
+    public static final String BOT_DISABLED = "BOT_DISABLED";
+    public static final String BOT_NOT_INSTALLED = "BOT_NOT_INSTALLED";
+    public static final String BOT_SCOPE_FORBIDDEN = "BOT_SCOPE_FORBIDDEN";
+    public static final String BOT_E2EE_UNSUPPORTED = "BOT_E2EE_UNSUPPORTED";
+    public static final String BOT_AVATAR_INVALID = "BOT_AVATAR_INVALID";
+
     // P0-2 (#80): channel settings — cover, read-only, join policy, rights, archive, pins.
     public static final String CHAT_READ_ONLY = "CHAT_READ_ONLY";
     public static final String CHAT_PERMISSION_DENIED = "CHAT_PERMISSION_DENIED";

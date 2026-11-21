@@ -21,6 +21,8 @@ public record MessageSnapshot(
         String type,
         UUID senderId,
         String senderDisplayName,
+        String senderType,
+        UUID botId,
         String text,
         UUID replyToId,
         UUID threadRootId,
@@ -37,6 +39,7 @@ public record MessageSnapshot(
         MessagePluginContent pluginContent) {
 
     public MessageSnapshot {
+        senderType = senderType == null ? "USER" : senderType;
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
         reactions = reactions == null ? List.of() : List.copyOf(reactions);
     }
@@ -47,8 +50,8 @@ public record MessageSnapshot(
                            Instant createdAt, Instant editedAt, Instant deletedAt, int version,
                            UUID stickerId, StickerSnapshot sticker,
                            List<AttachmentSnapshot> attachments) {
-        this(workspaceId, id, chatId, seq, type, senderId, senderDisplayName, text, replyToId,
-                null, createdAt, editedAt, deletedAt, version, null, null, stickerId, sticker,
-                attachments, List.of(), null);
+        this(workspaceId, id, chatId, seq, type, senderId, senderDisplayName, "USER", null,
+                text, replyToId, null, createdAt, editedAt, deletedAt, version, null, null,
+                stickerId, sticker, attachments, List.of(), null);
     }
 }

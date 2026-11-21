@@ -235,6 +235,24 @@ class RealtimeFrameContractTest {
     }
 
     @Test
+    void botMessagePayloadCarriesSenderTypeAndBotId() throws Exception {
+        UUID messageId = UUID.randomUUID();
+        UUID botId = UUID.randomUUID();
+        MessageSnapshot snapshot = new MessageSnapshot(workspaceId, messageId, chatId, 3,
+                "TEXT", null, "Deploy Bot", "BOT", botId, "hello", null, null, NOW, null,
+                null, 1, null, null, null, null, List.of(), List.of(), null);
+        RealtimeEvent event = RealtimeEventFactory.messageCreated(snapshot);
+
+        String frame = codec.event(event);
+        WsFrameContract.assertValid("event", frame);
+        JsonNode payload = mapper.readTree(frame).get("payload");
+        assertThat(payload.get("sender_type").asText()).isEqualTo("BOT");
+        assertThat(payload.get("bot_id").asText()).isEqualTo(botId.toString());
+        assertThat(payload.get("sender_id").isNull()).isTrue();
+        assertThat(payload.get("sender_display_name").asText()).isEqualTo("Deploy Bot");
+    }
+
+    @Test
     void gatewayPayloadMapAllowsNullFieldsFromOpenApiMessage() {
         MessageSnapshot system = new MessageSnapshot(workspaceId, UUID.randomUUID(), chatId, 1,
                 "SYSTEM", null, null, null, null, NOW, null, null, 1, null, null, List.of());

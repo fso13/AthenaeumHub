@@ -274,6 +274,7 @@ describe('song cards and ID3 upload metadata', () => {
       chat_id: chat.summary.id,
       seq,
       type: 'TEXT',
+      sender_type: 'USER',
       sender_id: '22222222-2222-4222-8222-222222222222',
       sender_display_name: 'Марк Соколов',
       text: 'Видео и фото',

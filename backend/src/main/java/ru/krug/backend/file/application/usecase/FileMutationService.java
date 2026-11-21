@@ -18,6 +18,8 @@ import ru.krug.backend.file.application.port.WorkspaceQuotaPort;
 import ru.krug.backend.file.domain.exception.UploadNotFoundException;
 import ru.krug.backend.file.domain.model.Attachment;
 import ru.krug.backend.file.domain.model.AttachmentStatus;
+import ru.krug.backend.file.domain.model.MediaKind;
+import ru.krug.backend.file.domain.service.AudioArtworkKey;
 import ru.krug.backend.file.domain.service.SafeFileName;
 import ru.krug.backend.file.domain.repository.AttachmentRepository;
 import ru.krug.backend.shared.application.model.Principal;
@@ -123,6 +125,14 @@ public class FileMutationService {
             storage.delete(attachment.objectKey());
         } catch (RuntimeException ex) {
             log.warn("file.delete.object_failed attachment_id={}", attachmentId);
+        }
+        if (attachment.media() != null && attachment.media().kind() == MediaKind.AUDIO) {
+            try {
+                storage.delete(AudioArtworkKey.forAttachment(scoped.workspaceId(),
+                        attachmentId));
+            } catch (RuntimeException ex) {
+                log.warn("file.delete.artwork_failed attachment_id={}", attachmentId);
+            }
         }
         audit.append(new AuditRecord(scoped.workspaceId(), scoped.userId(), DELETE_ACTION,
                 "attachment", attachmentId, scoped.requestId(),

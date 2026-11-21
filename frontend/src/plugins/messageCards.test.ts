@@ -47,6 +47,7 @@ function message(overrides: Partial<ApiMessage> = {}): ApiMessage {
     chat_id: '44444444-4444-4444-8444-444444444444',
     seq: 36,
     type: 'TEXT',
+    sender_type: 'USER',
     sender_id: null,
     sender_display_name: null,
     text: null,

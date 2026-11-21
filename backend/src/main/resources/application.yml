@@ -175,6 +175,12 @@ krug:
     invite-accept-window: ${KRUG_RATE_LIMIT_INVITE_ACCEPT_WINDOW:60s}
     invite-create-per-chat: ${KRUG_RATE_LIMIT_INVITE_CREATE_PER_CHAT:30}
     invite-create-window: ${KRUG_RATE_LIMIT_INVITE_CREATE_WINDOW:1h}
+    # #96: bot bearer tokens. Independent of user sends so a compromised bot cannot exhaust a
+    # human's quota and vice versa.
+    bot-send-per-bot: ${KRUG_RATE_LIMIT_BOT_SEND_PER_BOT:60}
+    bot-send-window: ${KRUG_RATE_LIMIT_BOT_SEND_WINDOW:60s}
+    bot-send-per-chat: ${KRUG_RATE_LIMIT_BOT_SEND_PER_CHAT:10}
+    bot-send-chat-window: ${KRUG_RATE_LIMIT_BOT_SEND_CHAT_WINDOW:1s}
   outbox:
     relay:
       enabled: ${KRUG_OUTBOX_RELAY_ENABLED:true}
@@ -258,6 +264,11 @@ krug:
     path-style: ${S3_PATH_STYLE:true}
     upload-ttl: ${KRUG_FILES_UPLOAD_TTL:24h}
     download-ttl: ${KRUG_FILES_DOWNLOAD_TTL:5m}
+    # #97: absolute public API origin used only to advertise server-extracted audio covers
+    # via media.artwork_url (e.g. https://chat.example.com). Production must set it to the
+    # public API origin; blank disables the advertised URL (the authenticated
+    # GET /attachments/{id}/artwork endpoint still works).
+    artwork-base-url: ${KRUG_FILES_ARTWORK_BASE_URL:http://localhost:8081}
     scan-mode: ${S3_SCAN_MODE:noop}         # noop (dev) | clamav
     noop-fail-marker: ${S3_SCAN_FAIL_MARKER:}
     clamav-host: ${CLAMAV_HOST:localhost}

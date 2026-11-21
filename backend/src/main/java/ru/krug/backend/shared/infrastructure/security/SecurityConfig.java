@@ -1,7 +1,9 @@
 package ru.krug.backend.shared.infrastructure.security;
 
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.header.writers.DelegatingRequestMatcherHeaderWriter;
 import org.springframework.security.web.header.writers.frameoptions.XFrameOptionsHeaderWriter;
@@ -14,12 +16,59 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
+
+import ru.krug.backend.bot.infrastructure.security.BotTokenAuthenticationFilter;
 
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /**
+     * The bot filter is a {@code @Component} so the security chain can inject it; disable the
+     * servlet-container auto-registration so it runs exactly once, inside its own chain.
+     */
     @Bean
+    public FilterRegistrationBean<BotTokenAuthenticationFilter> botTokenFilterRegistration(
+            BotTokenAuthenticationFilter filter) {
+        FilterRegistrationBean<BotTokenAuthenticationFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    /**
+     * #96: dedicated chain for the bot-token API. It never falls back to JWT and does not run
+     * the user device binding; the only matcher is {@code /api/v1/bots/**}, so a bot token can
+     * reach exactly the message-send controller. Ordered before the user chain.
+     */
+    @Bean
+    @Order(1)
+    public SecurityFilterChain botApiFilterChain(
+            HttpSecurity http,
+            BotTokenAuthenticationFilter botTokenAuthenticationFilter,
+            RestAuthenticationEntryPoint authenticationEntryPoint,
+            RestAccessDeniedHandler accessDeniedHandler) throws Exception {
+        http
+                .securityMatcher("/api/v1/bots/**")
+                .csrf(AbstractHttpConfigurer::disable)
+                .cors(AbstractHttpConfigurer::disable)
+                .httpBasic(AbstractHttpConfigurer::disable)
+                .formLogin(AbstractHttpConfigurer::disable)
+                .logout(AbstractHttpConfigurer::disable)
+                .requestCache(cache -> cache.disable())
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
+                .addFilterBefore(botTokenAuthenticationFilter, AuthorizationFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     public SecurityFilterChain apiFilterChain(
             HttpSecurity http,
             JwtDecoder jwtDecoder,

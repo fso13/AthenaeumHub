@@ -1313,6 +1313,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/attachments/{attachmentId}/artwork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Обложка аудио, извлечённая сервером (#97)
+         * @description Приватные байты обложки, извлечённой сервером из ID3v2.2/2.3/2.4 `APIC`/`PIC` или MP4 `covr`. Ответ — только растровое изображение (`image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/bmp`, `image/avif`), тип определяется по magic bytes, а не по клиентскому заголовку; `X-Content-Type-Options: nosniff`. Видимость совпадает со скачиванием вложения: ACTIVE-участник чата для привязанного файла, участник воркспейса для workspace-ассета, владелец — для ещё не привязанного глобального файла. AV fail-closed: пока объект SCANNING — `409`, карантин — `423`. Никакого redirect, presigned URL или внешнего запроса сервер не делает; object key строится только из серверных UUID. `404`, если у вложения нет извлечённой обложки.
+         */
+        get: operations["attachmentArtwork"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/files": {
         parameters: {
             query?: never;
@@ -2529,6 +2549,138 @@ export interface paths {
         patch: operations["updateWorkspacePermissions"];
         trace?: never;
     };
+    "/workspaces/{workspaceId}/bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Боты воркспейса (без токенов)
+         * @description Доступно любому ACTIVE-участнику воркспейса. Возвращаются только метаданные (id, имя, аватар, scopes, статус, audit-поля); токен и hash не возвращаются никогда. Чужой воркспейс — `403` без раскрытия существования.
+         */
+        get: operations["listBots"];
+        put?: never;
+        /**
+         * Создать бота и получить одноразовый токен (OWNER/ADMIN)
+         * @description Только workspace OWNER/ADMIN (роль, не настраиваемая матрица). В ответе ровно один раз возвращается bearer-токен бота; в БД хранится только его SHA-256 hash, поэтому повторно прочитать токен нельзя (для смены — `POST .../token`). `scopes` в MVP содержит только `chat.write`: бот не может читать сообщения, звонить, работать с файлами или вызывать админские API. Токен не пишется в audit, лог или БД в открытом виде. `name` — 1..80 символов. Создание пишет audit `bot.created` только с id.
+         */
+        post: operations["createBot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/bots/{botId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отключить/удалить бота (OWNER/ADMIN)
+         * @description Мягкое удаление: `status=DISABLED`, строка и установки сохраняются для истории, токен сразу перестаёт работать. Идемпотентно (повторный DELETE — `204` без второго audit). Audit `bot.disabled` содержит только id.
+         */
+        delete: operations["disableBot"];
+        options?: never;
+        head?: never;
+        /**
+         * Изменить имя/scopes/статус/аватар бота (OWNER/ADMIN)
+         * @description Отсутствующие поля не меняются. `status=DISABLED` — мягкое отключение (токен немедленно перестаёт аутентифицироваться); `status=ACTIVE` возвращает бота в строй. `avatar_file_id` должен быть существующим готовым изображением того же воркспейса; `clear_avatar=true` очищает ссылку (поля взаимоисключающие). Токен этим методом не меняется. Audit `bot.updated` содержит только id.
+         */
+        patch: operations["updateBot"];
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/bots/{botId}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ротировать токен бота (OWNER/ADMIN)
+         * @description Атомарно заменяет hash токена: старый токен сразу получает `401`, новый показывается ровно один раз в ответе. Для отключённого бота ротация разрешена, но новый токен начнёт работать только после `status=ACTIVE`. Audit `bot.token.rotated` содержит только id — ни токен, ни hash в audit/лог не попадают.
+         */
+        post: operations["rotateBotToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Боты, установленные в чате
+         * @description Доступно любому ACTIVE-участнику чата. Возвращает установленных ботов с метаданными (без токена/hash). Неизвестный/удалённый/чужой чат — `404` без раскрытия существования.
+         */
+        get: operations["listChatBots"];
+        put?: never;
+        /**
+         * Установить бота в чат (chat OWNER/ADMIN)
+         * @description Только ACTIVE-участник чата с ролью OWNER/ADMIN. Бот должен принадлежать тому же воркспейсу и быть ACTIVE; чат должен быть MANAGED. E2EE-чат — `422 BOT_E2EE_UNSUPPORTED`, отключённый бот — `422 BOT_DISABLED`. Установка идемпотентна; audit `chat.bot.installed` содержит только chat/bot id. После установки бот может отправлять сообщения через `POST /bots/{botId}/messages`.
+         */
+        post: operations["installChatBot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/bots/{botId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Удалить бота из чата (chat OWNER/ADMIN)
+         * @description Только ACTIVE-участник чата с ролью OWNER/ADMIN. Идемпотентно (`204` без audit при отсутствии установки). После удаления бот получает `403 BOT_NOT_INSTALLED` при попытке отправки в этот чат; история сообщений сохраняется. Audit `chat.bot.uninstalled` содержит только chat/bot id.
+         */
+        delete: operations["uninstallChatBot"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bots/{botId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отправить сообщение от имени бота (bot token)
+         * @description Единственный bot-token endpoint. Авторизация — `Authorization: Bearer sova_bot_...` (отдельная security-цепочка; JWT и X-Device-Id не используются). Токен сравнивается по SHA-256 hash в constant time; отключённый/неизвестный токен, чужой `botId` и битый токен дают одинаковый `401`. Требуется scope `chat.write` (`403 BOT_SCOPE_FORBIDDEN`), чат должен быть MANAGED (`422 BOT_E2EE_UNSUPPORTED`) и бот установлен+включён в нём (`403 BOT_NOT_INSTALLED`). Сообщение создаётся как `sender_type=BOT` с `bot_id`, именем бота в `sender_display_name` и без `sender_id`/device — импersonation пользователя невозможна. `Idempotency-Key` обязателен: повтор с тем же телом возвращает исходное сообщение и `Idempotent-Replay: true`, а с другим телом — `409 IDEMPOTENCY_KEY_REUSED`. Действует отдельный rate limit по боту и по чату (`429` + `Retry-After`).
+         */
+        post: operations["sendBotMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3329,7 +3481,7 @@ export interface components {
             mime_type?: string | null;
             /** Format: int64 */
             duration_ms?: number | null;
-            /** @description Клиентский artwork URL из ID3/метаданных; сервер его не загружает и не проверяет доступность. */
+            /** @description artwork URL из метаданных (#97): клиентский абсолютный http(s) URL, который сервер не загружает и не проверяет, либо серверный URL аутентифицированного `GET /attachments/{attachmentId}/artwork` для извлечённой обложки. Байты обложки в JSON никогда не попадают. */
             artwork_url?: string | null;
             title?: string | null;
             artist?: string | null;
@@ -3581,7 +3733,7 @@ export interface components {
             /** @enum {string} */
             encryption_mode: "MANAGED";
             sha256?: string;
-            /** @description Optional sanitized media metadata for this upload (D1-BE2). Accepted only for MANAGED uploads; the server rejects every non-MANAGED mode before parsing it. A voice recording (audio/webm, audio/ogg) must be kind=AUDIO with a 1..600000 ms duration. complete copies the values to AttachmentRef.media. Strings are trimmed, HTML/control-free and bounded; artwork_url is an absolute http(s) URL with a hostname that the server never fetches (no server-side SSRF). */
+            /** @description Optional sanitized media metadata for this upload (D1-BE2/#97). Accepted only for MANAGED uploads; the server rejects every non-MANAGED mode before parsing it. For MANAGED AUDIO the server also extracts ID3v2.2/2.3/2.4 or M4A atoms after complete and replaces an absent or empty payload with `metadata_source=SERVER`. A voice recording (audio/webm, audio/ogg) must be kind=AUDIO with a 1..600000 ms duration. complete copies the values to AttachmentRef.media. Strings are trimmed, HTML/control-free and bounded; artwork_url is an absolute http(s) URL with a hostname that the server never fetches (no server-side SSRF). */
             media?: {
                 /** @enum {string} */
                 kind: "AUDIO" | "VIDEO" | "IMAGE" | "FILE";
@@ -3643,7 +3795,7 @@ export interface components {
             mime_type?: string | null;
             /** @enum {string} */
             scan_status: "PENDING" | "CLEAN" | "INFECTED" | "FAILED" | "SKIPPED";
-            /** @description Managed-only media metadata (D1-BE2). MVP: the client sends parsed ID3/fallback values at upload init; the server sanitizes and stores them (server-side extraction is D1.1). Strings are trimmed, HTML/control-free and bounded; artwork_url is an absolute http(s) URL with a hostname that the server never fetches (no server-side SSRF). Absent/null for plain files, legacy attachments and E2EE — an E2EE message cannot carry attachments in this slice. */
+            /** @description Managed-only media metadata (D1-BE2/#97). The client may send parsed ID3/fallback values at upload init; on MANAGED AUDIO uploads the server also extracts ID3v2.2/2.3/2.4 and M4A/MP4 atoms itself and fills absent/incomplete client metadata with `metadata_source=SERVER`. Strings are trimmed, HTML/control-free and bounded; artwork_url is an absolute http(s) URL that the server never fetches (no server-side SSRF). A server-built artwork_url points at the authenticated `GET /attachments/{attachmentId}/artwork` endpoint; the cover bytes are never embedded in the JSON. Absent/null for plain files, legacy attachments and E2EE — an E2EE message cannot carry attachments in this slice. */
             media?: {
                 /** @enum {string} */
                 kind: "AUDIO" | "VIDEO" | "IMAGE" | "FILE";
@@ -3655,7 +3807,10 @@ export interface components {
                 album?: string | null;
                 year?: string | null;
                 genre?: string | null;
-                /** Format: uri */
+                /**
+                 * Format: uri
+                 * @description Client-supplied absolute http(s) URL (never fetched by the server) or the server-built URL of `GET /attachments/{attachmentId}/artwork` for an extracted cover. The server never fetches either URL.
+                 */
                 artwork_url?: string | null;
                 /** @enum {string} */
                 metadata_source: "ID3" | "SERVER" | "CLIENT" | "NONE";
@@ -3857,6 +4012,17 @@ export interface components {
             /** Format: uuid */
             sender_id?: string | null;
             sender_display_name?: string | null;
+            /**
+             * @description #96: автор — пользователь (`USER`, по умолчанию) или бот (`BOT`). Для бота `sender_id` всегда null, `bot_id` заполнен, а `sender_display_name` — имя бота на момент отправки. Клиент рисует BOT-бейдж по этому полю, не по имени.
+             * @default USER
+             * @enum {string}
+             */
+            sender_type: "USER" | "BOT";
+            /**
+             * Format: uuid
+             * @description #96: id автора-бота при `sender_type=BOT`; null для пользовательских сообщений. Никогда не подменяет `sender_id` (impersonation запрещён).
+             */
+            bot_id?: string | null;
             text?: string | null;
             /** Format: uuid */
             reply_to_id?: string | null;
@@ -4460,6 +4626,82 @@ export interface components {
             workspace_id: string;
             roles: components["schemas"]["WorkspaceRolePermissions"][];
         };
+        /** @description Метаданные бота. Никогда не содержит bearer-токен или его hash; токен возвращается только один раз в `BotToken` при создании/ротации. */
+        Bot: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            workspace_id: string;
+            name: string;
+            /**
+             * Format: uuid
+             * @description Готовое CLEAN-изображение того же воркспейса либо null. Отдельного upload/serve API у ботов в MVP нет.
+             */
+            avatar_file_id?: string | null;
+            /** @description MVP: только `chat.write`; чтение сообщений/звонки/файлы недоступны. */
+            scopes: "chat.write"[];
+            /**
+             * @description `DISABLED` — мягкое удаление; токен сразу перестаёт аутентифицироваться.
+             * @enum {string}
+             */
+            status: "ACTIVE" | "DISABLED";
+            /** Format: uuid */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            token_rotated_at?: string | null;
+        };
+        BotCreateRequest: {
+            name: string;
+            scopes: "chat.write"[];
+        };
+        /** @description Все поля опциональны: отсутствие — «не менять». `avatar_file_id` и `clear_avatar=true` взаимоисключающие (`400`). Пустой объект — допустимый no-op. */
+        BotUpdateRequest: {
+            name?: string;
+            scopes?: "chat.write"[];
+            /** Format: uuid */
+            avatar_file_id?: string | null;
+            /** @default false */
+            clear_avatar: boolean;
+            /** @enum {string} */
+            status?: "ACTIVE" | "DISABLED";
+        };
+        /** @description Единственный ответ с токеном. `token` показывается один раз и не сохраняется в открытом виде; сервер хранит только его SHA-256 hash. */
+        BotToken: {
+            bot: components["schemas"]["Bot"];
+            /**
+             * Format: password
+             * @description `sova_bot_<workspace_id>_<bot_id>_<32 random bytes base64url>`. Не логируется и не возвращается повторно.
+             */
+            token: string;
+        };
+        BotList: {
+            items: components["schemas"]["Bot"][];
+        };
+        ChatBotInstallRequest: {
+            /** Format: uuid */
+            bot_id: string;
+        };
+        ChatBot: {
+            /** Format: uuid */
+            chat_id: string;
+            bot: components["schemas"]["Bot"];
+            /** @description Эффективный флаг; отправка разрешена только при `true`. */
+            enabled: boolean;
+            /** Format: date-time */
+            installed_at: string;
+        };
+        ChatBotList: {
+            items: components["schemas"]["ChatBot"][];
+        };
+        BotMessageCreate: {
+            /** Format: uuid */
+            chat_id: string;
+            text: string;
+        };
     };
     responses: {
         /** @description Неверный запрос */
@@ -4580,6 +4822,7 @@ export interface components {
         /** @description #95: recommended for poll/task creation. With the header, a retry with the same key and body returns the original poll/task and its timeline message id instead of creating a second entity/message. Without it the server generates a fresh key, so every request is a new create. */
         OptionalIdempotencyKey: string;
         ChatId: string;
+        BotId: string;
         /** @description Идентификатор пользователя (участника воркспейса/канала). */
         UserId: string;
         PolicyId: string;
@@ -6985,6 +7228,51 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DownloadUrl"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            410: components["responses"]["Gone"];
+            /** @description Объект в карантине */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    attachmentArtwork: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                attachmentId: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Байты обложки */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    "X-Content-Type-Options"?: "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                    "image/gif": string;
+                    "image/bmp": string;
+                    "image/avif": string;
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -9446,6 +9734,274 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
+        };
+    };
+    listBots: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Список ботов */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createBot: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Бот создан; токен показывается один раз */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotToken"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    disableBot: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Бот отключён */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateBot: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Обновлённый бот */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Bot"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    rotateBotToken: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Новый токен (показывается один раз) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotToken"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listChatBots: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Установленные боты */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatBotList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    installChatBot: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatBotInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Бот установлен */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatBot"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    uninstallChatBot: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Бот удалён из чата */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    sendBotMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotMessageCreate"];
+            };
+        };
+        responses: {
+            /** @description Сообщение создано (или идемпотентный replay) */
+            201: {
+                headers: {
+                    "Idempotent-Replay"?: "true";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
         };
     };
 }

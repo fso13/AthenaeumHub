@@ -151,7 +151,8 @@ public class RealtimeChatHistoryAdapter implements RealtimeChatHistoryPort {
         boolean deleted = message.deletedAt() != null;
         return new MessageSnapshot(message.workspaceId(), message.id(), message.chatId(),
                 message.seq(), message.type().name(), message.senderId(),
-                message.senderDisplayName(), deleted || message.body() == null ? null
+                message.senderDisplayName(), message.senderType().name(), message.botId(),
+                deleted || message.body() == null ? null
                         : message.body().value(), message.replyToId(), message.threadRootId(),
                 message.createdAt(), message.editedAt(), message.deletedAt(), message.version(),
                 message.clientMessageId(), crypto, deleted ? null : message.stickerId(),

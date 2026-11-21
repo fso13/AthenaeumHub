@@ -79,6 +79,7 @@ import {
   createWorkspaceOverviewStore,
   type WorkspaceOverviewStore,
 } from '../workspace/overviewStore';
+import { createBotsStore, type BotsStore } from '../bots/botsStore';
 import { readDeviceWorkspaceId, writeDeviceWorkspaceId } from '../workspace/deviceWorkspace';
 import { getDeviceId, getSession, setSession } from '../auth/session';
 import { setRuntimeDeviceId } from '../auth/runtime';
@@ -1200,6 +1201,8 @@ export class ChatStore {
   readonly profile: ProfileWorkspaceStore;
   /** #84: workspace dashboard aggregates for the Overview page. */
   readonly workspaceOverview: WorkspaceOverviewStore;
+  /** #96: workspace bots (one-time token in memory) and chat installations. */
+  readonly bots: BotsStore;
   /** Per-id chat/workspace avatar bytes (object URLs, cleared on change). */
   readonly avatars: AvatarStore;
 
@@ -1360,6 +1363,7 @@ export class ChatStore {
 
     this.avatars = createAvatarStore({ api: deps.api });
     this.workspaceOverview = createWorkspaceOverviewStore({ api: deps.api });
+    this.bots = createBotsStore({ api: deps.api });
 
     this.files = createFilesStore({
       api: deps.api,
@@ -1457,6 +1461,7 @@ export class ChatStore {
     this.profile.dispose();
     this.avatars.dispose();
     this.workspaceOverview.dispose();
+    this.bots.dispose();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.listeners.clear();
@@ -1760,6 +1765,8 @@ export class ChatStore {
     this.security.reset();
     this.profile.reset();
     this.avatars.reset();
+    // #96: bot rows and any one-time token belong to the outgoing workspace.
+    this.bots.reset();
     // D1-FE1: keep the outgoing workspace badge truthful after `chats` is
     // cleared; the value is the same sum the server just gave us.
     const previousWorkspaceId = this.state.activeWorkspaceId;
@@ -2609,10 +2616,14 @@ export class ChatStore {
     }
   }
 
+  /** #96: drop installed-bot rows when chat settings closes/switches. */
+  clearChatBots(): void {
+    this.bots.clearChatBots();
+  }
+
   /* ------------------------------------------------------------------ */
   /* #79: invite links                                                  */
   /* ------------------------------------------------------------------ */
-
   /** `GET /chats/{chatId}/invites` (OWNER/ADMIN metadata list, no tokens). */
   loadChatInvites(chatId: string, force = false): Promise<void> {
     const current = this.state.chatInvites;
@@ -4289,6 +4300,7 @@ export class ChatStore {
     this.profile.reset();
     this.avatars.reset();
     this.workspaceOverview.reset();
+    this.bots.reset();
     this.chatLimitsPromise = null;
     this.unreadWorkspaceRequests.clear();
     this.membersToken += 1;

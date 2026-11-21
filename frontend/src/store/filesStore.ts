@@ -23,6 +23,17 @@ import type { Id3Artwork } from '../files/id3';
 
 const PART_RETRIES = 3;
 const DOWNLOAD_URL_SAFETY_MS = 30_000;
+/** #97: at most this many rendered cover object URLs stay alive per store. */
+const MAX_ARTWORK_URLS = 100;
+/** Only the raster types the contract allows may become a cover object URL. */
+const SAFE_ARTWORK_MIME: ReadonlySet<string> = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/bmp',
+  'image/avif',
+]);
 
 export type UploadTaskStatus =
   | 'queued'
@@ -121,6 +132,7 @@ export interface FilesStoreDeps {
     | 'completeUpload'
     | 'abortUpload'
     | 'attachmentDownloadUrl'
+    | 'getAttachmentArtwork'
   >;
   config: Pick<
     AppConfig,
@@ -232,6 +244,16 @@ export class FilesStore {
     { url: string; expiresAtMs: number; sizeBytes: number; sha256: string }
   >();
   private readonly downloadInFlight = new Map<string, Promise<DownloadUrl>>();
+  /**
+   * #97: authenticated cover bytes as per-attachment object URLs. Kept out of
+   * the React state: a cover is decorative, so resolving one must not
+   * re-render an entire page. URLs are revoked on invalidation, workspace
+   * switch, `reset()` and `dispose()`.
+   */
+  private readonly artworkUrls = new Map<string, string>();
+  private readonly artworkInFlight = new Map<string, Promise<string | null>>();
+  /** Per-id request token: a forced reload must not be deleted by an old finally. */
+  private readonly artworkTokens = new Map<string, object>();
   /** #83: the single in-flight one-shot global upload. */
   private fileUploadController: AbortController | null = null;
   private limitsPromise: Promise<void> | null = null;
@@ -261,6 +283,9 @@ export class FilesStore {
     this.listeners.clear();
     this.downloadCache.clear();
     this.downloadInFlight.clear();
+    this.revokeAllArtworkUrls();
+    this.artworkInFlight.clear();
+    this.artworkTokens.clear();
   }
 
   /** Workspace switch is the only quota scope; abort uploads from the old one. */
@@ -272,6 +297,8 @@ export class FilesStore {
       for (const task of this.state.tasks) void this.cancelTask(task.localId);
       this.patch({ tasks: [] });
     }
+    // Covers belong to the previous workspace's attachments; never leak them.
+    if (changed) this.revokeAllArtworkUrls();
 
     this.patch({
       workspaceId,
@@ -554,6 +581,7 @@ export class FilesStore {
   async deleteFile(fileId: string): Promise<FileMutationResult<void>> {
     try {
       await this.api.deleteFile(fileId, this.createId());
+      this.invalidateArtwork(fileId);
       if (!this.disposed) {
         const center = this.state.fileCenter;
         this.patch({
@@ -816,6 +844,107 @@ export class FilesStore {
     this.downloadCache.delete(attachmentId);
   }
 
+  /**
+   * #97: resolve the authenticated server cover for an attachment to a
+   * per-attachment `blob:` object URL.
+   *
+   * The URL from `media.artwork_url` must never be put into `<img src>`: it is
+   * an authenticated API endpoint and only the API client carries the bearer
+   * token. The bytes are fetched once, cached (one entry per attachment id)
+   * and reused by every card/row that renders the same cover. `404` (no
+   * extracted cover), `401`, `409` and `423` resolve to `null` so the caller
+   * falls back to the local ID3 cover or the default artwork without an error
+   * surface.
+   */
+  getAttachmentArtworkUrl(
+    attachmentId: string,
+    options: { force?: boolean } = {},
+  ): Promise<string | null> {
+    if (this.disposed || !attachmentId) return Promise.resolve(null);
+    if (options.force) {
+      this.revokeArtworkUrl(attachmentId);
+      this.artworkInFlight.delete(attachmentId);
+      this.artworkTokens.delete(attachmentId);
+    } else {
+      const cached = this.artworkUrls.get(attachmentId);
+      if (cached !== undefined) return Promise.resolve(cached);
+      const pending = this.artworkInFlight.get(attachmentId);
+      if (pending) return pending;
+    }
+
+    const token = {};
+    this.artworkTokens.set(attachmentId, token);
+    const promise = (async (): Promise<string | null> => {
+      try {
+        const blob = await this.api.getAttachmentArtwork(attachmentId);
+        if (this.disposed) return null;
+        // A forced/invalidated reload owns the cache now; never let an older
+        // response overwrite (or resurrect) its cover.
+        if (this.artworkTokens.get(attachmentId) !== token) return null;
+        const mime = (blob.type || '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
+        if (!SAFE_ARTWORK_MIME.has(mime) || blob.size === 0) return null;
+        const url = this.createArtworkObjectUrl(blob);
+        if (!url) return null;
+        this.revokeArtworkUrl(attachmentId);
+        this.artworkUrls.set(attachmentId, url);
+        this.pruneArtworkUrls();
+        return url;
+      } catch {
+        // Decorative cover only: the card keeps its local/default fallback.
+        return null;
+      } finally {
+        if (this.artworkTokens.get(attachmentId) === token) {
+          this.artworkTokens.delete(attachmentId);
+          this.artworkInFlight.delete(attachmentId);
+        }
+      }
+    })();
+
+    this.artworkInFlight.set(attachmentId, promise);
+    return promise;
+  }
+
+  /** Drop one cached cover (expired bytes, replaced artwork, deleted row). */
+  invalidateArtwork(attachmentId: string): void {
+    this.revokeArtworkUrl(attachmentId);
+    this.artworkInFlight.delete(attachmentId);
+    this.artworkTokens.delete(attachmentId);
+  }
+
+  private createArtworkObjectUrl(blob: Blob): string | null {
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return null;
+    try {
+      return URL.createObjectURL(blob);
+    } catch {
+      return null;
+    }
+  }
+
+  private revokeArtworkUrl(attachmentId: string): void {
+    const url = this.artworkUrls.get(attachmentId);
+    this.artworkUrls.delete(attachmentId);
+    if (url === undefined) return;
+    if (typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      // Revocation is best-effort; the entry is dropped either way.
+    }
+  }
+
+  private revokeAllArtworkUrls(): void {
+    for (const attachmentId of [...this.artworkUrls.keys()]) this.revokeArtworkUrl(attachmentId);
+  }
+
+  /** Bounded cache: drop the oldest object URLs instead of growing forever. */
+  private pruneArtworkUrls(): void {
+    while (this.artworkUrls.size > MAX_ARTWORK_URLS) {
+      const oldest = this.artworkUrls.keys().next();
+      if (oldest.done) return;
+      this.revokeArtworkUrl(oldest.value);
+    }
+  }
+
   async getDownloadUrl(attachmentId: string): Promise<DownloadUrl> {
     const now = this.now();
     const cached = this.downloadCache.get(attachmentId);
@@ -858,6 +987,9 @@ export class FilesStore {
     this.patch(initialState());
     this.downloadCache.clear();
     this.downloadInFlight.clear();
+    this.revokeAllArtworkUrls();
+    this.artworkInFlight.clear();
+    this.artworkTokens.clear();
     this.pumping.clear();
     this.starting.clear();
     this.polling.clear();

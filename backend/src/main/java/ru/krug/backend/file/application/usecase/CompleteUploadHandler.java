@@ -22,6 +22,7 @@ import ru.krug.backend.file.domain.exception.UploadExpiredException;
 import ru.krug.backend.file.domain.exception.UploadNotFoundException;
 import ru.krug.backend.file.domain.exception.UploadStateException;
 import ru.krug.backend.file.domain.model.Attachment;
+import ru.krug.backend.file.domain.model.MediaMetadata;
 import ru.krug.backend.file.domain.model.Sha256;
 import ru.krug.backend.file.domain.model.Upload;
 import ru.krug.backend.file.domain.model.UploadPart;
@@ -51,12 +52,13 @@ public class CompleteUploadHandler {
     private final ObjectStoragePort storage;
     private final WorkspaceQuotaPort quota;
     private final ClockPort clock;
+    private final AudioMetadataExtractor audioMetadataExtractor;
 
     public CompleteUploadHandler(FileAccessGuard accessGuard, UploadRepository uploadRepository,
                                  UploadPartRepository partRepository,
                                  AttachmentRepository attachmentRepository,
                                  ObjectStoragePort storage, WorkspaceQuotaPort quota,
-                                 ClockPort clock) {
+                                 ClockPort clock, AudioMetadataExtractor audioMetadataExtractor) {
         this.accessGuard = accessGuard;
         this.uploadRepository = uploadRepository;
         this.partRepository = partRepository;
@@ -64,6 +66,7 @@ public class CompleteUploadHandler {
         this.storage = storage;
         this.quota = quota;
         this.clock = clock;
+        this.audioMetadataExtractor = audioMetadataExtractor;
     }
 
     @Transactional
@@ -124,18 +127,45 @@ public class CompleteUploadHandler {
             throw new FileHashMismatchException(expected.value(), actualSha);
         }
 
-        Attachment attachment = Attachment.uploaded(UUID.randomUUID(), upload.workspaceId(),
+        UUID attachmentId = UUID.randomUUID();
+        MediaMetadata media = serverFallback(upload, attachmentId);
+        Attachment attachment = Attachment.uploaded(attachmentId, upload.workspaceId(),
                 upload.chatId(), upload.id(), upload.userId(), upload.filename(),
-                upload.mimeType(), upload.media(), upload.sizeBytes(), expected,
+                upload.mimeType(), media, upload.sizeBytes(), expected,
                 upload.objectKey(), now);
         attachmentRepository.save(attachment);
         Upload scanning = upload.markScanning(attachment.id(), now);
+        if (media != upload.media()) {
+            scanning = scanning.withMedia(media, now);
+        }
         if (upload.sha256() == null) {
             scanning = scanning.withSha(expected, now);
         }
         uploadRepository.save(scanning);
         quota.commit(upload.workspaceId(), upload.id(), now);
         return view(scanning);
+    }
+
+    /**
+     * #97: when the client sent no usable media, parse the completed object and fill
+     * AUDIO/SERVER metadata. An E2EE chat is never inspected: plaintext extraction there
+     * would defeat the chat's ciphertext-only contract.
+     */
+    private MediaMetadata serverFallback(Upload upload, UUID attachmentId) {
+        MediaMetadata media = upload.media();
+        if (!audioMetadataExtractor.needsServerMetadata(media)) {
+            return media;
+        }
+        if (!audioMetadataExtractor.isAudio(upload.mimeType(), upload.filename())) {
+            return media;
+        }
+        if (upload.chatId() != null && accessGuard.isE2eeChat(upload.workspaceId(),
+                upload.chatId(), upload.userId())) {
+            return media;
+        }
+        return audioMetadataExtractor.extract(upload.workspaceId(), attachmentId,
+                upload.mimeType(), upload.filename(), upload.objectKey(),
+                upload.sizeBytes()).media();
     }
 
     private UploadView view(Upload upload) {

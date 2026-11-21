@@ -20,7 +20,8 @@ public final class TestProperties {
                 new KrugProperties.RateLimit(true, 30, Duration.ofSeconds(10), 5,
                         Duration.ofSeconds(1), 60, Duration.ofSeconds(60), 10,
                         Duration.ofSeconds(60), 10, Duration.ofSeconds(60), 30,
-                        Duration.ofHours(1)),
+                        Duration.ofHours(1), 60, Duration.ofSeconds(60), 10,
+                        Duration.ofSeconds(1)),
                 new KrugProperties.Outbox(new KrugProperties.Outbox.Relay(false,
                         Duration.ofSeconds(1), 500)),
                 new KrugProperties.Oidc("", "", "krug-api", "krug-web", Duration.ofSeconds(30)),
@@ -34,7 +35,20 @@ public final class TestProperties {
                 new KrugProperties.RateLimit(enabled, perUser, userWindow, perChat,
                         Duration.ofSeconds(1), 60, Duration.ofSeconds(60), 10,
                         Duration.ofSeconds(60), 10, Duration.ofSeconds(60), 30,
-                        Duration.ofHours(1)),
+                        Duration.ofHours(1), 60, Duration.ofSeconds(60), 10,
+                        Duration.ofSeconds(1)),
+                base.outbox(), base.oidc(), base.e2ee());
+    }
+
+    /** #96: per-bot/per-chat windows for the bot send limiter. */
+    public static KrugProperties withBotRateLimit(int perBot, Duration botWindow, int perChat) {
+        KrugProperties base = defaults();
+        return new KrugProperties(base.auth(), base.content(), base.dev(),
+                new KrugProperties.RateLimit(true, 10000, Duration.ofSeconds(10), 10000,
+                        Duration.ofSeconds(1), 60, Duration.ofSeconds(60), 10,
+                        Duration.ofSeconds(60), 10, Duration.ofSeconds(60), 30,
+                        Duration.ofHours(1), perBot, botWindow, perChat,
+                        Duration.ofSeconds(1)),
                 base.outbox(), base.oidc(), base.e2ee());
     }
 }

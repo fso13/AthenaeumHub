@@ -1,8 +1,10 @@
 import { useEffect, useId } from 'react';
-import type { MusicRoomTrack } from '../../api/types';
+import type { AttachmentMedia, MusicRoomTrack } from '../../api/types';
 import { describeError } from '../../domain/errors';
-import { formatBytes, formatDuration, safeHttpUrl } from '../../files/format';
+import { formatBytes, formatDuration } from '../../files/format';
+import { isServerArtworkUrl } from '../../files/media';
 import { t } from '../../i18n/ru';
+import { ArtworkImage } from '../ArtworkImage';
 import { useChatState, useMusicRoomState, useMusicRoomStore } from '../../store/ChatProvider';
 import {
   MusicIcon,
@@ -41,22 +43,25 @@ function TrackMeta({ track }: { track: MusicRoomTrack }) {
 }
 
 function TrackArtwork({ track }: { track: MusicRoomTrack }) {
-  const artwork = safeHttpUrl(track.artwork_url);
-  if (!artwork) {
-    return (
-      <span className="music-track__cover music-track__cover--fallback" aria-hidden="true">
-        <MusicIcon />
-      </span>
-    );
-  }
+  // #97: `artwork_url` may be the authenticated server endpoint; resolve it as
+  // a blob instead of putting it into `<img src>` (that would be a `401`).
+  const media: AttachmentMedia | null = track.artwork_url
+    ? {
+        kind: 'AUDIO',
+        metadata_source: isServerArtworkUrl(track.id, track.artwork_url) ? 'SERVER' : 'NONE',
+        artwork_url: track.artwork_url,
+      }
+    : null;
   return (
-    <img
+    <ArtworkImage
+      attachmentId={track.id}
+      media={media}
       className="music-track__cover"
-      src={artwork}
-      alt=""
-      loading="lazy"
-      referrerPolicy="no-referrer"
-      draggable={false}
+      fallback={
+        <span className="music-track__cover music-track__cover--fallback" aria-hidden="true">
+          <MusicIcon />
+        </span>
+      }
     />
   );
 }

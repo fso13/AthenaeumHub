@@ -39,6 +39,10 @@ public class InMemoryRateLimiter implements RateLimitPort {
     private final long inviteAcceptUserWindowNanos;
     private final int inviteCreatePerChat;
     private final long inviteCreateChatWindowNanos;
+    private final int botSendPerBot;
+    private final long botSendBotWindowNanos;
+    private final int botSendPerChat;
+    private final long botSendChatWindowNanos;
     private final ConcurrentHashMap<String, Window> windows = new ConcurrentHashMap<>();
 
     public InMemoryRateLimiter(KrugProperties properties) {
@@ -56,6 +60,10 @@ public class InMemoryRateLimiter implements RateLimitPort {
         this.inviteAcceptUserWindowNanos = config.inviteAcceptWindow().toNanos();
         this.inviteCreatePerChat = config.inviteCreatePerChat();
         this.inviteCreateChatWindowNanos = config.inviteCreateWindow().toNanos();
+        this.botSendPerBot = config.botSendPerBot();
+        this.botSendBotWindowNanos = config.botSendWindow().toNanos();
+        this.botSendPerChat = config.botSendPerChat();
+        this.botSendChatWindowNanos = config.botSendChatWindow().toNanos();
     }
 
     @Override
@@ -98,6 +106,15 @@ public class InMemoryRateLimiter implements RateLimitPort {
         }
         enforce("invite-create:chat:" + chatId, inviteCreatePerChat,
                 inviteCreateChatWindowNanos, "chat");
+    }
+
+    @Override
+    public void checkBotSend(UUID botId, UUID chatId) {
+        if (!enabled) {
+            return;
+        }
+        enforce("bot-send:bot:" + botId, botSendPerBot, botSendBotWindowNanos, "bot");
+        enforce("bot-send:chat:" + chatId, botSendPerChat, botSendChatWindowNanos, "chat");
     }
 
     private void enforce(String key, int limit, long windowNanos, String scope) {

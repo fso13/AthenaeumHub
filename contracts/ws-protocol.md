@@ -79,6 +79,11 @@
 `krug.e2ee.enabled=false` live- и replay-кадры E2EE не публикуются: ни `message.created`, ни
 `crypto` (P2-03 review-06); managed-события не затронуты.
 
+#96: bot-сообщения приходят в том же `message.created` с `payload.sender_type="BOT"`,
+`payload.sender_id=null`, заполненным `payload.bot_id` и `payload.sender_display_name` = имя
+бота на момент отправки. Клиент рисует BOT-бейдж по `sender_type`, а не по имени. E2EE
+bot-сообщений не существует: бот не устанавливается в E2EE-чат и не может туда писать.
+
 `message.updated`/`message.deleted`/`message.reaction.changed` — live-события после
 commit REST-операции. Они **не входят в durable replay** `seq > last_seq` (replay
 по-прежнему отдаёт `message.created` с актуальным состоянием строки, включая
@@ -132,6 +137,8 @@ generation при этом не меняется) плюс `device.list.changed`
     "type": "TEXT",
     "sender_id": "...",
     "sender_display_name": "...",
+    "sender_type": "USER",
+    "bot_id": null,
     "text": "...",
     "thread_root_id": null,
     "created_at": "..."

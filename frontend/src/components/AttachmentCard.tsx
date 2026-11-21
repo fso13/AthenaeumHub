@@ -11,9 +11,9 @@ import {
   isSupportedAudioMime,
   isSupportedVideoMime,
   isVideoMime,
-  safeHttpUrl,
 } from '../files/format';
 import { isVoiceMedia, songDisplay } from '../files/media';
+import { useArtwork } from '../hooks/useArtwork';
 import { t, type MessageKey } from '../i18n/ru';
 import { useFilesStore } from '../store/ChatProvider';
 import { AudioAttachment } from './AudioAttachment';
@@ -120,15 +120,18 @@ export function AttachmentCard({
   // D1-FE2: media metadata only decorates an already-allowed attachment.
   const song = audio ? songDisplay(media) : null;
   const voiceVariant = audio && isVoiceMedia(media, attachment.filename);
-  // An untagged MP3 (metadata_source NONE) still gets the song-card fallback
-  // (filename + unknown artist + default cover); legacy attachments without
-  // any `media` keep the original audio card unchanged.
+  // An untagged MP3 still gets the song-card fallback: local `NONE` (#D1-FE2)
+  // and server `SERVER` (#97) both mean "no tags, show filename + default
+  // cover"; legacy attachments without any `media` keep the audio card.
   const songVariant =
     audio &&
     media?.kind === 'AUDIO' &&
     !voiceVariant &&
-    (song !== null || media.metadata_source === 'NONE');
-  const poster = video ? safeHttpUrl(media?.artwork_url) : null;
+    (song !== null || media.metadata_source === 'NONE' || media.metadata_source === 'SERVER');
+  // #97: a video poster may be the authenticated server artwork; resolve it
+  // through the API client instead of putting the endpoint into `poster`.
+  const posterArtwork = useArtwork(attachment.id, media, video);
+  const poster = video ? posterArtwork.url : null;
   const durationMs = elementDurationMs ?? media?.duration_ms ?? null;
   const dimensions =
     media?.width && media?.height

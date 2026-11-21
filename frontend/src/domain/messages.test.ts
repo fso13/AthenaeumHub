@@ -19,6 +19,7 @@ function message(seq: number, overrides: Partial<ApiMessage> = {}): ApiMessage {
     chat_id: 'chat-1',
     seq,
     type: 'TEXT',
+    sender_type: 'USER',
     sender_id: 'user-1',
     sender_display_name: 'Анна',
     text: `text ${seq}`,

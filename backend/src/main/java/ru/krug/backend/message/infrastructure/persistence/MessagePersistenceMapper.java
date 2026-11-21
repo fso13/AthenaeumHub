@@ -36,7 +36,8 @@ public class MessagePersistenceMapper {
                 entity.getPollId(), entity.getTaskId(), entity.getReplyToId(),
                 entity.getThreadRootId(), entity.getClientMessageId(), mentions(entity),
                 entity.isMentionAll(), entity.getCreatedAt(),
-                entity.getEditedAt(), entity.getDeletedAt(), entity.getVersion());
+                entity.getEditedAt(), entity.getDeletedAt(), entity.getVersion(),
+                Message.SenderType.valueOf(entity.getSenderType()), entity.getBotId());
     }
 
     public MessageEntity toEntity(Message message) {
@@ -51,8 +52,8 @@ public class MessagePersistenceMapper {
                 message.type().name(), message.cryptoScheme().name(), ciphertext, contentMeta,
                 message.clientMessageId(), message.stickerId(), message.pollId(),
                 message.taskId(), message.replyToId(), message.threadRootId(),
-                message.mentions(), message.mentionAll(), message.createdAt(),
-                message.version());
+                message.mentions(), message.mentionAll(), message.senderType().name(),
+                message.botId(), message.createdAt(), message.version());
     }
 
     private static List<UUID> mentions(MessageEntity entity) {

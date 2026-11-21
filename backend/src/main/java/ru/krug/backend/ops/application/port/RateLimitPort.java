@@ -36,4 +36,13 @@ public interface RateLimitPort {
      *         {@code Retry-After} when the window is exhausted
      */
     void checkInviteCreate(Principal principal, UUID chatId);
+
+    /**
+     * #96: bot message-send guard. A bot credential is a bearer secret with no user session,
+     * so it gets its own per-bot and per-chat windows, independent of user sends.
+     *
+     * @throws ru.krug.backend.shared.error.DomainException 429 {@code RATE_LIMITED} with
+     *         {@code Retry-After} when a window is exhausted
+     */
+    void checkBotSend(UUID botId, UUID chatId);
 }

@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_VOICE_DURATION_MS,
   clampDuration,
+  externalArtworkUrl,
+  isServerArtworkUrl,
   mediaKindForFile,
   planUploadMedia,
   sanitizeMediaText,
   sanitizeMediaYear,
   songDisplay,
+  songMetaLine,
   songTitleOrFilename,
+  usesServerArtwork,
   voiceMediaMetadata,
 } from './media';
 
@@ -138,5 +142,73 @@ describe('song display', () => {
     expect(song).not.toBeNull();
     expect(songTitleOrFilename(song!, 'My Track.mp3')).toBe('My Track');
     expect(songTitleOrFilename(song!, 'My Track.mp3')).not.toBe('Unknown');
+  });
+});
+
+describe('#97 artwork URL policy', () => {
+  const id = 'aa970000-0000-4000-8000-000000000097';
+  const serverUrl = `http://localhost:8081/api/v1/attachments/${id}/artwork`;
+
+  it('recognizes the authenticated artwork endpoint only for the same attachment', () => {
+    expect(isServerArtworkUrl(id, serverUrl)).toBe(true);
+    expect(isServerArtworkUrl(id, `${serverUrl}?token=leak`)).toBe(true);
+    expect(isServerArtworkUrl(id, 'https://cdn.example/art/cover.jpg')).toBe(false);
+    expect(isServerArtworkUrl(id, 'http://localhost:8081/api/v1/attachments/other/artwork')).toBe(
+      false,
+    );
+    expect(isServerArtworkUrl(id, 'not a url')).toBe(false);
+    expect(isServerArtworkUrl('', serverUrl)).toBe(false);
+  });
+
+  it('routes SERVER audio to the blob endpoint and keeps public posters direct', () => {
+    expect(
+      usesServerArtwork(id, {
+        kind: 'AUDIO',
+        metadata_source: 'SERVER',
+        artwork_url: serverUrl,
+      }),
+    ).toBe(true);
+    expect(
+      usesServerArtwork(id, {
+        kind: 'AUDIO',
+        metadata_source: 'SERVER',
+        artwork_url: null,
+      }),
+    ).toBe(true);
+    expect(
+      usesServerArtwork(id, {
+        kind: 'VIDEO',
+        metadata_source: 'SERVER',
+        artwork_url: 'https://cdn.example/poster.jpg',
+      }),
+    ).toBe(false);
+    expect(
+      externalArtworkUrl(id, {
+        kind: 'AUDIO',
+        metadata_source: 'SERVER',
+        artwork_url: serverUrl,
+      }),
+    ).toBeNull();
+    expect(
+      externalArtworkUrl(id, {
+        kind: 'VIDEO',
+        metadata_source: 'SERVER',
+        artwork_url: 'https://cdn.example/poster.jpg',
+      }),
+    ).toBe('https://cdn.example/poster.jpg');
+  });
+
+  it('builds a compact song line for the file-center row', () => {
+    const song = songDisplay({
+      kind: 'AUDIO',
+      metadata_source: 'SERVER',
+      title: 'Ночной эфир',
+      artist: 'Квартет',
+      album: 'Полночь',
+      year: '2019',
+      duration_ms: 245_000,
+    });
+    expect(songMetaLine(song, 245_000)).toBe('Ночной эфир · Квартет · Полночь · 2019 · 4:05');
+    expect(songMetaLine(null, null)).toBe('');
   });
 });

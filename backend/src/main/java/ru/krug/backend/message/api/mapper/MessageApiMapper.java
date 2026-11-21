@@ -59,7 +59,8 @@ public final class MessageApiMapper {
                         reaction.count(), reaction.me()))
                 .toList();
         return new MessageResponse(view.id(), view.chatId(), view.seq(), view.type(),
-                view.senderId(), view.senderDisplayName(), view.text(), view.replyToId(),
+                view.senderId(), view.senderDisplayName(), view.senderType(), view.botId(),
+                view.text(), view.replyToId(),
                 view.threadRootId(), view.createdAt(), view.editedAt(), view.deletedAt(),
                 view.version(), view.clientMessageId(), view.crypto(), view.stickerId(),
                 sticker(view.sticker()), attachments, reactions,

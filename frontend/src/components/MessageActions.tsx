@@ -373,6 +373,10 @@ export function MessageActions({
 
   if (message.deleted_at) return null;
 
+  // #96: bot messages are authored by a bot, not by the viewer. Reactions,
+  // replies and pinning stay available, but edit/delete affordances would be
+  // impersonation and are not rendered at all.
+  const botMessage = message.sender_type === 'BOT';
   const canThread = !message.thread_root_id;
   const editDisabledReason = e2eeChat
     ? t('message.editE2ee')
@@ -574,43 +578,46 @@ export function MessageActions({
     </div>
   ) : null;
 
-  const menu = menuOpen ? (
-    <div
-      className="msg-popover delete-menu"
-      role="dialog"
-      aria-label={t('message.deleteTitle')}
-      ref={menuRef}
-    >
-      <p className="msg-popover__title">{t('message.deleteTitle')}</p>
-      <button
-        type="button"
-        ref={firstMenuItemRef}
-        className="delete-menu__item"
-        onClick={() => void removeForMe()}
+  const menu =
+    menuOpen && !botMessage ? (
+      <div
+        className="msg-popover delete-menu"
+        role="dialog"
+        aria-label={t('message.deleteTitle')}
+        ref={menuRef}
       >
-        <span className="delete-menu__label">{t('message.deleteMe')}</span>
-        <span className="delete-menu__hint">{t('message.deleteMeHint')}</span>
-      </button>
-      {mine && !structured ? (
+        <p className="msg-popover__title">{t('message.deleteTitle')}</p>
         <button
           type="button"
-          className="delete-menu__item delete-menu__item--danger"
-          onClick={() => {
-            setMenuOpen(false);
-            setConfirmError(null);
-            // Capture a stable return target for the confirm dialog; the menu
-            // item that was clicked is unmounted in this same render.
-            deleteTriggerRef.current?.focus();
-            setConfirmOpen(true);
-          }}
+          ref={firstMenuItemRef}
+          className="delete-menu__item"
+          onClick={() => void removeForMe()}
         >
-          <span className="delete-menu__label">{t('message.deleteAll')}</span>
-          <span className="delete-menu__hint">{t('message.deleteAllHint')}</span>
+          <span className="delete-menu__label">{t('message.deleteMe')}</span>
+          <span className="delete-menu__hint">{t('message.deleteMeHint')}</span>
         </button>
-      ) : null}
-      {structured ? <p className="delete-menu__hint">{t('message.deleteStructuredHint')}</p> : null}
-    </div>
-  ) : null;
+        {mine && !structured ? (
+          <button
+            type="button"
+            className="delete-menu__item delete-menu__item--danger"
+            onClick={() => {
+              setMenuOpen(false);
+              setConfirmError(null);
+              // Capture a stable return target for the confirm dialog; the menu
+              // item that was clicked is unmounted in this same render.
+              deleteTriggerRef.current?.focus();
+              setConfirmOpen(true);
+            }}
+          >
+            <span className="delete-menu__label">{t('message.deleteAll')}</span>
+            <span className="delete-menu__hint">{t('message.deleteAllHint')}</span>
+          </button>
+        ) : null}
+        {structured ? (
+          <p className="delete-menu__hint">{t('message.deleteStructuredHint')}</p>
+        ) : null}
+      </div>
+    ) : null;
 
   const editDialog = editOpen ? (
     <div
@@ -796,7 +803,7 @@ export function MessageActions({
         >
           <EmojiIcon aria-hidden="true" />
         </button>
-        {mine ? (
+        {mine && !botMessage ? (
           <button
             type="button"
             ref={editTriggerRef}
@@ -828,23 +835,25 @@ export function MessageActions({
             <TranslateIcon aria-hidden="true" />
           </button>
         ) : null}
-        <button
-          type="button"
-          ref={deleteTriggerRef}
-          className="msg-tool"
-          aria-haspopup="dialog"
-          aria-expanded={menuOpen}
-          aria-label={t('message.delete')}
-          title={t('message.delete')}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => {
-            setPickerOpen(false);
-            setTranslateMenuOpen(false);
-            setMenuOpen((open) => !open);
-          }}
-        >
-          <TrashIcon aria-hidden="true" />
-        </button>
+        {botMessage ? null : (
+          <button
+            type="button"
+            ref={deleteTriggerRef}
+            className="msg-tool"
+            aria-haspopup="dialog"
+            aria-expanded={menuOpen}
+            aria-label={t('message.delete')}
+            title={t('message.delete')}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={() => {
+              setPickerOpen(false);
+              setTranslateMenuOpen(false);
+              setMenuOpen((open) => !open);
+            }}
+          >
+            <TrashIcon aria-hidden="true" />
+          </button>
+        )}
         {replyAction}
         {pinAction}
         {threadAction}

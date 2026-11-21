@@ -16,12 +16,24 @@ public final class Message {
         TEXT, STICKER, SYSTEM, POLL, TASK
     }
 
+    /**
+     * Who authored the row. {@code USER} is the default for every existing message.
+     * {@code BOT} rows carry a {@code botId} and no user/device identity — a bot can never
+     * impersonate a member.
+     */
+    public enum SenderType {
+        USER, BOT
+    }
+
     private final UUID id;
     private final UUID workspaceId;
     private final UUID chatId;
     private final long seq;
     private final UUID senderId;
     private final UUID senderDeviceId;
+    private final SenderType senderType;
+    /** Author bot for {@link SenderType#BOT}; null for every user message. */
+    private final UUID botId;
     private final String senderDisplayName;
     private final Type type;
     private final CryptoScheme cryptoScheme;
@@ -52,7 +64,8 @@ public final class Message {
                     Instant deletedAt, int version) {
         this(id, workspaceId, chatId, seq, senderId, senderDeviceId, senderDisplayName, type,
                 cryptoScheme, body, stickerId, pollId, taskId, replyToId, threadRootId,
-                clientMessageId, List.of(), false, createdAt, editedAt, deletedAt, version);
+                clientMessageId, List.of(), false, createdAt, editedAt, deletedAt, version,
+                SenderType.USER, null);
     }
 
     private Message(UUID id, UUID workspaceId, UUID chatId, long seq, UUID senderId,
@@ -61,6 +74,19 @@ public final class Message {
                     UUID pollId, UUID taskId, UUID replyToId, UUID threadRootId,
                     UUID clientMessageId, List<UUID> mentions, boolean mentionAll,
                     Instant createdAt, Instant editedAt, Instant deletedAt, int version) {
+        this(id, workspaceId, chatId, seq, senderId, senderDeviceId, senderDisplayName, type,
+                cryptoScheme, body, stickerId, pollId, taskId, replyToId, threadRootId,
+                clientMessageId, mentions, mentionAll, createdAt, editedAt, deletedAt, version,
+                SenderType.USER, null);
+    }
+
+    private Message(UUID id, UUID workspaceId, UUID chatId, long seq, UUID senderId,
+                    UUID senderDeviceId, String senderDisplayName, Type type,
+                    CryptoScheme cryptoScheme, MessageBody body, UUID stickerId,
+                    UUID pollId, UUID taskId, UUID replyToId, UUID threadRootId,
+                    UUID clientMessageId, List<UUID> mentions, boolean mentionAll,
+                    Instant createdAt, Instant editedAt, Instant deletedAt, int version,
+                    SenderType senderType, UUID botId) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
         this.chatId = Objects.requireNonNull(chatId, "chatId");
@@ -70,6 +96,8 @@ public final class Message {
         this.seq = seq;
         this.senderId = senderId;
         this.senderDeviceId = senderDeviceId;
+        this.senderType = Objects.requireNonNull(senderType, "senderType");
+        this.botId = botId;
         this.senderDisplayName = senderDisplayName;
         this.type = Objects.requireNonNull(type, "type");
         this.cryptoScheme = Objects.requireNonNull(cryptoScheme, "cryptoScheme");
@@ -124,11 +152,23 @@ public final class Message {
                 null, null, 1);
     }
 
+    /**
+     * #96: server-authored bot message. There is no user/device identity, no reply/thread,
+     * no sticker/plugin payload and no mention metadata. The bot name is snapshotted into
+     * {@code senderDisplayName} so renaming or disabling the bot never rewrites history.
+     */
+    public static Message createBotText(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                        UUID botId, String botDisplayName, MessageBody body,
+                                        Instant createdAt) {
+        return new Message(id, workspaceId, chatId, seq, null, null, botDisplayName,
+                Type.TEXT, CryptoScheme.MANAGED, body, null, null, null, null, null, null,
+                List.of(), false, createdAt, null, null, 1, SenderType.BOT, botId);
+    }
+
     public static Message createSticker(UUID id, UUID workspaceId, UUID chatId, long seq,
                                         UUID senderId, UUID senderDeviceId,
                                         String senderDisplayName, UUID stickerId, UUID replyToId,
-                                        UUID clientMessageId, Instant createdAt) {
-        return createSticker(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                                        UUID clientMessageId, Instant createdAt) {        return createSticker(id, workspaceId, chatId, seq, senderId, senderDeviceId,
                 senderDisplayName, stickerId, replyToId, null, clientMessageId, createdAt);
     }
 
@@ -229,7 +269,50 @@ public final class Message {
                 editedAt, deletedAt, version);
     }
 
+    /** Full persistence reconstitution including the #96 sender type and bot author. */
+    public static Message reconstitute(UUID id, UUID workspaceId, UUID chatId, long seq,
+                                       UUID senderId, UUID senderDeviceId, String senderDisplayName,
+                                       Type type, CryptoScheme cryptoScheme, MessageBody body,
+                                       UUID stickerId, UUID pollId, UUID taskId, UUID replyToId,
+                                       UUID threadRootId, UUID clientMessageId, List<UUID> mentions,
+                                       boolean mentionAll, Instant createdAt, Instant editedAt,
+                                       Instant deletedAt, int version, SenderType senderType,
+                                       UUID botId) {
+        return new Message(id, workspaceId, chatId, seq, senderId, senderDeviceId,
+                senderDisplayName, type, cryptoScheme, body, stickerId, pollId, taskId,
+                replyToId, threadRootId, clientMessageId, mentions, mentionAll, createdAt,
+                editedAt, deletedAt, version, senderType, botId);
+    }
+
     private void requireTypeInvariants() {
+        if (senderType == SenderType.BOT) {
+            if (botId == null) {
+                throw new IllegalArgumentException("BOT message requires a bot id");
+            }
+            if (type != Type.TEXT) {
+                throw new IllegalArgumentException("BOT message must be type TEXT");
+            }
+            if (cryptoScheme != CryptoScheme.MANAGED) {
+                throw new IllegalArgumentException("BOT message must be MANAGED");
+            }
+            if (senderId != null || senderDeviceId != null) {
+                throw new IllegalArgumentException(
+                        "BOT message must not carry a user or device identity");
+            }
+            if (body == null) {
+                throw new IllegalArgumentException("BOT message requires a body");
+            }
+            if (replyToId != null || threadRootId != null || stickerId != null
+                    || pollId != null || taskId != null) {
+                throw new IllegalArgumentException(
+                        "BOT message must not carry reply/thread/plugin/sticker metadata");
+            }
+            if (!mentions.isEmpty() || mentionAll) {
+                throw new IllegalArgumentException("BOT message must not carry mentions");
+            }
+        } else if (botId != null) {
+            throw new IllegalArgumentException("botId is only allowed on a BOT message");
+        }
         if (cryptoScheme == CryptoScheme.E2EE_PAIRWISE) {
             if (type != Type.TEXT) {
                 throw new IllegalArgumentException("E2EE message must be type TEXT");
@@ -254,7 +337,7 @@ public final class Message {
                 throw new IllegalArgumentException("E2EE message requires sender and device");
             }
         }
-        if (type == Type.TEXT && senderId == null) {
+        if (type == Type.TEXT && senderId == null && senderType != SenderType.BOT) {
             throw new IllegalArgumentException("TEXT message requires a sender");
         }
         if (type == Type.STICKER) {
@@ -331,6 +414,18 @@ public final class Message {
 
     public UUID senderDeviceId() {
         return senderDeviceId;
+    }
+
+    public SenderType senderType() {
+        return senderType;
+    }
+
+    public UUID botId() {
+        return botId;
+    }
+
+    public boolean isBotMessage() {
+        return senderType == SenderType.BOT;
     }
 
     public String senderDisplayName() {

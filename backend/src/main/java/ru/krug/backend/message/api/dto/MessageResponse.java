@@ -18,6 +18,9 @@ public record MessageResponse(
         String type,
         UUID senderId,
         String senderDisplayName,
+        /** #96: USER or BOT; a BOT message carries bot_id and no user/device sender. */
+        String senderType,
+        @JsonInclude(JsonInclude.Include.NON_NULL) UUID botId,
         String text,
         UUID replyToId,
         UUID threadRootId,

@@ -88,16 +88,26 @@ function messagePreview(message: ApiMessage | null): string {
 interface MessageMetaProps {
   author: string;
   mine: boolean;
+  isBot: boolean;
   message: ApiMessage;
   readByOthers: boolean;
   e2eeChat: boolean;
 }
 
 /** Flat author/time header shared by every message kind. */
-function MessageMeta({ author, mine, message, readByOthers, e2eeChat }: MessageMetaProps) {
+function MessageMeta({ author, mine, isBot, message, readByOthers, e2eeChat }: MessageMetaProps) {
   return (
     <div className="msg-head">
       <span className="msg-author">{author}</span>
+      {/*
+        #96: bot identity is derived from `sender_type`, never from the display
+        name: a renamed bot or a user called "Bot" must not gain the badge.
+      */}
+      {isBot ? (
+        <span className="msg-bot-badge" title={t('chat.botMessageHint')}>
+          {t('chat.botBadge')}
+        </span>
+      ) : null}
       {mine && !e2eeChat ? <span className="msg-you">{t('sidebar.user')}</span> : null}
       <time className="msg-time" dateTime={message.created_at}>
         {formatTime(message.created_at)}
@@ -118,7 +128,7 @@ function MessageMeta({ author, mine, message, readByOthers, e2eeChat }: MessageM
 
 export function MessageRow({
   message,
-  mine,
+  mine: mineProp,
   readByOthers,
   viewerId = null,
   replyTo,
@@ -139,6 +149,10 @@ export function MessageRow({
   onReply,
   onJumpTo,
 }: MessageRowProps) {
+  // #96: a bot row can never be "mine" and never shows user affordances; the
+  // server also enforces `sender_id=null` for BOT, this is a local backstop.
+  const isBot = message.sender_type === 'BOT';
+  const mine = mineProp && !isBot;
   /**
    * #83: the server is authoritative about who was mentioned. When the message
    * carries `mentions`, only those ids render as chips (a literal `@Name` typed
@@ -253,6 +267,7 @@ export function MessageRow({
     <MessageMeta
       author={author}
       mine={mine}
+      isBot={isBot}
       message={message}
       readByOthers={readByOthers}
       e2eeChat={e2eeChat}
@@ -264,11 +279,11 @@ export function MessageRow({
     const alt = sticker?.alt?.trim() || t('stickers.imageAlt');
     return (
       <article
-        className={`msg msg-row msg-row--sticker${mine ? ' msg-row--mine' : ''}`}
+        className={`msg msg-row msg-row--sticker${mine ? ' msg-row--mine' : ''}${isBot ? ' msg-row--bot' : ''}`}
         id={`message-${message.id}`}
         tabIndex={-1}
       >
-        <Avatar name={author} seed={message.sender_id} size="lg" />
+        <Avatar name={author} seed={message.bot_id ?? message.sender_id} size="lg" />
         <div className="msg-body">
           {meta}
           {quote}
@@ -316,14 +331,14 @@ export function MessageRow({
     return (
       <article
         className={`msg msg-row msg-row--plugin${mine ? ' msg-row--mine' : ''}${
-          highlighted ? ' is-focused' : ''
-        }`}
+          isBot ? ' msg-row--bot' : ''
+        }${highlighted ? ' is-focused' : ''}`}
         id={`message-${message.id}`}
         aria-labelledby={titleId}
         data-message-type={message.type}
         tabIndex={-1}
       >
-        <Avatar name={author} seed={message.sender_id} size="lg" />
+        <Avatar name={author} seed={message.bot_id ?? message.sender_id} size="lg" />
         <div className="msg-body">
           {meta}
           {quote}
@@ -369,11 +384,13 @@ export function MessageRow({
 
   return (
     <article
-      className={`msg msg-row${mine ? ' msg-row--mine' : ''}${highlighted ? ' is-focused' : ''}`}
+      className={`msg msg-row${mine ? ' msg-row--mine' : ''}${isBot ? ' msg-row--bot' : ''}${
+        highlighted ? ' is-focused' : ''
+      }`}
       id={`message-${message.id}`}
       tabIndex={-1}
     >
-      <Avatar name={author} seed={message.sender_id} size="lg" />
+      <Avatar name={author} seed={message.bot_id ?? message.sender_id} size="lg" />
       <div className="msg-body">
         {meta}
         {quote}

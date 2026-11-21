@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
-import { safeHttpUrl } from '../files/format';
 import { t } from '../i18n/ru';
 import { useProfileWorkspaceState, useProfileWorkspaceStore } from '../store/ChatProvider';
 import type { AvatarTarget } from '../profile/profileWorkspaceStore';
+import { ArtworkImage } from './ArtworkImage';
 import { DeviceImageUpload } from './DeviceImageUpload';
 import { RefreshIcon } from './Icons';
 
@@ -78,7 +78,6 @@ export function ImageFilePicker({
       {images.length > 0 ? (
         <ul className="cover-picker__grid">
           {images.map((item) => {
-            const artwork = safeHttpUrl(item.media?.artwork_url);
             const label = item.filename?.trim() || item.id;
             return (
               <li key={item.id}>
@@ -89,13 +88,15 @@ export function ImageFilePicker({
                   aria-label={`${label}: ${t('imagePicker.select')}`}
                   onClick={() => onSelect(item.id)}
                 >
-                  {artwork ? (
-                    <img src={artwork} alt="" loading="lazy" />
-                  ) : (
-                    <span className="cover-picker__fallback" aria-hidden="true">
-                      {label.slice(0, 12)}
-                    </span>
-                  )}
+                  <ArtworkImage
+                    attachmentId={item.id}
+                    media={item.media}
+                    fallback={
+                      <span className="cover-picker__fallback" aria-hidden="true">
+                        {label.slice(0, 12)}
+                      </span>
+                    }
+                  />
                   <span className="cover-picker__name">{label}</span>
                 </button>
               </li>

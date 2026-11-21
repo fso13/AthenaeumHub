@@ -13,6 +13,7 @@ import type {
   AuthRegisterRequest,
   AuthVerifyEmailRequest,
   BlockedUser,
+  Bot,
   Chat,
   ChatInvite,
   ChatMember,
@@ -61,6 +62,7 @@ import {
   buildChatSummaries,
   buildDirectMessages,
   buildGroupMessages,
+  buildMockBots,
   buildMockMe,
   buildMemberUsers,
   buildNotificationPreferences,
@@ -859,6 +861,44 @@ export interface MockWorkspaceInviteRecord extends WorkspaceInvite {
   token: string;
 }
 
+/**
+ * #96: workspace bot plus the mock-only credential. The real backend stores
+ * only a SHA-256 hash; handlers never expose `token` in a response except the
+ * one-time create/rotate `BotToken`.
+ */
+export interface MockBotRecord extends Bot {
+  token: string;
+}
+
+export interface MockChatBotRecord {
+  chatId: string;
+  botId: string;
+  workspaceId: string;
+  enabled: boolean;
+  installedBy: string;
+  installedAt: string;
+  updatedAt: string;
+}
+
+export type MockBotAction =
+  | 'create'
+  | 'list'
+  | 'update'
+  | 'disable'
+  | 'rotate'
+  | 'listChat'
+  | 'install'
+  | 'uninstall'
+  | 'send';
+
+export interface MockBotRequestRecord {
+  action: MockBotAction;
+  workspaceId: string | null;
+  chatId: string | null;
+  botId: string | null;
+  deviceId: string | null;
+}
+
 export interface MockDb {
   session: Session;
   me: MeResponse;
@@ -919,6 +959,22 @@ export interface MockDb {
   chatAvatarRequests: MockChatAvatarRequestRecord[];
   chatPins: Record<string, ChatPin[]>;
   chatPinRequests: MockChatPinRequestRecord[];
+  /** #96: workspace bots, mock-only credentials and chat installations. */
+  bots: MockBotRecord[];
+  chatBots: MockChatBotRecord[];
+  botRequests: MockBotRequestRecord[];
+  botDelayMs: number;
+  /** Server-side idempotency for `POST /bots/{botId}/messages`. */
+  botSendIdempotency: Map<string, { bodyHash: string; messageId: string }>;
+  forceBotListError: ForcedSendError | null;
+  forceBotCreateError: ForcedSendError | null;
+  forceBotUpdateError: ForcedSendError | null;
+  forceBotDisableError: ForcedSendError | null;
+  forceBotRotateError: ForcedSendError | null;
+  forceChatBotListError: ForcedSendError | null;
+  forceChatBotInstallError: ForcedSendError | null;
+  forceChatBotUninstallError: ForcedSendError | null;
+  forceBotSendError: ForcedSendError | null;
   chatArchiveRequests: MockChatArchiveRequestRecord[];
   chatDeleteRequests: Array<{ chatId: string; deviceId: string | null }>;
   forceChatCoverError: ForcedSendError | null;
@@ -1058,6 +1114,13 @@ export interface MockDb {
   forcePartError: ForcedFileError | null;
   forceCompleteError: ForcedFileError | null;
   forceDownloadError: ForcedFileError | null;
+
+  /* #97 server audio artwork (`GET /attachments/{id}/artwork`) */
+  /** Extracted raster cover bytes, keyed by attachment id. */
+  attachmentArtworks: Map<string, { mime: string; bytes: Uint8Array }>;
+  /** Every cover request, so suites can assert the bearer token was sent. */
+  artworkRequests: Array<{ attachmentId: string; authorized: boolean }>;
+  forceArtworkError: ForcedFileError | null;
 
   /* #73 file-center (`GET /files`) */
   fileCenterItems: FileItem[];
@@ -1632,6 +1695,20 @@ export function createMockDb(): MockDb {
     chatAvatarRequests: [],
     chatPins: buildChatPins(),
     chatPinRequests: [],
+    bots: buildMockBots(),
+    chatBots: [],
+    botRequests: [],
+    botDelayMs: 0,
+    botSendIdempotency: new Map(),
+    forceBotListError: null,
+    forceBotCreateError: null,
+    forceBotUpdateError: null,
+    forceBotDisableError: null,
+    forceBotRotateError: null,
+    forceChatBotListError: null,
+    forceChatBotInstallError: null,
+    forceChatBotUninstallError: null,
+    forceBotSendError: null,
     chatArchiveRequests: [],
     chatDeleteRequests: [],
     forceChatCoverError: null,
@@ -1724,6 +1801,10 @@ export function createMockDb(): MockDb {
     forcePartError: null,
     forceCompleteError: null,
     forceDownloadError: null,
+
+    attachmentArtworks: new Map(),
+    artworkRequests: [],
+    forceArtworkError: null,
 
     fileCenterItems: [],
     fileCenterRequests: [],
@@ -1882,6 +1963,20 @@ export function resetMockDb(db: MockDb): void {
   db.chatAvatarRequests = [];
   db.chatPins = fresh.chatPins;
   db.chatPinRequests = [];
+  db.bots = fresh.bots;
+  db.chatBots = fresh.chatBots;
+  db.botRequests = [];
+  db.botDelayMs = 0;
+  db.botSendIdempotency.clear();
+  db.forceBotListError = null;
+  db.forceBotCreateError = null;
+  db.forceBotUpdateError = null;
+  db.forceBotDisableError = null;
+  db.forceBotRotateError = null;
+  db.forceChatBotListError = null;
+  db.forceChatBotInstallError = null;
+  db.forceChatBotUninstallError = null;
+  db.forceBotSendError = null;
   db.chatArchiveRequests = [];
   db.chatDeleteRequests = [];
   db.forceChatCoverError = null;
@@ -1971,6 +2066,10 @@ export function resetMockDb(db: MockDb): void {
   db.forcePartError = null;
   db.forceCompleteError = null;
   db.forceDownloadError = null;
+
+  db.attachmentArtworks.clear();
+  db.artworkRequests = [];
+  db.forceArtworkError = null;
 
   db.fileCenterItems = [];
   db.fileCenterRequests = [];
@@ -2089,6 +2188,7 @@ export function insertMockMessage(
     chat_id: chatId,
     seq,
     type: 'TEXT',
+    sender_type: 'USER',
     sender_id: sender.id,
     sender_display_name: sender.name,
     text,
@@ -2120,6 +2220,45 @@ export function insertMockMessage(
 }
 
 /**
+ * #96: bot-authored message. Mirrors the backend shape: `sender_type=BOT`,
+ * `bot_id` set and both `sender_id`/sender device null (no impersonation).
+ */
+export function insertMockBotMessage(
+  db: MockDb,
+  chatId: string,
+  bot: { id: string; name: string },
+  text: string,
+): ApiMessage {
+  const chat = db.chats[chatId];
+  if (!chat) throw new Error(`Unknown mock chat: ${chatId}`);
+
+  const seq = chat.summary.last_seq + 1;
+  const created = new Date().toISOString();
+  const message: ApiMessage = {
+    id: `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`,
+    chat_id: chatId,
+    seq,
+    type: 'TEXT',
+    sender_type: 'BOT',
+    sender_id: null,
+    sender_display_name: bot.name,
+    bot_id: bot.id,
+    text,
+    reply_to_id: null,
+    created_at: created,
+    edited_at: null,
+    deleted_at: null,
+    version: 1,
+    reactions: [],
+  };
+
+  chat.messages.push(message);
+  chat.summary.last_seq = seq;
+  chat.summary.last_message_at = created;
+  return message;
+}
+
+/**
  * #95: server-created POLL/TASK row. The backend writes the message together
  * with the poll/task, so the mock must do the same and return its id.
  */
@@ -2139,6 +2278,7 @@ export function insertMockPluginMessage(
     chat_id: chatId,
     seq,
     type: input.type,
+    sender_type: 'USER',
     sender_id: sender.id,
     sender_display_name: sender.name,
     text: null,
@@ -2225,6 +2365,7 @@ export function insertMockStickerMessage(
     chat_id: chatId,
     seq,
     type: 'STICKER',
+    sender_type: 'USER',
     sender_id: sender.id,
     sender_display_name: sender.name,
     text: null,

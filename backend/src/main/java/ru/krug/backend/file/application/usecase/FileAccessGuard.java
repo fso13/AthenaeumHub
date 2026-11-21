@@ -89,6 +89,18 @@ public class FileAccessGuard {
     }
 
     /**
+     * #97: non-throwing security-mode probe used by upload completion. A missing/foreign
+     * chat is treated as "do not extract" (fail closed) so server-side plaintext parsing can
+     * never happen for an E2EE chat.
+     */
+    @Transactional(readOnly = true)
+    public boolean isE2eeChat(UUID workspaceId, UUID chatId, UUID userId) {
+        return chatAccess.findActiveChat(workspaceId, chatId, userId)
+                .map(access -> "E2EE".equals(access.securityMode()))
+                .orElse(true);
+    }
+
+    /**
      * Binds a Keycloak principal (no workspace claim) to the upload's workspace and activates
      * RLS. The SECURITY DEFINER resolver only returns the workspace for the uploader.
      */

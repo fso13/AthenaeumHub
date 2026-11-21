@@ -199,6 +199,16 @@ public final class Upload {
         return sha256 == null || sha256.matches(declared);
     }
 
+    /**
+     * #97: complete may replace empty client media with server-extracted metadata. The
+     * resumable session keeps the same sanitized copy for later GET upload reads.
+     */
+    public Upload withMedia(MediaMetadata value, Instant now) {
+        return new Upload(id, workspaceId, chatId, userId, filename, mimeType, value, sizeBytes,
+                sha256, encryptionMode, partSize, totalParts, objectKey, storageUploadId,
+                attachmentId, status, expiresAt, createdAt, now, completedAt);
+    }
+
     public Upload withSha(Sha256 value, Instant now) {
         return new Upload(id, workspaceId, chatId, userId, filename, mimeType, media, sizeBytes,
                 value, encryptionMode, partSize, totalParts, objectKey, storageUploadId,

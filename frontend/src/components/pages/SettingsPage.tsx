@@ -13,6 +13,7 @@ import { formatDateTime } from '../admin/format';
 import { Avatar } from '../Avatar';
 import {
   BellIcon,
+  BotIcon,
   EyeIcon,
   LockIcon,
   LogoutIcon,
@@ -25,14 +26,15 @@ import {
   SunIcon,
 } from '../Icons';
 import { BlockedUsersCard } from '../BlockedUsersCard';
+import { WorkspaceBotsCard } from '../bots/WorkspaceBotsCard';
 import { NotificationPreferencesDialog } from '../NotificationPreferencesDialog';
 import { WorkspaceSettingsPanel } from '../workspace/WorkspaceSettingsPanel';
 import { PageShell } from './PageShell';
 import { roleLabel, securityModeLabel, storageLimit, storageUsed, tariffLabel } from './pageData';
 
-type SettingsTab = 'profile' | 'appearance' | 'notifications' | 'workspace' | 'devices';
+type SettingsTab = 'profile' | 'appearance' | 'notifications' | 'workspace' | 'bots' | 'devices';
 
-type TabIconName = 'profile' | 'appearance' | 'bell' | 'shield' | 'monitor';
+type TabIconName = 'profile' | 'appearance' | 'bell' | 'shield' | 'bot' | 'monitor';
 
 interface TabEntry {
   id: SettingsTab;
@@ -45,6 +47,7 @@ const TABS: ReadonlyArray<TabEntry> = [
   { id: 'appearance', label: 'settings.nav.appearance', icon: 'appearance' },
   { id: 'notifications', label: 'settings.nav.notifications', icon: 'bell' },
   { id: 'workspace', label: 'settings.nav.workspace', icon: 'shield' },
+  { id: 'bots', label: 'settings.nav.bots', icon: 'bot' },
   { id: 'devices', label: 'settings.nav.devices', icon: 'monitor' },
 ];
 
@@ -67,6 +70,7 @@ function TabIcon({ icon }: { icon: TabIconName }) {
   if (icon === 'appearance') return <SunIcon aria-hidden="true" />;
   if (icon === 'bell') return <BellIcon aria-hidden="true" />;
   if (icon === 'shield') return <ShieldIcon aria-hidden="true" />;
+  if (icon === 'bot') return <BotIcon aria-hidden="true" />;
   if (icon === 'monitor') return <MonitorIcon aria-hidden="true" />;
   return <PeopleIcon aria-hidden="true" />;
 }
@@ -527,6 +531,16 @@ export function SettingsPage({
                 </div>
               </section>
             </>
+          ) : null}
+
+          {tab === 'bots' ? (
+            workspace ? (
+              <WorkspaceBotsCard workspace={workspace} actorRole={workspace.role} />
+            ) : (
+              <p className="card-empty" role="status">
+                {t('bots.unavailable')}
+              </p>
+            )
           ) : null}
 
           {tab === 'devices' ? (

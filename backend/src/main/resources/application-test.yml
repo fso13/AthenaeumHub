@@ -16,6 +16,9 @@ krug:
     # must not throttle repeated create/accept calls.
     invite-accept-per-user: 10000
     invite-create-per-chat: 10000
+    # #96: the shared suite never throttles bot sends; BotRateLimitIT lowers these explicitly.
+    bot-send-per-bot: 10000
+    bot-send-per-chat: 10000
   outbox:
     relay:
       enabled: false
@@ -63,6 +66,9 @@ krug:
     gc-enabled: false
     reconcile-enabled: false
     download-ttl: 5m
+    # #97: a stable, non-loopback origin so the contract-valid media.artwork_url can be
+    # asserted; the artwork bytes are fetched through the authenticated endpoint by id.
+    artwork-base-url: http://artwork.krug.test
 
 logging:
   level:

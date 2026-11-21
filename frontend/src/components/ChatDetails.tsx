@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ChatSummary, WorkspaceMemberRole } from '../api/types';
+import type { AttachmentMedia, ChatSummary, WorkspaceMemberRole } from '../api/types';
 import { chatDisplayName } from '../domain/chatLabel';
-import { isSafePreviewImage, safeHttpUrl } from '../files/format';
+import { isSafePreviewImage } from '../files/format';
 import { t, type MessageKey } from '../i18n/ru';
 import { enabledPluginCount } from '../plugins/model';
+import { useArtwork } from '../hooks/useArtwork';
 import { usePluginGate } from '../plugins/gate';
 import {
   useAvatarsState,
@@ -80,7 +81,7 @@ interface ChatDetailsProps {
 interface MediaItem {
   id: string;
   name: string;
-  url: string | null;
+  media: AttachmentMedia | null;
   kind: 'image' | 'video' | 'audio' | 'file';
   ext: string;
   mimeType: string | null;
@@ -110,7 +111,7 @@ function mediaItems(slice: ChatSlice | null): { items: MediaItem[]; total: numbe
       items.push({
         id: attachment.id,
         name: attachment.filename ?? t('attachments.attachmentOnly'),
-        url: safeHttpUrl(media?.artwork_url),
+        media: media ?? null,
         kind:
           kind === 'image'
             ? 'image'
@@ -137,14 +138,17 @@ function mediaFallback(kind: MediaItem['kind']) {
 
 /**
  * The details grid must show real image previews, not just an extension badge.
- * Presigned URLs are requested lazily only for CLEAN raster images; audio,
- * video and plain files keep the safe icon fallback (no extra API calls).
+ * Presigned URLs are requested lazily only for CLEAN raster images; a server
+ * cover (#97) is resolved as an authenticated blob, never as `src=artwork_url`.
  */
 function MediaPreview({ item }: { item: MediaItem }) {
   const files = useFilesStore();
-  const [url, setUrl] = useState<string | null>(item.url);
+  const cover = useArtwork(item.id, item.media);
+  const [url, setUrl] = useState<string | null>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+
   useEffect(() => {
-    setUrl(item.url);
+    setUrl(null);
     if (!isSafePreviewImage(item.mimeType) || item.scanStatus !== 'CLEAN') return;
     let active = true;
     void files
@@ -153,22 +157,24 @@ function MediaPreview({ item }: { item: MediaItem }) {
         if (active) setUrl(download.url);
       })
       .catch(() => {
-        // Keep the icon fallback; the attachment card has its own retry path.
+        // Keep the cover/icon fallback; the attachment card has its own retry.
       });
     return () => {
       active = false;
     };
-  }, [files, item.id, item.kind, item.scanStatus, item.url]);
+  }, [files, item.id, item.scanStatus, item.mimeType]);
 
-  if (url && isSafePreviewImage(item.mimeType)) {
+  const candidate = url ?? cover.url;
+  const src = candidate !== null && candidate !== failedSrc ? candidate : null;
+  if (src) {
     return (
       <img
-        src={url}
+        src={src}
         alt={item.name}
         loading="lazy"
         decoding="async"
         draggable={false}
-        onError={() => setUrl(null)}
+        onError={() => setFailedSrc(src)}
       />
     );
   }

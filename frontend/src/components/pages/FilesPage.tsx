@@ -6,7 +6,9 @@ import type { AdminActionErrorInfo } from '../admin/actionErrors';
 import { AdminConfirmDialog } from '../admin/AdminConfirmDialog';
 import type { FileItem, FileKindFilter, FileScanStatusFilter } from '../../api/types';
 import { describeError } from '../../domain/errors';
-import { formatBytes, isSafePreviewImage, safeHttpUrl } from '../../files/format';
+import { formatBytes, isSafePreviewImage } from '../../files/format';
+import { songDisplay, songMetaLine } from '../../files/media';
+import { useArtwork } from '../../hooks/useArtwork';
 import { t, type MessageKey } from '../../i18n/ru';
 import { useChatState, useFilesState, useFilesStore } from '../../store/ChatProvider';
 import type { AppState } from '../../store/chatStore';
@@ -81,31 +83,39 @@ function chatNameFor(item: FileItem, state: AppState): string {
   return t('files.unknownChat');
 }
 
-/** Presigned URL only for a CLEAN raster image; artwork is plain http(s). */
+/**
+ * #97 row cover. Priority:
+ *  1. a CLEAN raster image is previewed through the presigned attachment URL;
+ *  2. otherwise the authenticated server artwork blob (AUDIO cover, or an
+ *     IMAGE that cannot be previewed) — never `src=artwork_url`, which is an
+ *     authenticated endpoint and would return `401`;
+ *  3. the extension badge fallback.
+ */
 function useThumbnail(item: FileItem): string | null {
   const filesStore = useFilesStore();
-  const artwork = safeHttpUrl(item.media?.artwork_url);
   const previewable = isSafePreviewImage(item.mime_type) && item.scan_status === 'CLEAN';
-  const [url, setUrl] = useState<string | null>(artwork);
+  const [preview, setPreview] = useState<string | null>(null);
+  const cover = useArtwork(item.id, item.media);
 
   useEffect(() => {
-    setUrl(artwork);
+    setPreview(null);
     if (!previewable) return;
     let active = true;
     void filesStore
       .getDownloadUrl(item.id)
       .then((download) => {
-        if (active) setUrl(download.url);
+        if (active) setPreview(download.url);
       })
       .catch(() => {
-        // Keep the extension fallback; the row owns no preview error surface.
+        // Keep the extension/service-artwork fallback; the row owns no preview
+        // error surface.
       });
     return () => {
       active = false;
     };
-  }, [artwork, filesStore, item.id, previewable]);
+  }, [filesStore, item.id, previewable]);
 
-  return url;
+  return preview ?? cover.url;
 }
 
 function openExternal(url: string): void {
@@ -190,6 +200,11 @@ function FileRow({
   const scan = item.scan_status;
   const scanBlocked = scan === 'INFECTED' || scan === 'FAILED';
   const name = fileName(item);
+  // #97: server-extracted tags are shown for AUDIO rows (title/artist/album/
+  // year/duration). They arrive on the row itself, so a fresh upload shows
+  // metadata as soon as the post-upload `GET /files` refresh lands.
+  const song = kind === 'audio' ? songDisplay(item.media) : null;
+  const mediaLine = song ? songMetaLine(song, item.media?.duration_ms) : null;
 
   const handleDownload = async () => {
     if (busy || scanBlocked) return;
@@ -315,6 +330,11 @@ function FileRow({
         <small>
           {fileKindLabel(kind)} · {shortDate(item.created_at)}
         </small>
+        {mediaLine ? (
+          <small className="file-media-meta" title={mediaLine}>
+            {mediaLine}
+          </small>
+        ) : null}
         {renameError ? (
           <small className="file-error" id={`rename-error-${item.id}`} role="alert">
             {renameError}

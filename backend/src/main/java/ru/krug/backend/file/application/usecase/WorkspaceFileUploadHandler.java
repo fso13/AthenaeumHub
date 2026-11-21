@@ -21,6 +21,7 @@ import ru.krug.backend.audit.application.model.AuditRecord;
 import ru.krug.backend.audit.application.port.AuditPort;
 import ru.krug.backend.file.application.command.UploadWorkspaceFileCommand;
 import ru.krug.backend.file.application.model.FileItemView;
+import ru.krug.backend.file.application.model.FileMediaView;
 import ru.krug.backend.file.application.port.FileSettingsPort;
 import ru.krug.backend.file.application.port.ObjectStoragePort;
 import ru.krug.backend.file.application.port.WorkspaceQuotaPort;
@@ -28,6 +29,7 @@ import ru.krug.backend.file.domain.exception.FileTooLargeException;
 import ru.krug.backend.file.domain.exception.UnsupportedFileTypeException;
 import ru.krug.backend.file.domain.model.Attachment;
 import ru.krug.backend.file.domain.model.FileTypePolicy;
+import ru.krug.backend.file.domain.model.MediaMetadata;
 import ru.krug.backend.file.domain.model.ScanStatus;
 import ru.krug.backend.file.domain.model.Sha256;
 import ru.krug.backend.file.domain.model.Upload;
@@ -69,12 +71,14 @@ public class WorkspaceFileUploadHandler {
     private final FileSettingsPort settings;
     private final AuditPort audit;
     private final ClockPort clock;
+    private final AudioMetadataExtractor audioMetadataExtractor;
 
     public WorkspaceFileUploadHandler(FileAccessGuard accessGuard, WorkspaceQuotaPort quota,
                                       UploadRepository uploadRepository,
                                       AttachmentRepository attachmentRepository,
                                       ObjectStoragePort storage, FileSettingsPort settings,
-                                      AuditPort audit, ClockPort clock) {
+                                      AuditPort audit, ClockPort clock,
+                                      AudioMetadataExtractor audioMetadataExtractor) {
         this.accessGuard = accessGuard;
         this.quota = quota;
         this.uploadRepository = uploadRepository;
@@ -83,6 +87,7 @@ public class WorkspaceFileUploadHandler {
         this.settings = settings;
         this.audit = audit;
         this.clock = clock;
+        this.audioMetadataExtractor = audioMetadataExtractor;
     }
 
     @Transactional
@@ -143,8 +148,17 @@ public class WorkspaceFileUploadHandler {
             throw ex;
         }
 
-        Attachment attachment = Attachment.workspaceFile(UUID.randomUUID(), workspaceId,
-                upload.id(), scoped.userId(), filename, mime, null, upload.sizeBytes(), sha256,
+        UUID attachmentId = UUID.randomUUID();
+        // #97: a global upload has no client metadata object, so AUDIO is always parsed on
+        // the server. Malformed tags leave an AUDIO/SERVER object without fields and never
+        // fail the upload.
+        MediaMetadata media = null;
+        if (audioMetadataExtractor.isAudio(mime, filename)) {
+            media = audioMetadataExtractor.extract(workspaceId, attachmentId, mime, filename,
+                    upload.objectKey(), upload.sizeBytes()).media();
+        }
+        Attachment attachment = Attachment.workspaceFile(attachmentId, workspaceId,
+                upload.id(), scoped.userId(), filename, mime, media, upload.sizeBytes(), sha256,
                 upload.objectKey(), now);
         attachmentRepository.save(attachment);
         uploadRepository.save(upload.markScanning(attachment.id(), now));
@@ -156,7 +170,7 @@ public class WorkspaceFileUploadHandler {
                         "scan_status", ScanStatus.PENDING.name(), "source", "WORKSPACE"),
                 now));
         return new FileItemView(attachment.id(), filename, upload.sizeBytes(), mime,
-                ScanStatus.PENDING.name(), null, null, null, null, now);
+                ScanStatus.PENDING.name(), FileMediaView.from(media), null, null, null, now);
     }
 
     /**

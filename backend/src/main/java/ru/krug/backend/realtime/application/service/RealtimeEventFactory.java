@@ -103,6 +103,8 @@ public final class RealtimeEventFactory {
         payload.put("seq", message.seq());
         payload.put("type", message.type());
         payload.put("sender_id", message.senderId());
+        payload.put("sender_type", message.senderType());
+        payload.put("bot_id", message.botId());
         payload.put("sender_display_name", message.senderDisplayName());
         payload.put("text", message.text());
         payload.put("reply_to_id", message.replyToId());

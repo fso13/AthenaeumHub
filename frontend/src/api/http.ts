@@ -65,17 +65,21 @@ export class ApiClient {
    * `get` always parses JSON; an export is CSV or JSON and must stay a `Blob`
    * so the browser downloads exactly the bytes the server produced. Error
    * responses still use the contract JSON envelope and become `ApiError`.
+   *
+   * #97: `options.accept` lets an image endpoint advertise the exact raster
+   * types the contract allows instead of the export defaults.
    */
   async getBlob(
     path: string,
     query?: RequestOptions['query'],
+    options: { accept?: string } = {},
   ): Promise<{ blob: Blob; status: number; headers: Headers }> {
     const url = this.buildUrl(path, query);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
 
     const headers = new Headers({
-      Accept: 'text/csv, application/json',
+      Accept: options.accept ?? 'text/csv, application/json',
       'X-Request-Id': newUuid(),
     });
     const token = this.options.getToken();

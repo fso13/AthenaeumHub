@@ -19,6 +19,8 @@ import type {
   ApiMessage,
   AuthLoginRequest,
   BlockedUser,
+  Bot,
+  ChatBot,
   AuthRegisterRequest,
   AuthSession,
   Chat,
@@ -73,6 +75,8 @@ import type {
   WorkspaceSummary,
 } from '../api/types';
 import { sha256Bytes } from '../files/hash';
+import { readId3Tags } from '../files/id3';
+import { mediaKindForFile } from '../files/media';
 import { newUuid } from '../lib/ids';
 import { pluginUnavailableReason } from '../plugins/model';
 import { isSafePluginAssetPath } from '../plugins/assets';
@@ -83,8 +87,11 @@ import {
   createDefaultWorkspacePermissions,
   createMockPluginCatalog,
   createMockTwoFactor,
+  insertMockBotMessage,
   insertMockPluginMessage,
   type ChatRecord,
+  type MockBotRecord,
+  type MockChatBotRecord,
   type MockAuthUserRecord,
   type MockDb,
   type MockPluginAssetRecord,
@@ -171,6 +178,69 @@ async function readMultipartFile(request: Request): Promise<MultipartFilePart | 
     return { fileName, bytes: Uint8Array.from(body, (char) => char.charCodeAt(0)) };
   }
   return null;
+}
+
+/** #97 mock cover extracted by the "server"; bytes never come from the client. */
+export interface MockServerMedia {
+  media: NonNullable<FileItem['media']>;
+  artwork: { mime: string; bytes: Uint8Array } | null;
+}
+
+/**
+ * #97: in-mock stand-in for the backend audio extractor. The real server parses
+ * ID3v2/M4A itself; the mock reuses the bounded client parser so a FilesPage
+ * upload can observe the same "server extracted tags + authenticated artwork"
+ * response shape (`metadata_source=SERVER`, `artwork_url` = artwork endpoint).
+ * Non-audio media keeps only its kind, exactly like the backend.
+ */
+async function extractServerMedia(
+  bytes: Uint8Array,
+  filename: string,
+  mime: string,
+  attachmentId: string,
+  origin: string,
+): Promise<MockServerMedia | null> {
+  const kind = mediaKindForFile({ name: filename, type: mime });
+  if (kind === null) return null;
+  if (kind !== 'AUDIO') {
+    return { media: { kind, metadata_source: 'SERVER' }, artwork: null };
+  }
+
+  let tags: {
+    title?: string;
+    artist?: string;
+    album?: string;
+    year?: string;
+    genre?: string;
+    durationMs?: number;
+  } = {};
+  let artwork: { mime: string; bytes: Uint8Array } | null = null;
+  try {
+    const bytesCopy = new Uint8Array(bytes).buffer as ArrayBuffer;
+    const parsed = await readId3Tags(
+      new File([bytesCopy], filename, { type: mime || 'audio/mpeg' }),
+    );
+    if (parsed.status === 'ok') {
+      tags = parsed.tags;
+      artwork = parsed.artwork;
+    }
+  } catch {
+    // A malformed tag is still an AUDIO/SERVER row without tags.
+  }
+
+  const media: NonNullable<FileItem['media']> = { kind: 'AUDIO', metadata_source: 'SERVER' };
+  if (tags.title) media.title = tags.title;
+  if (tags.artist) media.artist = tags.artist;
+  if (tags.album) media.album = tags.album;
+  if (tags.year) media.year = tags.year;
+  if (tags.genre) media.genre = tags.genre;
+  if (typeof tags.durationMs === 'number' && tags.durationMs > 0) {
+    media.duration_ms = tags.durationMs;
+  }
+  if (artwork) {
+    media.artwork_url = `${origin}/api/v1/attachments/${attachmentId}/artwork`;
+  }
+  return { media, artwork };
 }
 
 interface MultipartFormPart {
@@ -416,6 +486,41 @@ function chatOwnerCount(db: MockDb, chatId: string): number {
 
 function isManagerRole(role: ChatMember['role'] | undefined): boolean {
   return role === 'OWNER' || role === 'ADMIN';
+}
+
+/* ------------------------------------------------------------------------- */
+/* #96 bots                                                                  */
+/* ------------------------------------------------------------------------- */
+
+/** Backend bot management is role-gated, not driven by the permission matrix. */
+function workspaceManager(db: MockDb, workspaceId: string): boolean {
+  const workspace = findMockWorkspace(db, workspaceId);
+  return workspace?.role === 'OWNER' || workspace?.role === 'ADMIN';
+}
+
+/** Contract `Bot` has no credential field; the mock keeps one only server-side. */
+function botView(record: MockBotRecord): Bot {
+  const { token: _token, ...bot } = record;
+  return bot;
+}
+
+/** Mock credential shape: `sova_bot_<workspace>_<bot>_<random>`. */
+function newBotToken(workspaceId: string, botId: string): string {
+  const random = `${newUuid().replace(/-/g, '')}${newUuid().replace(/-/g, '')}`;
+  return `sova_bot_${workspaceId}_${botId}_${random}`;
+}
+
+function chatBotView(db: MockDb, install: MockChatBotRecord): ChatBot | null {
+  const bot = db.bots.find(
+    (item) => item.id === install.botId && item.workspace_id === install.workspaceId,
+  );
+  if (!bot) return null;
+  return {
+    chat_id: install.chatId,
+    bot: botView(bot),
+    enabled: install.enabled,
+    installed_at: install.installedAt,
+  };
 }
 
 function chatMemberStatusOf(chat: ChatRecord | undefined): 'GROUP' | 'DIRECT' | null {
@@ -5236,6 +5341,403 @@ export function createHandlers(db: MockDb) {
       return HttpResponse.json(next);
     }),
 
+    /* ------------------------------------------------------------------ */
+    /* #96 bots: workspace management, chat install and the bot send API  */
+    /* ------------------------------------------------------------------ */
+
+    http.get(`${API}/workspaces/:workspaceId/bots`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      db.botRequests.push({
+        action: 'list',
+        workspaceId,
+        chatId: null,
+        botId: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotListError) {
+        const forced = db.forceBotListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!findMockWorkspace(db, workspaceId)) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      }
+      return HttpResponse.json({
+        items: db.bots
+          .filter((bot) => bot.workspace_id === workspaceId)
+          .sort((left, right) => right.created_at.localeCompare(left.created_at))
+          .map(botView),
+      });
+    }),
+
+    http.post(`${API}/workspaces/:workspaceId/bots`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      db.botRequests.push({
+        action: 'create',
+        workspaceId,
+        chatId: null,
+        botId: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotCreateError) {
+        const forced = db.forceBotCreateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!workspaceManager(db, workspaceId)) {
+        return errorResponse(403, 'FORBIDDEN', 'OWNER or ADMIN role is required');
+      }
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      const scopes = Array.isArray(body.scopes) ? body.scopes : null;
+      if (name.length < 1 || name.length > 80) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'name must be 1..80 characters', {
+          details: { field: 'name' },
+        });
+      }
+      if (!scopes || scopes.length !== 1 || scopes[0] !== 'chat.write') {
+        return errorResponse(422, 'VALIDATION_FAILED', 'scopes must be exactly [chat.write]', {
+          details: { field: 'scopes' },
+        });
+      }
+      const now = new Date().toISOString();
+      const bot: MockBotRecord = {
+        id: newUuid(),
+        workspace_id: workspaceId,
+        name,
+        avatar_file_id: null,
+        scopes: ['chat.write'],
+        status: 'ACTIVE',
+        created_by: db.me.user.id,
+        created_at: now,
+        updated_at: now,
+        token_rotated_at: null,
+        token: newBotToken(workspaceId, newUuid()),
+      };
+      db.bots = [bot, ...db.bots];
+      return HttpResponse.json({ bot: botView(bot), token: bot.token }, { status: 201 });
+    }),
+
+    http.patch(`${API}/workspaces/:workspaceId/bots/:botId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const botId = String(params.botId);
+      db.botRequests.push({
+        action: 'update',
+        workspaceId,
+        chatId: null,
+        botId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotUpdateError) {
+        const forced = db.forceBotUpdateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!workspaceManager(db, workspaceId)) {
+        return errorResponse(403, 'FORBIDDEN', 'OWNER or ADMIN role is required');
+      }
+      const bot = db.bots.find((item) => item.id === botId && item.workspace_id === workspaceId);
+      if (!bot) return errorResponse(404, 'BOT_NOT_FOUND', 'Bot not found');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      if (body.name !== undefined) {
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (name.length < 1 || name.length > 80) {
+          return errorResponse(422, 'VALIDATION_FAILED', 'name must be 1..80 characters', {
+            details: { field: 'name' },
+          });
+        }
+        bot.name = name;
+      }
+      if (body.scopes !== undefined) {
+        const scopes = Array.isArray(body.scopes) ? body.scopes : null;
+        if (!scopes || scopes.length !== 1 || scopes[0] !== 'chat.write') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'scopes must be exactly [chat.write]', {
+            details: { field: 'scopes' },
+          });
+        }
+        bot.scopes = ['chat.write'];
+      }
+      if (body.status !== undefined) {
+        if (body.status !== 'ACTIVE' && body.status !== 'DISABLED') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'status must be ACTIVE or DISABLED', {
+            details: { field: 'status' },
+          });
+        }
+        bot.status = body.status;
+      }
+      bot.updated_at = new Date().toISOString();
+      return HttpResponse.json(botView(bot));
+    }),
+
+    http.delete(`${API}/workspaces/:workspaceId/bots/:botId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const botId = String(params.botId);
+      db.botRequests.push({
+        action: 'disable',
+        workspaceId,
+        chatId: null,
+        botId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotDisableError) {
+        const forced = db.forceBotDisableError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!workspaceManager(db, workspaceId)) {
+        return errorResponse(403, 'FORBIDDEN', 'OWNER or ADMIN role is required');
+      }
+      const bot = db.bots.find((item) => item.id === botId && item.workspace_id === workspaceId);
+      if (!bot) return errorResponse(404, 'BOT_NOT_FOUND', 'Bot not found');
+      if (bot.status !== 'DISABLED') {
+        bot.status = 'DISABLED';
+        bot.updated_at = new Date().toISOString();
+      }
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/workspaces/:workspaceId/bots/:botId/token`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const botId = String(params.botId);
+      db.botRequests.push({
+        action: 'rotate',
+        workspaceId,
+        chatId: null,
+        botId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotRotateError) {
+        const forced = db.forceBotRotateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!workspaceManager(db, workspaceId)) {
+        return errorResponse(403, 'FORBIDDEN', 'OWNER or ADMIN role is required');
+      }
+      const bot = db.bots.find((item) => item.id === botId && item.workspace_id === workspaceId);
+      if (!bot) return errorResponse(404, 'BOT_NOT_FOUND', 'Bot not found');
+      const now = new Date().toISOString();
+      bot.token = newBotToken(workspaceId, botId);
+      bot.token_rotated_at = now;
+      bot.updated_at = now;
+      return HttpResponse.json({ bot: botView(bot), token: bot.token });
+    }),
+
+    http.get(`${API}/chats/:chatId/bots`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      db.botRequests.push({
+        action: 'listChat',
+        workspaceId: null,
+        chatId,
+        botId: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceChatBotListError) {
+        const forced = db.forceChatBotListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const record = db.chats[chatId];
+      const member = record ? chatActorMember(db, chatId) : null;
+      if (!record || !member) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      return HttpResponse.json({
+        items: db.chatBots
+          .filter((install) => install.chatId === chatId)
+          .map((install) => chatBotView(db, install))
+          .filter((item): item is ChatBot => item !== null),
+      });
+    }),
+
+    http.post(`${API}/chats/:chatId/bots`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      db.botRequests.push({
+        action: 'install',
+        workspaceId: null,
+        chatId,
+        botId: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceChatBotInstallError) {
+        const forced = db.forceChatBotInstallError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const record = db.chats[chatId];
+      const member = record ? chatActorMember(db, chatId) : null;
+      if (!record || !member) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (!isManagerRole(member.role)) {
+        return errorResponse(403, 'FORBIDDEN', 'Chat OWNER or ADMIN role is required');
+      }
+      if (record.summary.type !== 'GROUP') {
+        return errorResponse(422, 'BOT_E2EE_UNSUPPORTED', 'Bots are GROUP-only');
+      }
+      if (record.summary.security_mode === 'E2EE') {
+        return errorResponse(422, 'BOT_E2EE_UNSUPPORTED', 'Bots are not available in E2EE chats');
+      }
+      const body = asRecord(await readJson(request));
+      const botId = body && typeof body.bot_id === 'string' ? body.bot_id : '';
+      const bot = db.bots.find(
+        (item) => item.id === botId && item.workspace_id === record.workspaceId,
+      );
+      if (!bot) return errorResponse(404, 'BOT_NOT_FOUND', 'Bot not found');
+      if (bot.status !== 'ACTIVE') return errorResponse(422, 'BOT_DISABLED', 'Bot is disabled');
+      let install = db.chatBots.find((item) => item.chatId === chatId && item.botId === botId);
+      if (!install) {
+        const now = new Date().toISOString();
+        install = {
+          chatId,
+          botId,
+          workspaceId: record.workspaceId,
+          enabled: true,
+          installedBy: db.me.user.id,
+          installedAt: now,
+          updatedAt: now,
+        };
+        db.chatBots.push(install);
+      }
+      return HttpResponse.json(chatBotView(db, install), { status: 201 });
+    }),
+
+    http.delete(`${API}/chats/:chatId/bots/:botId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      const botId = String(params.botId);
+      db.botRequests.push({
+        action: 'uninstall',
+        workspaceId: null,
+        chatId,
+        botId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceChatBotUninstallError) {
+        const forced = db.forceChatBotUninstallError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const record = db.chats[chatId];
+      const member = record ? chatActorMember(db, chatId) : null;
+      if (!record || !member) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (!isManagerRole(member.role)) {
+        return errorResponse(403, 'FORBIDDEN', 'Chat OWNER or ADMIN role is required');
+      }
+      db.chatBots = db.chatBots.filter(
+        (install) => !(install.chatId === chatId && install.botId === botId),
+      );
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/bots/:botId/messages`, async ({ request, params }) => {
+      const botId = String(params.botId);
+      db.botRequests.push({
+        action: 'send',
+        workspaceId: null,
+        chatId: null,
+        botId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotSendError) {
+        const forced = db.forceBotSendError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const authorization = request.headers.get('authorization') ?? '';
+      const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+      const bot = db.bots.find(
+        (item) => item.id === botId && item.token === token && item.status === 'ACTIVE',
+      );
+      if (!bot) return errorResponse(401, 'UNAUTHENTICATED', 'Invalid bot credentials');
+      const idempotencyKey = request.headers.get('idempotency-key');
+      if (!idempotencyKey) {
+        return errorResponse(400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key is required');
+      }
+      const body = asRecord(await readJson(request));
+      const chatId = body && typeof body.chat_id === 'string' ? body.chat_id : '';
+      const text = body && typeof body.text === 'string' ? body.text : '';
+      if (!chatId || text.trim().length === 0 || text.length > 8000) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'chat_id and text are required');
+      }
+      const record = db.chats[chatId];
+      if (!record || record.workspaceId !== bot.workspace_id) {
+        return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      }
+      if (record.summary.security_mode === 'E2EE') {
+        return errorResponse(422, 'BOT_E2EE_UNSUPPORTED', 'Bots are not available in E2EE chats');
+      }
+      const install = db.chatBots.find(
+        (item) => item.chatId === chatId && item.botId === botId && item.enabled,
+      );
+      if (!install) {
+        return errorResponse(403, 'BOT_NOT_INSTALLED', 'Bot is not installed in this chat');
+      }
+      const bodyHash = `${chatId}\u0000${text}`;
+      const replayKey = `${botId}:${idempotencyKey}`;
+      const existing = db.botSendIdempotency.get(replayKey);
+      if (existing) {
+        if (existing.bodyHash !== bodyHash) {
+          return errorResponse(
+            409,
+            'IDEMPOTENCY_KEY_REUSED',
+            'Idempotency-Key was reused with another body',
+          );
+        }
+        const message = record.messages.find((item) => item.id === existing.messageId);
+        if (message) {
+          return HttpResponse.json(presentMessage(record, message), {
+            status: 201,
+            headers: { 'Idempotent-Replay': 'true' },
+          });
+        }
+      }
+      const message = insertMockBotMessage(db, chatId, { id: bot.id, name: bot.name }, text);
+      db.botSendIdempotency.set(replayKey, { bodyHash, messageId: message.id });
+      publishMockMessageCreated(db, message);
+      return HttpResponse.json(presentMessage(record, message), { status: 201 });
+    }),
+
     http.get(`${API}/workspaces/:workspaceId/chats`, ({ request, params }) => {
       const unauthorized = requireAuth(request);
       if (unauthorized) return unauthorized;
@@ -6405,6 +6907,7 @@ export function createHandlers(db: MockDb) {
         chat_id: chatId,
         seq: 1,
         type: 'SYSTEM',
+        sender_type: 'USER',
         sender_id: null,
         sender_display_name: null,
         text: 'Чат создан',
@@ -6645,6 +7148,15 @@ export function createHandlers(db: MockDb) {
       const id = newUuid();
       const uploadId = newUuid();
       const created = new Date().toISOString();
+      // #97: the backend parses AUDIO after storing it and returns the media
+      // in the same 201; the file-center refresh then shows the tags.
+      const extracted = await extractServerMedia(
+        form.file.bytes,
+        filename,
+        mime,
+        id,
+        new URL(request.url).origin,
+      );
       const item: FileItem = {
         id,
         filename,
@@ -6657,17 +7169,19 @@ export function createHandlers(db: MockDb) {
         chat_name: null,
         message_id: null,
         created_at: created,
+        ...(extracted ? { media: extracted.media } : {}),
       };
       db.fileCenterItems.unshift(item);
       db.limits.usage.used += size;
       db.fileUploadRequests.push({ workspaceId, filename, size, mime });
+      if (extracted?.artwork) db.attachmentArtworks.set(id, extracted.artwork);
       db.uploads.set(uploadId, {
         id: uploadId,
         chatId: null,
         filename,
         size,
         mime,
-        media: null,
+        media: extracted?.media ?? null,
         declaredSha256: null,
         partSize: Math.max(1, size),
         totalParts: 1,
@@ -6688,6 +7202,7 @@ export function createHandlers(db: MockDb) {
           size_bytes: size,
           mime_type: mime || null,
           scan_status: 'CLEAN',
+          ...(extracted ? { media: extracted.media } : {}),
         },
         uploadId,
         messageId: null,
@@ -7503,6 +8018,57 @@ export function createHandlers(db: MockDb) {
     }),
 
     /**
+     * #97: authenticated cover bytes (`GET /attachments/{id}/artwork`). The
+     * route requires the bearer/device pair like every other attachment call,
+     * so a direct `<img src=artwork_url>` would get `401` — exactly the bug the
+     * frontend must avoid by fetching through the API client.
+     */
+    http.get(`${API}/attachments/:attachmentId/artwork`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const attachmentId = String(params.attachmentId);
+      db.artworkRequests.push({ attachmentId, authorized: true });
+      if (db.fileDelayMs > 0) await delay(db.fileDelayMs);
+
+      if (db.forceArtworkError) {
+        const forced = db.forceArtworkError;
+        if (forced.once) db.forceArtworkError = null;
+        return fileErrorResponse(
+          forced.status,
+          forced.code,
+          forced.message,
+          forced.details,
+          forced.retryAfterSeconds,
+        );
+      }
+
+      const attachment = db.attachments.get(attachmentId);
+      if (!attachment) return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
+      const upload = db.uploads.get(attachment.uploadId);
+      if (!upload) return errorResponse(404, 'NOT_FOUND', 'Attachment not found');
+      if (upload.status === 'EXPIRED' || upload.status === 'ABORTED') {
+        return fileErrorResponse(410, 'ATTACHMENT_DELETED', 'Attachment was deleted');
+      }
+      if (upload.status === 'QUARANTINED' || attachment.ref.scan_status === 'INFECTED') {
+        return fileErrorResponse(423, 'ATTACHMENT_QUARANTINED', 'Attachment is quarantined');
+      }
+      if (attachment.ref.scan_status !== 'CLEAN' || upload.status === 'SCANNING') {
+        return fileErrorResponse(409, 'SCAN_PENDING', 'Attachment is still being scanned');
+      }
+
+      const artwork = db.attachmentArtworks.get(attachmentId);
+      if (!artwork) return errorResponse(404, 'NOT_FOUND', 'Artwork not found');
+      return new HttpResponse(artwork.bytes, {
+        headers: {
+          'Content-Type': artwork.mime,
+          'Content-Length': String(artwork.bytes.byteLength),
+          'Cache-Control': 'private, max-age=300',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }),
+
+    /**
      * Mock "presigned MinIO" object. It serves the uploaded bytes for media
      * MIME types only, so image/video/audio previews can be exercised without
      * a real S3/MinIO. Non-media objects stay unreachable, mirroring the
@@ -7890,6 +8456,7 @@ export function createHandlers(db: MockDb) {
         chat_id: chat.summary.id,
         seq,
         type: sticker ? 'STICKER' : 'TEXT',
+        sender_type: 'USER',
         sender_id: db.session.user.id,
         sender_display_name: db.session.user.display_name,
         text: sticker ? null : typeof text === 'string' && text.length > 0 ? text : null,

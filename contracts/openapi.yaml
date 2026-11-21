@@ -25,6 +25,7 @@ tags:
   - name: files
   - name: stickers
   - name: plugins
+  - name: bots
   - name: notifications
   - name: mentions
   - name: setup
@@ -2556,6 +2557,61 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DownloadUrl"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "423":
+          description: Объект в карантине
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /attachments/{attachmentId}/artwork:
+    get:
+      tags: [files]
+      operationId: attachmentArtwork
+      summary: Обложка аудио, извлечённая сервером (#97)
+      description: >
+        Приватные байты обложки, извлечённой сервером из ID3v2.2/2.3/2.4 `APIC`/`PIC` или
+        MP4 `covr`. Ответ — только растровое изображение (`image/jpeg`, `image/png`,
+        `image/webp`, `image/gif`, `image/bmp`, `image/avif`), тип определяется по magic
+        bytes, а не по клиентскому заголовку; `X-Content-Type-Options: nosniff`. Видимость
+        совпадает со скачиванием вложения: ACTIVE-участник чата для привязанного файла,
+        участник воркспейса для workspace-ассета, владелец — для ещё не привязанного
+        глобального файла. AV fail-closed: пока объект SCANNING — `409`, карантин — `423`.
+        Никакого redirect, presigned URL или внешнего запроса сервер не делает; object key
+        строится только из серверных UUID. `404`, если у вложения нет извлечённой обложки.
+      parameters:
+        - $ref: "#/components/parameters/AttachmentId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Байты обложки
+          headers:
+            Cache-Control:
+              schema: { type: string }
+            X-Content-Type-Options:
+              schema: { type: string, enum: [nosniff] }
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+            image/gif:
+              schema: { type: string, format: binary }
+            image/bmp:
+              schema: { type: string, format: binary }
+            image/avif:
+              schema: { type: string, format: binary }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -5206,12 +5262,310 @@ paths:
           $ref: "#/components/responses/Unprocessable"
 
 
+  /workspaces/{workspaceId}/bots:
+    post:
+      tags: [bots]
+      operationId: createBot
+      summary: Создать бота и получить одноразовый токен (OWNER/ADMIN)
+      description: >
+        Только workspace OWNER/ADMIN (роль, не настраиваемая матрица). В ответе ровно один
+        раз возвращается bearer-токен бота; в БД хранится только его SHA-256 hash, поэтому
+        повторно прочитать токен нельзя (для смены — `POST .../token`). `scopes` в MVP
+        содержит только `chat.write`: бот не может читать сообщения, звонить, работать с
+        файлами или вызывать админские API. Токен не пишется в audit, лог или БД в открытом
+        виде. `name` — 1..80 символов. Создание пишет audit `bot.created` только с id.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotCreateRequest"
+      responses:
+        "201":
+          description: Бот создан; токен показывается один раз
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotToken"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+    get:
+      tags: [bots]
+      operationId: listBots
+      summary: Боты воркспейса (без токенов)
+      description: >
+        Доступно любому ACTIVE-участнику воркспейса. Возвращаются только метаданные (id,
+        имя, аватар, scopes, статус, audit-поля); токен и hash не возвращаются никогда.
+        Чужой воркспейс — `403` без раскрытия существования.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Список ботов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /workspaces/{workspaceId}/bots/{botId}:
+    patch:
+      tags: [bots]
+      operationId: updateBot
+      summary: Изменить имя/scopes/статус/аватар бота (OWNER/ADMIN)
+      description: >
+        Отсутствующие поля не меняются. `status=DISABLED` — мягкое отключение (токен
+        немедленно перестаёт аутентифицироваться); `status=ACTIVE` возвращает бота в строй.
+        `avatar_file_id` должен быть существующим готовым изображением того же воркспейса;
+        `clear_avatar=true` очищает ссылку (поля взаимоисключающие). Токен этим методом не
+        меняется. Audit `bot.updated` содержит только id.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotUpdateRequest"
+      responses:
+        "200":
+          description: Обновлённый бот
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bot"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+    delete:
+      tags: [bots]
+      operationId: disableBot
+      summary: Отключить/удалить бота (OWNER/ADMIN)
+      description: >
+        Мягкое удаление: `status=DISABLED`, строка и установки сохраняются для истории,
+        токен сразу перестаёт работать. Идемпотентно (повторный DELETE — `204` без второго
+        audit). Audit `bot.disabled` содержит только id.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "204":
+          description: Бот отключён
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /workspaces/{workspaceId}/bots/{botId}/token:
+    post:
+      tags: [bots]
+      operationId: rotateBotToken
+      summary: Ротировать токен бота (OWNER/ADMIN)
+      description: >
+        Атомарно заменяет hash токена: старый токен сразу получает `401`, новый показывается
+        ровно один раз в ответе. Для отключённого бота ротация разрешена, но новый токен
+        начнёт работать только после `status=ACTIVE`. Audit `bot.token.rotated` содержит
+        только id — ни токен, ни hash в audit/лог не попадают.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Новый токен (показывается один раз)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotToken"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /chats/{chatId}/bots:
+    get:
+      tags: [bots]
+      operationId: listChatBots
+      summary: Боты, установленные в чате
+      description: >
+        Доступно любому ACTIVE-участнику чата. Возвращает установленных ботов с
+        метаданными (без токена/hash). Неизвестный/удалённый/чужой чат — `404` без
+        раскрытия существования.
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Установленные боты
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatBotList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    post:
+      tags: [bots]
+      operationId: installChatBot
+      summary: Установить бота в чат (chat OWNER/ADMIN)
+      description: >
+        Только ACTIVE-участник чата с ролью OWNER/ADMIN. Бот должен принадлежать тому же
+        воркспейсу и быть ACTIVE; чат должен быть MANAGED. E2EE-чат — `422
+        BOT_E2EE_UNSUPPORTED`, отключённый бот — `422 BOT_DISABLED`. Установка идемпотентна;
+        audit `chat.bot.installed` содержит только chat/bot id. После установки бот может
+        отправлять сообщения через `POST /bots/{botId}/messages`.
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatBotInstallRequest"
+      responses:
+        "201":
+          description: Бот установлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatBot"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /chats/{chatId}/bots/{botId}:
+    delete:
+      tags: [bots]
+      operationId: uninstallChatBot
+      summary: Удалить бота из чата (chat OWNER/ADMIN)
+      description: >
+        Только ACTIVE-участник чата с ролью OWNER/ADMIN. Идемпотентно (`204` без audit при
+        отсутствии установки). После удаления бот получает `403 BOT_NOT_INSTALLED` при
+        попытке отправки в этот чат; история сообщений сохраняется. Audit
+        `chat.bot.uninstalled` содержит только chat/bot id.
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "204":
+          description: Бот удалён из чата
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /bots/{botId}/messages:
+    post:
+      tags: [bots]
+      operationId: sendBotMessage
+      summary: Отправить сообщение от имени бота (bot token)
+      description: >
+        Единственный bot-token endpoint. Авторизация — `Authorization: Bearer
+        sova_bot_...` (отдельная security-цепочка; JWT и X-Device-Id не используются).
+        Токен сравнивается по SHA-256 hash в constant time; отключённый/неизвестный токен,
+        чужой `botId` и битый токен дают одинаковый `401`. Требуется scope `chat.write`
+        (`403 BOT_SCOPE_FORBIDDEN`), чат должен быть MANAGED (`422 BOT_E2EE_UNSUPPORTED`) и
+        бот установлен+включён в нём (`403 BOT_NOT_INSTALLED`). Сообщение создаётся как
+        `sender_type=BOT` с `bot_id`, именем бота в `sender_display_name` и без
+        `sender_id`/device — импersonation пользователя невозможна. `Idempotency-Key`
+        обязателен: повтор с тем же телом возвращает исходное сообщение и
+        `Idempotent-Replay: true`, а с другим телом — `409 IDEMPOTENCY_KEY_REUSED`.
+        Действует отдельный rate limit по боту и по чату (`429` + `Retry-After`).
+      security:
+        - botTokenAuth: []
+      parameters:
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotMessageCreate"
+      responses:
+        "201":
+          description: Сообщение создано (или идемпотентный replay)
+          headers:
+            Idempotent-Replay:
+              schema: { type: string, enum: ["true"] }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    botTokenAuth:
+      type: http
+      scheme: bearer
+      description: >
+        #96: одноразовый bot-токен вида `sova_bot_<workspace_id>_<bot_id>_<secret>`.
+        Действует только на `POST /bots/{botId}/messages`; в БД хранится только его
+        SHA-256 hash. Не JWT: отдельная security-цепочка, X-Device-Id не нужен.
+      bearerFormat: BotToken
 
   parameters:
     DeviceId:
@@ -5236,6 +5590,11 @@ components:
       schema: { type: string, format: uuid }
     ChatId:
       name: chatId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BotId:
+      name: botId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -6746,8 +7105,10 @@ components:
           type: [string, "null"]
           maxLength: 2048
           description: >
-            Клиентский artwork URL из ID3/метаданных; сервер его не загружает и не
-            проверяет доступность.
+            artwork URL из метаданных (#97): клиентский абсолютный http(s) URL, который
+            сервер не загружает и не проверяет, либо серверный URL аутентифицированного
+            `GET /attachments/{attachmentId}/artwork` для извлечённой обложки. Байты
+            обложки в JSON никогда не попадают.
         title: { type: [string, "null"], maxLength: 255 }
         artist: { type: [string, "null"], maxLength: 255 }
         size_bytes: { type: integer, format: int64, minimum: 1 }
@@ -7156,8 +7517,10 @@ components:
         media:
           type: [object, "null"]
           description: >
-            Optional sanitized media metadata for this upload (D1-BE2). Accepted only for
+            Optional sanitized media metadata for this upload (D1-BE2/#97). Accepted only for
             MANAGED uploads; the server rejects every non-MANAGED mode before parsing it.
+            For MANAGED AUDIO the server also extracts ID3v2.2/2.3/2.4 or M4A atoms after
+            complete and replaces an absent or empty payload with `metadata_source=SERVER`.
             A voice recording (audio/webm, audio/ogg) must be kind=AUDIO with a 1..600000
             ms duration. complete copies the values to AttachmentRef.media. Strings are
             trimmed, HTML/control-free and bounded; artwork_url is an absolute http(s) URL
@@ -7254,12 +7617,15 @@ components:
         media:
           type: [object, "null"]
           description: >
-            Managed-only media metadata (D1-BE2). MVP: the client sends parsed ID3/fallback
-            values at upload init; the server sanitizes and stores them (server-side
-            extraction is D1.1). Strings are trimmed, HTML/control-free and bounded;
-            artwork_url is an absolute http(s) URL with a hostname that the server never
-            fetches (no server-side SSRF). Absent/null for plain files, legacy attachments
-            and E2EE — an E2EE message cannot carry attachments in this slice.
+            Managed-only media metadata (D1-BE2/#97). The client may send parsed ID3/fallback
+            values at upload init; on MANAGED AUDIO uploads the server also extracts
+            ID3v2.2/2.3/2.4 and M4A/MP4 atoms itself and fills absent/incomplete client
+            metadata with `metadata_source=SERVER`. Strings are trimmed, HTML/control-free
+            and bounded; artwork_url is an absolute http(s) URL that the server never fetches
+            (no server-side SSRF). A server-built artwork_url points at the authenticated
+            `GET /attachments/{attachmentId}/artwork` endpoint; the cover bytes are never
+            embedded in the JSON. Absent/null for plain files, legacy attachments and E2EE —
+            an E2EE message cannot carry attachments in this slice.
           required: [kind, metadata_source]
           properties:
             kind: { type: string, enum: [AUDIO, VIDEO, IMAGE, FILE] }
@@ -7278,6 +7644,10 @@ components:
               type: [string, "null"]
               format: uri
               maxLength: 2048
+              description: >
+                Client-supplied absolute http(s) URL (never fetched by the server) or the
+                server-built URL of `GET /attachments/{attachmentId}/artwork` for an
+                extracted cover. The server never fetches either URL.
             metadata_source: { type: string, enum: [ID3, SERVER, CLIENT, NONE] }
 
     DownloadUrl:
@@ -7561,6 +7931,20 @@ components:
         type: { type: string, enum: [TEXT, STICKER, SYSTEM, POLL, TASK] }
         sender_id: { type: [string, "null"], format: uuid }
         sender_display_name: { type: [string, "null"] }
+        sender_type:
+          type: string
+          enum: [USER, BOT]
+          default: USER
+          description: >
+            #96: автор — пользователь (`USER`, по умолчанию) или бот (`BOT`). Для бота
+            `sender_id` всегда null, `bot_id` заполнен, а `sender_display_name` — имя бота
+            на момент отправки. Клиент рисует BOT-бейдж по этому полю, не по имени.
+        bot_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            #96: id автора-бота при `sender_type=BOT`; null для пользовательских сообщений.
+            Никогда не подменяет `sender_id` (impersonation запрещён).
         text: { type: [string, "null"] }
         reply_to_id: { type: [string, "null"], format: uuid }
         thread_root_id:
@@ -8619,6 +9003,124 @@ components:
           type: array
           items: { $ref: "#/components/schemas/WorkspaceRolePermissions" }
 
+    # ---------------------------------------------------------------------
+    # #96 bots
+    # ---------------------------------------------------------------------
+    Bot:
+      type: object
+      description: >
+        Метаданные бота. Никогда не содержит bearer-токен или его hash; токен возвращается
+        только один раз в `BotToken` при создании/ротации.
+      required: [id, workspace_id, name, scopes, status, created_by, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        avatar_file_id:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            Готовое CLEAN-изображение того же воркспейса либо null. Отдельного upload/serve
+            API у ботов в MVP нет.
+        scopes:
+          type: array
+          minItems: 1
+          description: >
+            MVP: только `chat.write`; чтение сообщений/звонки/файлы недоступны.
+          items: { type: string, enum: [chat.write] }
+        status:
+          type: string
+          enum: [ACTIVE, DISABLED]
+          description: >
+            `DISABLED` — мягкое удаление; токен сразу перестаёт аутентифицироваться.
+        created_by: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        token_rotated_at: { type: [string, "null"], format: date-time }
+
+    BotCreateRequest:
+      type: object
+      required: [name, scopes]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items: { type: string, enum: [chat.write] }
+
+    BotUpdateRequest:
+      type: object
+      description: >
+        Все поля опциональны: отсутствие — «не менять». `avatar_file_id` и
+        `clear_avatar=true` взаимоисключающие (`400`). Пустой объект — допустимый no-op.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items: { type: string, enum: [chat.write] }
+        avatar_file_id: { type: [string, "null"], format: uuid }
+        clear_avatar: { type: boolean, default: false }
+        status: { type: string, enum: [ACTIVE, DISABLED] }
+
+    BotToken:
+      type: object
+      description: >
+        Единственный ответ с токеном. `token` показывается один раз и не сохраняется в
+        открытом виде; сервер хранит только его SHA-256 hash.
+      required: [bot, token]
+      properties:
+        bot: { $ref: "#/components/schemas/Bot" }
+        token:
+          type: string
+          minLength: 90
+          maxLength: 160
+          description: >
+            `sova_bot_<workspace_id>_<bot_id>_<32 random bytes base64url>`. Не логируется и
+            не возвращается повторно.
+          format: password
+
+    BotList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Bot" }
+
+    ChatBotInstallRequest:
+      type: object
+      required: [bot_id]
+      properties:
+        bot_id: { type: string, format: uuid }
+
+    ChatBot:
+      type: object
+      required: [chat_id, bot, enabled, installed_at]
+      properties:
+        chat_id: { type: string, format: uuid }
+        bot: { $ref: "#/components/schemas/Bot" }
+        enabled:
+          type: boolean
+          description: Эффективный флаг; отправка разрешена только при `true`.
+        installed_at: { type: string, format: date-time }
+
+    ChatBotList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ChatBot" }
+
+    BotMessageCreate:
+      type: object
+      required: [chat_id, text]
+      properties:
+        chat_id: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 8000 }
 
   responses:
     BadRequest:

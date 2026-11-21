@@ -44,7 +44,13 @@ public record KrugProperties(
             @DefaultValue("10") int inviteAcceptPerUser,
             @DefaultValue("60s") Duration inviteAcceptWindow,
             @DefaultValue("30") int inviteCreatePerChat,
-            @DefaultValue("1h") Duration inviteCreateWindow) {
+            @DefaultValue("1h") Duration inviteCreateWindow,
+            // #96: bot token windows. Independent of user message windows; the transport also
+            // caps a single chat so one bot cannot flood a channel.
+            @DefaultValue("60") int botSendPerBot,
+            @DefaultValue("60s") Duration botSendWindow,
+            @DefaultValue("10") int botSendPerChat,
+            @DefaultValue("1s") Duration botSendChatWindow) {
     }
 
     public record Outbox(Relay relay) {

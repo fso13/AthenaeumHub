@@ -150,6 +150,19 @@ const operations = {
   'POST /workspaces/{workspaceId}/music-room':
     spec.paths?.['/workspaces/{workspaceId}/music-room']?.post,
   'GET /chats/{chatId}/music-room': spec.paths?.['/chats/{chatId}/music-room']?.get,
+  // #96 bots: management (JWT) + the only bot-token operation.
+  'POST /workspaces/{workspaceId}/bots': spec.paths?.['/workspaces/{workspaceId}/bots']?.post,
+  'GET /workspaces/{workspaceId}/bots': spec.paths?.['/workspaces/{workspaceId}/bots']?.get,
+  'PATCH /workspaces/{workspaceId}/bots/{botId}':
+    spec.paths?.['/workspaces/{workspaceId}/bots/{botId}']?.patch,
+  'DELETE /workspaces/{workspaceId}/bots/{botId}':
+    spec.paths?.['/workspaces/{workspaceId}/bots/{botId}']?.delete,
+  'POST /workspaces/{workspaceId}/bots/{botId}/token':
+    spec.paths?.['/workspaces/{workspaceId}/bots/{botId}/token']?.post,
+  'GET /chats/{chatId}/bots': spec.paths?.['/chats/{chatId}/bots']?.get,
+  'POST /chats/{chatId}/bots': spec.paths?.['/chats/{chatId}/bots']?.post,
+  'DELETE /chats/{chatId}/bots/{botId}': spec.paths?.['/chats/{chatId}/bots/{botId}']?.delete,
+  'POST /bots/{botId}/messages': spec.paths?.['/bots/{botId}/messages']?.post,
   'GET /admin/audit': spec.paths?.['/admin/audit']?.get,
   'GET /me': spec.paths?.['/me']?.get,
   'POST /devices': spec.paths?.['/devices']?.post,
@@ -868,18 +881,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 119,
-  'Contract must expose exactly 119 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
+  Object.keys(spec.paths ?? {}).length === 126,
+  'Contract must expose exactly 126 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 146,
-  'Contract check must cover exactly 146 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
+  Object.keys(operations).length === 155,
+  'Contract check must cover exactly 155 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
 );
 check(
-  Object.keys(schemas).length === 195,
-  'Contract must expose exactly 195 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
+  Object.keys(schemas).length === 204,
+  'Contract must expose exactly 204 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
 );
 
 check(
@@ -887,6 +900,24 @@ check(
     schemas.Message?.properties?.type?.enum?.includes(type),
   ),
   'Message.type must allow TEXT/STICKER/SYSTEM',
+);
+
+// --- #96 bots ------------------------------------------------------------
+check(
+  ['USER', 'BOT'].every((type) => schemas.Message?.properties?.sender_type?.enum?.includes(type)) &&
+    Object.prototype.hasOwnProperty.call(schemas.Message?.properties ?? {}, 'bot_id'),
+  'Message must expose sender_type USER/BOT and bot_id for the BOT badge',
+);
+check(
+  schemas.Bot?.properties?.scopes?.items?.enum?.join(',') === 'chat.write' &&
+    schemas.BotToken?.required?.includes('token') &&
+    schemas.BotCreateRequest?.properties?.name?.maxLength === 80 &&
+    schemas.BotMessageCreate?.properties?.text?.maxLength === 8000,
+  'Bot schemas must expose chat.write, a one-time token and the 1..8000 text bound',
+);
+check(
+  spec.paths?.['/bots/{botId}/messages']?.post?.security?.[0]?.botTokenAuth !== undefined,
+  'The bot message endpoint must use the dedicated botTokenAuth scheme',
 );
 
 // --- #94 music room ------------------------------------------------------

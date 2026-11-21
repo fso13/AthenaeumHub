@@ -484,6 +484,37 @@ export type WorkspaceSecurityUpdateRequest =
   components['schemas']['WorkspaceSecurityUpdateRequest'];
 
 /* ------------------------------------------------------------------------- */
+/* #96: workspace bots (MVP: chat.write only, no event subscriptions)        */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Bot metadata. The contract deliberately has no token/hash field: the bearer
+ * token exists only in the one-time `BotToken` response of create/rotate.
+ */
+export type Bot = components['schemas']['Bot'];
+export type BotStatus = Bot['status'];
+/** MVP scope vocabulary: only `chat.write` can be granted. */
+export type BotScope = Bot['scopes'][number];
+export type BotList = components['schemas']['BotList'];
+export type BotCreateRequest = components['schemas']['BotCreateRequest'];
+/**
+ * Absent fields stay unchanged; `clear_avatar` is mutually exclusive with
+ * `avatar_file_id`. The generated schema marks `clear_avatar` as required
+ * because of its `default: false`, while the contract allows omitting it (the
+ * same shape as `MessageCreateBody.mention_all`).
+ */
+export type BotUpdateRequest = Omit<components['schemas']['BotUpdateRequest'], 'clear_avatar'> & {
+  clear_avatar?: boolean;
+};
+/** One-time response: `token` is shown once and never listed again. */
+export type BotToken = components['schemas']['BotToken'];
+export type ChatBot = components['schemas']['ChatBot'];
+export type ChatBotList = components['schemas']['ChatBotList'];
+export type ChatBotInstallRequest = components['schemas']['ChatBotInstallRequest'];
+/** `USER` for members, `BOT` for bot-authored rows (badge/identity gate). */
+export type MessageSenderType = ApiMessage['sender_type'];
+
+/* ------------------------------------------------------------------------- */
 /* E6-F: in-app notifications and preferences                                */
 /* ------------------------------------------------------------------------- */
 

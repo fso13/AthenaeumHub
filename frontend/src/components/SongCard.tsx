@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { ApiAttachment, AttachmentMedia } from '../api/types';
-import { getLocalArtworkUrl } from '../files/artworkCache';
-import { fileTypeLabel, formatBytes, formatDuration, safeHttpUrl } from '../files/format';
-import { MAX_MEDIA_GENRE_LENGTH, songDisplay, songTitleOrFilename } from '../files/media';
+import { fileTypeLabel, formatBytes, formatDuration } from '../files/format';
+import {
+  MAX_MEDIA_GENRE_LENGTH,
+  songDisplay,
+  songTitleOrFilename,
+  usesServerArtwork,
+} from '../files/media';
+import { useArtwork, useLocalArtworkFallback } from '../hooks/useArtwork';
 import { t } from '../i18n/ru';
 import { MusicIcon } from './Icons';
 
@@ -17,10 +22,15 @@ export interface SongCardProps {
 }
 
 /**
- * Song card: ID3 title/artist/album/year/genre plus artwork and a native
- * player. With no usable tags it degrades to the filename + "unknown artist"
- * + default cover (never invents metadata, never renders tag values as HTML).
- * Artwork comes from a validated http(s) URL or the local-only ID3 cache.
+ * Song card: server/ID3 title, artist, album, year and genre plus artwork and
+ * a native player. With no usable tags it degrades to the filename + "unknown
+ * artist" + default cover (never invents metadata, never renders tag values as
+ * HTML).
+ *
+ * Artwork priority (#97): the server cover is fetched as an authenticated blob
+ * (its `artwork_url` is an authenticated endpoint, so `<img src=artwork_url>`
+ * would be a `401`); a client-supplied public URL renders directly; the local
+ * ID3 cache is the fallback; then the default `MusicIcon`.
  */
 export function SongCard({
   attachment,
@@ -31,23 +41,27 @@ export function SongCard({
   onDuration,
 }: SongCardProps) {
   const song = songDisplay(media);
-  const remoteArtwork = safeHttpUrl(media.artwork_url);
+  const artwork = useArtwork(attachment.id, media);
+  const serverArtwork = usesServerArtwork(attachment.id, media);
   const [remoteFailed, setRemoteFailed] = useState(false);
-  const [localArtwork, setLocalArtwork] = useState<string | null>(null);
+  const [localFailed, setLocalFailed] = useState(false);
+  // Only look for local bytes once the server/external cover is not pending
+  // and did not resolve (or was rejected by the browser): the server cover
+  // always wins while it is available.
+  const localArtwork = useLocalArtworkFallback(
+    attachment.id,
+    remoteFailed ||
+      artwork.status === 'empty' ||
+      (!serverArtwork && artwork.status !== 'loading' && artwork.url === null),
+  );
 
   useEffect(() => {
-    let active = true;
-    setLocalArtwork(null);
-    // A managed server-provided cover wins; local bytes are the fallback
-    // (and the only source while server-side extraction is D1.1).
-    if (remoteArtwork && !remoteFailed) return;
-    void getLocalArtworkUrl(attachment.id).then((url) => {
-      if (active) setLocalArtwork(url);
-    });
-    return () => {
-      active = false;
-    };
-  }, [attachment.id, remoteArtwork, remoteFailed]);
+    setRemoteFailed(false);
+  }, [artwork.url]);
+
+  useEffect(() => {
+    setLocalFailed(false);
+  }, [localArtwork]);
 
   const fallbackName = attachment.filename?.trim() || t('song.unknownTitle');
   const title = song
@@ -57,8 +71,9 @@ export function SongCard({
   const album = song?.album ?? null;
   const year = song?.year ?? null;
   const genre = song?.genre ? song.genre.slice(0, MAX_MEDIA_GENRE_LENGTH) : null;
-  const artworkSrc = remoteArtwork && !remoteFailed ? remoteArtwork : localArtwork;
-  const localOnly = !remoteArtwork && Boolean(localArtwork);
+  const remoteArtwork = artwork.url && !remoteFailed ? artwork.url : null;
+  const localOnly = remoteArtwork === null && localArtwork !== null && !localFailed;
+  const artworkSrc = remoteArtwork ?? (localFailed ? null : localArtwork);
   const totalDuration = durationMs ?? song?.durationMs ?? null;
 
   return (
@@ -75,8 +90,8 @@ export function SongCard({
             loading="lazy"
             referrerPolicy="no-referrer"
             onError={() => {
-              if (remoteArtwork && !remoteFailed) setRemoteFailed(true);
-              else setLocalArtwork(null);
+              if (remoteArtwork) setRemoteFailed(true);
+              else setLocalFailed(true);
             }}
           />
         ) : (

@@ -16,7 +16,7 @@
  * server extraction is D1.1 and E2EE stays local-only).
  */
 import type { AttachmentMedia, MediaKind, UploadMediaMetadata } from '../api/types';
-import { extensionOf } from './format';
+import { extensionOf, formatDuration, safeHttpUrl } from './format';
 import { readId3Tags, sanitizeId3Text, type Id3Tags } from './id3';
 
 export const MAX_MEDIA_TEXT_LENGTH = 255;
@@ -228,4 +228,81 @@ export function isVoiceMedia(
   if (!media || media.kind !== 'AUDIO') return false;
   if (songDisplay(media)) return false;
   return media.metadata_source === 'CLIENT' || /^voice-/i.test(filename ?? '');
+}
+
+/**
+ * #97: the server-built artwork URL is an *authenticated* API endpoint
+ * (`.../attachments/{id}/artwork`), not a presigned/public object URL. Such a
+ * URL must never reach `<img src>` — the browser would send no Authorization
+ * header and get `401`. It is resolved to bytes through the API client instead.
+ *
+ * A client-supplied `artwork_url` (ID3 import) is a plain public http(s) URL
+ * and may be rendered directly; only the server shape is special.
+ */
+export function isServerArtworkUrl(
+  attachmentId: string | null | undefined,
+  value: string | null | undefined,
+): boolean {
+  if (!attachmentId || typeof value !== 'string' || value.length === 0) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const segments = parsed.pathname.split('/').filter((segment) => segment.length > 0);
+  const count = segments.length;
+  return (
+    count >= 3 &&
+    segments[count - 3] === 'attachments' &&
+    segments[count - 2] === attachmentId &&
+    segments[count - 1] === 'artwork'
+  );
+}
+
+/**
+ * #97: artwork bytes live behind the authenticated endpoint when the server
+ * extracted the cover (`metadata_source=SERVER`) or the payload already points
+ * at that endpoint. Server extraction is AUDIO-only, so a `SERVER` VIDEO/IMAGE
+ * `artwork_url` (a client poster/thumbnail) stays a plain URL.
+ */
+export function usesServerArtwork(
+  attachmentId: string | null | undefined,
+  media: AttachmentMedia | null | undefined,
+): boolean {
+  if (!media) return false;
+  if (isServerArtworkUrl(attachmentId, media.artwork_url)) return true;
+  return media.kind === 'AUDIO' && media.metadata_source === 'SERVER';
+}
+
+/**
+ * A public http(s) artwork URL that can go straight into `<img src>`. The
+ * authenticated server endpoint is excluded and must be fetched as a blob.
+ */
+export function externalArtworkUrl(
+  attachmentId: string | null | undefined,
+  media: AttachmentMedia | null | undefined,
+): string | null {
+  if (!media || isServerArtworkUrl(attachmentId, media.artwork_url)) return null;
+  return safeHttpUrl(media.artwork_url);
+}
+
+/** One-line tag summary for compact rows (file center): title · artist · album · year · duration. */
+export function songMetaLine(
+  song: SongDisplay | null,
+  durationMs: number | null | undefined,
+): string {
+  const parts: string[] = [];
+  const title = song?.title?.trim();
+  const artist = song?.artist?.trim();
+  const album = song?.album?.trim();
+  const year = song?.year?.trim();
+  if (title) parts.push(title);
+  if (artist) parts.push(artist);
+  if (album) parts.push(album);
+  if (year) parts.push(year);
+  const duration = song?.durationMs ?? durationMs ?? null;
+  if (typeof duration === 'number' && duration > 0) parts.push(formatDuration(duration));
+  return parts.join(' · ');
 }

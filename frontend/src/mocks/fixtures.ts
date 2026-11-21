@@ -1,5 +1,6 @@
 import type {
   ApiMessage,
+  Bot,
   ChatInvite,
   ChatMember,
   ChatPermissions,
@@ -34,6 +35,9 @@ export const IDS = {
   inviteExhausted: 'a0000000-0000-4000-8000-000000000002',
   inviteExpired: 'a0000000-0000-4000-8000-000000000003',
   inviteRevoked: 'a0000000-0000-4000-8000-000000000004',
+  /* #96: workspace bots (never real credentials; mock-only tokens below). */
+  botActive: 'b0000000-0000-4000-8000-000000000001',
+  botDisabled: 'b0000000-0000-4000-8000-000000000002',
 } as const;
 
 /**
@@ -45,6 +49,16 @@ export const MOCK_INVITE_TOKENS = {
   exhausted: 'mock-invite-exhausted-token-0002',
   expired: 'mock-invite-expired-token-0003',
   revoked: 'mock-invite-revoked-token-0004',
+} as const;
+
+/**
+ * #96 mock-only bot credentials. The real backend stores only SHA-256 hashes;
+ * the frontend never persists these values either. They exist so the MSW send
+ * handler can prove 401-after-rotation and the BOT badge end to end.
+ */
+export const MOCK_BOT_TOKENS = {
+  active: `sova_bot_${IDS.workspace}_${IDS.botActive}_${'a'.repeat(43)}`,
+  disabled: `sova_bot_${IDS.workspace}_${IDS.botDisabled}_${'b'.repeat(43)}`,
 } as const;
 
 export const MOCK_ACCESS_TOKEN = 'mock-access-token';
@@ -179,6 +193,42 @@ export function buildMemberUsers(): MockMemberUser[] {
  * kept in the mock so add-after-removal can be exercised, while the list
  * endpoint returns ACTIVE rows only (matching the backend read model).
  */
+/**
+ * #96 seeded workspace bots: one ACTIVE and one DISABLED. The token field is a
+ * mock-only credential (the contract `Bot` has no token); handlers strip it
+ * from every response.
+ */
+export function buildMockBots(): Array<Bot & { token: string }> {
+  return [
+    {
+      id: IDS.botActive,
+      workspace_id: IDS.workspace,
+      name: 'Сова Помощник',
+      avatar_file_id: null,
+      scopes: ['chat.write'],
+      status: 'ACTIVE',
+      created_by: IDS.user,
+      created_at: '2026-01-10T09:00:00.000Z',
+      updated_at: '2026-01-10T09:00:00.000Z',
+      token_rotated_at: null,
+      token: MOCK_BOT_TOKENS.active,
+    },
+    {
+      id: IDS.botDisabled,
+      workspace_id: IDS.workspace,
+      name: 'Релиз-бот',
+      avatar_file_id: null,
+      scopes: ['chat.write'],
+      status: 'DISABLED',
+      created_by: IDS.anna,
+      created_at: '2025-12-20T12:00:00.000Z',
+      updated_at: '2026-01-05T12:00:00.000Z',
+      token_rotated_at: '2026-01-05T12:00:00.000Z',
+      token: MOCK_BOT_TOKENS.disabled,
+    },
+  ];
+}
+
 export function buildChatMembers(): Record<string, ChatMember[]> {
   return {
     [IDS.groupChat]: [
@@ -597,6 +647,7 @@ function toMessage(chatId: string, draft: DraftMessage): ApiMessage {
     chat_id: chatId,
     seq: draft.seq,
     type: draft.type ?? 'TEXT',
+    sender_type: 'USER',
     sender_id: draft.sender?.id ?? null,
     sender_display_name: draft.sender?.name ?? null,
     // #95: server-created POLL/TASK messages never carry plain text.

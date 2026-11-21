@@ -55,6 +55,7 @@ function seedAttachmentMessage(
     chat_id: IDS.groupChat,
     seq,
     type: 'TEXT',
+    sender_type: 'USER',
     sender_id: IDS.mark,
     sender_display_name: 'Марк Соколов',
     text,

@@ -30,6 +30,11 @@ public class FilesSettingsAdapter implements FileSettingsPort {
     }
 
     @Override
+    public String artworkBaseUrl() {
+        return properties.getArtworkBaseUrl();
+    }
+
+    @Override
     public AllowedFileExtensions allowedFileExtensions() {
         return systemSettings.allowedFileExtensions();
     }
