@@ -36,6 +36,8 @@ import type {
   FileItem,
   Mention,
   MessageCreateBody,
+  MusicRoomOpen,
+  MusicRoomTracks,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
@@ -4180,6 +4182,144 @@ export function createHandlers(db: MockDb) {
         enabled: body.enabled,
         available: true,
       });
+    }),
+
+    /* ------------------------------------------------------------------ */
+    /* #94: music room                                                    */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Idempotent find-or-create of the workspace room. The room is a regular
+     * MANAGED GROUP channel; the mock mirrors the server invariants (one room
+     * per workspace, plugin enabled, `created` only for the first call).
+     */
+    http.post(`${API}/workspaces/:workspaceId/music-room`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      db.musicRoomOpenRequests.push({
+        workspaceId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.musicRoomDelayMs > 0) await delay(db.musicRoomDelayMs);
+      if (db.forceMusicRoomOpenError) {
+        const forced = db.forceMusicRoomOpenError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      const plugin = db.pluginCatalog.find((item) => item.id === 'music-room');
+      if (!plugin) return errorResponse(404, 'PLUGIN_NOT_FOUND', 'Plugin not found');
+      if (plugin.state === 'DISABLED') {
+        return errorResponse(422, 'PLUGIN_DISABLED', 'Plugin is disabled in the catalog');
+      }
+      if (workspace.security_mode === 'E2EE') {
+        return errorResponse(422, 'PLUGIN_NOT_AVAILABLE', 'Plugin is not available in E2EE');
+      }
+
+      const existingId = db.musicRoomChats.get(workspaceId);
+      const existing = existingId ? db.chats[existingId] : undefined;
+      if (existing) {
+        const chat: Chat = {
+          id: existing.summary.id,
+          type: 'GROUP',
+          security_mode: existing.summary.security_mode,
+          visibility: existing.summary.visibility ?? 'PUBLIC',
+          peer_id: null,
+          peer_has_e2ee_capable_devices: false,
+          name: existing.summary.name,
+          last_seq: existing.summary.last_seq,
+          unread_count: existing.summary.unread_count,
+          created_at: new Date().toISOString(),
+          join_policy: existing.summary.join_policy ?? 'OPEN',
+        };
+        const payload: MusicRoomOpen = {
+          chat,
+          plugin: { plugin_id: 'music-room', enabled: true, available: true, version: '1.0.0' },
+          created: false,
+        };
+        return HttpResponse.json(payload, { status: 200 });
+      }
+
+      const chatId = newUuid();
+      const now = new Date().toISOString();
+      const chat: Chat = {
+        id: chatId,
+        type: 'GROUP',
+        security_mode: 'MANAGED',
+        visibility: 'PUBLIC',
+        peer_id: null,
+        peer_has_e2ee_capable_devices: false,
+        name: 'Музыкальная комната',
+        last_seq: 0,
+        unread_count: 0,
+        created_at: now,
+        join_policy: 'OPEN',
+      };
+      db.chats[chatId] = {
+        summary: {
+          id: chatId,
+          name: chat.name ?? null,
+          type: 'GROUP',
+          security_mode: 'MANAGED',
+          visibility: 'PUBLIC',
+          peer_id: null,
+          peer_has_e2ee_capable_devices: false,
+          last_message_at: null,
+          unread_count: 0,
+          last_seq: 0,
+          join_policy: 'OPEN',
+          read_only: false,
+        },
+        workspaceId,
+        memberIds: [],
+        messages: [],
+        clientMessageIds: new Map(),
+        hiddenMessageIds: new Set(),
+      };
+      db.musicRoomChats.set(workspaceId, chatId);
+      db.chatPlugins.set(chatId, new Map([['music-room', true]]));
+      const payload: MusicRoomOpen = {
+        chat,
+        plugin: { plugin_id: 'music-room', enabled: true, available: true, version: '1.0.0' },
+        created: true,
+      };
+      return HttpResponse.json(payload, { status: 201 });
+    }),
+
+    /** Metadata-only AUDIO list of a managed chat with the plugin enabled. */
+    http.get(`${API}/chats/:chatId/music-room`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      db.musicRoomTrackRequests.push({
+        chatId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.musicRoomDelayMs > 0) await delay(db.musicRoomDelayMs);
+      if (db.forceMusicRoomTracksError) {
+        const forced = db.forceMusicRoomTracksError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+
+      const found = accessibleChat(db, chatId);
+      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const gate = pluginActionGate(db, found.chat, 'music-room');
+      if (gate) return gate;
+      const payload: MusicRoomTracks = {
+        chat_id: chatId,
+        plugin: { plugin_id: 'music-room', enabled: true, available: true, version: '1.0.0' },
+        items: db.musicRoomTracks.get(chatId) ?? [],
+        has_more: false,
+      };
+      return HttpResponse.json(payload);
     }),
 
     /* ------------------------------------------------------------------ */

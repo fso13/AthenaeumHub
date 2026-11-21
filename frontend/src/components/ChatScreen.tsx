@@ -56,7 +56,7 @@ interface ChatScreenProps {
   /** E12: opens the existing workspace members directory. */
   onOpenMembers?: () => void;
   /** D1 UX: section pages reachable from the details panel. */
-  onNavigate?: (view: 'plugins' | 'security') => void;
+  onNavigate?: (view: 'plugins' | 'security' | 'files') => void;
 }
 
 export function ChatScreen({
@@ -1004,6 +1004,7 @@ export function ChatScreen({
               : undefined
           }
           callDisabledReason={callsDisabledReason}
+          onAttachAudio={canAttach ? () => fileInputRef.current?.click() : undefined}
         />
       ) : null}
 

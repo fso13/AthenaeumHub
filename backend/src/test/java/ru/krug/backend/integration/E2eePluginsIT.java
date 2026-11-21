@@ -55,7 +55,7 @@ class E2eePluginsIT extends IntegrationTestBase {
                 .andReturn();
         JsonNode catalogBody = json(catalog);
         CONTRACT.assertValid("PluginList", catalogBody);
-        assertThat(catalogBody.get("items")).hasSize(5);
+        assertThat(catalogBody.get("items")).hasSize(6);
         for (JsonNode item : catalogBody.get("items")) {
             CONTRACT.assertValid("Plugin", item);
             assertThat(item.get("modes")).hasSize(1);
@@ -68,7 +68,7 @@ class E2eePluginsIT extends IntegrationTestBase {
                 .andReturn();
         JsonNode stateBody = json(states);
         CONTRACT.assertValid("ChatPluginStateList", stateBody);
-        assertThat(stateBody.get("items")).hasSize(5);
+        assertThat(stateBody.get("items")).hasSize(6);
         for (JsonNode item : stateBody.get("items")) {
             CONTRACT.assertValid("ChatPluginState", item);
             assertThat(item.get("enabled").asBoolean()).isFalse();

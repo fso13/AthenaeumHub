@@ -150,6 +150,59 @@ paths:
         "422":
           $ref: "#/components/responses/Unprocessable"
 
+  /workspaces/{workspaceId}/music-room:
+    post:
+      tags: [plugins]
+      operationId: openMusicRoom
+      summary: Открыть музыкальную комнату воркспейса (идемпотентно)
+      description: >
+        Идемпотентный find-or-create единственной музыкальной комнаты воркспейса.
+        Комнатой считается GROUP-канал, помеченный в `chat.plugin_rooms` для плагина
+        `music-room`: имя канала не используется для поиска, поэтому переименование
+        безопасно. Если комнаты нет, создаётся managed GROUP-канал `PUBLIC`/`OPEN` с
+        именем «Музыкальная комната»: создатель — `OWNER`, все ACTIVE-участники
+        воркспейса добавляются, плагин включается в канале. Повторный вызов возвращает
+        существующий канал с `200` и не расходует лимит чатов; создание — `201`. Только
+        ACTIVE-участник воркспейса, иначе `403`. Лимиты установки (`CHAT_LIMIT_REACHED`,
+        `details.scope`) проверяются только при фактическом создании. Выключенный
+        каталог — `422 PLUGIN_DISABLED`; E2EE-воркспейс — `422 PLUGIN_NOT_AVAILABLE`
+        (плагин `MANAGED`, E2EE GROUP не поддерживается). Конкурентные вызовы
+        сериализуются advisory-локом и PK `(workspace_id, plugin_id)`, поэтому дубликат
+        канала невозможен. Сервер не хранит аудио и состояние воспроизведения и не
+        создаёт SFU-сессию: фронтенд перечисляет AUDIO-вложения канала и микширует звук
+        в звонок локально.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "201":
+          description: Комната создана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MusicRoomOpen"
+        "200":
+          description: Комната уже существует — возвращается тот же канал
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MusicRoomOpen"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: >
+            `409 CHAT_LIMIT_REACHED` при фактическом создании, если достигнут лимит
+            установки; `details.scope` — `USER`|`WORKSPACE`, `details.limit`,
+            `details.used`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
   /workspaces/{workspaceId}/members:
     get:
       tags: [workspaces]
@@ -3385,6 +3438,43 @@ paths:
         "422":
           $ref: "#/components/responses/Unprocessable"
 
+  /chats/{chatId}/music-room:
+    get:
+      tags: [plugins]
+      operationId: getMusicRoom
+      summary: AUDIO-вложения музыкальной комнаты (плагин `music-room` включён)
+      description: >
+        Список AUDIO-вложений канала, доступный любому ACTIVE-участнику чата при
+        включённом плагине `music-room`. Неизвестный/удалённый/чужой чат — `404` без
+        раскрытия существования, не-участник воркспейса — `403`, выключенный плагин —
+        `422 PLUGIN_NOT_ENABLED`, kill switch каталога — `422 PLUGIN_DISABLED`,
+        серверный плагин в E2EE-чате — `422 PLUGIN_NOT_AVAILABLE`. Данные берутся из
+        file center: только `CLEAN`-вложения и только метаданные (`id`, `filename`,
+        `mime_type`, `duration_ms`, `artwork_url`, `title`/`artist`, `size_bytes`,
+        `message_id`, `created_at`); object key, `sha256`, presigned URL и байты не
+        возвращаются. Список отсортирован по `created_at DESC` и ограничен 100
+        элементами: `has_more=true` означает, что более старые треки не вошли в срез
+        (курсора в этом срезе нет). Сервер не воспроизводит аудио и не открывает SFU:
+        фронтенд микширует звук в звонок локально.
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: AUDIO-вложения комнаты
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MusicRoomTracks"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
   /chats/{chatId}/polls:
     parameters:
       - $ref: "#/components/parameters/ChatId"
@@ -6596,6 +6686,90 @@ components:
       required: [enabled]
       properties:
         enabled: { type: boolean }
+
+    MusicRoomPlugin:
+      type: object
+      required: [plugin_id, enabled, available, version]
+      properties:
+        plugin_id:
+          type: string
+          enum: [music-room]
+        enabled:
+          type: boolean
+          description: Per-chat toggle; the open endpoint always enables the room.
+        available:
+          type: boolean
+          description: Effective availability for the chat/workspace mode and catalog state.
+        version:
+          type: string
+          enum: ["1.0.0"]
+          description: >
+            Версия встроенного плагина. Built-in строки `plugin.catalog` не хранят package
+            version (V44), поэтому версия 1.0.0 отдаётся API и документируется в
+            `backend/MUSIC-ROOM-REPORT.md`.
+        reason:
+          type: string
+          enum: [PLUGIN_NOT_AVAILABLE, PLUGIN_DISABLED]
+          description: Присутствует только при `available=false`.
+
+    MusicRoomOpen:
+      type: object
+      required: [chat, plugin, created]
+      properties:
+        chat:
+          $ref: "#/components/schemas/Chat"
+        plugin:
+          $ref: "#/components/schemas/MusicRoomPlugin"
+        created:
+          type: boolean
+          description: >
+            `true` только когда этот запрос создал канал (HTTP 201); повторное открытие
+            существующей комнаты — `false` (HTTP 200).
+
+    MusicRoomTrack:
+      type: object
+      required: [id, filename, size_bytes, created_at]
+      description: >
+        Метаданные AUDIO-вложения. Никогда не содержит object key, sha256, presigned URL
+        или байты; скачивание идёт обычным путём `attachmentDownloadUrl`.
+      properties:
+        id: { type: string, format: uuid }
+        message_id: { type: [string, "null"], format: uuid }
+        filename: { type: string, minLength: 1, maxLength: 255 }
+        mime_type: { type: [string, "null"], maxLength: 128 }
+        duration_ms:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          maximum: 604800000
+        artwork_url:
+          type: [string, "null"]
+          maxLength: 2048
+          description: >
+            Клиентский artwork URL из ID3/метаданных; сервер его не загружает и не
+            проверяет доступность.
+        title: { type: [string, "null"], maxLength: 255 }
+        artist: { type: [string, "null"], maxLength: 255 }
+        size_bytes: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+
+    MusicRoomTracks:
+      type: object
+      required: [chat_id, plugin, items, has_more]
+      properties:
+        chat_id: { type: string, format: uuid }
+        plugin:
+          $ref: "#/components/schemas/MusicRoomPlugin"
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/MusicRoomTrack"
+        has_more:
+          type: boolean
+          description: >
+            `true` когда в канале больше 100 AUDIO-вложений и более старые не вошли в
+            срез (курсора в этом срезе нет).
 
     PollOption:
       type: object

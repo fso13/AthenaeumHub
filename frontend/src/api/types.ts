@@ -395,6 +395,20 @@ export type ChatPluginUnavailableReason = NonNullable<ChatPluginState['reason']>
 export type ChatPluginUpdateRequest = components['schemas']['ChatPluginUpdateRequest'];
 
 /* ------------------------------------------------------------------------- */
+/* #94: Music Room (built-in `music-room` plugin)                            */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Server projection of the built-in `music-room` plugin. The room itself is a
+ * regular MANAGED GROUP channel; the server never stores audio, playback state
+ * or an SFU session. Tracks are metadata-only AUDIO attachments of that chat.
+ */
+export type MusicRoomPlugin = components['schemas']['MusicRoomPlugin'];
+export type MusicRoomOpen = components['schemas']['MusicRoomOpen'];
+export type MusicRoomTrack = components['schemas']['MusicRoomTrack'];
+export type MusicRoomTracks = components['schemas']['MusicRoomTracks'];
+
+/* ------------------------------------------------------------------------- */
 /* D1.2 (#86): external plugin packages (admin ZIP install)                  */
 /* ------------------------------------------------------------------------- */
 

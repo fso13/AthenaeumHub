@@ -47,9 +47,24 @@ export class FakeMediaStream {
   }
 }
 
+export class FakeRTCRtpSender {
+  track: MediaStreamTrack;
+  readonly replacedTracks: MediaStreamTrack[] = [];
+
+  constructor(track: MediaStreamTrack) {
+    this.track = track;
+  }
+
+  async replaceTrack(track: MediaStreamTrack | null): Promise<void> {
+    if (track) this.track = track;
+    this.replacedTracks.push(track as MediaStreamTrack);
+  }
+}
+
 export class FakeRTCPeerConnection {
   readonly config: RTCConfiguration;
   readonly addedTracks: { track: MediaStreamTrack; stream: MediaStream }[] = [];
+  readonly senders: FakeRTCRtpSender[] = [];
   readonly addedCandidates: RTCIceCandidateInit[] = [];
   localDescription: RTCSessionDescription | null = null;
   remoteDescription: RTCSessionDescription | null = null;
@@ -65,6 +80,11 @@ export class FakeRTCPeerConnection {
 
   addTrack(track: MediaStreamTrack, stream: MediaStream): void {
     this.addedTracks.push({ track, stream });
+    this.senders.push(new FakeRTCRtpSender(track));
+  }
+
+  getSenders(): RTCRtpSender[] {
+    return this.senders as unknown as RTCRtpSender[];
   }
 
   async createOffer(): Promise<RTCSessionDescriptionInit> {

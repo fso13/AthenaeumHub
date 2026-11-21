@@ -13,6 +13,7 @@ import {
   type IncomingCallSignal,
 } from './types';
 import { createWebAudioRingtone, type CallRingtone } from './ringtone';
+import { createWebAudioMusicMixer, type CallMusicMixer, type MixedCallAudio } from './musicMix';
 
 /**
  * WebRTC engine for one 1:1 call and for GROUP mesh conferences (#77).
@@ -41,6 +42,8 @@ export interface CallControllerOptions {
   createPeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
   /** #77: injectable so tests can assert ringback/ringtone start-stop exactly. */
   ringtone?: CallRingtone;
+  /** #94: injectable mic+music mixer (Web Audio in the browser, fake in tests). */
+  musicMixer?: CallMusicMixer;
 }
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
@@ -78,6 +81,7 @@ interface ConferencePeer {
 export class CallController {
   private readonly options: CallControllerOptions;
   private readonly ringtone: CallRingtone;
+  private readonly musicMixer: CallMusicMixer;
   private state: CallState = idleCallState();
   private pc: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
@@ -95,11 +99,19 @@ export class CallController {
   private directOfferSdp: string | null = null;
   private directCandidates: CallIceCandidate[] = [];
   private retryTimer: number | null = null;
+  /**
+   * #94: music that should be audible to every peer. Kept separately from the
+   * mixed outgoing track so a late peer/new peer connection can be patched
+   * without restarting playback.
+   */
+  private incomingMusicStream: MediaStream | null = null;
+  private mixedAudio: MixedCallAudio | null = null;
   private disposed = false;
 
   constructor(options: CallControllerOptions) {
     this.options = options;
     this.ringtone = options.ringtone ?? createWebAudioRingtone();
+    this.musicMixer = options.musicMixer ?? createWebAudioMusicMixer();
   }
 
   getState(): CallState {
@@ -208,7 +220,7 @@ export class CallController {
       try {
         const peer = this.createConferencePeer(peerUserId);
         if (!peer.pc) continue;
-        for (const track of stream.getTracks()) peer.pc.addTrack(track, stream);
+        this.addLocalTracks(peer.pc, stream);
         const offer = await peer.pc.createOffer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: video,
@@ -256,7 +268,7 @@ export class CallController {
     this.syncParticipants();
     void (async () => {
       try {
-        for (const track of stream.getTracks()) pc.addTrack(track, stream);
+        this.addLocalTracks(pc, stream);
         const offer = await pc.createOffer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: this.state.video,
@@ -307,7 +319,7 @@ export class CallController {
 
     try {
       const pc = this.createPeer(callId);
-      for (const track of stream.getTracks()) pc.addTrack(track, stream);
+      this.addLocalTracks(pc, stream);
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: video,
@@ -384,7 +396,7 @@ export class CallController {
         peer.remoteDescriptionSet = true;
         peer.pendingOffer = null;
         this.dequeueOffer(peer.userId);
-        for (const track of stream.getTracks()) pc.addTrack(track, stream);
+        this.addLocalTracks(pc, stream);
         const answer = await pc.createAnswer();
         if (callId !== this.state.callId) return;
         await pc.setLocalDescription(answer);
@@ -437,7 +449,7 @@ export class CallController {
       if (callId !== this.state.callId) return;
       this.remoteDescriptionSet = true;
       this.pendingOffer = null;
-      for (const track of stream.getTracks()) pc.addTrack(track, stream);
+      this.addLocalTracks(pc, stream);
       const answer = await pc.createAnswer();
       if (callId !== this.state.callId) return;
       await pc.setLocalDescription(answer);
@@ -626,7 +638,7 @@ export class CallController {
       peer.remoteDescriptionSet = true;
       peer.pendingOffer = null;
       this.dequeueOffer(peer.userId);
-      for (const track of stream.getTracks()) pc.addTrack(track, stream);
+      this.addLocalTracks(pc, stream);
       const answer = await pc.createAnswer();
       if (this.state.callId !== callId) return;
       await pc.setLocalDescription(answer);
@@ -772,6 +784,90 @@ export class CallController {
   dismissNotice(): void {
     if (!this.state.notice) return;
     this.update({ notice: null });
+  }
+
+  /**
+   * #94 host relay. Pass the Music Room stream while a call is active: the
+   * controller mixes it with the microphone through a Web Audio destination
+   * and replaces the outgoing audio sender of **every** peer connection, so
+   * all call participants hear the same music. Pass `null` to restore the plain
+   * microphone track. Returns `true` only when the mix is actually applied (or
+   * armed for peers that are still connecting); with no active call it returns
+   * `false` and playback stays local-only.
+   */
+  setIncomingMusicStream(stream: MediaStream | null): boolean {
+    if (this.disposed) return false;
+    if (stream === null) {
+      this.incomingMusicStream = null;
+      this.stopMixedAudio();
+      this.update({ musicActive: false });
+      return true;
+    }
+    this.incomingMusicStream = stream;
+    const applied = this.applyIncomingMusic();
+    this.update({ musicActive: applied });
+    return applied;
+  }
+
+  /**
+   * Build the mixed track once and route it into every live peer connection.
+   * Called after every `addTrack`, so a call that starts while music is already
+   * playing still shares it from its first offer.
+   */
+  private applyIncomingMusic(): boolean {
+    const mixed = this.ensureMixedAudio();
+    if (!mixed) return false;
+    for (const pc of this.allPeerConnections()) this.replaceAudioSender(pc, mixed.track);
+    return true;
+  }
+
+  private applyMusicToPc(pc: RTCPeerConnection): void {
+    if (!this.incomingMusicStream) return;
+    const mixed = this.ensureMixedAudio();
+    if (mixed) this.replaceAudioSender(pc, mixed.track);
+  }
+
+  private ensureMixedAudio(): MixedCallAudio | null {
+    if (this.mixedAudio) return this.mixedAudio;
+    if (!this.incomingMusicStream || !this.localStream) return null;
+    this.mixedAudio = this.musicMixer.mix(this.localStream, this.incomingMusicStream);
+    return this.mixedAudio;
+  }
+
+  private addLocalTracks(pc: RTCPeerConnection, stream: MediaStream): void {
+    for (const track of stream.getTracks()) pc.addTrack(track, stream);
+    this.applyMusicToPc(pc);
+  }
+
+  /** Find the outgoing microphone sender; new tracks keep its transceiver. */
+  private replaceAudioSender(pc: RTCPeerConnection, track: MediaStreamTrack): boolean {
+    const senders = pc.getSenders?.() ?? [];
+    const sender = senders.find((item) => item.track?.kind === 'audio');
+    if (!sender) return false;
+    void sender.replaceTrack(track).catch(() => undefined);
+    return true;
+  }
+
+  /** Put the plain microphone track back before closing peers or pausing music. */
+  private stopMixedAudio(): void {
+    if (!this.mixedAudio) return;
+    const micTrack = this.localStream?.getAudioTracks()[0] ?? null;
+    for (const pc of this.allPeerConnections()) {
+      const senders = pc.getSenders?.() ?? [];
+      const sender = senders.find((item) => item.track?.kind === 'audio');
+      if (sender && micTrack) void sender.replaceTrack(micTrack).catch(() => undefined);
+    }
+    this.mixedAudio.dispose();
+    this.mixedAudio = null;
+  }
+
+  private allPeerConnections(): RTCPeerConnection[] {
+    const peers: RTCPeerConnection[] = [];
+    if (this.pc) peers.push(this.pc);
+    for (const peer of this.conferencePeers.values()) {
+      if (peer.pc) peers.push(peer.pc);
+    }
+    return peers;
   }
 
   /**
@@ -1201,6 +1297,9 @@ export class CallController {
 
   private resetResources(): void {
     this.ringtone.stop();
+    // #94: restore the microphone on every live sender, then drop the music.
+    this.stopMixedAudio();
+    this.incomingMusicStream = null;
     const pc = this.pc;
     this.pc = null;
     if (pc) {

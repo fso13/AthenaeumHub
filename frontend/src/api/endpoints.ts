@@ -44,6 +44,8 @@ import type {
   ChatPluginState,
   ChatPluginStateList,
   ChatPluginUpdateRequest,
+  MusicRoomOpen,
+  MusicRoomTracks,
   PluginList,
   Poll,
   PollCloseRequest,
@@ -577,6 +579,18 @@ export interface ChatApi {
    */
   listPlugins(): Promise<PluginList>;
   listChatPlugins(chatId: string): Promise<ChatPluginStateList>;
+  /**
+   * #94: idempotent find-or-create of the workspace music room. The server
+   * returns `201` only when it created the channel; a repeat is `200` with the
+   * same chat id. The room is a normal MANAGED GROUP channel with the
+   * `music-room` plugin enabled, never an SFU/session.
+   */
+  openMusicRoom(workspaceId: string): Promise<MusicRoomOpen>;
+  /**
+   * #94: AUDIO-attachment metadata of a managed chat whose `music-room` plugin
+   * is enabled. Contains no object keys, hashes, presigned URLs or bytes.
+   */
+  getMusicRoom(chatId: string): Promise<MusicRoomTracks>;
   /*
    * D1.2 (#86): platform-admin external package lifecycle. The server enforces
    * the admin flag and every archive/manifest rule; the client only validates
@@ -1635,6 +1649,24 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       return withReauth(async () => {
         // Catalog is global and authenticated; no chat/workspace is required.
         const response = await client.get<PluginList>('/plugins');
+        return response.data;
+      });
+    },
+
+    openMusicRoom(workspaceId) {
+      return withReauth(async () => {
+        const response = await client.post<MusicRoomOpen>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/music-room`,
+        );
+        return response.data;
+      });
+    },
+
+    getMusicRoom(chatId) {
+      return withReauth(async () => {
+        const response = await client.get<MusicRoomTracks>(
+          `/chats/${encodeURIComponent(chatId)}/music-room`,
+        );
         return response.data;
       });
     },

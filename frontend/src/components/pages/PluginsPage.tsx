@@ -13,11 +13,14 @@ import {
 import {
   useChatState,
   useChatStore,
+  useMusicRoomState,
+  useMusicRoomStore,
   usePluginsState,
   usePluginsStore,
 } from '../../store/ChatProvider';
 import {
   LockIcon,
+  MusicIcon,
   PlugIcon,
   PollIcon,
   RefreshIcon,
@@ -26,7 +29,8 @@ import {
   TaskIcon,
   TranslateIcon,
 } from '../Icons';
-import { useNavigate } from '../../router/router';
+import { useLocation, useNavigate } from '../../router/router';
+import { withView } from '../../router/views';
 import { ExternalPluginRunner } from '../plugins/ExternalPluginRunner';
 import { PageShell } from './PageShell';
 import { securityModeLabel } from './pageData';
@@ -43,6 +47,7 @@ const ICONS: Readonly<Record<string, ReactNode>> = {
   plug: <PlugIcon />,
   shield: <ShieldIcon />,
   stickers: <StickerIcon />,
+  music: <MusicIcon />,
 };
 
 function pluginIcon(icon: string | null | undefined): ReactNode {
@@ -72,6 +77,10 @@ interface PluginCardProps {
   onToggle: (plugin: Plugin, enabled: boolean) => void;
   /** Present only for `kind=EXTERNAL` catalog rows. */
   onOpen?: (plugin: Plugin) => void;
+  /** #94: present only for the built-in `music-room` row. */
+  onOpenMusicRoom?: (plugin: Plugin) => void;
+  musicRoomPending?: boolean;
+  musicRoomDisabledReason?: string | null;
 }
 
 function PluginCard({
@@ -85,6 +94,9 @@ function PluginCard({
   pending,
   onToggle,
   onOpen,
+  onOpenMusicRoom,
+  musicRoomPending = false,
+  musicRoomDisabledReason = null,
 }: PluginCardProps) {
   const available = stateItem?.available ?? false;
   const checked = stateItem?.enabled ?? false;
@@ -151,6 +163,22 @@ function PluginCard({
           ) : null}
         </div>
       </div>
+
+      {onOpenMusicRoom ? (
+        <div className="plugin-actions">
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            onClick={() => onOpenMusicRoom(plugin)}
+            disabled={musicRoomPending || musicRoomDisabledReason !== null}
+            title={musicRoomDisabledReason ?? t('music.openHint')}
+            aria-label={t('music.open')}
+          >
+            <MusicIcon aria-hidden="true" />
+            {musicRoomPending ? t('music.opening') : t('music.open')}
+          </button>
+        </div>
+      ) : null}
 
       {onOpen ? (
         <div className="plugin-actions">
@@ -238,6 +266,9 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
   const store = usePluginsStore();
   const plugins = usePluginsState();
   const navigate = useNavigate();
+  const location = useLocation();
+  const musicStore = useMusicRoomStore();
+  const music = useMusicRoomState();
   const isAdmin = state.me?.user.is_platform_admin === true;
   const [activeExternal, setActiveExternal] = useState<Plugin | null>(null);
   const loadEntry = useCallback((entryUrl: string) => store.readPluginEntry(entryUrl), [store]);
@@ -258,6 +289,12 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
    */
   const activeWorkspaceId = state.activeWorkspaceId ?? state.session?.workspace.id ?? null;
   const viewerId = state.user?.id ?? state.session?.user.id ?? null;
+  const musicRoomAvailable = workspaceMode === 'MANAGED' && activeWorkspaceId !== null;
+  const musicRoomDisabledReason = !activeWorkspaceId
+    ? t('music.reasonNoWorkspace')
+    : workspaceMode === 'E2EE'
+      ? t('music.e2ee')
+      : null;
   const workspaceRole =
     state.activeWorkspace?.role ??
     state.workspaces.find((workspace) => workspace.id === activeWorkspaceId)?.role ??
@@ -331,6 +368,21 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
     if (selectedChatId) void store.loadChat(selectedChatId, true);
   };
 
+  /**
+   * #94: the room is workspace-scoped, not chat-scoped. POST is idempotent, so
+   * the second press returns the same channel; after the `201`/`200` the chat
+   * list is re-read and the room becomes the selected/active chat.
+   */
+  const openMusicRoom = async () => {
+    if (!activeWorkspaceId || !musicRoomAvailable) return;
+    const opened = await musicStore.open(activeWorkspaceId);
+    if (!opened) return;
+    await chatStore.reloadChats();
+    await chatStore.setActiveChat(opened.chat.id);
+    setSelectedChatId(opened.chat.id);
+    navigate(withView(location, 'chat'));
+  };
+
   const toggleError = plugins.toggleError;
   const toggleErrorText = toggleError
     ? toggleError.status === 403
@@ -340,6 +392,19 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
         : toggleError.code === 'PLUGIN_DISABLED'
           ? t('plugins.reasonDisabled')
           : describeError(toggleError).message
+    : null;
+
+  const musicOpenError = music.openError;
+  const musicOpenErrorText = musicOpenError
+    ? musicOpenError.status === 403
+      ? t('music.openForbidden')
+      : musicOpenError.status === 409
+        ? t('music.openLimit')
+        : musicOpenError.code === 'PLUGIN_DISABLED'
+          ? t('music.openDisabled')
+          : musicOpenError.code === 'PLUGIN_NOT_AVAILABLE'
+            ? t('music.e2ee')
+            : describeError(musicOpenError).message
     : null;
 
   const lastToggle = plugins.lastToggle;
@@ -504,6 +569,18 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
         </section>
       ) : null}
 
+      {musicOpenErrorText ? (
+        <section className="card pg-error plugin-open-error" role="alert">
+          <div>
+            <h2 className="card-title">{t('music.openErrorTitle')}</h2>
+            <p className="card-empty">{musicOpenErrorText}</p>
+          </div>
+          <button type="button" className="btn btn--sm" onClick={() => void openMusicRoom()}>
+            {t('music.retry')}
+          </button>
+        </section>
+      ) : null}
+
       {lastToggle ? (
         <p className="plugin-feedback" role="status" aria-live="polite">
           {lastToggle.changed
@@ -550,6 +627,13 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
                 hasChat={selectedChat !== null}
                 canManage={canManage}
                 pending={plugins.pendingPluginIds.includes(plugin.id)}
+                onOpenMusicRoom={
+                  plugin.id === 'music-room' ? () => void openMusicRoom() : undefined
+                }
+                musicRoomPending={plugin.id === 'music-room' && music.openStatus === 'opening'}
+                musicRoomDisabledReason={
+                  plugin.id === 'music-room' ? musicRoomDisabledReason : null
+                }
                 onToggle={(target, enabled) => {
                   if (selectedChatId) void store.toggle(selectedChatId, target.id, enabled);
                 }}

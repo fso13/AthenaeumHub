@@ -25,6 +25,7 @@ import type {
   FileItem,
   MeResponse,
   Mention,
+  MusicRoomTrack,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
@@ -947,6 +948,14 @@ export interface MockDb {
   chatPluginPatchDelayMs: number;
   forceChatPluginsError: ForcedSendError | null;
   forceChatPluginPatchError: ForcedSendError | null;
+  /** #94: idempotent workspace music room + AUDIO-attachment track metadata. */
+  musicRoomChats: Map<string, string>;
+  musicRoomTracks: Map<string, MusicRoomTrack[]>;
+  musicRoomOpenRequests: Array<{ workspaceId: string; deviceId: string | null }>;
+  musicRoomTrackRequests: Array<{ chatId: string; deviceId: string | null }>;
+  musicRoomDelayMs: number;
+  forceMusicRoomOpenError: ForcedSendError | null;
+  forceMusicRoomTracksError: ForcedSendError | null;
   /** D1.2 (#86): installed external ZIP packages and their static assets. */
   pluginPackages: AdminPluginPackage[];
   pluginPackageAssets: Map<string, Map<string, MockPluginAssetRecord>>;
@@ -1300,7 +1309,55 @@ export function createMockPluginCatalog(): Plugin[] {
       modes: ['MANAGED'],
       state: 'ACTIVE',
     },
+    {
+      id: 'music-room',
+      kind: 'BUILTIN',
+      name: 'Музыкальная комната',
+      description: 'Совместное прослушивание музыки: аудиофайлы канала и общий плеер.',
+      icon: 'music',
+      permissions: ['FILES', 'MESSAGES'],
+      modes: ['MANAGED'],
+      state: 'ACTIVE',
+    },
   ];
+}
+
+/**
+ * #94 seeded AUDIO attachments of the group channel. The mock does not model
+ * real bytes: the track list is metadata-only, exactly like the server response.
+ */
+export function buildMusicRoomTracks(): Map<string, MusicRoomTrack[]> {
+  return new Map([
+    [
+      IDS.groupChat,
+      [
+        {
+          id: 'c1000000-0000-4000-8000-000000000001',
+          message_id: 'd1000000-0000-4000-8000-000000000001',
+          filename: 'sova-night.mp3',
+          mime_type: 'audio/mpeg',
+          duration_ms: 214_000,
+          artwork_url: null,
+          title: 'Ночная сова',
+          artist: 'Сова',
+          size_bytes: 5_242_880,
+          created_at: '2026-11-19T21:10:00.000Z',
+        },
+        {
+          id: 'c1000000-0000-4000-8000-000000000002',
+          message_id: 'd1000000-0000-4000-8000-000000000002',
+          filename: 'forest-walk.flac',
+          mime_type: 'audio/flac',
+          duration_ms: 187_500,
+          artwork_url: 'https://cdn.example.test/art/forest.jpg',
+          title: 'Прогулка по лесу',
+          artist: 'Анна Петрова',
+          size_bytes: 31_457_280,
+          created_at: '2026-11-18T09:30:00.000Z',
+        },
+      ],
+    ],
+  ]);
 }
 
 /** D1.2 (#86): project an installed package into the public catalog shape. */
@@ -1597,6 +1654,13 @@ export function createMockDb(): MockDb {
     chatPluginPatchDelayMs: 0,
     forceChatPluginsError: null,
     forceChatPluginPatchError: null,
+    musicRoomChats: new Map(),
+    musicRoomTracks: buildMusicRoomTracks(),
+    musicRoomOpenRequests: [],
+    musicRoomTrackRequests: [],
+    musicRoomDelayMs: 0,
+    forceMusicRoomOpenError: null,
+    forceMusicRoomTracksError: null,
     pluginPackages: [],
     pluginPackageAssets: new Map(),
     adminPluginListRequests: 0,
@@ -1840,6 +1904,13 @@ export function resetMockDb(db: MockDb): void {
   db.chatPluginPatchDelayMs = 0;
   db.forceChatPluginsError = null;
   db.forceChatPluginPatchError = null;
+  db.musicRoomChats = fresh.musicRoomChats;
+  db.musicRoomTracks = fresh.musicRoomTracks;
+  db.musicRoomOpenRequests = [];
+  db.musicRoomTrackRequests = [];
+  db.musicRoomDelayMs = 0;
+  db.forceMusicRoomOpenError = null;
+  db.forceMusicRoomTracksError = null;
   db.pluginPackages = fresh.pluginPackages;
   db.pluginPackageAssets.clear();
   db.adminPluginListRequests = 0;

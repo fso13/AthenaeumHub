@@ -146,6 +146,10 @@ const operations = {
   'DELETE /admin/plugins/{pluginId}': spec.paths?.['/admin/plugins/{pluginId}']?.delete,
   'GET /plugins/{pluginId}/assets/{assetPath}':
     spec.paths?.['/plugins/{pluginId}/assets/{assetPath}']?.get,
+  // #94 music room: idempotent workspace room + AUDIO attachment listing.
+  'POST /workspaces/{workspaceId}/music-room':
+    spec.paths?.['/workspaces/{workspaceId}/music-room']?.post,
+  'GET /chats/{chatId}/music-room': spec.paths?.['/chats/{chatId}/music-room']?.get,
   'GET /admin/audit': spec.paths?.['/admin/audit']?.get,
   'GET /me': spec.paths?.['/me']?.get,
   'POST /devices': spec.paths?.['/devices']?.post,
@@ -864,18 +868,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 117,
-  'Contract must expose exactly 117 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
+  Object.keys(spec.paths ?? {}).length === 119,
+  'Contract must expose exactly 119 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 144,
-  'Contract check must cover exactly 144 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
+  Object.keys(operations).length === 146,
+  'Contract check must cover exactly 146 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
 );
 check(
-  Object.keys(schemas).length === 191,
-  'Contract must expose exactly 191 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
+  Object.keys(schemas).length === 195,
+  'Contract must expose exactly 195 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions)',
 );
 
 check(
@@ -883,6 +887,19 @@ check(
     schemas.Message?.properties?.type?.enum?.includes(type),
   ),
   'Message.type must allow TEXT/STICKER/SYSTEM',
+);
+
+// --- #94 music room ------------------------------------------------------
+check(
+  schemas.MusicRoomOpen?.properties?.chat !== undefined &&
+    schemas.MusicRoomOpen?.properties?.plugin !== undefined &&
+    schemas.MusicRoomTracks?.properties?.chat_id !== undefined &&
+    schemas.MusicRoomTracks?.properties?.items?.items?.$ref ===
+      '#/components/schemas/MusicRoomTrack' &&
+    schemas.MusicRoomTrack?.properties?.duration_ms !== undefined &&
+    schemas.MusicRoomTrack?.properties?.artwork_url !== undefined &&
+    schemas.MusicRoomPlugin?.properties?.version?.enum?.includes('1.0.0'),
+  'Music room must expose open (chat+plugin) and AUDIO track list with version 1.0.0',
 );
 check(
   ['TEXT', 'STICKER'].every((type) =>
