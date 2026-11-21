@@ -333,9 +333,12 @@ describe('TOFU pinning', () => {
     const key = `pin:${DEVICE_IDS.peerUser}:${DEVICE_IDS.peerDevice}`;
     const raw = await storage.get<{ v: 1; nonce: string; ciphertext: string }>('pins', key);
     if (!raw) throw new Error('pin missing');
+    const last = raw.ciphertext.slice(-1);
     await storage.put('pins', key, {
       ...raw,
-      ciphertext: `${raw.ciphertext.slice(0, -2)}AA`,
+      // Flip one base64url character; appending the same suffix twice would
+      // make the "tamper" a no-op and turn this into a flaky test.
+      ciphertext: `${raw.ciphertext.slice(0, -1)}${last === 'A' ? 'B' : 'A'}`,
     });
     await expect(
       readPin(storage, DEVICE_IDS.peerUser, DEVICE_IDS.peerDevice),
