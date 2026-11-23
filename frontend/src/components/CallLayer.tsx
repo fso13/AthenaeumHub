@@ -239,6 +239,9 @@ export function CallLayer() {
   const conference = call.conference;
   const incoming = call.phase === 'incoming';
   const connected = call.phase === 'connected';
+  // Only a ringing incoming call owns the screen. Outgoing, connecting and
+  // connected calls are non-modal so the app remains usable.
+  const floating = !incoming;
   const participantName = (userId: string): string =>
     state.workspaceMembers.items.find((item) => item.user_id === userId)?.display_name ??
     t('calls.participantFallback');
@@ -266,7 +269,7 @@ export function CallLayer() {
   // scrolling while ringing or connected.
   useEffect(() => {
     // Connected calls are non-modal: never lock the app behind the call.
-    if (!active || call.phase === 'connected') return;
+    if (!active || call.phase !== 'incoming') return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -279,7 +282,7 @@ export function CallLayer() {
   const liveRef = useRef({ phase: call.phase, confirmEnd });
   liveRef.current = { phase: call.phase, confirmEnd };
   useEffect(() => {
-    if (!active || call.phase === 'connected') return;
+    if (!active || call.phase !== 'incoming') return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusTimer = window.setTimeout(() => {
       if (liveRef.current.phase === 'incoming') acceptRef.current?.focus();
@@ -329,6 +332,22 @@ export function CallLayer() {
     };
   }, [active, store]);
 
+  // The call is non-modal after ringing, but Escape still asks for
+  // confirmation while focus is inside the call widget.
+  useEffect(() => {
+    if (!active || incoming) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const dialog = dialogRef.current;
+      if (!dialog || !dialog.contains(document.activeElement)) return;
+      event.preventDefault();
+      if (confirmEnd) setConfirmEnd(false);
+      else setConfirmEnd(true);
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [active, incoming, confirmEnd]);
+
   useEffect(() => {
     if (confirmEnd) stayRef.current?.focus();
   }, [confirmEnd]);
@@ -336,7 +355,7 @@ export function CallLayer() {
   // Accepting or connecting unmounts the focused control. Keep keyboard users
   // inside the dialog instead of dropping focus onto <body>.
   useEffect(() => {
-    if (!active || call.phase === 'connected') return;
+    if (!active || call.phase !== 'incoming') return;
     const element = document.activeElement;
     if (!(element instanceof HTMLElement) || !element.isConnected || element === document.body) {
       dialogRef.current?.focus();
@@ -491,12 +510,12 @@ export function CallLayer() {
 
   return (
     <div
-      className={`call-overlay call-overlay--${call.phase}${connected ? ' call-overlay--floating' : ''}`}
+      className={`call-overlay call-overlay--${call.phase}${floating ? ' call-overlay--floating' : ''}`}
     >
       <div
-        className={`call-dialog${connected ? ' call-dialog--floating' : ''}${maximized ? ' call-dialog--maximized' : ''}`}
+        className={`call-dialog${floating ? ' call-dialog--floating' : ''}${maximized ? ' call-dialog--maximized' : ''}`}
         role="dialog"
-        aria-modal={connected ? undefined : true}
+        aria-modal={floating ? undefined : true}
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         ref={dialogRef}
