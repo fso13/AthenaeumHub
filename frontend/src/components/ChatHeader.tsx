@@ -8,15 +8,7 @@ import { useAvatarsState, useAvatarsStore } from '../store/ChatProvider';
 import type { AppState } from '../store/chatStore';
 import { Avatar } from './Avatar';
 import { pluralRu } from './pages/pageData';
-import {
-  InfoIcon,
-  LockIcon,
-  PhoneIcon,
-  RefreshIcon,
-  SearchIcon,
-  SettingsIcon,
-  VideoIcon,
-} from './Icons';
+import { InfoIcon, LockIcon, PhoneIcon, RefreshIcon, SearchIcon, SettingsIcon } from './Icons';
 
 interface ChatHeaderProps {
   state: AppState;
@@ -105,7 +97,6 @@ export function ChatHeader({
     callDisabledReason === undefined ? derivedCallReason : callDisabledReason;
   const callsAvailable = callableChat && callsDisabledReason === null && Boolean(onStartCall);
   const callTitle = callsDisabledReason ?? t('chat.call');
-  const videoCallTitle = callsDisabledReason ?? t('chat.videoCall');
 
   const meta =
     chatType === 'DIRECT'
@@ -209,21 +200,11 @@ export function ChatHeader({
           type="button"
           className="icon-button chat-head__call"
           disabled={!callsAvailable}
-          onClick={() => onStartCall?.(false)}
+          onClick={() => onStartCall?.(true)}
           aria-label={t('chat.call')}
           title={callTitle}
         >
           <PhoneIcon aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className="icon-button chat-head__video"
-          disabled={!callsAvailable}
-          onClick={() => onStartCall?.(true)}
-          aria-label={t('chat.videoCall')}
-          title={videoCallTitle}
-        >
-          <VideoIcon aria-hidden="true" />
         </button>
         <button
           type="button"

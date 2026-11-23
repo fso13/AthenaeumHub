@@ -95,6 +95,7 @@ import type { AppConfig } from '../config/env';
 import { maxSeq, mergeMessages, minSeq } from '../domain/messages';
 import { sumUnread } from '../domain/unread';
 import { newUuid } from '../lib/ids';
+import { readCallPreferences } from '../prefs/callPreferences';
 import { isE2eeEnabled } from '../e2ee/app/flag';
 import { readChatModePin } from '../e2ee/device/modePin';
 import {
@@ -1442,6 +1443,10 @@ export class ChatStore {
       mediaDevices: deps.callMediaDevices,
       createPeerConnection: deps.callCreatePeerConnection,
       ringtone: deps.callRingtone,
+      initialMedia: () => {
+        const prefs = readCallPreferences();
+        return { muted: !prefs.microphoneOnByDefault, cameraOn: prefs.cameraOnByDefault };
+      },
     });
 
     // #105: rooms reuse the same mesh call engine; the bridge keeps the media

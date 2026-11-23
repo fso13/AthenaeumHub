@@ -23,7 +23,6 @@ import {
   VideoIcon,
   VideoOffIcon,
   ExpandIcon,
-  MinimizeIcon,
   MonitorIcon,
   SettingsIcon,
 } from './Icons';
@@ -81,6 +80,7 @@ function ConferenceTile({
   local = false,
   cameraOn = true,
   ringing = false,
+  featured = false,
   outputVolume,
   outputMuted,
   outputDeviceId,
@@ -93,6 +93,7 @@ function ConferenceTile({
   local?: boolean;
   cameraOn?: boolean;
   ringing?: boolean;
+  featured?: boolean;
   outputVolume: number;
   outputMuted: boolean;
   outputDeviceId: string | null;
@@ -129,7 +130,9 @@ function ConferenceTile({
   const showFailed = !local && state === 'failed';
 
   return (
-    <div className={`call-tile${showVideo ? ' is-video' : ''}${local ? ' call-tile--local' : ''}`}>
+    <div
+      className={`call-tile${showVideo ? ' is-video' : ''}${local ? ' call-tile--local' : ''}${featured ? ' call-tile--featured' : ''}`}
+    >
       {video || !local ? (
         <video
           ref={videoRef}
@@ -205,6 +208,9 @@ export function CallLayer() {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [windowOffset, setWindowOffset] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const [featuredUserId, setFeaturedUserId] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -241,7 +247,8 @@ export function CallLayer() {
   const connected = call.phase === 'connected';
   // Only a ringing incoming call owns the screen. Outgoing, connecting and
   // connected calls are non-modal so the app remains usable.
-  const floating = !incoming;
+  // A call is a modal, resizable window (latest UX decision).
+  const floating = false;
   const participantName = (userId: string): string =>
     state.workspaceMembers.items.find((item) => item.user_id === userId)?.display_name ??
     t('calls.participantFallback');
@@ -257,6 +264,8 @@ export function CallLayer() {
     if (active) return;
     setConfirmEnd(false);
     setCollapsed(false);
+    setWindowOffset({ x: 0, y: 0 });
+    setFeaturedUserId(null);
     setMaximized(false);
     setSettingsOpen(false);
     setControlError(null);
@@ -269,7 +278,7 @@ export function CallLayer() {
   // scrolling while ringing or connected.
   useEffect(() => {
     // Connected calls are non-modal: never lock the app behind the call.
-    if (!active || call.phase !== 'incoming') return;
+    if (!active) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -282,7 +291,7 @@ export function CallLayer() {
   const liveRef = useRef({ phase: call.phase, confirmEnd });
   liveRef.current = { phase: call.phase, confirmEnd };
   useEffect(() => {
-    if (!active || call.phase !== 'incoming') return;
+    if (!active) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusTimer = window.setTimeout(() => {
       if (liveRef.current.phase === 'incoming') acceptRef.current?.focus();
@@ -355,7 +364,7 @@ export function CallLayer() {
   // Accepting or connecting unmounts the focused control. Keep keyboard users
   // inside the dialog instead of dropping focus onto <body>.
   useEffect(() => {
-    if (!active || call.phase !== 'incoming') return;
+    if (!active) return;
     const element = document.activeElement;
     if (!(element instanceof HTMLElement) || !element.isConnected || element === document.body) {
       dialogRef.current?.focus();
@@ -515,16 +524,22 @@ export function CallLayer() {
       <div
         className={`call-dialog${floating ? ' call-dialog--floating' : ''}${maximized ? ' call-dialog--maximized' : ''}`}
         role="dialog"
-        aria-modal={floating ? undefined : true}
+        aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         ref={dialogRef}
         tabIndex={-1}
+        style={{ transform: `translate(${windowOffset.x}px, ${windowOffset.y}px)` }}
       >
         <div className="call-stage">
           {conference ? (
             <div className={`call-grid call-grid--${gridSize}`}>
-              {call.participants.map((participant) => (
+              {(featuredUserId
+                ? [...call.participants].sort((a, b) =>
+                    a.userId === featuredUserId ? -1 : b.userId === featuredUserId ? 1 : 0,
+                  )
+                : call.participants
+              ).map((participant) => (
                 <ConferenceTile
                   key={participant.userId}
                   participant={participant}
@@ -532,6 +547,7 @@ export function CallLayer() {
                   video={call.video}
                   stream={participant.stream}
                   ringing={incoming}
+                  featured={featuredUserId === participant.userId}
                   outputVolume={outputVolume}
                   outputMuted={outputMuted}
                   outputDeviceId={outputDeviceId}
@@ -571,7 +587,30 @@ export function CallLayer() {
             </>
           )}
 
-          <div className="call-stage__top">
+          <div
+            className="call-stage__top call-drag-handle"
+            onPointerDown={(event) => {
+              if ((event.target as HTMLElement).closest('button')) return;
+              dragRef.current = {
+                x: event.clientX,
+                y: event.clientY,
+                ox: windowOffset.x,
+                oy: windowOffset.y,
+              };
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const drag = dragRef.current;
+              if (!drag) return;
+              setWindowOffset({
+                x: drag.ox + event.clientX - drag.x,
+                y: drag.oy + event.clientY - drag.y,
+              });
+            }}
+            onPointerUp={() => {
+              dragRef.current = null;
+            }}
+          >
             <span className="call-kind">
               {call.video ? <VideoIcon aria-hidden="true" /> : <PhoneIcon aria-hidden="true" />}
               {conference
@@ -581,17 +620,6 @@ export function CallLayer() {
                   : t('calls.audio')}
             </span>
             {connected && call.startedAt !== null ? <CallTimer startedAt={call.startedAt} /> : null}
-            {connected ? (
-              <button
-                type="button"
-                className="call-minimize"
-                onClick={() => setCollapsed(true)}
-                aria-label={t('calls.minimize')}
-                title={t('calls.minimize')}
-              >
-                <MinimizeIcon />
-              </button>
-            ) : null}
           </div>
 
           <div className="call-stage__info">
@@ -695,6 +723,28 @@ export function CallLayer() {
               </p>
             ) : null}
           </section>
+        ) : null}
+
+        {connected ? (
+          <div className="call-people" role="group" aria-label={t('calls.participantsList')}>
+            <button
+              type="button"
+              className={`call-person-chip${featuredUserId === null ? ' is-active' : ''}`}
+              onClick={() => setFeaturedUserId(null)}
+            >
+              {t('calls.allParticipants')}
+            </button>
+            {call.participants.map((participant) => (
+              <button
+                type="button"
+                key={participant.userId}
+                className={`call-person-chip${featuredUserId === participant.userId ? ' is-active' : ''}`}
+                onClick={() => setFeaturedUserId(participant.userId)}
+              >
+                {participantName(participant.userId)}
+              </button>
+            ))}
+          </div>
         ) : null}
 
         <div className="call-controls">

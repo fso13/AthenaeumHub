@@ -17,6 +17,11 @@ import { Avatar } from './Avatar';
 import { BlockedUsersCard } from './BlockedUsersCard';
 import { BellIcon, CloseIcon, LogoutIcon, MoonIcon, RefreshIcon, SunIcon } from './Icons';
 import { ImageFilePicker } from './ImageFilePicker';
+import {
+  readCallPreferences,
+  writeCallPreferences,
+  type CallPreferences,
+} from '../prefs/callPreferences';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
 import { ProfileAccordionSection } from './profile/ProfileAccordionSection';
 import { TwoFactorCard } from './profile/TwoFactorCard';
@@ -34,7 +39,7 @@ const DEVICE_STATUS_LABEL: Record<NonNullable<Device['status']>, MessageKey> = {
 type ProfileField = 'display_name' | 'bio' | 'phone';
 type ProfileFieldErrors = Partial<Record<ProfileField, string>>;
 type ProfileSectionKey =
-  'avatar' | 'two-factor' | 'devices' | 'sessions' | 'notifications' | 'blocked';
+  'avatar' | 'two-factor' | 'devices' | 'sessions' | 'calls' | 'notifications' | 'blocked';
 const DEFAULT_PROFILE_SECTIONS: readonly ProfileSectionKey[] = ['avatar'];
 
 interface ProfileFormState {
@@ -162,6 +167,19 @@ export function ProfileDialog({
   const [avatarNotice, setAvatarNotice] = useState<string | null>(null);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [callPrefs, setCallPrefs] = useState<CallPreferences>(() => readCallPreferences());
+  const [callDevices, setCallDevices] = useState<MediaDeviceInfo[]>([]);
+
+  const updateCallPrefs = (patch: Partial<CallPreferences>) => {
+    setCallPrefs(writeCallPreferences(patch));
+  };
+
+  const loadCallDevices = () => {
+    void navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((items) => setCallDevices(items))
+      .catch(() => setCallDevices([]));
+  };
 
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM);
@@ -908,6 +926,78 @@ export function ProfileDialog({
                         </button>
                       </div>
                     ))}
+                  </div>
+                </ProfileAccordionSection>
+
+                <ProfileAccordionSection
+                  id="calls"
+                  title={t('profile.callsSection')}
+                  open={isSectionOpen('calls')}
+                  onToggle={() => toggleSection('calls')}
+                >
+                  <div className="profile-section-body">
+                    <p className="mini-card__note">{t('profile.callsHint')}</p>
+                    <label className="profile-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={callPrefs.microphoneOnByDefault}
+                        onChange={(event) =>
+                          updateCallPrefs({ microphoneOnByDefault: event.target.checked })
+                        }
+                      />
+                      <span>{t('profile.callsMicDefault')}</span>
+                    </label>
+                    <label className="profile-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={callPrefs.cameraOnByDefault}
+                        onChange={(event) =>
+                          updateCallPrefs({ cameraOnByDefault: event.target.checked })
+                        }
+                      />
+                      <span>{t('profile.callsCameraDefault')}</span>
+                    </label>
+                    <button type="button" className="btn btn--sm" onClick={loadCallDevices}>
+                      {t('profile.callsRefreshDevices')}
+                    </button>
+                    <label className="field">
+                      <span className="field__label">{t('profile.callsCamera')}</span>
+                      <select
+                        className="input"
+                        value={callPrefs.cameraDeviceId ?? ''}
+                        onChange={(event) =>
+                          updateCallPrefs({ cameraDeviceId: event.target.value || null })
+                        }
+                      >
+                        <option value="">{t('profile.callsDefaultDevice')}</option>
+                        {callDevices
+                          .filter((device) => device.kind === 'videoinput')
+                          .map((device, index) => (
+                            <option key={device.deviceId} value={device.deviceId}>
+                              {device.label || `${t('profile.callsCamera')} ${index + 1}`}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span className="field__label">{t('profile.callsMicrophone')}</span>
+                      <select
+                        className="input"
+                        value={callPrefs.microphoneDeviceId ?? ''}
+                        onChange={(event) =>
+                          updateCallPrefs({ microphoneDeviceId: event.target.value || null })
+                        }
+                      >
+                        <option value="">{t('profile.callsDefaultDevice')}</option>
+                        {callDevices
+                          .filter((device) => device.kind === 'audioinput')
+                          .map((device, index) => (
+                            <option key={device.deviceId} value={device.deviceId}>
+                              {device.label || `${t('profile.callsMicrophone')} ${index + 1}`}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
                   </div>
                 </ProfileAccordionSection>
 

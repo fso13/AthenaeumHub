@@ -13,6 +13,7 @@ import {
   type IncomingCallSignal,
 } from './types';
 import { createWebAudioRingtone, type CallRingtone } from './ringtone';
+import { readCallPreferences } from '../prefs/callPreferences';
 
 /**
  * WebRTC engine for one 1:1 call and for GROUP mesh conferences (#77).
@@ -41,6 +42,8 @@ export interface CallControllerOptions {
   createPeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
   /** #77: injectable so tests can assert ringback/ringtone start-stop exactly. */
   ringtone?: CallRingtone;
+  /** #178: user defaults for microphone/camera when media is acquired. */
+  initialMedia?: () => { muted: boolean; cameraOn: boolean };
 }
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
@@ -200,11 +203,12 @@ export class CallController {
     }
 
     this.localStream = stream;
+    const initial = this.applyInitialMedia(stream, video);
     this.update({
       localStream: stream,
       mediaPending: false,
-      muted: false,
-      cameraOn: video && stream.getVideoTracks().length > 0,
+      muted: initial.muted,
+      cameraOn: initial.cameraOn,
     });
 
     for (const peerUserId of peers) {
@@ -302,11 +306,12 @@ export class CallController {
     }
 
     this.localStream = stream;
+    const initial = this.applyInitialMedia(stream, video);
     this.update({
       localStream: stream,
       mediaPending: false,
-      muted: false,
-      cameraOn: video && stream.getVideoTracks().length > 0,
+      muted: initial.muted,
+      cameraOn: initial.cameraOn,
     });
 
     try {
@@ -370,11 +375,12 @@ export class CallController {
     }
 
     this.localStream = stream;
+    const initial = this.applyInitialMedia(stream, video);
     this.update({
       localStream: stream,
       mediaPending: false,
-      muted: false,
-      cameraOn: video && stream.getVideoTracks().length > 0,
+      muted: initial.muted,
+      cameraOn: initial.cameraOn,
     });
 
     const peers = [...this.conferencePeers.values()];
@@ -428,11 +434,12 @@ export class CallController {
     }
 
     this.localStream = stream;
+    const initial = this.applyInitialMedia(stream, incoming.video);
     this.update({
       localStream: stream,
       mediaPending: false,
-      muted: false,
-      cameraOn: incoming.video && stream.getVideoTracks().length > 0,
+      muted: initial.muted,
+      cameraOn: initial.cameraOn,
     });
 
     try {
@@ -1246,14 +1253,33 @@ export class CallController {
     }
   }
 
+  private applyInitialMedia(
+    stream: MediaStream,
+    video: boolean,
+  ): { muted: boolean; cameraOn: boolean } {
+    const prefs = this.options.initialMedia?.() ?? { muted: false, cameraOn: true };
+    const muted = prefs.muted;
+    for (const track of stream.getAudioTracks()) track.enabled = !muted;
+    const cameraOn = video && prefs.cameraOn && stream.getVideoTracks().length > 0;
+    for (const track of stream.getVideoTracks()) track.enabled = cameraOn;
+    return { muted, cameraOn };
+  }
+
   private async openMedia(video: boolean): Promise<MediaStream> {
     const devices = this.options.mediaDevices ?? browserMediaDevices();
     if (!devices?.getUserMedia) {
       throw Object.assign(new Error('getUserMedia is unavailable'), { name: 'NotSupportedError' });
     }
+    const prefs = readCallPreferences();
     return devices.getUserMedia({
-      audio: AUDIO_CONSTRAINTS,
-      video: video ? VIDEO_CONSTRAINTS : false,
+      audio: prefs.microphoneDeviceId
+        ? { ...AUDIO_CONSTRAINTS, deviceId: { exact: prefs.microphoneDeviceId } }
+        : AUDIO_CONSTRAINTS,
+      video: video
+        ? prefs.cameraDeviceId
+          ? { ...VIDEO_CONSTRAINTS, deviceId: { exact: prefs.cameraDeviceId } }
+          : VIDEO_CONSTRAINTS
+        : false,
     });
   }
 

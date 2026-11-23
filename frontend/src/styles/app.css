@@ -21063,3 +21063,70 @@ html[data-theme='dark'] .recent-thumb--video {
   color: #fca5a5;
   font-size: 12px;
 }
+
+/* #178: modal call window is movable and resizable. */
+.call-dialog {
+  resize: both;
+  overflow: auto;
+  min-width: 320px;
+  min-height: 360px;
+  max-width: calc(100vw - 20px);
+  max-height: calc(100dvh - 20px);
+}
+.call-drag-handle {
+  cursor: grab;
+  touch-action: none;
+}
+.call-drag-handle:active {
+  cursor: grabbing;
+}
+.call-people {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+.call-people__count {
+  flex: none;
+  font-size: 12px;
+  opacity: 0.8;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.call-person-chip {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.call-person-chip.is-active {
+  background: rgba(255, 255, 255, 0.9);
+  color: #101614;
+}
+.call-tile--featured {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+@media (max-width: 720px) {
+  .call-tile--featured {
+    grid-column: span 1;
+    grid-row: span 1;
+  }
+}
+.profile-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.profile-checkbox input {
+  width: 16px;
+  height: 16px;
+}

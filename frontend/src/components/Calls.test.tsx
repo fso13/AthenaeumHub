@@ -51,7 +51,11 @@ async function openDirect(user: ReturnType<typeof renderCalls>['user']): Promise
 }
 
 function callButton(container: HTMLElement, kind: 'call' | 'video' = 'call'): HTMLButtonElement {
-  const button = container.querySelector<HTMLButtonElement>(`.chat-head__${kind}`);
+  // #178: one unified call button starts a call with video capability; the
+  // camera can be toggled off in the call window.
+  const button =
+    container.querySelector<HTMLButtonElement>(`.chat-head__${kind}`) ??
+    container.querySelector<HTMLButtonElement>('.chat-head__call');
   if (!button) throw new Error(`missing .chat-head__${kind}`);
   return button;
 }
@@ -212,7 +216,7 @@ describe('1:1 calls', () => {
     const offer = mockSentCallSignals().find((item) => item.payload.kind === 'offer');
     expect(offer?.payload).toMatchObject({
       kind: 'offer',
-      video: false,
+      video: true,
       conference: true,
       recipients: [IDS.lena],
     });
@@ -226,9 +230,9 @@ describe('1:1 calls', () => {
 
     expect(callButton(container, 'call')).toBeEnabled();
     const { callId, offer } = await startOutgoing(user, container, media);
-    expect(offer.payload).toMatchObject({ call_id: callId, kind: 'offer', video: false });
+    expect(offer.payload).toMatchObject({ call_id: callId, kind: 'offer', video: true });
     expect(media.constraints[0]?.audio).toBeTruthy();
-    expect(media.constraints[0]?.video).toBe(false);
+    expect(media.constraints[0]?.video).toBeTruthy();
     expect(await screen.findByRole('dialog')).toHaveAccessibleName(/Анна Петрова/);
     expect(screen.getByText('Вызываем…')).toBeInTheDocument();
 
@@ -893,12 +897,12 @@ describe('#107 call output controls', () => {
 
     const tiles = [...container.querySelectorAll('.call-tile')];
     expect(tiles).toHaveLength(4);
-    expect(container.querySelectorAll('.call-tile.is-video')).toHaveLength(0);
+    expect(container.querySelectorAll('.call-tile.is-video').length).toBeGreaterThan(0);
     expect(tiles.every((tile) => tile.querySelector('.call-tile__identity') !== null)).toBe(true);
     // Each remote tile still has a media element so remote audio is audible.
     const remoteVideos = container.querySelectorAll('.call-tile:not(.call-tile--local) video');
     expect(remoteVideos).toHaveLength(3);
-    expect(media.constraints[0]?.video).toBe(false);
+    expect(media.constraints[0]?.video).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Завершить звонок' }));
     await user.click(

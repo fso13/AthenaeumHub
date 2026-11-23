@@ -211,6 +211,8 @@ export const ru = {
   'calls.microphone': 'Микрофон',
   'calls.maximize': 'Развернуть окно',
   'calls.restore': 'Вернуть окно',
+  'calls.participantsList': 'Участники звонка',
+  'calls.allParticipants': 'Все участники',
   'calls.mute': 'Выключить микрофон',
   'calls.unmute': 'Включить микрофон',
   'calls.cameraOff': 'Выключить камеру',
@@ -3167,6 +3169,14 @@ export const ru = {
     'Вызов недействителен или истёк. Войдите снова, чтобы получить новый.',
 
   /* P0-4 (#82): own avatar. */
+  'profile.callsSection': 'Звонки',
+  'profile.callsHint': 'По умолчанию для новых звонков на этом устройстве.',
+  'profile.callsMicDefault': 'Включать микрофон при входе в звонок',
+  'profile.callsCameraDefault': 'Включать камеру при входе в звонок',
+  'profile.callsRefreshDevices': 'Обновить список устройств',
+  'profile.callsCamera': 'Камера',
+  'profile.callsMicrophone': 'Микрофон',
+  'profile.callsDefaultDevice': 'Системное устройство',
   'profile.avatarSection': 'Аватар',
   'profile.avatar.hint': 'Аватар видят участники пространств.',
   'profile.avatar.current': 'Текущий аватар',
