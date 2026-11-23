@@ -12,7 +12,6 @@ import { readAuthSession, writeAuthSession } from './storage';
 
 const SESSION = {
   accessToken: 'stored-access-token',
-  refreshToken: 'stored-refresh-token',
   expiresAt: Date.now() + 60_000,
   user: {
     id: '11111111-1111-4111-8111-111111111111',

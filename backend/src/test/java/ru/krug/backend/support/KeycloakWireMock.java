@@ -43,6 +43,10 @@ public final class KeycloakWireMock {
     private static final KeyPair KEY_PAIR = generateKeyPair();
     private static final String KID = "krug-auth-bff-test";
     private static final String ADMIN_TOKEN = "admin-test-token";
+    /** #103: client-credentials service account used by the Auth BFF tests. */
+    public static final String SERVICE_CLIENT_ID = "svc-krug-bff";
+    public static final String SERVICE_CLIENT_SECRET =
+            "svc-krug-bff-test-secret-please-change-32";
 
     private static final KeycloakTransformer TRANSFORMER = new KeycloakTransformer();
     private static final WireMockServer SERVER;
@@ -106,6 +110,29 @@ public final class KeycloakWireMock {
     /** Make the fake Admin user update return 503 (best-effort display-name sync test). */
     public static void failUserUpdates(boolean fail) {
         TRANSFORMER.failUserUpdates = fail;
+    }
+
+    /** Number of {@code client_credentials} token acquisitions since the last reset. */
+    public static int serviceTokenRequests() {
+        return TRANSFORMER.serviceTokenRequests.get();
+    }
+
+    /** Number of interactive (realm `krug`) password grants since the last reset. */
+    public static int passwordTokenRequests() {
+        return TRANSFORMER.passwordTokenRequests.get();
+    }
+
+    /** Number of legacy master-realm admin password grants since the last reset. */
+    public static int adminPasswordTokenRequests() {
+        return TRANSFORMER.adminPasswordTokenRequests.get();
+    }
+
+    /**
+     * Simulate Keycloak revoking the cached service-account token: the next Admin API
+     * request answers 401 once, forcing the adapter to re-acquire and replay.
+     */
+    public static void invalidateServiceToken() {
+        TRANSFORMER.rejectNextAdminRequest = true;
     }
 
     public static java.util.List<String> events() {
@@ -200,6 +227,14 @@ public final class KeycloakWireMock {
         private final Map<String, UUID> refreshTokens = new ConcurrentHashMap<>();
         private final Map<UUID, java.util.List<TestSession>> sessionsByUser =
                 new ConcurrentHashMap<>();
+        private final java.util.concurrent.atomic.AtomicInteger serviceTokenRequests =
+                new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger passwordTokenRequests =
+                new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger adminPasswordTokenRequests =
+                new java.util.concurrent.atomic.AtomicInteger();
+        private volatile String currentServiceToken;
+        private volatile boolean rejectNextAdminRequest;
         private volatile boolean failAdminSessions;
         private volatile boolean failUserUpdates;
 
@@ -214,6 +249,11 @@ public final class KeycloakWireMock {
             accessTokens.clear();
             refreshTokens.clear();
             sessionsByUser.clear();
+            serviceTokenRequests.set(0);
+            passwordTokenRequests.set(0);
+            adminPasswordTokenRequests.set(0);
+            currentServiceToken = null;
+            rejectNextAdminRequest = false;
             failAdminSessions = false;
             failUserUpdates = false;
         }
@@ -252,6 +292,7 @@ public final class KeycloakWireMock {
                 String method = request.getMethod().value();
                 if (path.equals("/realms/master/protocol/openid-connect/token")
                         && method.equals("POST")) {
+                    adminPasswordTokenRequests.incrementAndGet();
                     return adminToken();
                 }
                 if (path.equals("/realms/krug/protocol/openid-connect/certs")
@@ -269,6 +310,12 @@ public final class KeycloakWireMock {
                 if (path.equals("/realms/krug/protocol/openid-connect/logout")
                         && method.equals("POST")) {
                     return logout(request.getBodyAsString());
+                }
+                if (path.startsWith("/admin/realms/krug/")) {
+                    Response rejected = authorizeAdmin(request);
+                    if (rejected != null) {
+                        return rejected;
+                    }
                 }
                 if (path.equals("/admin/realms/krug/users") && method.equals("POST")) {
                     return createUser(request.getBodyAsString());
@@ -299,11 +346,52 @@ public final class KeycloakWireMock {
                     + "\",\"expires_in\":300,\"token_type\":\"Bearer\"}");
         }
 
+        /**
+         * #103: every Admin API request must present the current service-account token or
+         * the legacy password-grant token. {@link #invalidateServiceToken()} simulates a
+         * server-side revocation with a single 401.
+         */
+        private Response authorizeAdmin(Request request) {
+            if (rejectNextAdminRequest) {
+                rejectNextAdminRequest = false;
+                return json(401, "{\"error\":\"invalid_token\"}");
+            }
+            String authorization = request.getHeader("Authorization");
+            String token = bearer(authorization);
+            if (ADMIN_TOKEN.equals(token)) {
+                return null;
+            }
+            String serviceToken = currentServiceToken;
+            if (serviceToken != null && serviceToken.equals(token)) {
+                return null;
+            }
+            return json(401, "{\"error\":\"invalid_token\"}");
+        }
+
         private Response token(String body) {
             Map<String, String> form = parseForm(body);
             String grant = form.getOrDefault("grant_type", "");
+            if (grant.equals("client_credentials")) {
+                String clientId = form.getOrDefault("client_id", "");
+                String secret = form.getOrDefault("client_secret", "");
+                if (!SERVICE_CLIENT_ID.equals(clientId)
+                        || !MessageDigest.isEqual(
+                                SERVICE_CLIENT_SECRET.getBytes(StandardCharsets.UTF_8),
+                                secret.getBytes(StandardCharsets.UTF_8))) {
+                    return json(401, "{\"error\":\"invalid_client\"}");
+                }
+                serviceTokenRequests.incrementAndGet();
+                String token = "svc-admin-" + UUID.randomUUID();
+                currentServiceToken = token;
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("access_token", token);
+                payload.put("expires_in", 300);
+                payload.put("token_type", "Bearer");
+                return json(200, toJson(payload));
+            }
             TestUser user;
             if (grant.equals("password")) {
+                passwordTokenRequests.incrementAndGet();
                 String username = form.getOrDefault("username", "").toLowerCase(Locale.ROOT);
                 user = byEmail.get(username);
                 if (user == null || !user.enabled || user.password == null

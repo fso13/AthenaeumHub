@@ -153,7 +153,7 @@ describe('Auth BFF password flow', () => {
     const session = readAuthSession();
     expect(session).not.toBeNull();
     expect(session?.accessToken).toBe(getAccessToken());
-    expect(session?.refreshToken).toMatch(/^mock-refresh-/);
+    expect(session).not.toHaveProperty('refreshToken');
     expect(session?.user.email).toBe(REGISTER_EMAIL);
     expect(mockDb.authVerifyRequests).toHaveLength(1);
     expect(mockDb.authVerifyRequests[0]?.code).toBe(MOCK_EMAIL_CODE);
@@ -163,6 +163,8 @@ describe('Auth BFF password flow', () => {
     const stored = readStored('krug.auth.session') ?? '';
     expect(stored).not.toContain(REGISTER_PASSWORD);
     expect(stored).not.toContain(MOCK_EMAIL_CODE);
+    expect(stored).not.toContain('refresh');
+    expect(stored).not.toContain('mock-refresh-');
 
     const urls = requestUrls(requests);
     expect(urls.some((url) => url.includes('8180'))).toBe(false);
@@ -308,7 +310,6 @@ describe('Auth BFF password flow', () => {
   it('bootstraps from the stored session via /me without a login screen', async () => {
     writeAuthSession({
       accessToken: 'stored-access-token',
-      refreshToken: 'stored-refresh-token',
       expiresAt: Date.now() + 60_000,
       user: { id: IDS.user, displayName: MOCK_DISPLAY_NAME, email: MOCK_EMAIL },
     });
@@ -345,7 +346,8 @@ describe('Auth BFF password flow', () => {
     expect(await screen.findByRole('heading', { name: CHAT_HEADING })).toBeInTheDocument();
     expect(meCalls).toBe(2);
     expect(mockDb.authRefreshRequests).toHaveLength(1);
-    expect(readAuthSession()?.refreshToken).toMatch(/^mock-refresh-/);
+    expect(readAuthSession()?.accessToken).toMatch(/^mock-access-/);
+    expect(readAuthSession()).not.toHaveProperty('refreshToken');
   });
 
   it('blocks a password-only session when refresh requires the second factor', async () => {
@@ -403,7 +405,7 @@ describe('Auth BFF password flow', () => {
     expect(getAccessToken()).toBeNull();
   });
 
-  it('revokes the refresh token on logout, clears auth storage and returns to /login', async () => {
+  it('revokes the HttpOnly cookie on logout, clears auth storage and returns to /login', async () => {
     const { user } = renderPasswordApp();
     await login(user);
     await screen.findByRole('heading', { name: CHAT_HEADING });
@@ -415,8 +417,10 @@ describe('Auth BFF password flow', () => {
     expect(await screen.findByRole('heading', { name: LOGIN_HEADING })).toBeInTheDocument();
     expect(window.location.pathname).toBe('/login');
     expect(screen.getByText('Вы вышли из аккаунта.')).toBeInTheDocument();
-    expect(mockDb.authLogoutRequests).toEqual([stored?.refreshToken]);
-    expect(mockDb.authRefreshTokens.has(stored?.refreshToken ?? '')).toBe(false);
+    expect(stored).not.toHaveProperty('refreshToken');
+    expect(mockDb.authLogoutRequests).toHaveLength(1);
+    expect(mockDb.authLogoutRequests[0]).toMatch(/^mock-refresh-/);
+    expect(mockDb.authRefreshCookie).toBeNull();
     expect(readAuthSession()).toBeNull();
     expect(getAccessToken()).toBeNull();
   });

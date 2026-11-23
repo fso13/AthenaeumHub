@@ -81,6 +81,7 @@ import { sha256Bytes } from '../files/hash';
 import { readId3Tags } from '../files/id3';
 import { mediaKindForFile } from '../files/media';
 import { newUuid } from '../lib/ids';
+import { validateTranslationUrl } from '../ops/translation';
 import { pluginUnavailableReason } from '../plugins/model';
 import { isSafePluginAssetPath } from '../plugins/assets';
 import {
@@ -1306,15 +1307,20 @@ function normalizeOptionalString(value: unknown, maxLength: number): string | nu
   return trimmed.slice(0, maxLength);
 }
 
+/**
+ * #103: simulate the browser's HttpOnly refresh cookie. The value is kept on the
+ * mock DB rather than in JS-readable storage, mirroring the production cookie:
+ * authApi.refresh()/logout() send no token in the body.
+ */
 function issueAuthSession(db: MockDb, user: MockAuthUserRecord): AuthSession {
   const now = Date.now();
   const accessToken = `mock-access-${newUuid()}`;
   const refreshToken = `mock-refresh-${newUuid()}`;
   db.authAccessTokens.set(accessToken, { userId: user.id, expiresAt: now + AUTH_ACCESS_TTL_MS });
   db.authRefreshTokens.set(refreshToken, { userId: user.id, expiresAt: now + AUTH_REFRESH_TTL_MS });
+  db.authRefreshCookie = refreshToken;
   return {
     access_token: accessToken,
-    refresh_token: refreshToken,
     expires_in: Math.floor(AUTH_ACCESS_TTL_MS / 1000),
     token_type: 'Bearer',
     user: {
@@ -1324,6 +1330,22 @@ function issueAuthSession(db: MockDb, user: MockAuthUserRecord): AuthSession {
       is_platform_admin: user.isPlatformAdmin,
     },
   };
+}
+
+function refreshCookieHeader(db: MockDb): string {
+  const value = db.authRefreshCookie ?? '';
+  return `sova_refresh=${value}; HttpOnly; SameSite=Lax; Path=/api/v1/auth; Max-Age=1800`;
+}
+
+function clearedRefreshCookieHeader(): string {
+  return 'sova_refresh=; HttpOnly; SameSite=Lax; Path=/api/v1/auth; Max-Age=0';
+}
+
+function authSessionResponse(db: MockDb, user: MockAuthUserRecord): Response {
+  const session = issueAuthSession(db, user);
+  return HttpResponse.json(session, {
+    headers: { 'Set-Cookie': refreshCookieHeader(db) },
+  });
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1505,27 +1527,15 @@ function adminSessionRowsFor(db: MockDb, userId: string): AdminSession[] {
 function normalizeTranslationUrl(raw: string): string | null {
   const value = raw.trim();
   if (value.length === 0) return '';
-  if (value.length > 2048) return null;
-  for (const char of value) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code < 0x20 || code === 0x7f || /\s/.test(char)) return null;
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== 'https:') return null;
-  if (!url.hostname) return null;
-  if (url.username !== '' || url.password !== '') return null;
-  if (url.search !== '' || url.hash !== '') return null;
-  if (/\/\.\.?(\/|$)/.test(url.pathname)) return null;
-  return value;
+  return validateTranslationUrl(value) === null ? value : null;
 }
 
 function translationSettingsView(db: MockDb): TranslationProviderSettings {
-  return { enabled: db.translationAdmin.enabled, url: db.translationAdmin.url };
+  return {
+    enabled: db.translationAdmin.enabled,
+    url: db.translationAdmin.url,
+    provider: db.translationAdmin.provider,
+  };
 }
 
 function appendMockAudit(
@@ -2079,7 +2089,7 @@ export function createHandlers(db: MockDb) {
           { status: 202 },
         );
       }
-      return HttpResponse.json(issueAuthSession(db, user));
+      return authSessionResponse(db, user);
     }),
 
     http.post(`${API}/auth/resend-email-code`, async ({ request }) => {
@@ -2165,7 +2175,7 @@ export function createHandlers(db: MockDb) {
           { status: 202 },
         );
       }
-      return HttpResponse.json(issueAuthSession(db, user));
+      return authSessionResponse(db, user);
     }),
 
     /* P0-4 (#82): complete the login challenge with TOTP/recovery code. */
@@ -2207,7 +2217,7 @@ export function createHandlers(db: MockDb) {
       if (!user) {
         return errorResponse(401, 'TWO_FACTOR_CHALLENGE_INVALID', 'Challenge user is gone');
       }
-      return HttpResponse.json(issueAuthSession(db, user));
+      return authSessionResponse(db, user);
     }),
 
     /* #93: mandatory TOTP enrollment during login (server-wide require_2fa). */
@@ -2319,14 +2329,14 @@ export function createHandlers(db: MockDb) {
       db.twoFactorChallenge = null;
       // Contract: a bare `AuthSession`; codes are issued separately through
       // `POST /me/2fa/recovery-codes` with the held token + password.
-      return HttpResponse.json(issueAuthSession(db, user));
+      return authSessionResponse(db, user);
     }),
 
-    http.post(`${API}/auth/refresh`, async ({ request }) => {
-      const body = asRecord(await readJson(request));
-      const refreshToken = readStringField(body, 'refresh_token');
+    http.post(`${API}/auth/refresh`, async () => {
+      // #103: no body; the simulated HttpOnly cookie is the only credential.
+      const refreshToken = db.authRefreshCookie;
       if (!refreshToken) {
-        return errorResponse(400, 'VALIDATION_FAILED', 'Invalid refresh payload');
+        return errorResponse(401, 'INVALID_CREDENTIALS', 'Refresh cookie is missing');
       }
       db.authRefreshRequests.push(refreshToken);
       const record = db.authRefreshTokens.get(refreshToken);
@@ -2335,20 +2345,20 @@ export function createHandlers(db: MockDb) {
       }
       const user = db.authUsers.find((candidate) => candidate.id === record.userId);
       if (!user) return errorResponse(401, 'INVALID_CREDENTIALS', 'Refresh token is invalid');
-      // Rotation: the old refresh token is no longer usable.
+      // Rotation: the old refresh token is no longer usable; the response re-issues the cookie.
       db.authRefreshTokens.delete(refreshToken);
-      return HttpResponse.json(issueAuthSession(db, user));
+      return authSessionResponse(db, user);
     }),
 
-    http.post(`${API}/auth/logout`, async ({ request }) => {
-      const body = asRecord(await readJson(request));
-      const refreshToken = readStringField(body, 'refresh_token');
-      if (!refreshToken) {
-        return errorResponse(400, 'VALIDATION_FAILED', 'Invalid logout payload');
-      }
-      db.authLogoutRequests.push(refreshToken);
-      db.authRefreshTokens.delete(refreshToken);
-      return new HttpResponse(null, { status: 204 });
+    http.post(`${API}/auth/logout`, async () => {
+      const refreshToken = db.authRefreshCookie;
+      db.authLogoutRequests.push(refreshToken ?? '');
+      if (refreshToken) db.authRefreshTokens.delete(refreshToken);
+      db.authRefreshCookie = null;
+      return new HttpResponse(null, {
+        status: 204,
+        headers: { 'Set-Cookie': clearedRefreshCookieHeader() },
+      });
     }),
 
     http.get(`${API}/me`, ({ request }) => {
@@ -3001,7 +3011,7 @@ export function createHandlers(db: MockDb) {
       }
       const body = asRecord(await readJson(request));
       if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
-      const allowed = ['enabled', 'url'];
+      const allowed = ['enabled', 'url', 'provider'];
       if (Object.keys(body).some((key) => !allowed.includes(key))) {
         return errorResponse(400, 'VALIDATION_FAILED', 'Unknown translation setting');
       }
@@ -3013,7 +3023,23 @@ export function createHandlers(db: MockDb) {
           details: { field: 'enabled' },
         });
       }
+      if (body.provider !== undefined && typeof body.provider !== 'string') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'provider must be a string', {
+          details: { field: 'provider' },
+        });
+      }
       const current = translationSettingsView(db);
+      const requestedProvider =
+        body.provider === undefined ? current.provider : body.provider.trim().toUpperCase();
+      const nextProvider = requestedProvider === '' ? 'AUTO' : requestedProvider;
+      if (!['AUTO', 'CUSTOM', 'LIBRETRANSLATE'].includes(nextProvider)) {
+        return errorResponse(
+          422,
+          'TRANSLATION_PROVIDER_INVALID',
+          'Translation provider must be AUTO, CUSTOM or LIBRETRANSLATE',
+          { details: { field: 'provider' } },
+        );
+      }
       const nextEnabled = body.enabled === undefined ? current.enabled : body.enabled;
       let nextUrl = current.url;
       if (body.url !== undefined) {
@@ -3043,10 +3069,14 @@ export function createHandlers(db: MockDb) {
           { details: { field: 'url' } },
         );
       }
-      const changed = nextEnabled !== current.enabled || nextUrl !== current.url;
+      const changed =
+        nextEnabled !== current.enabled ||
+        nextUrl !== current.url ||
+        nextProvider !== current.provider;
       if (changed) {
         db.translationAdmin.enabled = nextEnabled;
         db.translationAdmin.url = nextUrl;
+        db.translationAdmin.provider = nextProvider as typeof current.provider;
         appendMockAudit(db, {
           action: 'admin.plugin.translate.updated',
           target_type: 'translation_provider',

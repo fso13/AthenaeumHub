@@ -17,10 +17,13 @@ export interface AuthSessionUser {
 /**
  * Persisted password-mode session. It is written only by the auth storage
  * module and never exposed to components; the UI sees `AuthUser` instead.
+ *
+ * #103: the refresh token is **not** stored here (or anywhere JS can read it).
+ * It lives in the backend-issued HttpOnly cookie and is used through
+ * `POST /auth/refresh` with `credentials: 'include'`.
  */
 export interface StoredAuthSession {
   accessToken: string;
-  refreshToken: string;
   /** Access-token expiry, milliseconds since epoch. */
   expiresAt: number;
   user: AuthSessionUser;

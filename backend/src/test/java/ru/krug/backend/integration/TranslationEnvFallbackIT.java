@@ -20,8 +20,9 @@ import ru.krug.backend.support.OpenApiContract;
  * #84: the historical environment URL remains the fallback until an administrator saves an
  * explicit setting; an explicit disable then wins over the environment.
  */
-@SpringBootTest(properties =
-        "krug.plugins.translate.url=https://env.example.test/v1/translate")
+@SpringBootTest(properties = {
+        "krug.plugins.translate.url=https://env.example.test/v1/translate",
+        "krug.plugins.translate.provider=libretranslate"})
 @ActiveProfiles("test")
 class TranslationEnvFallbackIT extends IntegrationTestBase {
 
@@ -42,6 +43,7 @@ class TranslationEnvFallbackIT extends IntegrationTestBase {
         CONTRACT.assertValid("TranslationProviderSettings", defaults);
         assertThat(defaults.get("enabled").asBoolean()).isTrue();
         assertThat(defaults.get("url").asText()).isEqualTo(ENV_URL);
+        assertThat(defaults.get("provider").asText()).isEqualTo("LIBRETRANSLATE");
 
         JsonNode disabled = json(mockMvc.perform(authed(
                         patch("/api/v1/admin/plugins/translate"), admin)
@@ -50,6 +52,7 @@ class TranslationEnvFallbackIT extends IntegrationTestBase {
                 .andExpect(status().isOk()).andReturn());
         assertThat(disabled.get("enabled").asBoolean()).isFalse();
         assertThat(disabled.get("url").asText()).isEmpty();
+        assertThat(disabled.get("provider").asText()).isEqualTo("AUTO");
 
         JsonNode reenabled = json(mockMvc.perform(authed(
                         patch("/api/v1/admin/plugins/translate"), admin)
@@ -58,6 +61,7 @@ class TranslationEnvFallbackIT extends IntegrationTestBase {
                 .andExpect(status().isOk()).andReturn());
         assertThat(reenabled.get("enabled").asBoolean()).isTrue();
         assertThat(reenabled.get("url").asText()).isEqualTo(ENV_URL);
+        assertThat(reenabled.get("provider").asText()).isEqualTo("LIBRETRANSLATE");
     }
 
     private SessionResponse adminSession() throws Exception {

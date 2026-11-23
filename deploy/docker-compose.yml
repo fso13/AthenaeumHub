@@ -7,6 +7,13 @@
 # nginx-served React SPA. Everything is same-origin behind the SPA host; only
 # MinIO (presigned downloads) and optionally Keycloak/Postgres are published.
 #
+# Optional self-hosted translation (LibreTranslate, internal only, no published
+# port, models in a named volume):
+#   docker compose --env-file .env --profile translate up -d libretranslate
+# The backend is pre-wired to http://libretranslate:5000/translate. Without the
+# profile that host does not resolve: translation actions honestly return 503 and
+# the admin health probe reports UNAVAILABLE (no fabricated success).
+#
 # E2EE is intentionally disabled (KRUG_E2EE_ENABLED=false) until the external
 # crypto review / browser E2E gate is closed. Set it only after that review.
 
@@ -212,6 +219,37 @@ services:
       - "1025:1025"   # SMTP
     networks: [krug]
 
+  # #104: optional self-hosted machine translation. Internal only (no published
+  # port); the backend calls it over the compose network. First start downloads
+  # the Argos models for LT_LOAD_ONLY (~1-2 GB, a few minutes) into the named
+  # volume, so later starts are fast. Resource guidance: 2 vCPU / 2-4 GB RAM is
+  # enough for en+ru; each extra language pair adds model disk/RAM.
+  #   --profile translate up -d libretranslate
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6
+    container_name: krug-libretranslate
+    profiles: ["translate"]
+    restart: unless-stopped
+    environment:
+      # Only the languages actually needed are loaded/downloaded. The health
+      # probe translates a constant into `en`, so keep `en` in this list.
+      LT_LOAD_ONLY: ${LT_LOAD_ONLY:-en,ru}
+      LT_UPDATE_MODELS: ${LT_UPDATE_MODELS:-true}
+      # The public web UI/playground is not needed for an internal API service.
+      LT_DISABLE_WEB_UI: "true"
+      TZ: UTC
+    expose:
+      - "5000"
+    volumes:
+      - krug-libretranslate-models:/home/libretranslate/.local:rw
+    healthcheck:
+      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    networks: [krug]
+
   backend:
     build:
       context: ../backend
@@ -248,8 +286,13 @@ services:
       KRUG_OIDC_ISSUER: ${KC_PUBLIC_URL:-http://localhost:8180}/realms/krug
       KRUG_OIDC_JWKS_URI: http://keycloak:8080/realms/krug/protocol/openid-connect/certs
       KRUG_KEYCLOAK_URL: http://keycloak:8080
+      # Dev-only fallback (#103): the documented password grant is used only when
+      # KRUG_KEYCLOAK_SERVICE_CLIENT_ID/SECRET are blank. Prod requires the
+      # svc-krug-bff client-credentials service account (see PRODUCTION-RUNBOOK §4).
       KC_ADMIN_USER: ${KC_ADMIN_USER:-admin}
       KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?set KC_ADMIN_PASSWORD in deploy/.env}
+      # Plain-http localhost: the refresh cookie must not be Secure here.
+      KRUG_AUTH_BFF_COOKIE_SECURE: "false"
       SPRING_MAIL_HOST: mailpit
       SPRING_MAIL_PORT: "1025"
       KRUG_MAIL_FROM: ${KRUG_MAIL_FROM:-no-reply@krug.local}
@@ -270,6 +313,11 @@ services:
       S3_SCAN_MODE: ${S3_SCAN_MODE:-noop}
       CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+
+      # #104: self-hosted translation. The URL enables the provider; start the
+      # `translate` profile for it to resolve. No public third-party API is used.
+      KRUG_PLUGINS_TRANSLATE_URL: ${KRUG_PLUGINS_TRANSLATE_URL:-http://libretranslate:5000/translate}
+      KRUG_PLUGINS_TRANSLATE_PROVIDER: ${KRUG_PLUGINS_TRANSLATE_PROVIDER:-libretranslate}
 
       # E2EE gate: keep false until the external crypto review / browser E2E.
       KRUG_E2EE_ENABLED: ${KRUG_E2EE_ENABLED:-false}
@@ -336,6 +384,7 @@ volumes:
   krug-keycloak-import:
   krug-minio-data:
   krug-clamav-data:
+  krug-libretranslate-models:
 
 networks:
   krug:

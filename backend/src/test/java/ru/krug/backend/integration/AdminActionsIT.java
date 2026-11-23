@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -28,6 +29,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import ru.krug.backend.ops.api.dto.SessionResponse;
+import ru.krug.backend.support.AuthCookieTestSupport;
 import ru.krug.backend.support.IntegrationTestBase;
 import ru.krug.backend.support.KeycloakWireMock;
 import ru.krug.backend.support.OpenApiContract;
@@ -68,9 +70,12 @@ class AdminActionsIT extends IntegrationTestBase {
         KeycloakWireMock.TestUser keycloakUser = KeycloakWireMock.putUser(
                 email, "Suspend Target", PASSWORD, true, true);
 
-        JsonNode firstLogin = login(email, PASSWORD, 200);
+        MvcResult firstLoginResult = loginResult(email, PASSWORD, 200);
+        JsonNode firstLogin = json(firstLoginResult);
         UUID targetId = UUID.fromString(firstLogin.at("/user/id").asText());
-        String refreshToken = firstLogin.get("refresh_token").asText();
+        String refreshCookie = AuthCookieTestSupport.value(firstLoginResult);
+        assertThat(refreshCookie).isNotBlank();
+        assertThat(firstLogin.has("refresh_token")).isFalse();
         assertThat(targetId).isNotEqualTo(admin.user().id());
         assertThat(userStatus(targetId)).isEqualTo("ACTIVE");
 
@@ -87,10 +92,9 @@ class AdminActionsIT extends IntegrationTestBase {
                         + keycloakUser.id() + "/logout"));
 
         // The revoked refresh token no longer rotates, and a disabled user cannot log in.
-        MvcResult refresh = mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(
-                                Map.of("refresh_token", refreshToken))))
+        MvcResult refresh = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"), refreshCookie)
+                        .header(HttpHeaders.ORIGIN, "http://localhost:5173"))
                 .andExpect(status().isUnauthorized())
                 .andReturn();
         CONTRACT.assertValid("Error", json(refresh));
@@ -420,13 +424,17 @@ class AdminActionsIT extends IntegrationTestBase {
     }
 
     private JsonNode login(String email, String password, int expectedStatus) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/v1/auth/login")
+        return json(loginResult(email, password, expectedStatus));
+    }
+
+    private MvcResult loginResult(String email, String password, int expectedStatus)
+            throws Exception {
+        return mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "email", email, "password", password))))
                 .andExpect(status().is(expectedStatus))
                 .andReturn();
-        return json(result);
     }
 
     private JsonNode adminChats(SessionResponse admin, UUID workspaceId, String query)

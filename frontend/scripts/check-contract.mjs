@@ -265,17 +265,32 @@ for (const [operation, definition] of Object.entries(operations)) {
 
 // --- 3. Fields consumed by the UI / store --------------------------------
 const schemas = spec.components?.schemas ?? {};
+
+// #103: the refresh token must never be a required JSON response/request field.
+check(
+  !(schemas.AuthSession?.required ?? []).includes('refresh_token'),
+  'AuthSession.refresh_token must not be required (#103 HttpOnly cookie)',
+);
+check(
+  Boolean(schemas.AuthSession?.properties?.refresh_token?.deprecated),
+  'AuthSession.refresh_token must stay documented as deprecated',
+);
+for (const name of ['AuthRefreshRequest', 'AuthLogoutRequest']) {
+  check(
+    !(schemas[name]?.required ?? []).includes('refresh_token'),
+    `${name}.refresh_token must not be required (#103 cookie transport)`,
+  );
+}
+
 const requiredFields = {
   Error: ['code', 'message', 'request_id'],
   Session: ['access_token', 'expires_at', 'user', 'device', 'workspace', 'chat'],
-  AuthSession: ['access_token', 'refresh_token', 'expires_in', 'token_type', 'user'],
+  AuthSession: ['access_token', 'expires_in', 'token_type', 'user'],
   AuthSessionUser: ['id', 'display_name', 'email'],
   AuthRegisterRequest: ['email', 'display_name', 'password'],
   AuthRegisterResponse: ['verification_id', 'expires_in', 'resend_after'],
   AuthVerifyEmailRequest: ['verification_id', 'code'],
   AuthLoginRequest: ['email', 'password'],
-  AuthRefreshRequest: ['refresh_token'],
-  AuthLogoutRequest: ['refresh_token'],
   SetupStatus: ['setup_required', 'registration_open'],
   AdminSettings: [
     'setup_completed',
@@ -871,7 +886,17 @@ check(
       schemas.TranslationProviderSettings?.properties ?? {},
       'secret',
     ),
-  'TranslationProviderSettings must be url-only (max 2048, no secret field)',
+  'TranslationProviderSettings must be URL-only (max 2048, no secret field)',
+);
+check(
+  schemas.TranslationProviderSettings?.required?.includes('provider') &&
+    ['AUTO', 'CUSTOM', 'LIBRETRANSLATE'].every((provider) =>
+      schemas.TranslationProviderSettings?.properties?.provider?.enum?.includes(provider),
+    ) &&
+    ['AUTO', 'CUSTOM', 'LIBRETRANSLATE'].every((provider) =>
+      schemas.TranslationProviderUpdate?.properties?.provider?.enum?.includes(provider),
+    ),
+  'TranslationProviderSettings/Update must expose the AUTO/CUSTOM/LIBRETRANSLATE protocol',
 );
 check(
   schemas.TranslationProviderUpdate?.additionalProperties === false &&

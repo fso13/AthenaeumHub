@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { getSession, setSession } from '../auth/session';
 import { IDS, mockSession } from '../mocks/fixtures';
 import { server } from '../test/server';
@@ -133,6 +133,38 @@ describe('API client', () => {
     expect(sessionCalls).toBe(1);
     expect(getSession()?.access_token).toBe(mockSession.access_token);
     expect(page.items.length).toBe(30);
+  });
+
+  it('sends credentialed requests without a refresh token in the body (#103)', async () => {
+    const captured: { credentials?: RequestCredentials; body?: BodyInit | null } = {};
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      captured.credentials = init?.credentials;
+      captured.body = init?.body;
+      return new Response(
+        JSON.stringify({
+          access_token: 'cookie-access',
+          expires_in: 900,
+          token_type: 'Bearer',
+          user: {
+            id: IDS.user,
+            display_name: 'Дмитрий Крылов',
+            email: 'dmitry@example.test',
+            is_platform_admin: false,
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    try {
+      const client = makeClient();
+      await client.post('/auth/refresh', undefined, { auth: false });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(captured.credentials).toBe('include');
+    expect(captured.body).toBeUndefined();
   });
 
   it('parses Retry-After for 429', async () => {

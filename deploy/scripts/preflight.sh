@@ -104,8 +104,8 @@ required=(
   KRUG_AUTH_BFF_EMAIL_SECRET_KEY
   KC_DB_PASSWORD
   KC_BOOTSTRAP_ADMIN_PASSWORD
-  KC_ADMIN_USER
-  KC_ADMIN_PASSWORD
+  KRUG_KEYCLOAK_SERVICE_CLIENT_ID
+  KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET
   KC_ADMIN_EMAIL
   SPRING_MAIL_HOST
   SPRING_MAIL_USERNAME
@@ -128,7 +128,7 @@ min_length KRUG_AUTH_BFF_EMAIL_SECRET_KEY 32
 min_length KRUG_DB_PASSWORD 16
 min_length KRUG_APP_PASSWORD 16
 min_length KC_DB_PASSWORD 16
-min_length KC_ADMIN_PASSWORD 16
+min_length KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET 32
 min_length KC_BOOTSTRAP_ADMIN_PASSWORD 16
 min_length S3_SECRET_KEY 16
 min_length S3_ACCESS_KEY 8
@@ -157,14 +157,29 @@ else
   ok "KRUG_E2EE_ENABLED=false"
 fi
 
-if [[ "$(value KRUG_KEYCLOAK_ADMIN_REALM)" == "master" ]]; then
-  fail "runtime Keycloak admin realm must not be master"
+# #103: runtime Keycloak administration must be the client-credentials service
+# account in the `krug` realm, never master/admin-cli or a password technical user.
+service_client="$(value KRUG_KEYCLOAK_SERVICE_CLIENT_ID)"
+if [[ "$service_client" == "admin-cli" ]]; then
+  fail "KRUG_KEYCLOAK_SERVICE_CLIENT_ID must not be admin-cli"
 fi
-if [[ "$(value KC_ADMIN_CLIENT_ID)" == "admin-cli" ]]; then
-  fail "runtime Keycloak client must not be master-realm admin-cli"
+if [[ "$service_client" != "svc-krug-bff" ]]; then
+  warn "KRUG_KEYCLOAK_SERVICE_CLIENT_ID is '$service_client' (expected svc-krug-bff)"
 fi
-if [[ "$(value KC_ADMIN_USER)" == "admin" ]]; then
-  warn "KC_ADMIN_USER is the bootstrap admin; use svc-krug-bff for runtime"
+if [[ -n "$(value KC_ADMIN_USER)" || -n "$(value KC_ADMIN_PASSWORD)" ]]; then
+  warn "legacy KC_ADMIN_USER/KC_ADMIN_PASSWORD are ignored; the backend uses client_credentials"
+fi
+if [[ "$(value KRUG_AUTH_BFF_COOKIE_SECURE)" == "false" ]]; then
+  fail "KRUG_AUTH_BFF_COOKIE_SECURE must be true in production"
+fi
+cors_origins="$(value KRUG_CORS_ALLOWED_ORIGINS)"
+if [[ -n "$cors_origins" ]]; then
+  if [[ "$cors_origins" == *"*"* ]]; then
+    fail "KRUG_CORS_ALLOWED_ORIGINS must not contain '*'"
+  fi
+  if [[ "$cors_origins" != https://* ]]; then
+    fail "KRUG_CORS_ALLOWED_ORIGINS must use https:// in production"
+  fi
 fi
 if [[ "$(value SPRING_PROFILES_ACTIVE)" != *prod* ]]; then
   warn "SPRING_PROFILES_ACTIVE does not include prod"

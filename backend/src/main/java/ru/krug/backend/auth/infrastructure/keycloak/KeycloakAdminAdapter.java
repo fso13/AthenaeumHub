@@ -24,8 +24,10 @@ import ru.krug.backend.auth.application.port.ProviderUnavailableException;
 import ru.krug.backend.auth.application.port.UserAlreadyExistsException;
 
 /**
- * Keycloak Admin REST adapter (admin-cli token). Deliberately never logs request bodies,
- * credentials or user emails; transport failures become a generic 503 cause.
+ * Keycloak Admin REST adapter. Uses the shared authenticated admin client (#103:
+ * client-credentials service account, with a one-shot 401 token refresh). Deliberately
+ * never logs request bodies, credentials or user emails; transport failures become a
+ * generic 503 cause.
  */
 @Component
 public class KeycloakAdminAdapter implements KeycloakAdminPort {
@@ -39,10 +41,9 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     @Override
     public Optional<KeycloakUserView> findByEmail(String email) {
         try {
-            return http.restClient().get()
+            return http.adminRestClient().get()
                     .uri(uriBuilder -> URI.create(http.endpoints().adminUsersUrl()
                             + "?email=" + urlEncode(email) + "&exact=true"))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .exchange((request, response) -> {
                         if (response.getStatusCode().value() != 200) {
                             throw new ProviderUnavailableException();
@@ -64,9 +65,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     @Override
     public Optional<KeycloakUserView> findById(UUID userId) {
         try {
-            return http.restClient().get()
+            return http.adminRestClient().get()
                     .uri(http.endpoints().adminUserUrl(userId.toString()))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         if (status == 404) {
@@ -100,9 +100,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
         body.put("emailVerified", false);
         body.put("requiredActions", List.of());
         try {
-            return http.restClient().post()
+            return http.adminRestClient().post()
                     .uri(http.endpoints().adminUsersUrl())
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .exchange((request, response) -> {
@@ -135,9 +134,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
         body.put("value", password);
         body.put("temporary", false);
         try {
-            http.restClient().put()
+            http.adminRestClient().put()
                     .uri(http.endpoints().adminUserUrl(userId.toString()) + "/reset-password")
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .exchange((request, response) -> {
@@ -161,9 +159,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     public void updateEnabledAndVerified(UUID userId, boolean enabled, boolean emailVerified) {
         Map<String, Object> body = Map.of("enabled", enabled, "emailVerified", emailVerified);
         try {
-            http.restClient().put()
+            http.adminRestClient().put()
                     .uri(http.endpoints().adminUserUrl(userId.toString()))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .exchange((request, response) -> {
@@ -185,9 +182,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
         // Partial update: only `enabled` is sent, so emailVerified/requiredActions are kept.
         Map<String, Object> body = Map.of("enabled", enabled);
         try {
-            http.restClient().put()
+            http.adminRestClient().put()
                     .uri(http.endpoints().adminUserUrl(userId.toString()))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .exchange((request, response) -> {
@@ -207,9 +203,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     @Override
     public void logoutAllSessions(UUID userId) {
         try {
-            http.restClient().post()
+            http.adminRestClient().post()
                     .uri(http.endpoints().adminUserLogoutUrl(userId.toString()))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         // 404: the Keycloak user is already gone; nothing to revoke.
@@ -231,9 +226,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
         body.put("firstName", displayName);
         body.put("lastName", displayName);
         try {
-            http.restClient().put()
+            http.adminRestClient().put()
                     .uri(http.endpoints().adminUserUrl(userId.toString()))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .exchange((request, response) -> {
@@ -254,9 +248,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     @Override
     public List<KeycloakSessionView> listSessions(UUID userId) {
         try {
-            return http.restClient().get()
+            return http.adminRestClient().get()
                     .uri(http.endpoints().adminUserSessionsUrl(userId.toString()))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         if (status == 404) {
@@ -281,9 +274,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     @Override
     public void revokeSession(UUID userId, String sessionId) {
         try {
-            http.restClient().delete()
+            http.adminRestClient().delete()
                     .uri(http.endpoints().adminUserSessionUrl(userId.toString(), sessionId))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         // 404: already revoked concurrently; DELETE stays idempotent.
@@ -302,9 +294,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     @Override
     public void revokeSessionById(String sessionId) {
         try {
-            http.restClient().delete()
+            http.adminRestClient().delete()
                     .uri(http.endpoints().adminSessionUrl(sessionId))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         // 404: already revoked concurrently; DELETE stays idempotent.
@@ -323,9 +314,8 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
     @Override
     public void deleteUser(UUID userId) {
         try {
-            http.restClient().delete()
+            http.adminRestClient().delete()
                     .uri(http.endpoints().adminUserUrl(userId.toString()))
-                    .header(HttpHeaders.AUTHORIZATION, bearer())
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         if (status != 204 && status != 200 && status != 404) {
@@ -338,10 +328,6 @@ public class KeycloakAdminAdapter implements KeycloakAdminPort {
         } catch (RestClientException ex) {
             throw new ProviderUnavailableException();
         }
-    }
-
-    private String bearer() {
-        return "Bearer " + http.adminToken();
     }
 
     private KeycloakSessionView mapSession(Map<String, Object> session) {

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -26,6 +27,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import ru.krug.backend.auth.domain.service.TotpCode;
 import ru.krug.backend.ops.api.dto.SessionResponse;
+import ru.krug.backend.support.AuthCookieTestSupport;
 import ru.krug.backend.support.IntegrationTestBase;
 import ru.krug.backend.support.KeycloakTestSupport;
 import ru.krug.backend.support.KeycloakWireMock;
@@ -114,14 +116,16 @@ class TwoFactorPolicyIT extends IntegrationTestBase {
                 .andExpect(status().isOk()).andReturn();
         JsonNode body = json(session);
         CONTRACT.assertValid("AuthSession", body);
-        assertThat(body.get("refresh_token").asText()).isNotBlank();
+        assertThat(body.has("refresh_token")).isFalse();
+        String cookie = AuthCookieTestSupport.value(session);
+        assertThat(cookie).isNotBlank();
 
         // The completed challenge marks the refresh token: rotation is allowed.
-        MvcResult refreshed = mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(
-                                Map.of("refresh_token", body.get("refresh_token").asText()))))
+        MvcResult refreshed = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"), cookie)
+                        .header(HttpHeaders.ORIGIN, "http://localhost:5173"))
                 .andExpect(status().isOk()).andReturn();
+        assertThat(AuthCookieTestSupport.value(refreshed)).isNotEqualTo(cookie);
         CONTRACT.assertValid("AuthSession", json(refreshed));
     }
 
@@ -174,7 +178,9 @@ class TwoFactorPolicyIT extends IntegrationTestBase {
                 .andExpect(status().isOk()).andReturn();
         JsonNode sessionBody = json(session);
         CONTRACT.assertValid("AuthSession", sessionBody);
+        assertThat(sessionBody.has("refresh_token")).isFalse();
         assertThat(sessionBody.at("/user/email").asText()).isEqualTo(idp.email());
+        assertThat(AuthCookieTestSupport.value(session)).isNotBlank();
         assertThat(migrator().queryForObject(
                 "SELECT enabled_at FROM auth.user_totp WHERE user_id = ?",
                 java.sql.Timestamp.class, userId)).isNotNull();
@@ -196,12 +202,13 @@ class TwoFactorPolicyIT extends IntegrationTestBase {
                 """, String.class, userId);
         assertThat(metadata).doesNotContain(secret).doesNotContain("otpauth");
 
-        MvcResult refreshed = mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of(
-                                "refresh_token", sessionBody.get("refresh_token").asText()))))
+        MvcResult refreshed = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"),
+                                AuthCookieTestSupport.value(session))
+                        .header(HttpHeaders.ORIGIN, "http://localhost:5173"))
                 .andExpect(status().isOk()).andReturn();
         CONTRACT.assertValid("AuthSession", json(refreshed));
+        assertThat(json(refreshed).has("refresh_token")).isFalse();
     }
 
     @Test
@@ -270,14 +277,15 @@ class TwoFactorPolicyIT extends IntegrationTestBase {
         KeycloakWireMock.TestUser idp = keycloakUser("policy-refresh");
         MvcResult login = login(idp);
         assertThat(login.getResponse().getStatus()).isEqualTo(200);
-        String refreshToken = json(login).get("refresh_token").asText();
+        String cookie = AuthCookieTestSupport.value(login);
+        assertThat(cookie).isNotBlank();
+        assertThat(json(login).has("refresh_token")).isFalse();
 
         setPolicy(true);
 
-        MvcResult refused = mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(
-                                Map.of("refresh_token", refreshToken))))
+        MvcResult refused = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"), cookie)
+                        .header(HttpHeaders.ORIGIN, "http://localhost:5173"))
                 .andExpect(status().isForbidden()).andReturn();
         JsonNode error = json(refused);
         CONTRACT.assertValid("Error", error);
@@ -287,16 +295,18 @@ class TwoFactorPolicyIT extends IntegrationTestBase {
 
         String challengeId = json(login(idp)).get("challenge_id").asText();
         String secret = enrollStart(challengeId).get("secret").asText();
-        JsonNode enrolled = json(mockMvc.perform(post("/api/v1/auth/2fa/enroll/verify")
+        MvcResult enrolledResult = mockMvc.perform(post("/api/v1/auth/2fa/enroll/verify")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "challenge_id", challengeId, "code", code(secret)))))
-                .andExpect(status().isOk()).andReturn());
+                .andExpect(status().isOk()).andReturn();
+        String enrolledCookie = AuthCookieTestSupport.value(enrolledResult);
+        assertThat(enrolledCookie).isNotBlank();
+        assertThat(json(enrolledResult).has("refresh_token")).isFalse();
 
-        MvcResult rotated = mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of(
-                                "refresh_token", enrolled.get("refresh_token").asText()))))
+        MvcResult rotated = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"), enrolledCookie)
+                        .header(HttpHeaders.ORIGIN, "http://localhost:5173"))
                 .andExpect(status().isOk()).andReturn();
         CONTRACT.assertValid("AuthSession", json(rotated));
     }

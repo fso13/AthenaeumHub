@@ -97,4 +97,29 @@ public class AuthBffSettingsAdapter implements AuthBffSettings {
         // No database settings in unit-test/back-compat construction -> policy defaults off.
         return systemSettings != null && systemSettings.current().requireTwoFactor();
     }
+
+    @Override
+    public String refreshCookieName() {
+        return properties.refreshCookie().name();
+    }
+
+    @Override
+    public String refreshCookiePath() {
+        return properties.refreshCookie().path();
+    }
+
+    @Override
+    public boolean refreshCookieSecure() {
+        return properties.refreshCookie().secure();
+    }
+
+    @Override
+    public String refreshCookieSameSite() {
+        return properties.refreshCookie().sameSite();
+    }
+
+    @Override
+    public Duration refreshCookieMaxAge() {
+        return properties.refreshCookie().maxAge();
+    }
 }

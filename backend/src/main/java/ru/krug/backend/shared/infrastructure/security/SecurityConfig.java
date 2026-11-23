@@ -18,7 +18,10 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
 
+import ru.krug.backend.auth.infrastructure.security.AuthCsrfFilter;
 import ru.krug.backend.auth.infrastructure.security.SessionActivityFilter;
 import ru.krug.backend.bot.infrastructure.security.BotTokenAuthenticationFilter;
 
@@ -43,6 +46,18 @@ public class SecurityConfig {
      * #101: the activity filter is added to the user chain explicitly; disable the servlet
      * container auto-registration so it runs exactly once, after device binding.
      */
+    /**
+     * #103: the CSRF origin guard is added to the user chain only; disable the servlet
+     * container auto-registration so it runs exactly once, after CORS and before controllers.
+     */
+    @Bean
+    public FilterRegistrationBean<AuthCsrfFilter> authCsrfFilterRegistration(
+            AuthCsrfFilter filter) {
+        FilterRegistrationBean<AuthCsrfFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
     @Bean
     public FilterRegistrationBean<SessionActivityFilter> sessionActivityFilterRegistration(
             SessionActivityFilter filter) {
@@ -89,11 +104,15 @@ public class SecurityConfig {
             JwtDecoder jwtDecoder,
             DeviceBindingFilter deviceBindingFilter,
             SessionActivityFilter sessionActivityFilter,
+            AuthCsrfFilter authCsrfFilter,
+            CorsConfigurationSource corsConfigurationSource,
             RestAuthenticationEntryPoint authenticationEntryPoint,
             RestAccessDeniedHandler accessDeniedHandler) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
-                .cors(AbstractHttpConfigurer::disable)
+                // #103: credentialed CORS for the split-origin/dev SPA; the refresh cookie
+                // itself is SameSite=Lax and scoped to /api/v1/auth.
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 // D1.2 (#86): plugin assets are rendered in a sandboxed iframe, so the
                 // default DENY would make the documented entry_url unusable. Only the
                 // asset path is exempt; every other response keeps X-Frame-Options DENY.
@@ -127,7 +146,8 @@ public class SecurityConfig {
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler))
                 .addFilterAfter(deviceBindingFilter, BearerTokenAuthenticationFilter.class)
-                .addFilterAfter(sessionActivityFilter, DeviceBindingFilter.class);
+                .addFilterAfter(sessionActivityFilter, DeviceBindingFilter.class)
+                .addFilterBefore(authCsrfFilter, CorsFilter.class);
         return http.build();
     }
 }

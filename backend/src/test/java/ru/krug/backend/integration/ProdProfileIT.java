@@ -23,6 +23,11 @@ import ru.krug.backend.support.IntegrationTestBase;
         "krug.files.reconcile-enabled=false",
         "krug.auth.jwt-secret=prod-test-jwt-secret-please-change-32-bytes",
         "krug.content.key=prod-test-content-key-please-change-32-bytes",
+        // #103: prod requires the client-credentials service account and a Secure cookie.
+        "krug.auth-bff.keycloak.service-client-id=svc-krug-bff",
+        "krug.auth-bff.keycloak.service-client-secret=prod-profile-test-service-secret-32",
+        "krug.auth-bff.refresh-cookie.secure=true",
+        "krug.cors.allowed-origins=https://chat.example.com",
         "krug.oidc.issuer=http://localhost:8180/realms/krug",
         "krug.oidc.jwk-set-uri=http://localhost:8180/realms/krug/protocol/openid-connect/certs"
 })

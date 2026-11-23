@@ -2,7 +2,9 @@ package ru.krug.backend.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.LinkedHashMap;
@@ -18,6 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -26,6 +29,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import ru.krug.backend.auth.api.dto.AuthRegisterResponse;
 import ru.krug.backend.auth.api.dto.AuthSessionResponse;
+import ru.krug.backend.support.AuthCookieTestSupport;
 import ru.krug.backend.support.IntegrationTestBase;
 import ru.krug.backend.support.KeycloakWireMock;
 import ru.krug.backend.support.MockMailSender;
@@ -47,6 +51,10 @@ import ru.krug.backend.support.TestMailConfig;
         "krug.auth-bff.code.secret-key=auth-bff-test-email-secret-key-please-change-32",
         "krug.auth-bff.cleanup.enabled=false",
         "krug.auth-bff.keycloak.admin-password=auth-bff-test-admin",
+        // #103: the real end-to-end path uses the client-credentials service account; the
+        // legacy password property is present below so the test can prove it is unused.
+        "krug.auth-bff.keycloak.service-client-id=svc-krug-bff",
+        "krug.auth-bff.keycloak.service-client-secret=svc-krug-bff-test-secret-please-change-32",
         "krug.auth-bff.rate-limit.register-per-email=100",
         "krug.auth-bff.rate-limit.register-per-ip=1000",
         "krug.auth-bff.rate-limit.login-per-email=100",
@@ -61,6 +69,7 @@ class AuthBffIT extends IntegrationTestBase {
 
     private static final OpenApiContract CONTRACT = OpenApiContract.load();
     private static final String PASSWORD = "VeryStrongPass123!";
+    private static final String ALLOWED_ORIGIN = "http://localhost:5173";
 
     @Autowired
     private MockMailSender mail;
@@ -105,8 +114,18 @@ class AuthBffIT extends IntegrationTestBase {
         assertThat(session.user().email()).isEqualTo(email);
         assertThat(session.user().displayName()).isEqualTo("Дмитрий");
         assertThat(session.accessToken()).isNotBlank();
-        assertThat(session.refreshToken()).isNotBlank();
         assertThat(session.tokenType()).isEqualTo("Bearer");
+        // #103: no refresh token in the body; it arrives as an HttpOnly cookie.
+        assertThat(sessionJson.has("refresh_token")).isFalse();
+        String setCookie = AuthCookieTestSupport.setCookie(verify);
+        assertThat(setCookie)
+                .startsWith("sova_refresh=")
+                .contains("HttpOnly")
+                .contains("SameSite=Lax")
+                .contains("Path=/api/v1/auth")
+                .contains("Max-Age=")
+                .doesNotContain("Secure") // localhost/http dev profile
+                .doesNotContain("Domain=");
 
         assertThat(KeycloakWireMock.user(email).enabled()).isTrue();
         assertThat(KeycloakWireMock.user(email).emailVerified()).isTrue();
@@ -267,44 +286,163 @@ class AuthBffIT extends IntegrationTestBase {
     }
 
     @Test
-    void refreshRotatesAndLogoutRevokes() throws Exception {
+    void refreshRotatesTheCookieAndLogoutRevokesClearsAndIgnoresTheBody() throws Exception {
         String email = uniqueEmail("refresh");
-        AuthSessionResponse session = registerAndVerify(email);
+        UUID verificationId = registerId(email);
+        MvcResult verified = verify(verificationId, mail.lastFor(email).code());
+        assertThat(verified.getResponse().getStatus()).isEqualTo(200);
+        AuthSessionResponse session = objectMapper.readValue(
+                verified.getResponse().getContentAsString(), AuthSessionResponse.class);
+        String firstCookie = AuthCookieTestSupport.value(verified);
+        assertThat(firstCookie).isNotBlank();
 
-        MvcResult refreshed = mockMvc.perform(post("/api/v1/auth/refresh")
+        MvcResult refreshed = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"), firstCookie)
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN)
+                        // A body must be ignored; the cookie is the only credential.
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(
-                                Map.of("refresh_token", session.refreshToken()))))
+                        .content("{\"refresh_token\":\"attacker-body-token\"}"))
                 .andExpect(status().isOk())
                 .andReturn();
-        CONTRACT.assertValid("AuthSession", json(refreshed));
+        JsonNode refreshedJson = json(refreshed);
+        CONTRACT.assertValid("AuthSession", refreshedJson);
+        assertThat(refreshedJson.has("refresh_token")).isFalse();
+        String rotatedCookie = AuthCookieTestSupport.value(refreshed);
+        assertThat(rotatedCookie).isNotBlank().isNotEqualTo(firstCookie);
         AuthSessionResponse rotated = objectMapper.readValue(
                 refreshed.getResponse().getContentAsString(), AuthSessionResponse.class);
         assertThat(rotated.accessToken()).isNotEqualTo(session.accessToken());
-        assertThat(rotated.refreshToken()).isNotEqualTo(session.refreshToken());
+        assertThat(AuthCookieTestSupport.setCookie(refreshed))
+                .contains("HttpOnly")
+                .contains("SameSite=Lax")
+                .contains("Path=/api/v1/auth")
+                .contains("Max-Age=");
 
-        MvcResult logout = mockMvc.perform(post("/api/v1/auth/logout")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(
-                                Map.of("refresh_token", rotated.refreshToken()))))
+        // Rotation invalidates the previous cookie value.
+        MvcResult stale = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"), firstCookie)
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
+                .andExpect(status().isUnauthorized())
+                .andReturn();
+        assertThat(json(stale).get("code").asText()).isEqualTo("INVALID_CREDENTIALS");
+
+        MvcResult logout = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/logout"), rotatedCookie)
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
                 .andExpect(status().isNoContent())
                 .andReturn();
         assertThat(logout.getResponse().getContentAsString()).isEmpty();
+        String clearCookie = AuthCookieTestSupport.setCookie(logout);
+        assertThat(clearCookie)
+                .startsWith("sova_refresh=;")
+                .contains("Max-Age=0")
+                .contains("HttpOnly")
+                .contains("Path=/api/v1/auth");
 
-        MvcResult revoked = mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(
-                                Map.of("refresh_token", rotated.refreshToken()))))
+        MvcResult revoked = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                post("/api/v1/auth/refresh"), rotatedCookie)
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
+                .andExpect(status().isUnauthorized())
                 .andReturn();
-        assertThat(revoked.getResponse().getStatus()).isEqualTo(401);
         assertThat(json(revoked).get("code").asText()).isEqualTo("INVALID_CREDENTIALS");
 
-        // Logout is idempotent.
+        // Logout is idempotent and still clears a missing/stale cookie.
         assertThat(mockMvc.perform(post("/api/v1/auth/logout")
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
+                .andExpect(status().isNoContent())
+                .andReturn().getResponse().getHeader(HttpHeaders.SET_COOKIE))
+                .contains("Max-Age=0");
+    }
+
+    @Test
+    void refreshWithoutCookieIs401AndDoesNotEchoAToken() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/v1/auth/refresh")
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
+                .andExpect(status().isUnauthorized())
+                .andReturn();
+        CONTRACT.assertValid("Error", json(result));
+        assertThat(json(result).get("code").asText()).isEqualTo("INVALID_CREDENTIALS");
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("refresh_token");
+    }
+
+    @Test
+    void foreignBrowserOriginIsRejectedForStateChangingAuthRequests() throws Exception {
+        String email = uniqueEmail("csrf");
+        UUID verificationId = registerId(email);
+        String cookie = AuthCookieTestSupport.value(
+                verify(verificationId, mail.lastFor(email).code()));
+
+        for (String origin : new String[]{"https://evil.example", "null"}) {
+            MvcResult refresh = mockMvc.perform(AuthCookieTestSupport.withCookie(
+                                    post("/api/v1/auth/refresh"), cookie)
+                            .header(HttpHeaders.ORIGIN, origin))
+                    .andExpect(status().isForbidden())
+                    .andReturn();
+            assertThat(json(refresh).get("code").asText()).isEqualTo("CSRF_REJECTED");
+            CONTRACT.assertValid("Error", json(refresh));
+        }
+
+        // Referer is used when Origin is absent.
+        MvcResult referer = mockMvc.perform(post("/api/v1/auth/login")
+                        .header(HttpHeaders.REFERER, "https://evil.example/steal")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(
-                                Map.of("refresh_token", "not-a-token"))))
-                .andReturn().getResponse().getStatus()).isEqualTo(204);
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "email", email, "password", PASSWORD))))
+                .andExpect(status().isForbidden())
+                .andReturn();
+        assertThat(json(referer).get("code").asText()).isEqualTo("CSRF_REJECTED");
+
+        // A configured SPA origin is accepted.
+        mockMvc.perform(AuthCookieTestSupport.withCookie(post("/api/v1/auth/refresh"), cookie)
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void corsPreflightAllowsTheConfiguredOriginWithCredentials() throws Exception {
+        mockMvc.perform(options("/api/v1/auth/refresh")
+                        .header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN)
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "content-type"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN,
+                        ALLOWED_ORIGIN))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS,
+                        org.hamcrest.Matchers.containsString("POST")));
+
+        mockMvc.perform(options("/api/v1/auth/refresh")
+                        .header(HttpHeaders.ORIGIN, "https://evil.example")
+                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void adminApiUsesTheCachedServiceAccountTokenAndNeverThePasswordGrant() throws Exception {
+        String email = uniqueEmail("service-account");
+        registerAndVerify(email);
+
+        assertThat(KeycloakWireMock.serviceTokenRequests())
+                .as("one cached client_credentials token covers the whole registration")
+                .isEqualTo(1);
+        assertThat(KeycloakWireMock.adminPasswordTokenRequests())
+                .as("the legacy admin-password property must be ignored")
+                .isZero();
+    }
+
+    @Test
+    void serviceAccountTokenIsReacquiredOnceAfterAdmin401() throws Exception {
+        registerAndVerify(uniqueEmail("svc-refresh-before"));
+        assertThat(KeycloakWireMock.serviceTokenRequests()).isEqualTo(1);
+
+        KeycloakWireMock.invalidateServiceToken();
+        String email = uniqueEmail("svc-refresh-after");
+        MvcResult register = registerResult(email, "Дмитрий");
+        assertThat(register.getResponse().getStatus()).isEqualTo(202);
+        assertThat(KeycloakWireMock.serviceTokenRequests())
+                .as("a 401 on the cached token forces exactly one fresh acquisition")
+                .isEqualTo(2);
+        assertThat(KeycloakWireMock.adminPasswordTokenRequests()).isZero();
     }
 
     @Test
@@ -323,12 +461,17 @@ class AuthBffIT extends IntegrationTestBase {
         String email = uniqueEmail("logs");
         UUID verificationId = registerId(email);
         String code = mail.lastFor(email).code();
-        AuthSessionResponse session = verifySession(verificationId, code);
+        MvcResult verify = verify(verificationId, code);
+        AuthSessionResponse session = objectMapper.readValue(
+                verify.getResponse().getContentAsString(), AuthSessionResponse.class);
 
         assertThat(output).doesNotContain(PASSWORD);
         assertThat(output).doesNotContain(code);
         assertThat(output).doesNotContain(session.accessToken());
-        assertThat(output).doesNotContain(session.refreshToken());
+        String cookie = AuthCookieTestSupport.value(verify);
+        assertThat(cookie).isNotBlank();
+        assertThat(output).doesNotContain(cookie);
+        assertThat(output).doesNotContain(KeycloakWireMock.SERVICE_CLIENT_SECRET);
     }
 
     // ------------------------------------------------------------------ helpers

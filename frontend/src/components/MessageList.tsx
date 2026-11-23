@@ -68,12 +68,20 @@ export function MessageList({
   onOpenThread,
 }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
   const previousScrollHeight = useRef<number | null>(null);
   const previousFirstId = useRef<string | null>(null);
   const lastKey = useRef<string | null>(null);
   const initialScrollDone = useRef(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const highlightTimer = useRef<number | null>(null);
+
+  const scrollToBottom = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+  };
 
   const ordered = useMemo(
     () =>
@@ -110,6 +118,20 @@ export function MessageList({
     }
     return names;
   }, [ordered]);
+
+  // Images, videos and embeds get their intrinsic size after the first paint.
+  // Keep the feed pinned to the newest message while the reader is at the
+  // bottom, otherwise a fresh chat can open a few dozen pixels above the last
+  // row and look like it "did not scroll all the way down".
+  useEffect(() => {
+    const inner = innerRef.current;
+    if (!inner || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (stickToBottom.current) scrollToBottom();
+    });
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, []);
 
   const handleLoadMore = () => {
     const element = scrollRef.current;
@@ -148,10 +170,15 @@ export function MessageList({
     const nearBottom = distanceToBottom < 180;
 
     if (!initialScrollDone.current) {
-      element.scrollTop = element.scrollHeight;
+      stickToBottom.current = true;
+      scrollToBottom();
+      // Second pass after media/attachments have been laid out.
+      window.requestAnimationFrame(scrollToBottom);
+      window.setTimeout(scrollToBottom, 120);
       initialScrollDone.current = true;
     } else if (lastKey.current !== key && (nearBottom || lastOutgoing !== undefined)) {
-      element.scrollTop = element.scrollHeight;
+      stickToBottom.current = true;
+      scrollToBottom();
     }
     lastKey.current = key;
   }, [slice.messages, slice.outbox]);
@@ -208,6 +235,11 @@ export function MessageList({
       aria-live="polite"
       aria-relevant="additions text"
       tabIndex={0}
+      onScroll={(event) => {
+        const element = event.currentTarget;
+        const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+        stickToBottom.current = distance < 120;
+      }}
     >
       {slice.hasMore || slice.loadMoreStatus !== 'idle' ? (
         <div className="history-top">
@@ -238,7 +270,7 @@ export function MessageList({
         </div>
       ) : null}
 
-      <div className="messages__inner">
+      <div className="messages__inner" ref={innerRef}>
         {visible.length === 0 && normalizedQuery.length > 0 ? (
           <p className="messages__empty" role="status">
             {t('chat.searchEmpty')}

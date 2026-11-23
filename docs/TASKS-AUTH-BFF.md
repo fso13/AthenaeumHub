@@ -20,10 +20,12 @@
 | POST | `/auth/verify-email` | `{verification_id, code}` | `200 AuthSession` |
 | POST | `/auth/resend-email-code` | `{verification_id}` | `202 {expires_in, resend_after}` |
 | POST | `/auth/login` | `{email, password}` | `200 AuthSession` |
-| POST | `/auth/refresh` | `{refresh_token}` | `200 AuthSession` |
-| POST | `/auth/logout` | `{refresh_token}` | `204` |
+| POST | `/auth/refresh` | — (HttpOnly cookie #103) | `200 AuthSession` + rotated cookie |
+| POST | `/auth/logout` | — (HttpOnly cookie #103) | `204` + cleared cookie |
 
-`AuthSession`: `{access_token, refresh_token, expires_in, token_type, user:{id,display_name,email}}`.
+`AuthSession`: `{access_token, expires_in, token_type, user:{id,display_name,email}}`.
+#103: the refresh token is **not** in the JSON body; it is an `HttpOnly;
+SameSite=Lax; Path=/api/v1/auth` cookie (`sova_refresh`, `Secure` in prod).
 
 Коды: `INVALID_CREDENTIALS` 401, `EMAIL_NOT_VERIFIED` 403 (+ `verification_id`), `CODE_INVALID` 422, `CODE_EXPIRED` 410, `EMAIL_TAKEN` 409, `RATE_LIMITED` 429, `REGISTRATION_CLOSED` 403.
 
@@ -43,7 +45,8 @@
 
 - Remove `RealOidcProvider` path from app; `AuthMode = dev | password` (mock only in tests).
 - Login form: email/password; register form: display name/email/password/confirm; verify form: 6 digits, resend timer.
-- Store tokens via existing auth storage; refresh on 401 via `/auth/refresh`; logout calls backend.
+- Store only the access token via existing auth storage; refresh on 401 calls `/auth/refresh`
+  with `credentials: 'include'` (cookie), logout calls the backend and never sends a token.
 - No redirect/callback/Keycloak URLs; update E2E/auth tests; a11y.
 - `VITE_AUTH_MODE=password`; OIDC env removed from deploy.
 

@@ -70,6 +70,20 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "svc-krug-bff",
+      "name": "Sova BFF Admin API",
+      "description": "#103 client-credentials service account: manage-users/view-users/query-users only",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": false,
+      "secret": "__BFF_SERVICE_CLIENT_SECRET__"
     }
   ],
   "users": []

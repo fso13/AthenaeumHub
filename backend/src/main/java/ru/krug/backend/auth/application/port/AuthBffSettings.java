@@ -39,4 +39,19 @@ public interface AuthBffSettings {
      * ENROLL challenge and no session before enrollment completes.
      */
     boolean requireTwoFactor();
+
+    /** #103: HttpOnly refresh-token cookie name (e.g. {@code sova_refresh}). */
+    String refreshCookieName();
+
+    /** #103: cookie path; narrowed to the Auth BFF so it is not sent to other APIs. */
+    String refreshCookiePath();
+
+    /** #103: true when the deployment is served over HTTPS (prod). */
+    boolean refreshCookieSecure();
+
+    /** #103: {@code Lax}, {@code Strict} or {@code None} (CSRF defence in depth). */
+    String refreshCookieSameSite();
+
+    /** #103: cookie lifetime; Keycloak remains the authority on token validity. */
+    Duration refreshCookieMaxAge();
 }

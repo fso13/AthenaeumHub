@@ -32,8 +32,10 @@ docker compose up -d
 export JAVA_HOME=$(/usr/libexec/java_home -v 21)     # macOS
 # export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk       # Linux example
 SERVER_PORT=8081 SPRING_PROFILES_ACTIVE=dev mvn spring-boot:run
-# For the Auth BFF in the keycloak profile also export KC_ADMIN_USER=admin and
-# KC_ADMIN_PASSWORD=admin (the admin-cli token used by the BFF).
+# Dev-only fallback for the Auth BFF (#103): with SPRING_PROFILES_ACTIVE=keycloak
+# and no KRUG_KEYCLOAK_SERVICE_CLIENT_* pair, export KC_ADMIN_USER=admin and
+# KC_ADMIN_PASSWORD=admin (password grant). Prod requires the svc-krug-bff
+# client-credentials service account instead.
 
 # 3. Dev-profile smoke check
 curl -s http://localhost:8081/api/v1/health
@@ -93,7 +95,7 @@ SPRING_PROFILES_ACTIVE=prod \
 | Web origin | `http://localhost:5173` |
 | API audience | `krug-api` (access-token mapper) |
 | Test user | `test@krug.local` / `Test1234!` (login is email) |
-| BFF admin credentials | `KC_ADMIN_USER` / `KC_ADMIN_PASSWORD` (admin-cli token) |
+| BFF admin credentials | `svc-krug-bff` client-credentials service account (#103); `KC_ADMIN_USER` / `KC_ADMIN_PASSWORD` is a dev-only password fallback |
 | BFF internal URL | derived from `KRUG_OIDC_ISSUER` (compose: `http://keycloak:8080`) |
 
 Registration is enabled in the realm. The browser talks only to `/api/v1/auth/*`: the
@@ -124,9 +126,12 @@ keeps `org.springframework.security` at `WARN`.
 | `KRUG_OIDC_AUDIENCE` | `krug-api` | required `aud` |
 | `KRUG_OIDC_AZP` | `krug-web` | required `azp` |
 | `KRUG_OIDC_CLOCK_SKEW` | `30s` | `exp`/`nbf` tolerance |
-| `KC_ADMIN_USER` / `KC_ADMIN_PASSWORD` | `admin` / — | Keycloak admin-cli credentials for the BFF Admin API; **required** in `keycloak`/`prod` for auth endpoints |
+| `KRUG_KEYCLOAK_SERVICE_CLIENT_ID` / `KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET` | blank / blank | #103 client-credentials service account (`svc-krug-bff`) for the Admin API; **required in `prod`**, blank enables the dev password fallback |
+| `KC_ADMIN_USER` / `KC_ADMIN_PASSWORD` | `admin` / — | dev-only password-grant fallback when the service-account pair is blank |
 | `KRUG_KEYCLOAK_URL` | derived from `KRUG_OIDC_ISSUER` | internal Keycloak base URL for admin/token calls (compose: `http://keycloak:8080`) |
-| `KC_ADMIN_CLIENT_ID` | `admin-cli` | admin token client; production follow-up: realm service account |
+| `KC_ADMIN_CLIENT_ID` | `admin-cli` | client id for the dev password fallback only |
+| `KRUG_AUTH_BFF_COOKIE_SECURE` | `false`; `true` in `prod` | `Secure` flag of the HttpOnly `sova_refresh` cookie (#103) |
+| `KRUG_CORS_ALLOWED_ORIGINS` | `http://localhost:5173` (fallback `KRUG_WS_ALLOWED_ORIGINS`) | credentialed CORS + CSRF Origin allowlist; never `*` |
 | `KRUG_AUTH_BFF_CLIENT_ID` | `krug-web` | public client used for direct grants/refresh |
 | `KRUG_AUTH_BFF_REGISTRATION_ENABLED` | `true` | `false` → `403 REGISTRATION_CLOSED` |
 | `KRUG_AUTH_BFF_CODE_EXPIRY` | `10m` | email confirmation lifetime |
@@ -283,8 +288,8 @@ Base URL: `http://localhost:8081/api/v1`.
 | `POST` | `/auth/verify-email` | public | `{verification_id,code}` → `200 AuthSession` |
 | `POST` | `/auth/resend-email-code` | public | `{verification_id}` → `202`; 60 s cooldown |
 | `POST` | `/auth/login` | public | `{email,password}` → `200 AuthSession`; 401/403 |
-| `POST` | `/auth/refresh` | public | `{refresh_token}` → `200 AuthSession` |
-| `POST` | `/auth/logout` | public | `{refresh_token}` → idempotent `204` |
+| `POST` | `/auth/refresh` | public | cookie `sova_refresh` → `200 AuthSession` + rotated cookie; no body |
+| `POST` | `/auth/logout` | public | cookie `sova_refresh` → idempotent `204` + cleared cookie |
 | `GET` | `/me` | JWT | profile + active workspaces + `default_workspace_id` |
 | `POST` | `/devices` | JWT + `Idempotency-Key` | WEB device; max 5; idempotent; 201 |
 | `POST` | `/workspaces` | JWT + `X-Device-Id` + `Idempotency-Key` | OWNER + default «Общий чат»; 201 |
@@ -379,8 +384,10 @@ Keycloak Admin API and token endpoint over the internal network, and confirms re
 with a 6-digit RFC 6238 TOTP from email (docs/TASKS-AUTH-BFF.md). The API is public (no
 bearer token) and returns the same `{code,message,details,request_id}` envelope as the rest
 of the API. `AuthSession` is
-`{access_token,refresh_token,expires_in,token_type,user:{id,display_name,email}}`; the local
-`user.id` is JIT-provisioned, so it matches `GET /me`.
+`{access_token,expires_in,token_type,user:{id,display_name,email}}`; the local
+`user.id` is JIT-provisioned, so it matches `GET /me`. #103: the refresh token is **not**
+in the body — it is an `HttpOnly; SameSite=Lax; Path=/api/v1/auth` cookie
+(`sova_refresh`, `Secure` in prod) rotated by refresh and cleared by logout.
 
 ```text
 register ──► Keycloak Admin: create user (username=email, enabled=false, emailVerified=false)
@@ -391,8 +398,10 @@ verify   ──► validate TOTP (SHA-1, 6 digits, 30 s, ±5 steps)
              Keycloak Admin: enabled=true + emailVerified=true
              exchange the cached refresh token → AuthSession + JIT local user
 login    ──► Keycloak token endpoint grant_type=password (client krug-web)
-refresh  ──► grant_type=refresh_token (Keycloak rotates the pair)
-logout   ──► Keycloak logout endpoint revokes the refresh token
+             refresh token goes into the HttpOnly cookie; JSON gets only access_token
+refresh  ──► read sova_refresh cookie → grant_type=refresh_token (Keycloak rotates)
+             → rotated cookie; no refresh token in JSON
+logout   ──► read sova_refresh cookie → Keycloak logout revokes it → Max-Age=0
 ```
 
 ### Registration and email confirmation
@@ -445,12 +454,18 @@ the 6-digit code and the expiration; the code is never written to logs or the da
 
 ### Keycloak admin access
 
-The BFF obtains an `admin-cli` token from the admin realm (`KC_ADMIN_USER` /
-`KC_ADMIN_PASSWORD`) and caches it until shortly before expiry. The base URL is
-`KRUG_KEYCLOAK_URL`, or is derived from `KRUG_OIDC_ISSUER` when blank — compose already
-sets it to `http://keycloak:8080/realms/krug`, so the browser-facing host is never used for
-admin calls. **Production follow-up:** replace the master-realm `admin-cli` password with a
-dedicated realm service account restricted to `manage-users` (out of scope for this task).
+#103: the BFF obtains an Admin API token with `grant_type=client_credentials` for the
+confidential `svc-krug-bff` client in realm `krug` (`KRUG_KEYCLOAK_SERVICE_CLIENT_ID` /
+`KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET`), restricted to `manage-users`, `view-users` and
+`query-users`. The token is cached in memory until shortly before expiry; on a `401` the
+client drops it and retries once. The base URL is `KRUG_KEYCLOAK_URL`, or is derived from
+`KRUG_OIDC_ISSUER` when blank — compose already sets it to `http://keycloak:8080/realms/krug`,
+so the browser-facing host is never used for admin calls.
+
+When both service-account values are blank (local dev only), the documented
+password fallback (`KC_ADMIN_USER` / `KC_ADMIN_PASSWORD`, `KC_ADMIN_CLIENT_ID`) is used.
+A half-configured pair fails closed with `503`. `prod` requires the service account and a
+`Secure` cookie (`ProdGuard`).
 
 ### Rate limits and error codes
 
@@ -478,8 +493,9 @@ overwrites `X-Forwarded-For`.
   envelopes. `GlobalExceptionHandler` never logs request data.
 * Keycloak is published only on `127.0.0.1:8180` for ops; the browser dependency is removed.
 * `keycloak`/`prod` still require `KRUG_CONTENT_KEY`; the pending session store and rate
-  limiter are single-node. Browser HttpOnly-cookie sessions, refresh-rotation reuse
-  detection, WebAuthn/MFA and E2EE changes are out of scope (see docs/TASKS-AUTH-BFF.md).
+  limiter are single-node. #103 provides the HttpOnly refresh cookie + Origin/Referer CSRF;
+  refresh-rotation reuse detection, WebAuthn/MFA and E2EE changes remain out of scope
+  (see docs/TASKS-AUTH-BFF.md).
 * The realm has `registrationAllowed=true` and `directAccessGrantsEnabled=true` for the BFF;
   disable Keycloak's hosted registration UI if all sign-ups must go through the BFF.
 
@@ -2317,10 +2333,10 @@ The contract file is unchanged. Deliberate interpretations:
 * Auth BFF known debt: the registration→verification refresh token lives in a single-node
   in-memory bridge (15 min); a restart/multi-node deployment requires the user to sign in
   after verification (the account is still verified). Keycloak admin access uses the
-  master-realm `admin-cli` password (`KC_ADMIN_*`); a restricted realm service account with
-  `manage-users` is the production follow-up. The rate limiter is in-memory (Redis is the
-  multi-node replacement). The verification email has no branding/i18n beyond plain text.
-  Browser HttpOnly-cookie sessions/CSRF, refresh reuse detection, WebAuthn and MFA remain
-  out of scope. `frontend/scripts/check-contract.mjs` hard-codes the pre-BFF path/schema
-  counts (28/58), so `npm run contract:check` fails until the frontend owner updates those
+  `svc-krug-bff` client-credentials service account (#103); the password fallback is dev-only.
+  The rate limiter is in-memory (Redis is the multi-node replacement). The verification
+  email has no branding/i18n beyond plain text. Refresh reuse detection, WebAuthn and
+  stronger MFA remain out of scope; #103 implements HttpOnly refresh cookies + CSRF
+  (`SameSite=Lax` + Origin/Referer). The access token still lives in sessionStorage with a
+  short TTL — moving it to memory-only is the remaining frontend follow-up.
   two constants (the regenerated `src/api/schema.d.ts` is already committed).

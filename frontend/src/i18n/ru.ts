@@ -1163,27 +1163,39 @@ export const ru = {
   /* #84 translation-provider installation settings (admin/plugins). */
   'admin.translate.title': 'Переводчик',
   'admin.translate.lead':
-    'Установочный провайдер перевода. Показано действующее значение: явная настройка или fallback окружения. Хранятся только переключатель и https URL; секретов и API-ключей нет.',
+    'Установочный провайдер перевода: self-hosted LibreTranslate или собственный сервис. Показано действующее значение: явная настройка или fallback окружения. Хранятся переключатель, URL и протокол; секретов и API-ключей нет.',
   'admin.translate.loading': 'Загружаем настройки переводчика…',
   'admin.translate.loadError': 'Не удалось загрузить настройки переводчика.',
   'admin.translate.retry': 'Повторить',
   'admin.translate.enabled': 'Провайдер включён',
+  'admin.translate.enabledUnverified': 'Провайдер включён · не проверен',
   'admin.translate.disabled': 'Провайдер выключен',
+  'admin.translate.enabledUnavailable': 'Провайдер включён, но недоступен',
   'admin.translate.statusHint':
-    'Выключенный провайдер не делает сетевых вызовов; перевод вернёт 503 TRANSLATION_UNAVAILABLE.',
+    'Выключенный провайдер не делает сетевых вызовов. Включённый, но недоступный сервис честно отвечает 503 TRANSLATION_UNAVAILABLE — «зелёного» состояния без успешной проверки нет.',
   'admin.translate.enable': 'Включить переводчик',
-  'admin.translate.url': 'HTTPS URL провайдера',
+  'admin.translate.provider': 'Протокол провайдера',
+  'admin.translate.providerAuto': 'Авто — LibreTranslate по пути /translate',
+  'admin.translate.providerLibreTranslate': 'LibreTranslate (self-hosted)',
+  'admin.translate.providerCustom': 'Свой сервис {text,target}',
+  'admin.translate.providerHint':
+    'Сейчас будет использован: {protocol}. «Авто» выбирает LibreTranslate, если путь URL заканчивается на /translate; для своего сервиса на этом пути выберите явно «Свой сервис».',
+  'admin.translate.url': 'URL провайдера',
   'admin.translate.urlHint':
-    'Только абсолютный https URL с необязательным путём. Credentials, query и fragment запрещены; пустое значение очищает URL.',
+    'LibreTranslate: http://libretranslate:5000/translate (http допустим только для внутреннего хоста: compose-имя, localhost, private-сеть). Публичный адрес — только https. Credentials, query и fragment запрещены; пустое значение очищает URL.',
   'admin.translate.save': 'Сохранить переводчик',
   'admin.translate.saved': 'Настройки переводчика сохранены.',
   'admin.translate.noChanges': 'Изменений нет.',
-  'admin.translate.required': 'Для включения нужен https URL: сохранённого или из окружения нет.',
-  'admin.translate.invalidGeneric': 'URL провайдера отклонён: нужен абсолютный https URL.',
+  'admin.translate.required': 'Для включения нужен URL: сохранённого или из окружения нет.',
+  'admin.translate.invalidGeneric':
+    'URL провайдера отклонён: нужен абсолютный https URL или http для внутреннего хоста.',
+  'admin.translate.providerInvalid':
+    'Протокол провайдера отклонён: допустимы AUTO, CUSTOM и LIBRETRANSLATE.',
   'admin.translate.invalidTooLong': 'URL длиннее 2048 символов.',
   'admin.translate.invalidWhitespace': 'URL не должен содержать пробелы и управляющие символы.',
   'admin.translate.invalidAbsolute': 'URL должен быть абсолютным.',
-  'admin.translate.invalidHttps': 'URL должен использовать https.',
+  'admin.translate.invalidHttps':
+    'URL должен использовать https (http — только для внутреннего хоста).',
   'admin.translate.invalidHost': 'URL должен содержать хост.',
   'admin.translate.invalidCredentials': 'URL не должен содержать credentials/userinfo.',
   'admin.translate.invalidQuery': 'URL не должен содержать query string.',
@@ -1199,11 +1211,13 @@ export const ru = {
   'admin.translate.testDisabled': 'Провайдер выключен — сетевой вызов не выполнялся (0 мс).',
   'admin.translate.testUnavailable': 'Провайдер недоступен · {latency} мс.',
   'admin.translate.testError': 'Не удалось выполнить проверку провайдера.',
+  'admin.translate.unavailableWarning':
+    'Проверка не прошла: переводы в чатах вернут 503, пока сервис не поднимется. Запустите LibreTranslate профилем translate (docker compose --profile translate up -d libretranslate) и проверьте соединение снова.',
   'admin.translate.auditHint':
-    'Изменения и проверки записываются в аудит: enabled, url_changed, status и latency. Сам URL не логируется.',
+    'Изменения и проверки записываются в аудит: enabled, provider, url_changed, status и latency. Сам URL не логируется.',
   'admin.settings.translationLink': 'Настроить переводчик',
   'admin.settings.translationHint':
-    'Провайдер перевода настраивается во вкладке «Плагины»: enabled и https URL, проверка соединения.',
+    'Провайдер перевода настраивается во вкладке «Плагины»: enabled, self-hosted LibreTranslate/custom URL и протокол, проверка соединения.',
 
   'admin.overview.quickLinks': 'Разделы',
   'admin.overview.openUsers': 'Открыть пользователей',

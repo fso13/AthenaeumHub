@@ -1,8 +1,12 @@
 package ru.krug.backend.auth.api;
 
+import java.util.Map;
+
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,8 +15,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import ru.krug.backend.auth.api.dto.AuthLoginRequest;
-import ru.krug.backend.auth.api.dto.AuthLogoutRequest;
-import ru.krug.backend.auth.api.dto.AuthRefreshRequest;
 import ru.krug.backend.auth.api.dto.AuthRegisterRequest;
 import ru.krug.backend.auth.api.dto.AuthRegisterResponse;
 import ru.krug.backend.auth.api.dto.AuthResendEmailCodeRequest;
@@ -28,6 +30,7 @@ import ru.krug.backend.auth.api.mapper.AuthBffApiMapper;
 import ru.krug.backend.auth.application.command.LoginCommand;
 import ru.krug.backend.auth.application.command.RegisterCommand;
 import ru.krug.backend.auth.application.command.VerifyEmailCommand;
+import ru.krug.backend.auth.application.model.AuthSessionView;
 import ru.krug.backend.auth.application.model.LoginOutcome;
 import ru.krug.backend.auth.application.model.TwoFactorSetupView;
 import ru.krug.backend.auth.application.port.AuthBffSettings;
@@ -39,6 +42,8 @@ import ru.krug.backend.auth.application.usecase.ResendEmailCodeService;
 import ru.krug.backend.auth.application.usecase.TwoFactorService;
 import ru.krug.backend.auth.application.usecase.VerifyEmailService;
 import ru.krug.backend.shared.api.RequestIdFilter;
+import ru.krug.backend.shared.error.DomainException;
+import ru.krug.backend.shared.error.ErrorCode;
 
 /**
  * Auth BFF: the only browser-facing auth surface. Keycloak is called server-to-server with
@@ -55,6 +60,7 @@ public class AuthBffController {
     private final RefreshSessionService refreshSessionService;
     private final LogoutService logoutService;
     private final TwoFactorService twoFactor;
+    private final RefreshCookieFactory refreshCookies;
     private final AuthBffSettings settings;
 
     public AuthBffController(RegisterUserService registerUserService,
@@ -64,6 +70,7 @@ public class AuthBffController {
                              RefreshSessionService refreshSessionService,
                              LogoutService logoutService,
                              TwoFactorService twoFactor,
+                             RefreshCookieFactory refreshCookies,
                              AuthBffSettings settings) {
         this.registerUserService = registerUserService;
         this.verifyEmailService = verifyEmailService;
@@ -72,6 +79,7 @@ public class AuthBffController {
         this.refreshSessionService = refreshSessionService;
         this.logoutService = logoutService;
         this.twoFactor = twoFactor;
+        this.refreshCookies = refreshCookies;
         this.settings = settings;
     }
 
@@ -86,8 +94,8 @@ public class AuthBffController {
     }
 
     @PostMapping("/verify-email")
-    public ResponseEntity<Object> verifyEmail(@Valid @RequestBody AuthVerifyEmailRequest request,
-                                              HttpServletRequest http) {
+    public ResponseEntity<?> verifyEmail(@Valid @RequestBody AuthVerifyEmailRequest request,
+                                         HttpServletRequest http) {
         LoginOutcome outcome = verifyEmailService.verify(
                 new VerifyEmailCommand(request.verificationId(), request.code()),
                 RequestIdFilter.requestId(http));
@@ -95,7 +103,7 @@ public class AuthBffController {
             return ResponseEntity.status(HttpStatus.ACCEPTED)
                     .body(AuthBffApiMapper.toResponse(outcome.challenge()));
         }
-        return ResponseEntity.ok(AuthBffApiMapper.toResponse(outcome.session()));
+        return sessionResponse(outcome.session());
     }
 
     @PostMapping("/resend-email-code")
@@ -107,8 +115,8 @@ public class AuthBffController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<Object> login(@Valid @RequestBody AuthLoginRequest request,
-                                        HttpServletRequest http) {
+    public ResponseEntity<?> login(@Valid @RequestBody AuthLoginRequest request,
+                                   HttpServletRequest http) {
         LoginOutcome outcome = loginService.loginOutcome(
                 new LoginCommand(request.email(), request.password()), clientIp(http),
                 RequestIdFilter.requestId(http));
@@ -117,13 +125,13 @@ public class AuthBffController {
                     AuthBffApiMapper.toResponse(outcome.challenge());
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(challenge);
         }
-        return ResponseEntity.ok(AuthBffApiMapper.toResponse(outcome.session()));
+        return sessionResponse(outcome.session());
     }
 
     @PostMapping("/2fa/verify")
-    public AuthSessionResponse verifyTwoFactor(
+    public ResponseEntity<AuthSessionResponse> verifyTwoFactor(
             @Valid @RequestBody AuthTwoFactorVerifyRequest request, HttpServletRequest http) {
-        return AuthBffApiMapper.toResponse(twoFactor.verifyChallenge(request.challengeId(),
+        return sessionResponse(twoFactor.verifyChallenge(request.challengeId(),
                 request.code(), clientIp(http), RequestIdFilter.requestId(http)));
     }
 
@@ -136,24 +144,62 @@ public class AuthBffController {
     }
 
     @PostMapping("/2fa/enroll/verify")
-    public AuthSessionResponse verifyTwoFactorEnrollment(
+    public ResponseEntity<AuthSessionResponse> verifyTwoFactorEnrollment(
             @Valid @RequestBody AuthTwoFactorEnrollVerifyRequest request,
             HttpServletRequest http) {
-        return AuthBffApiMapper.toResponse(twoFactor.verifyEnrollment(request.challengeId(),
+        return sessionResponse(twoFactor.verifyEnrollment(request.challengeId(),
                 request.code(), clientIp(http), RequestIdFilter.requestId(http)));
     }
 
+    /**
+     * #103: the refresh token is read exclusively from the HttpOnly cookie. A JSON body is
+     * ignored (the legacy {@code AuthRefreshRequest} is deprecated), so a script cannot
+     * exfiltrate the token by reading a response. Rotation always re-issues the cookie.
+     */
     @PostMapping("/refresh")
-    public AuthSessionResponse refresh(@Valid @RequestBody AuthRefreshRequest request,
-                                       HttpServletRequest http) {
-        return AuthBffApiMapper.toResponse(refreshSessionService.refresh(
-                request.refreshToken(), RequestIdFilter.requestId(http)));
+    public ResponseEntity<AuthSessionResponse> refresh(HttpServletRequest http) {
+        String refreshToken = refreshCookieValue(http);
+        if (refreshToken == null || refreshToken.isBlank()) {
+            throw DomainException.unauthorized(ErrorCode.INVALID_CREDENTIALS,
+                    "Refresh cookie is missing or invalid", Map.of());
+        }
+        return sessionResponse(refreshSessionService.refresh(refreshToken,
+                RequestIdFilter.requestId(http)));
     }
 
+    /**
+     * #103: revokes the cookie's Keycloak refresh token and always expires the cookie, so
+     * logout works even after the IdP already invalidated the token.
+     */
     @PostMapping("/logout")
-    public ResponseEntity<Void> logout(@Valid @RequestBody AuthLogoutRequest request) {
-        logoutService.logout(request.refreshToken());
-        return ResponseEntity.noContent().build();
+    public ResponseEntity<Void> logout(HttpServletRequest http) {
+        String refreshToken = refreshCookieValue(http);
+        if (refreshToken != null && !refreshToken.isBlank()) {
+            logoutService.logout(refreshToken);
+        }
+        return ResponseEntity.noContent()
+                .header(HttpHeaders.SET_COOKIE, refreshCookies.clear().toString())
+                .build();
+    }
+
+    private ResponseEntity<AuthSessionResponse> sessionResponse(AuthSessionView session) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, refreshCookies.issue(session.refreshToken()).toString())
+                .body(AuthBffApiMapper.toResponse(session));
+    }
+
+    private String refreshCookieValue(HttpServletRequest request) {
+        Cookie[] cookies = request.getCookies();
+        if (cookies == null) {
+            return null;
+        }
+        String expected = refreshCookies.cookieName();
+        for (Cookie cookie : cookies) {
+            if (expected.equals(cookie.getName())) {
+                return cookie.getValue();
+            }
+        }
+        return null;
     }
 
     private String clientIp(HttpServletRequest request) {

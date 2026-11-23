@@ -198,15 +198,14 @@ function draftMaxFileSize(draft: DlpPolicyDraft): number | undefined {
 
 /** Create body: trims only the name, the pattern is matched literally. */
 export function toCreateDlpBody(draft: DlpPolicyDraft): DlpPolicyCreateRequest {
+  const maxFileSize = draftMaxFileSize(draft);
   return {
     name: draft.name.trim(),
     action: draft.action,
     pattern_type: draft.patternType,
     pattern: draft.pattern,
     scope: draft.scope,
-    ...(draftMaxFileSize(draft) === undefined
-      ? {}
-      : { max_file_size_bytes: draftMaxFileSize(draft) }),
+    ...(maxFileSize === undefined ? {} : { max_file_size_bytes: maxFileSize }),
     enabled: draft.enabled,
   };
 }
@@ -217,15 +216,14 @@ export function toCreateDlpBody(draft: DlpPolicyDraft): DlpPolicyCreateRequest {
  * defines as "keep the stored value" (a threshold cannot be cleared).
  */
 export function toUpdateDlpBody(draft: DlpPolicyDraft): DlpPolicyUpdateRequest {
+  const maxFileSize = draftMaxFileSize(draft);
   return {
     name: draft.name.trim(),
     action: draft.action,
     pattern_type: draft.patternType,
     pattern: draft.pattern,
     scope: draft.scope,
-    ...(draftMaxFileSize(draft) === undefined
-      ? {}
-      : { max_file_size_bytes: draftMaxFileSize(draft) }),
+    ...(maxFileSize === undefined ? {} : { max_file_size_bytes: maxFileSize }),
     enabled: draft.enabled,
   };
 }

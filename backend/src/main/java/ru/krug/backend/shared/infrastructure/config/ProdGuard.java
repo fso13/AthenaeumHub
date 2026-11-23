@@ -85,6 +85,24 @@ public class ProdGuard implements BeanFactoryPostProcessor, EnvironmentAware {
             String jwtSecret = value("krug.auth.jwt-secret");
             requireSecret("krug.auth.jwt-secret", "KRUG_AUTH_JWT_SECRET", jwtSecret,
                     DEV_JWT_SECRETS, violations);
+
+            // #103: runtime Keycloak administration must use the client-credentials
+            // service account, never a password-grant technical user or admin-cli.
+            require("krug.auth-bff.keycloak.service-client-id",
+                    "KRUG_KEYCLOAK_SERVICE_CLIENT_ID", violations);
+            String serviceSecret = require("krug.auth-bff.keycloak.service-client-secret",
+                    "KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET", violations);
+            if (!serviceSecret.isBlank() && !serviceSecret.contains("${")
+                    && serviceSecret.length() < 32) {
+                violations.add("KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET must be at least 32 characters");
+            }
+            String cookieSecure = value("krug.auth-bff.refresh-cookie.secure");
+            if ("false".equalsIgnoreCase(cookieSecure)) {
+                violations.add("KRUG_AUTH_BFF_COOKIE_SECURE must be true in prod");
+            }
+            // Browsers send Origin on state-changing auth requests; an empty allowlist
+            // would make login/refresh fail closed (or, if bypassed, weaken CSRF).
+            require("krug.cors.allowed-origins", "KRUG_CORS_ALLOWED_ORIGINS", violations);
         } else {
             String jwtSecret = value("krug.auth.jwt-secret");
             if (!jwtSecret.isBlank() && DEV_JWT_SECRETS.contains(jwtSecret)) {

@@ -31,7 +31,7 @@ public final class AuthBffApiMapper {
     }
 
     public static AuthSessionResponse toResponse(AuthSessionView view) {
-        return new AuthSessionResponse(view.accessToken(), view.refreshToken(), view.expiresIn(),
+        return new AuthSessionResponse(view.accessToken(), view.expiresIn(),
                 view.tokenType(),
                 new AuthUserResponse(view.user().id(), view.user().displayName(),
                         view.user().email(), view.user().platformAdmin()));

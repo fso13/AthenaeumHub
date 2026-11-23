@@ -26,6 +26,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import ru.krug.backend.auth.domain.service.TotpCode;
+import ru.krug.backend.support.AuthCookieTestSupport;
 import ru.krug.backend.support.IntegrationTestBase;
 import ru.krug.backend.support.KeycloakTestSupport;
 import ru.krug.backend.support.KeycloakWireMock;
@@ -228,7 +229,14 @@ class TwoFactorIT extends IntegrationTestBase {
         JsonNode body = json(session);
         CONTRACT.assertValid("AuthSession", body);
         assertThat(body.get("access_token").asText()).isNotBlank();
-        assertThat(body.get("refresh_token").asText()).isNotBlank();
+        // #103: the refresh token is an HttpOnly cookie, never a JSON field.
+        assertThat(body.has("refresh_token")).isFalse();
+        assertThat(AuthCookieTestSupport.value(session)).isNotBlank();
+        assertThat(AuthCookieTestSupport.setCookie(session))
+                .contains("HttpOnly")
+                .contains("SameSite=Lax")
+                .contains("Path=/api/v1/auth")
+                .doesNotContain("Secure");
         assertThat(body.at("/user/email").asText()).isEqualTo(idp.email());
 
         mockMvc.perform(post("/api/v1/auth/2fa/verify")

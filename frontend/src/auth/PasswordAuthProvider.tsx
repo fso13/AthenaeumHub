@@ -94,7 +94,7 @@ function isPendingExpired(pending: PendingVerification, now: number): boolean {
 function toStoredSession(session: AuthSession): StoredAuthSession {
   return {
     accessToken: session.access_token,
-    refreshToken: session.refresh_token,
+    // #103: refresh_token is not part of the response; the HttpOnly cookie holds it.
     expiresAt: Date.now() + session.expires_in * 1000,
     user: {
       id: session.user.id,
@@ -208,12 +208,13 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (refreshPromise.current) return refreshPromise.current;
-    const stored = readAuthSession();
-    if (!stored) return false;
 
     refreshPromise.current = (async () => {
       try {
-        const session = await api.refresh(stored.refreshToken);
+        // #103: the request carries the HttpOnly cookie via credentials: 'include'.
+        // A page reload may have cleared in-memory/sessionStorage state while the
+        // cookie is still valid, so this must not require a stored session.
+        const session = await api.refresh();
         applySession(session);
         return true;
       } catch (error) {
@@ -646,12 +647,10 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
   }, [api, state.pending]);
 
   const signOut = useCallback(async (): Promise<void> => {
-    const stored = readAuthSession();
     const userId = state.user?.sub ?? null;
-    if (stored?.refreshToken) {
-      // Revoke first, best-effort: a network failure must not keep local tokens.
-      await api.logout(stored.refreshToken).catch(() => undefined);
-    }
+    // Revoke first, best-effort: a network failure must not keep the cookie or local
+    // state. The server always clears the cookie even if Keycloak already revoked it.
+    await api.logout().catch(() => undefined);
     await clearAll(userId);
     navigate(withInviteToken('/login?logged_out=1', inviteToken), { replace: true });
   }, [api, clearAll, inviteToken, navigate, state.user?.sub]);

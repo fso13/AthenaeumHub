@@ -79,7 +79,6 @@ async function openChatSettings(user: TestUser): Promise<HTMLElement> {
 function seedAuthenticatedSession(): void {
   writeAuthSession({
     accessToken: 'mock-access-token',
-    refreshToken: 'mock-refresh-token',
     expiresAt: Date.now() + 60 * 60 * 1000,
     user: {
       id: mockDb.me.user.id,

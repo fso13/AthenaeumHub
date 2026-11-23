@@ -18,6 +18,40 @@ import ru.krug.backend.shared.error.ErrorCode;
 class TranslationProviderUrlTest {
 
     @Test
+    void acceptsPlainHttpOnlyForAnInternalHost() {
+        assertThat(TranslationProviderUrl.normalize("http://libretranslate:5000/translate"))
+                .isEqualTo("http://libretranslate:5000/translate");
+        assertThat(TranslationProviderUrl.normalize("http://localhost:5000"))
+                .isEqualTo("http://localhost:5000");
+        assertThat(TranslationProviderUrl.normalize("http://127.0.0.1:5000/translate"))
+                .isEqualTo("http://127.0.0.1:5000/translate");
+        assertThat(TranslationProviderUrl.normalize("http://10.0.0.5:5000/translate"))
+                .isEqualTo("http://10.0.0.5:5000/translate");
+        assertThat(TranslationProviderUrl.normalize("http://192.168.1.20:5000"))
+                .isEqualTo("http://192.168.1.20:5000");
+        assertThat(TranslationProviderUrl.normalize("http://translate.internal/translate"))
+                .isEqualTo("http://translate.internal/translate");
+        assertThat(TranslationProviderUrl.normalize("http://[::1]:5000/translate"))
+                .isEqualTo("http://[::1]:5000/translate");
+        assertThat(TranslationProviderUrl.normalize("http://[fd00::1]:5000/translate"))
+                .isEqualTo("http://[fd00::1]:5000/translate");
+    }
+
+    @Test
+    void rejectsPlainHttpForAPublicHost() {
+        for (String value : java.util.List.of(
+                "http://translate.example.test/v1",
+                "http://8.8.8.8:5000/translate",
+                "http://[2001:db8::1]:5000/translate",
+                "http://172.32.0.1:5000/translate")) {
+            assertThatThrownBy(() -> TranslationProviderUrl.normalize(value))
+                    .isInstanceOf(DomainException.class)
+                    .satisfies(ex -> assertThat(((DomainException) ex).code())
+                            .isEqualTo(ErrorCode.TRANSLATION_URL_INVALID));
+        }
+    }
+
+    @Test
     void acceptsHttpsWithAndWithoutPath() {
         assertThat(TranslationProviderUrl.normalize(" https://translate.example.test/v1/translate "))
                 .isEqualTo("https://translate.example.test/v1/translate");

@@ -25,8 +25,8 @@ public final class AuthBffTestData {
                 Duration.ofMinutes(15),
                 new AuthBffProperties.Keycloak(
                         "http://localhost:9999", "krug", "master", "admin", "admin",
-                        "admin-cli", "krug-web", Duration.ofSeconds(2), Duration.ofSeconds(2),
-                        Duration.ofSeconds(10)),
+                        "admin-cli", "krug-web", "", "",
+                        Duration.ofSeconds(2), Duration.ofSeconds(2), Duration.ofSeconds(10)),
                 new AuthBffProperties.Mail(MAIL_FROM),
                 new AuthBffProperties.Code(Duration.ofMinutes(10), Duration.ofSeconds(60), 5, 5,
                         EMAIL_SECRET_KEY),
@@ -37,7 +37,9 @@ public final class AuthBffTestData {
                         Duration.ofMinutes(10), 20, Duration.ofMinutes(5), 60,
                         Duration.ofMinutes(5)),
                 new AuthBffProperties.Cleanup(true, Duration.ofMinutes(10),
-                        Duration.ofMinutes(2), 200, Duration.ofHours(24)));
+                        Duration.ofMinutes(2), 200, Duration.ofHours(24)),
+                new AuthBffProperties.RefreshCookie("sova_refresh", "/api/v1/auth", false,
+                        "Lax", Duration.ofMinutes(30)));
     }
 
     public static AuthBffProperties withRegistrationClosed() {
@@ -66,6 +68,7 @@ public final class AuthBffTestData {
                         base.rateLimit().twoFactorUserWindow(),
                         base.rateLimit().twoFactorPerIp(),
                         base.rateLimit().twoFactorIpWindow()),
-                base.cleanup());
+                base.cleanup(),
+                base.refreshCookie());
     }
 }

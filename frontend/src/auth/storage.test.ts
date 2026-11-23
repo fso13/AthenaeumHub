@@ -17,7 +17,6 @@ import type { StoredAuthSession } from './types';
 
 const SESSION: StoredAuthSession = {
   accessToken: 'access-token-value',
-  refreshToken: 'refresh-token-value',
   expiresAt: 1_900_000_000_000,
   user: {
     id: '11111111-1111-4111-8111-111111111111',
@@ -38,17 +37,21 @@ describe('auth storage', () => {
     writeStored('krug.auth.session', '{not-json');
     expect(readAuthSession()).toBeNull();
 
-    writeStored(
-      'krug.auth.session',
-      JSON.stringify({ accessToken: 'a', refreshToken: 'b', expiresAt: 1 }),
-    );
+    writeStored('krug.auth.session', JSON.stringify({ accessToken: 'a', expiresAt: 1 }));
     expect(readAuthSession()).toBeNull();
 
+    writeStored('krug.auth.session', JSON.stringify({ ...SESSION, accessToken: '' }));
+    expect(readAuthSession()).toBeNull();
+  });
+
+  it('purges a legacy stored refresh token left by an older build (#103)', () => {
     writeStored(
       'krug.auth.session',
-      JSON.stringify({ ...SESSION, accessToken: '', refreshToken: undefined }),
+      JSON.stringify({ ...SESSION, refreshToken: 'legacy-refresh-token' }),
     );
+
     expect(readAuthSession()).toBeNull();
+    expect(readStored('krug.auth.session')).toBeNull();
   });
 
   it('round-trips a pending verification without a code or password', () => {

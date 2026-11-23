@@ -143,13 +143,12 @@ services:
       KRUG_OIDC_AZP: ${KRUG_OIDC_AZP:-krug-web}
       KRUG_KEYCLOAK_URL: http://keycloak:8080
 
-      # Runtime Keycloak administration must NOT use the master realm or
-      # admin-cli. Create a least-privilege technical user in the `krug` realm
-      # (see docs/PRODUCTION-RUNBOOK.md) and keep these values in sync.
-      KRUG_KEYCLOAK_ADMIN_REALM: ${KRUG_KEYCLOAK_ADMIN_REALM:-krug}
-      KC_ADMIN_CLIENT_ID: ${KC_ADMIN_CLIENT_ID:-krug-web}
-      KC_ADMIN_USER: ${KC_ADMIN_USER:?set KC_ADMIN_USER in .env.prod}
-      KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?set KC_ADMIN_PASSWORD in .env.prod}
+      # #103: runtime Keycloak Admin API is a client-credentials service account
+      # in the `krug` realm, never master/admin-cli and never a password user.
+      KRUG_KEYCLOAK_SERVICE_CLIENT_ID: ${KRUG_KEYCLOAK_SERVICE_CLIENT_ID:?set KRUG_KEYCLOAK_SERVICE_CLIENT_ID in .env.prod}
+      KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET: ${KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET:?set KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET in .env.prod}
+      # The refresh cookie must be Secure in prod (ProdGuard fails otherwise).
+      KRUG_AUTH_BFF_COOKIE_SECURE: "true"
 
       # Real SMTP relay. The admin panel's runtime SMTP settings, once saved,
       # take precedence over these environment values.
@@ -165,6 +164,9 @@ services:
       # real client address and nginx appends the proxy address.
       PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env.prod}
       KRUG_WS_ALLOWED_ORIGINS: https://${DOMAIN:?set DOMAIN in .env.prod}
+      # #103: credentialed CORS + same-origin CSRF allowlist. Explicit value wins
+      # over the shared WS origin fallback for split-origin deployments.
+      KRUG_CORS_ALLOWED_ORIGINS: ${KRUG_CORS_ALLOWED_ORIGINS:-https://${DOMAIN:?set DOMAIN in .env.prod}}
       KRUG_REALTIME_WS_URL: wss://${DOMAIN:?set DOMAIN in .env.prod}/ws
       KRUG_AUTH_BFF_TRUST_XFF: "true"
       KRUG_FILES_ARTWORK_BASE_URL: https://${DOMAIN:?set DOMAIN in .env.prod}
@@ -182,6 +184,12 @@ services:
       S3_SCAN_MODE: ${S3_SCAN_MODE:-noop}
       CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
       CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+
+      # #104: optional self-hosted translation. Leave the URL empty (default) to
+      # keep the provider disabled; enable with the `translate` profile and
+      # KRUG_PLUGINS_TRANSLATE_URL=http://libretranslate:5000/translate.
+      KRUG_PLUGINS_TRANSLATE_URL: ${KRUG_PLUGINS_TRANSLATE_URL:-}
+      KRUG_PLUGINS_TRANSLATE_PROVIDER: ${KRUG_PLUGINS_TRANSLATE_PROVIDER:-libretranslate}
 
       # Keep false until the E2EE release gate is closed.
       KRUG_E2EE_ENABLED: ${KRUG_E2EE_ENABLED:-false}
@@ -296,14 +304,17 @@ services:
     restart: "no"
     environment:
       PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env.prod}
+      # #103: secret substituted into the imported confidential service client.
+      KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET: ${KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET:?set KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET in .env.prod}
     command:
       - /bin/sh
       - -c
       - |
         set -eu
         mkdir -p /import
-        sed "s|__PUBLIC_URL__|$${PUBLIC_URL}|g" /src/realm-export.prod.json \
-          > /import/realm-export.json
+        sed -e "s|__PUBLIC_URL__|$${PUBLIC_URL}|g" \
+            -e "s|__BFF_SERVICE_CLIENT_SECRET__|$${KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET}|g" \
+            /src/realm-export.prod.json > /import/realm-export.json
         test -s /import/realm-export.json
     volumes:
       - ./realm-export.prod.json:/src/realm-export.prod.json:ro
@@ -330,11 +341,12 @@ services:
       KC_DB_POOL_MIN_SIZE: "5"
       KC_DB_POOL_MAX_SIZE: "20"
 
-      # Bootstrap admin is used only for the first provisioning (see runbook);
-      # the application must use the separate `krug` realm technical user.
+      # Bootstrap admin is used only for the first provisioning/break-glass (see
+      # runbook); the application uses the `svc-krug-bff` client-credentials
+      # service account in the `krug` realm (#103).
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD in .env.prod}
-      # Operator contact for the runtime technical user; not a secret.
+      # Operator contact for the realm; not a secret or a backend credential.
       KC_ADMIN_EMAIL: ${KC_ADMIN_EMAIL:-ops@example.com}
 
       KC_HEALTH_ENABLED: "true"
@@ -418,6 +430,36 @@ services:
     logging: *default-logging
 
   # ---------------------------------------------------------------------------
+  # Optional self-hosted translation (#104). Internal network only: Caddy never
+  # proxies it, the backend calls http://libretranslate:5000/translate. Enable:
+  #   docker compose ... --profile translate up -d libretranslate
+  # and set KRUG_PLUGINS_TRANSLATE_URL in .env.prod. Models live in a named
+  # volume; first start downloads them (~1-2 GB for en+ru, 2-4 GB RAM, 2 vCPU).
+  # ---------------------------------------------------------------------------
+  libretranslate:
+    image: libretranslate/libretranslate:v1.9.6
+    container_name: krug-prod-libretranslate
+    profiles: ["translate"]
+    restart: unless-stopped
+    environment:
+      LT_LOAD_ONLY: ${LT_LOAD_ONLY:-en,ru}
+      LT_UPDATE_MODELS: ${LT_UPDATE_MODELS:-true}
+      LT_DISABLE_WEB_UI: "true"
+      TZ: UTC
+    expose:
+      - "5000"
+    volumes:
+      - krug-prod-libretranslate-models:/home/libretranslate/.local:rw
+    healthcheck:
+      test: ["CMD-SHELL", "./venv/bin/python scripts/healthcheck.py"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    networks: [internal]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
   # Optional AV scanner. Production should run it, but it needs a large volume
   # and a long signature update on first start:
   #   S3_SCAN_MODE=clamav docker compose ... --profile scan up -d
@@ -447,6 +489,7 @@ volumes:
   krug-prod-keycloak-import:
   krug-prod-minio-data:
   krug-prod-clamav-data:
+  krug-prod-libretranslate-models:
   krug-prod-caddy-data:
   krug-prod-caddy-config:
 

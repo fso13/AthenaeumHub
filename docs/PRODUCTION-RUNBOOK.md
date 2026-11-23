@@ -23,6 +23,7 @@
 | `minio` | `chainguard/minio:latest` | — | `edge`, `internal` | S3-объекты |
 | `minio-backup` | `chainguard/minio-client:latest` | — | `internal` | one-off `mc` для backup/restore |
 | `clamav` | `clamav/clamav:stable` | — | `internal` | опционально, profile `scan` |
+| `libretranslate` | `libretranslate/libretranslate:v1.9.6` | — | `internal` | опционально, profile `translate`: self-hosted перевод |
 
 Наружу опубликован только Caddy. `postgres`, `keycloak`, `minio` и `backend`
 не имеют host-port mapping. `FILES_DOMAIN` — единственный публичный путь к
@@ -48,6 +49,7 @@ backend ──SMTP 587/TLS──> external relay
 | `krug-prod-caddy-data` | ACME-аккаунт и сертификаты | не обязателен, Caddy перевыпустит; при потере — новый ACME |
 | `krug-prod-caddy-config` | runtime config Caddy | не критичен |
 | `krug-prod-clamav-data` | сигнатуры ClamAV | не критичен, скачивается заново |
+| `krug-prod-libretranslate-models` | модели LibreTranslate | не критичен, скачивается заново |
 | `krug-prod-keycloak-import` | отрендеренный realm | не критичен, генерируется |
 
 `docker compose down -v` **удаляет все данные**. В production использовать
@@ -97,7 +99,7 @@ openssl rand -base64 48 | tr -d '\n'; echo
   в secret manager до первого запуска;
 - `KRUG_AUTH_BFF_EMAIL_SECRET_KEY` — отдельный ключ для TOTP/email-секретов;
 - `KC_BOOTSTRAP_ADMIN_PASSWORD` — только для provisioning и break-glass;
-- `KC_ADMIN_*` — runtime-пользователь Keycloak (см. §4);
+- `KRUG_KEYCLOAK_SERVICE_CLIENT_*` — service account Keycloak Admin API (см. §4);
 - `SPRING_MAIL_*` / `KRUG_MAIL_FROM` — реальный relay (см. §6).
 
 Проверить, что compose видит конфигурацию (секреты не печатаются в отчёт), и
@@ -111,7 +113,7 @@ docker compose --env-file deploy/production/.env.prod \
 ```
 
 `preflight.sh` завершится ошибкой, если остался `CHANGE_ME`/`change-me`, секрет короче
-нормы, включён E2EE или выбран master/admin-cli для runtime Keycloak. Перед
+нормы, включён E2EE, не задан service account или `KRUG_AUTH_BFF_COOKIE_SECURE=false`. Перед
 go-live запустите `preflight.sh --strict`: он дополнительно требует
 `S3_SCAN_MODE=clamav` и SMTP 587.
 
@@ -140,15 +142,20 @@ docker compose --env-file deploy/production/.env.prod \
 а healthcheck ходит на loopback; безопасность обеспечивается сетевой
 изоляцией и отсутствием published ports.
 
-### 3.3. Создать runtime-пользователя Keycloak
+### 3.3. Проверить service account Keycloak
 
-Текущий backend (`KeycloakHttp.adminToken()`) использует **password grant**.
-Поэтому «service account» в строгом смысле (client credentials) пока не
-поддерживается; используется отдельный технический пользователь в realm
-`krug`, а не master и не `admin-cli`. Это осознанный interim-шаг, см.
-follow-up F-102-A в §10.
+С #103 backend ходит в Keycloak Admin API через **client-credentials**
+service account, без пароля пользователя и без master/admin-cli:
 
-Войти bootstrap-админом (переменные уже есть в контейнере Keycloak):
+- клиент `svc-krug-bff` — confidential, `serviceAccountsEnabled=true`,
+  `standardFlowEnabled=false`, `directAccessGrantsEnabled=false`;
+- он импортируется из `realm-export.prod.json`; `keycloak-realm-init`
+  подставляет в него `KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET`;
+- service-account пользователь получает ровно `manage-users`, `view-users`,
+  `query-users` на клиент `realm-management` realm `krug`.
+
+Секрет клиента не печатается в логи. После того как `keycloak` стал
+`healthy`, войдите bootstrap-админом (только для provisioning/break-glass):
 
 ```bash
 docker compose --env-file deploy/production/.env.prod \
@@ -162,44 +169,25 @@ docker compose --env-file deploy/production/.env.prod \
   '
 ```
 
-Создать пользователя (если его ещё нет) и выдать минимальные роли
-`realm-management`:
+Проверьте клиент и получите id его service-account пользователя:
 
 ```bash
 docker compose --env-file deploy/production/.env.prod \
   -f deploy/production/docker-compose.prod.yml \
   exec -T keycloak bash -lc '
-    set -e
-    /opt/keycloak/bin/kcadm.sh get users -r krug -q username=svc-krug-bff --fields id,username >/tmp/u.json
-    if ! grep -q 'svc-krug-bff' /tmp/u.json; then
-      /opt/keycloak/bin/kcadm.sh create users -r krug \
-        -s username=svc-krug-bff \
-        -s enabled=true \
-        -s email="$KC_ADMIN_EMAIL" \
-        -s emailVerified=true \
-        -s firstName=Krug \
-        -s lastName=Ops
-    fi
+    /opt/keycloak/bin/kcadm.sh get clients -r krug \
+      -q clientId=svc-krug-bff \
+      --fields id,clientId,enabled,serviceAccountsEnabled,publicClient
+    /opt/keycloak/bin/kcadm.sh get clients/svc-krug-bff/service-account-user \
+      --fields id,username
   '
 ```
 
-`KC_ADMIN_EMAIL` берётся из `.env.prod`; при необходимости передайте его
-явно через `exec -e KC_ADMIN_EMAIL=ops@example.com`.
-Пароль задать отдельно, не печатая его в history:
+`kcadm` принимает clientId прямо вместо UUID. Если команда с
+`clients/svc-krug-bff/...` не сработала в вашей версии Keycloak, возьмите
+`id` из первой команды и передайте его: `clients/<uuid>/service-account-user`.
 
-```bash
-read -r -s -p "Runtime Keycloak admin password: " KC_OPS_PASSWORD; echo
-docker compose --env-file deploy/production/.env.prod \
-  -f deploy/production/docker-compose.prod.yml \
-  exec -T -e KC_OPS_PASSWORD="$KC_OPS_PASSWORD" keycloak bash -lc '
-    /opt/keycloak/bin/kcadm.sh set-password -r krug \
-      --username svc-krug-bff \
-      --new-password "$KC_OPS_PASSWORD"
-  '
-unset KC_OPS_PASSWORD
-```
-
-Выдать роли (ровно те, что нужны Admin API пользователей/сессий):
+Выдайте минимальные роли (команда идемпотентна для уже выданных ролей):
 
 ```bash
 docker compose --env-file deploy/production/.env.prod \
@@ -207,33 +195,50 @@ docker compose --env-file deploy/production/.env.prod \
   exec -T keycloak bash -lc '
     for role in manage-users view-users query-users; do
       /opt/keycloak/bin/kcadm.sh add-roles -r krug \
-        --uusername svc-krug-bff \
+        --uusername service-account-svc-krug-bff \
         --cclientid realm-management \
         --rolename "$role"
     done
   '
 ```
 
-Проверить, что пользователь реально может читать realm (не master):
+`service-account-svc-krug-bff` — стандартное имя service-account
+пользователя Keycloak для клиента `svc-krug-bff`; если в вашей версии оно
+другое, используйте `--uid <id>` из команды выше.
+
+Проверить, что клиент реально получает токен (не печатая его):
 
 ```bash
-read -r -s -p "Runtime Keycloak admin password: " KC_OPS_PASSWORD; echo
 docker compose --env-file deploy/production/.env.prod \
   -f deploy/production/docker-compose.prod.yml \
-  exec -T -e KC_OPS_PASSWORD="$KC_OPS_PASSWORD" keycloak bash -lc '
-    /opt/keycloak/bin/kcadm.sh config credentials \
-      --server http://127.0.0.1:8080 \
-      --realm krug \
-      --client krug-web \
-      --user svc-krug-bff \
-      --password "$KC_OPS_PASSWORD"
-    /opt/keycloak/bin/kcadm.sh get users -r krug -q username=svc-krug-bff --fields id,username,enabled
+  exec -T keycloak bash -lc '
+    test -n "$KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET"
+    curl -s -o /dev/null -w "%{http_code}\n" \
+      -X POST http://127.0.0.1:8080/realms/krug/protocol/openid-connect/token \
+      -d grant_type=client_credentials \
+      -d client_id=svc-krug-bff \
+      --data-urlencode client_secret="$KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET"
   '
-unset KC_OPS_PASSWORD
 ```
 
-`KC_ADMIN_PASSWORD` в `.env.prod` должен совпадать с только что заданным
-паролем; при ротации меняются оба места.
+Ожидаемо `200`; `401` — секрет в `.env.prod` не совпадает с импортированным
+или клиент отключён. `kcadm` внутри контейнера использует bootstrap-пароль
+только для ops-профиля; backend его не получает.
+
+Если клиент создавался вручную (realm уже был импортирован раньше), создайте
+его один раз:
+
+```bash
+/opt/keycloak/bin/kcadm.sh create clients -r krug \
+  -s clientId=svc-krug-bff \
+  -s enabled=true \
+  -s publicClient=false \
+  -s serviceAccountsEnabled=true \
+  -s standardFlowEnabled=false \
+  -s directAccessGrantsEnabled=false \
+  -s fullScopeAllowed=false \
+  -s secret="$KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET"
+```
 
 ### 3.4. Поднять приложение и TLS
 
@@ -288,59 +293,36 @@ LATEST="$(ls -dt /srv/backups/krug/krug-backup-* | head -n 1)"
 
 ## 4. Keycloak: режим доступа и service account
 
-### 4.1. Что используется сейчас
+### 4.1. Что используется сейчас (#103)
 
 - `KC_BOOTSTRAP_ADMIN_*` — master-realm admin, создаётся при первом старте;
   используется только для provisioning и break-glass. В backend **не**
   передаётся.
-- Backend получает `KC_ADMIN_USER`, `KC_ADMIN_PASSWORD`,
-  `KC_ADMIN_CLIENT_ID=krug-web`, `KRUG_KEYCLOAK_ADMIN_REALM=krug`.
-  `KeycloakHttp` делает `grant_type=password` в
+- Backend получает `KRUG_KEYCLOAK_SERVICE_CLIENT_ID=svc-krug-bff` и
+  `KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET`;
+  `KeycloakHttp.adminToken()` делает `grant_type=client_credentials` в
   `/realms/krug/protocol/openid-connect/token`.
-- Пользователь `svc-krug-bff` имеет только `manage-users`, `view-users`,
+- Клиент `svc-krug-bff` живёт в realm `krug`, не в master; `admin-cli` и
+  технический пользователь с паролем в runtime не используются.
+- Service-account пользователь имеет только `manage-users`, `view-users`,
   `query-users` в клиенте `realm-management` realm `krug`.
-- Master realm и `admin-cli` в runtime не используются. Это требование
-  выполнено для текущего стека.
+- Токен Admin API кэшируется в памяти до истечения (`expires_in` минус
+  `KRUG_KEYCLOAK_ADMIN_TOKEN_SKEW`); на `401` клиент один раз сбрасывает
+  кэш, получает новый токен и повторяет запрос. Секреты и токены не
+  логируются.
 
-Ограничение: это не client-credentials service account, а технический
-пользователь с паролем. Пароль хранится в `.env.prod`; ротация — §9.
+### 4.2. Dev fallback
 
-### 4.2. Целевой service account (follow-up F-102-A)
+Локально (профиль `dev`, `deploy/docker-compose.yml`) допустим старый
+password-grant fallback: `KC_ADMIN_USER` / `KC_ADMIN_PASSWORD` в realm
+`krug` или master. Он выбирается **только** если оба
+`KRUG_KEYCLOAK_SERVICE_CLIENT_*` пусты. Наполовину заданная пара
+(только id или только secret) считается ошибкой конфигурации и даёт `503`,
+а не тихий откат на пароль.
 
-Для строгого `client_credentials` нужен небольшой код-фикс в
-`backend/src/main/java/ru/krug/backend/auth/infrastructure/keycloak/KeycloakHttp.java`:
-при непустом `KC_ADMIN_CLIENT_SECRET` отправлять
-`grant_type=client_credentials` + `client_id` + `client_secret` вместо
-`username/password`; не требовать `adminPassword`, когда задан secret;
-добавить поле в `AuthBffProperties.Keycloak` и
-`admin-client-secret: ${KC_ADMIN_CLIENT_SECRET:}` в `application.yml`.
-После этого:
-
-1. Создать конфиденциальный клиент в realm `krug`:
-   ```bash
-   /opt/keycloak/bin/kcadm.sh create clients -r krug \
-     -s clientId=krug-bff-admin \
-     -s enabled=true \
-     -s publicClient=false \
-     -s serviceAccountsEnabled=true \
-     -s standardFlowEnabled=false \
-     -s directAccessGrantsEnabled=false \
-     -s secret="$KC_ADMIN_CLIENT_SECRET"
-   ```
-2. Получить service-account user id и выдать те же роли:
-   ```bash
-   /opt/keycloak/bin/kcadm.sh get clients -r krug -q clientId=krug-bff-admin --fields id
-   /opt/keycloak/bin/kcadm.sh get clients/<client-id>/service-account-user --fields id
-   /opt/keycloak/bin/kcadm.sh add-roles -r krug --uid <service-account-user-id> \
-     --cclientid realm-management --rolename manage-users
-   ```
-3. В `.env.prod`: `KC_ADMIN_CLIENT_ID=krug-bff-admin`,
-   `KC_ADMIN_CLIENT_SECRET=...`; удалить `KC_ADMIN_USER`/`KC_ADMIN_PASSWORD`
-   из backend-окружения после проверки.
-4. Перезапустить backend и проверить регистрацию/вход.
-
-До этого фикса **не** пытайтесь подставить service account в текущий backend:
-он не умеет `client_credentials` и вернёт 503 на auth-эндпоинтах.
+В `prod` `ProdGuard` требует оба service-account значения и `Secure`
+refresh-cookie; парольный fallback там не используется. `.env.prod.example`
+содержит только service-account переменные.
 
 ### 4.3. Admin console без публикации порта
 
@@ -554,7 +536,7 @@ RPO по умолчанию — 24 часа (ежедневный бэкап), R
 | `KRUG_DB_PASSWORD` | `ALTER ROLE krug_migrator PASSWORD ...`; обновить `.env.prod`; `up -d db-bootstrap backend` | Flyway/бэкап используют новый пароль |
 | `KRUG_APP_PASSWORD` | обновить `.env.prod`; перезапустить `db-bootstrap` (он сделает `ALTER ROLE krug_app`), затем backend | активные соединения переподключатся |
 | `KC_DB_PASSWORD` | `ALTER ROLE keycloak PASSWORD ...`; `.env.prod`; `up -d keycloak` | короткий простой Keycloak |
-| `KC_ADMIN_PASSWORD` | `kcadm set-password` для `svc-krug-bff`; `.env.prod`; `restart backend` | старые admin-токены живут до expiry |
+| `KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET` | `kcadm update clients/<svc-krug-bff-id> -s secret=...` (или Admin Console); `.env.prod`; `restart backend` | старые admin-токены живут ≤ `expires_in` (обычно 5 мин) |
 | `KC_BOOTSTRAP_ADMIN_PASSWORD` | сменить в консоли/`kcadm`, обновить `.env.prod` | на уже инициализированной БД env не перезаписывает пароль |
 | SMTP password | админ-панель + `.env.prod`; проверка тестовым письмом | письма с кодом могут временно не уходить |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | сменить root-креды MinIO, обновить `.env.prod`; `up -d minio createbuckets backend` | старые presigned URL живут ≤ 5 мин |
@@ -567,31 +549,49 @@ RPO по умолчанию — 24 часа (ежедневный бэкап), R
 скачивание файла, тестовое письмо. Секреты не хранить в shell history:
 использовать `read -r -s`, secret manager или `docker compose` env-file.
 
-## 10. HttpOnly cookies — план (follow-up F-102-B)
+## 10. HttpOnly refresh cookie (#103)
 
-Сейчас BFF возвращает `access_token`/`refresh_token` в JSON, а SPA хранит
-сессию в `sessionStorage` (`frontend/src/auth/storage.ts`); `Set-Cookie` в
-backend нет. Это значит, что XSS может украсть токены. TLS/HSTS и
-sessionStorage (вместо localStorage) снижают риск, но не устраняют его.
+Реализовано в backend и минимально во frontend:
 
-Целевая схема (требует изменений backend + frontend + contract, в #102 не
-реализована):
+1. `POST /api/v1/auth/login|verify-email|2fa/verify|2fa/enroll/verify` и
+   `POST /api/v1/auth/refresh` ставят cookie `sova_refresh`:
+   `HttpOnly; SameSite=Lax; Path=/api/v1/auth; Max-Age=30m`
+   (+ `Secure` в `prod`; dev-http localhost оставляет `Secure=false`).
+2. `POST /api/v1/auth/refresh` читает **только cookie**, тело и параметры
+   игнорируются; Keycloak ротирует пару, ответ ставит новую cookie и не
+   содержит `refresh_token` в JSON. Access token по-прежнему в теле и
+   памяти/`sessionStorage` SPA.
+3. `POST /api/v1/auth/logout` отзывает refresh-токен из cookie и всегда
+   отвечает `204` с `sova_refresh=; Max-Age=0`; повторный logout безопасен.
+4. CSRF: `SameSite=Lax` + проверка `Origin`/`Referer` на всех mutating
+   `/api/v1/auth/**`; чужой браузерный origin — `403 CSRF_REJECTED`.
+   CORS для split-origin/dev включает `Access-Control-Allow-Credentials` и
+   конкретный origin (`KRUG_CORS_ALLOWED_ORIGINS`, никогда `*`). Так как cookie
+   `SameSite=Lax`, split-origin развёртывание должно быть same-site (например,
+   `app.example.com` + `api.example.com`); полностью cross-site SPA потребовал бы
+   `SameSite=None; Secure` и отдельный CSRF-токен — это вне #103.
+5. Frontend: `ApiClient` отправляет `credentials: 'include'`, refresh на
+   `401` идёт через cookie, refresh-токен больше не пишется в
+   `sessionStorage`. Старые сессии с `refreshToken` в storage очищаются при
+   чтении (пользователь входит заново один раз).
 
-1. BFF на `/api/v1/auth/login|register|refresh` ставит `HttpOnly; Secure;
-   SameSite=Lax` cookie с непрозрачным session id (access/refresh не отдаются
-   в JSON).
-2. CSRF: double-submit token или `SameSite=Strict` для state-changing
-   эндпоинтов; добавить `GET /api/v1/auth/csrf`.
-3. Frontend: `credentials: 'include'`, убрать чтение/запись токенов, обновить
-   `authApi`, `PasswordAuthProvider`, тесты и OpenAPI.
-4. Logout/refresh rotation и revocation на сервере; cookie очищается.
-5. CSP (`default-src 'self'` с минимальными исключениями для media/blob)
-   добавить в Caddy/nginx после проверки SPA.
-6. Тесты: отсутствие токенов в JS/JSON, `HttpOnly`/`Secure`/`SameSite` в
-   ответе, CSRF negative cases.
+Проверка после деплоя:
 
-До реализации: короткий TTL access token, device binding, запрет
-third-party scripts, регулярный dependency audit.
+```bash
+curl -sSI -X POST https://DOMAIN/api/v1/auth/login \
+  -H 'Origin: https://DOMAIN' -H 'Content-Type: application/json' \
+  --data '{"email":"user@example.com","password":"..."}' \
+  | grep -i '^set-cookie: sova_refresh'
+```
+
+Ожидаемо: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/api/v1/auth`,
+`Max-Age=...`. Значение cookie не копировать в тикеты/логи. Запрос с
+`Origin: https://evil.example` должен вернуть `403 CSRF_REJECTED`.
+
+Остаточный риск: access token всё ещё хранится в `sessionStorage`
+(короткий TTL, device binding). Переход на memory-only access token с
+bootstrap-refresh при загрузке страницы — отдельный follow-up; refresh-токен
+от XSS уже защищён HttpOnly.
 
 ## 11. Мониторинг и day-2
 
@@ -623,7 +623,9 @@ docker system df
 | Симптом | Что проверить |
 |---|---|
 | 502 от Caddy | `docker compose ps`; healthy ли frontend/backend; `logs frontend backend` |
-| 503 на login/register | Keycloak healthy? `KC_ADMIN_*` совпадают с `svc-krug-bff`? роли выданы? |
+| 503 на login/register | Keycloak healthy? `KRUG_KEYCLOAK_SERVICE_CLIENT_*` совпадают с `svc-krug-bff`? роли `manage-users/view-users/query-users` выданы? |
+| 401 на refresh, хотя access token истёк | cookie `sova_refresh` есть? `Path=/api/v1/auth`, `Secure` только на HTTPS, запрос идёт с `credentials: include`, Origin в `KRUG_CORS_ALLOWED_ORIGINS` |
+| 403 `CSRF_REJECTED` на login/refresh | `Origin`/`Referer` не входит в `KRUG_CORS_ALLOWED_ORIGINS`; проверьте PUBLIC_URL/DOMAIN и proxy, не подменяет ли он Origin |
 | 401 на всех запросах | `KRUG_OIDC_ISSUER` = `https://DOMAIN/realms/krug`; системное время; JWKS доступен из backend |
 | WS не подключается | Caddy/nginx `/ws`, `KRUG_WS_ALLOWED_ORIGINS=https://DOMAIN`, ticket TTL |
 | Файлы не скачиваются | `FILES_DOMAIN` DNS/TLS; `S3_PUBLIC_ENDPOINT`; подпись Host; bucket |
@@ -640,13 +642,15 @@ docker system df
 
 | ID | Тема | Статус |
 |---|---|---|
-| F-102-A | Keycloak client-credentials service account вместо password grant технического пользователя | follow-up, код |
-| F-102-B | HttpOnly/Secure/SameSite cookie вместо токенов в JSON/sessionStorage | follow-up, код + контракт |
+| F-102-A | Keycloak client-credentials service account вместо password grant технического пользователя | DONE (#103), dev fallback задокументирован |
+| F-102-B | HttpOnly/Secure/SameSite refresh cookie вместо refresh-токена в JSON/sessionStorage | DONE (#103); access token остаётся в sessionStorage |
+| — | Перевести access token в memory-only + bootstrap refresh при загрузке SPA | follow-up, frontend |
 | F-102-C | Implicit TLS 465 (`mail.smtp.ssl.enable`) для SMTP | follow-up, конфиг/код |
 | — | `S3_SCAN_MODE=noop` по умолчанию: перед production включить `scan` профиль и `S3_SCAN_MODE=clamav` | launch blocker |
 | — | Single-node backend/Keycloak, без HA; Redis/Kafka/внешний scheduler — отдельная задача | ограничение |
 | — | MinIO/Caddy/ClamAV образы с `latest`/`stable`; перед go-live зафиксировать digest | hardening |
 | — | Нет WAL-архива; RPO = интервал бэкапа | ограничение |
+| #104 | Перевод: self-hosted LibreTranslate под profile `translate`, только `internal`; публичные translate API не используются. Настройка и лимиты — [`TRANSLATION.md`](./TRANSLATION.md) | DONE |
 | — | Access-логи Caddy выключены; включать только с redaction query string | ограничение |
 
 ## 14. Чек-лист go-live
@@ -656,8 +660,12 @@ docker system df
       secret manager.
 - [ ] `KRUG_CONTENT_KEY` сохранён отдельно; известна процедура восстановления.
 - [ ] `docker compose config --quiet` проходит.
-- [ ] `svc-krug-bff` создан, роли `manage-users/view-users/query-users`
-      выданы, backend получает 200 на login.
+- [ ] `svc-krug-bff` импортирован как confidential service account, роли
+      `manage-users/view-users/query-users` выданы, backend получает 200 на login.
+- [ ] `KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET` и `KRUG_AUTH_BFF_COOKIE_SECURE=true`
+      заданы в `.env.prod`; `KRUG_CORS_ALLOWED_ORIGINS` = публичный HTTPS-origin.
+- [ ] `Set-Cookie: sova_refresh` содержит `HttpOnly; Secure; SameSite=Lax;
+      Path=/api/v1/auth`; refresh без cookie даёт 401, чужой Origin — 403.
 - [ ] Demo-пользователей нет; bootstrap admin имеет сильный пароль.
 - [ ] TLS-сертификаты выпущены для обоих доменов; HSTS есть.
 - [ ] SMTP 587/STARTTLS проверен тестовым письмом; SPF/DKIM/DMARC настроены.

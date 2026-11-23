@@ -146,10 +146,10 @@ npm run contract:check   # 162 operations, 213 contract schemas, generated types
 npm run security:check   # 432 files, no XSS sinks, no token logs/storage
 npm run session-writers:check
 npm run stickers:check
-npm run lint             # 0 errors (one pre-existing warning in e2ee)
-npm run format:check     # all files formatted
-npm run test             # 1367 tests, 0 failures
-npm run build            # tsc + vite build
+npm run check            # green: lint + format + contract + stickers + security
+                         #        + session-writers + 1367 tests + tsc/vite build
+# test phase: 142 files, 1367 tests, 0 failures (115.3 s under a loaded host)
+# build: 585 modules transformed, vite build succeeded
 ```
 
 ## 5. Contract limitations kept visible in the UI

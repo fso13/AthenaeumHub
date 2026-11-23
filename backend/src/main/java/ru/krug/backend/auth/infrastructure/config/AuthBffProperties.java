@@ -3,6 +3,7 @@ package ru.krug.backend.auth.infrastructure.config;
 import java.time.Duration;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
  * Auth BFF settings ({@code krug.auth-bff}). Kept in infrastructure so application code
@@ -21,7 +22,8 @@ public record AuthBffProperties(
         Code code,
         TwoFactor twoFactor,
         RateLimit rateLimit,
-        Cleanup cleanup) {
+        Cleanup cleanup,
+        RefreshCookie refreshCookie) {
 
     public record Keycloak(
             String baseUrl,
@@ -31,9 +33,52 @@ public record AuthBffProperties(
             String adminPassword,
             String adminClientId,
             String clientId,
+            // #103: client-credentials service account for the runtime Keycloak Admin API.
+            // Blank in dev keeps the documented password-grant fallback; prod requires both.
+            String serviceClientId,
+            String serviceClientSecret,
             Duration connectTimeout,
             Duration readTimeout,
             Duration adminTokenSkew) {
+    }
+
+    /**
+     * #103: the browser refresh token is an HttpOnly cookie. The path is narrowed to the
+     * Auth BFF so the token is not attached to every API request; Secure is enabled by the
+     * prod profile and stays off for plain-http localhost development.
+     */
+    public record RefreshCookie(
+            @DefaultValue("sova_refresh") String name,
+            @DefaultValue("/api/v1/auth") String path,
+            @DefaultValue("false") boolean secure,
+            @DefaultValue("Lax") String sameSite,
+            @DefaultValue("30m") Duration maxAge) {
+
+        public RefreshCookie {
+            if (name == null || !name.matches("[A-Za-z0-9_-]{1,64}")) {
+                throw new IllegalArgumentException(
+                        "krug.auth-bff.refresh-cookie.name must be a safe cookie name");
+            }
+            if (path == null || !path.startsWith("/") || path.contains(";")
+                    || path.contains("\r") || path.contains("\n")) {
+                throw new IllegalArgumentException(
+                        "krug.auth-bff.refresh-cookie.path must be an absolute cookie path");
+            }
+            String normalized = sameSite == null ? "" : sameSite.strip();
+            if (!normalized.equals("Lax") && !normalized.equals("Strict")
+                    && !normalized.equals("None")) {
+                throw new IllegalArgumentException(
+                        "krug.auth-bff.refresh-cookie.same-site must be Lax, Strict or None");
+            }
+            if (normalized.equals("None") && !secure) {
+                throw new IllegalArgumentException(
+                        "krug.auth-bff.refresh-cookie.same-site=None requires secure=true");
+            }
+            if (maxAge == null || maxAge.isZero() || maxAge.isNegative()) {
+                throw new IllegalArgumentException(
+                        "krug.auth-bff.refresh-cookie.max-age must be positive");
+            }
+        }
     }
 
     public record Mail(String from) {

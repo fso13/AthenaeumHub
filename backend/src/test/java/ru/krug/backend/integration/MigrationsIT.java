@@ -362,7 +362,18 @@ class MigrationsIT extends IntegrationTestBase {
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM information_schema.columns
                  WHERE table_schema = 'ops' AND table_name = 'plugin_translation_settings'
-                """, Integer.class)).isEqualTo(5);
+                """, Integer.class)).isEqualTo(6);
+        // #104: the protocol selector is a plain enum-like text column with a safe default.
+        assertThat(jdbc.queryForObject("""
+                SELECT column_default FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'plugin_translation_settings'
+                   AND column_name = 'provider'
+                """, String.class)).isEqualTo("'AUTO'::text");
+        assertThat(jdbc.queryForObject("""
+                SELECT is_nullable FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'plugin_translation_settings'
+                   AND column_name = 'provider'
+                """, String.class)).isEqualTo("NO");
         for (String forbidden : List.of("api_key", "secret", "token", "password",
                 "credential")) {
             assertThat(jdbc.queryForObject("""

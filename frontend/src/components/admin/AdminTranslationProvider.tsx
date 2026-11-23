@@ -3,8 +3,10 @@ import type { ApiError } from '../../api/problem';
 import type { TranslationProviderUpdate } from '../../api/types';
 import { t } from '../../i18n/ru';
 import {
+  resolveTranslationProvider,
   translationDraftChanged,
   validateTranslationUrl,
+  type TranslationProviderKind,
   type TranslationUrlIssue,
 } from '../../ops/translation';
 import { useOpsState, useOpsStore } from '../../store/ChatProvider';
@@ -24,22 +26,35 @@ const URL_ISSUE_KEY: Record<TranslationUrlIssue, Parameters<typeof t>[0]> = {
   port: 'admin.translate.invalidPort',
 };
 
+const PROVIDER_OPTIONS: TranslationProviderKind[] = ['AUTO', 'LIBRETRANSLATE', 'CUSTOM'];
+
+const PROVIDER_LABEL: Record<TranslationProviderKind, Parameters<typeof t>[0]> = {
+  AUTO: 'admin.translate.providerAuto',
+  LIBRETRANSLATE: 'admin.translate.providerLibreTranslate',
+  CUSTOM: 'admin.translate.providerCustom',
+};
+
 function saveErrorText(error: ApiError): string {
   if (error.status === 403) return t('admin.forbidden.text');
   if (error.code === 'TRANSLATION_URL_INVALID') return t('admin.translate.invalidGeneric');
   if (error.code === 'TRANSLATION_URL_REQUIRED') return t('admin.translate.required');
+  if (error.code === 'TRANSLATION_PROVIDER_INVALID') return t('admin.translate.providerInvalid');
   if (error.status === 400 || error.status === 422) return t('admin.form.validation');
   if (error.status === 503 || error.isNetwork) return t('admin.translate.unavailable');
   return t('admin.translate.saveError');
 }
 
 /**
- * #84 translation-provider installation settings inside `/admin?tab=plugins`.
+ * #84/#104 translation-provider installation settings inside `/admin?tab=plugins`.
  *
- * The contract stores only `enabled` and an https URL — there is no API-key or
- * credential field, and this form never collects one. The health probe returns
- * `status`/`latency_ms` only, so no provider content can appear. Both changing
- * the switch/URL and probing are audited with counters/flags only.
+ * The contract stores `enabled`, a URL and a protocol selector — there is no API-key or
+ * credential field, and this form never collects one. Supported providers are self-hosted
+ * only: LibreTranslate (`{q,source,target,format}` → `translatedText`) or a custom service
+ * (`{text,target}` → `text`). The health probe returns `status`/`latency_ms` only, so no
+ * provider content can appear. When the probe reports UNAVAILABLE the card says so instead
+ * of pretending translations work, and the chat action keeps returning 503 until the
+ * service is reachable. Both changing settings and probing are audited with counters/flags
+ * only.
  */
 export function AdminTranslationProvider() {
   const store = useOpsStore();
@@ -47,24 +62,40 @@ export function AdminTranslationProvider() {
   const settings = ops.translation;
   const [enabled, setEnabled] = useState(settings?.enabled ?? false);
   const [url, setUrl] = useState(settings?.url ?? '');
+  const [provider, setProvider] = useState<TranslationProviderKind>(settings?.provider ?? 'AUTO');
   const [formError, setFormError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const ids = { enabled: useId(), url: useId(), hint: useId() };
+  const ids = { enabled: useId(), url: useId(), provider: useId(), hint: useId(), mode: useId() };
 
   useEffect(() => {
     if (!settings) return;
     setEnabled(settings.enabled);
     setUrl(settings.url);
+    setProvider(settings.provider);
     setSaved(false);
     setFormError(null);
   }, [settings]);
 
-  const dirty = translationDraftChanged(settings, enabled, url);
+  const dirty = translationDraftChanged(settings, enabled, url, provider);
   const busy = ops.translationSaving || ops.translationTestStatus === 'testing';
   const loaded = ops.translationStatus === 'ready' && settings !== null;
   const forbidden = ops.translationError?.status === 403;
   const test = ops.translationTest;
   const testing = ops.translationTestStatus === 'testing';
+  const resolved = resolveTranslationProvider(provider, url);
+  const unavailable = settings?.enabled === true && test?.status === 'UNAVAILABLE';
+  const chipKey = unavailable
+    ? 'admin.translate.enabledUnavailable'
+    : !settings?.enabled
+      ? 'admin.translate.disabled'
+      : test
+        ? 'admin.translate.enabled'
+        : 'admin.translate.enabledUnverified';
+  const chipTone = unavailable
+    ? 'admin-chip--warning'
+    : !settings?.enabled || !test
+      ? 'admin-chip--muted'
+      : 'admin-chip--ok';
 
   const validate = (): TranslationProviderUpdate | null => {
     const trimmed = url.trim();
@@ -80,6 +111,7 @@ export function AdminTranslationProvider() {
     const patch: TranslationProviderUpdate = {};
     if (!settings || enabled !== settings.enabled) patch.enabled = enabled;
     if (!settings || trimmed !== settings.url) patch.url = trimmed;
+    if (!settings || provider !== settings.provider) patch.provider = provider;
     if (Object.keys(patch).length === 0) {
       setFormError(t('admin.translate.noChanges'));
       return null;
@@ -160,11 +192,8 @@ export function AdminTranslationProvider() {
           noValidate
         >
           <div className="admin-form__statusline">
-            <span
-              className={`admin-chip${settings.enabled ? ' admin-chip--ok' : ' admin-chip--muted'}`}
-              role="status"
-            >
-              {t(settings.enabled ? 'admin.translate.enabled' : 'admin.translate.disabled')}
+            <span className={`admin-chip ${chipTone}`} role="status">
+              {t(chipKey)}
             </span>
             <span className="admin-form__hint">{t('admin.translate.statusHint')}</span>
           </div>
@@ -184,6 +213,34 @@ export function AdminTranslationProvider() {
           </div>
 
           <div className="field">
+            <label className="field__label" htmlFor={ids.provider}>
+              {t('admin.translate.provider')}
+            </label>
+            <select
+              id={ids.provider}
+              className="field__input"
+              value={provider}
+              aria-describedby={ids.mode}
+              onChange={(event) => {
+                setSaved(false);
+                setFormError(null);
+                setProvider(event.target.value as TranslationProviderKind);
+              }}
+            >
+              {PROVIDER_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {t(PROVIDER_LABEL[option])}
+                </option>
+              ))}
+            </select>
+            <p className="field__meta" id={ids.mode}>
+              {t('admin.translate.providerHint', {
+                protocol: resolved === 'LIBRETRANSLATE' ? 'LibreTranslate' : 'custom {text,target}',
+              })}
+            </p>
+          </div>
+
+          <div className="field">
             <label className="field__label" htmlFor={ids.url}>
               {t('admin.translate.url')}
             </label>
@@ -195,7 +252,7 @@ export function AdminTranslationProvider() {
               maxLength={2048}
               autoComplete="off"
               spellCheck={false}
-              placeholder="https://translate.example.com/v1"
+              placeholder="http://libretranslate:5000/translate"
               value={url}
               aria-describedby={ids.hint}
               onChange={(event) => {
@@ -212,6 +269,12 @@ export function AdminTranslationProvider() {
           {formError ? (
             <p className="admin-form__error" role="alert">
               {formError}
+            </p>
+          ) : null}
+
+          {unavailable ? (
+            <p className="admin-form__error" role="alert">
+              {t('admin.translate.unavailableWarning')}
             </p>
           ) : null}
 

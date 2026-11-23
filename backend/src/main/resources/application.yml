@@ -101,6 +101,10 @@ krug:
       admin-password: ${KC_ADMIN_PASSWORD:}
       admin-client-id: ${KC_ADMIN_CLIENT_ID:admin-cli}
       client-id: ${KRUG_AUTH_BFF_CLIENT_ID:krug-web}
+      # #103: client-credentials service account for the Keycloak Admin API. Set both in
+      # prod; when both are blank the documented dev password-grant fallback is used.
+      service-client-id: ${KRUG_KEYCLOAK_SERVICE_CLIENT_ID:}
+      service-client-secret: ${KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET:}
       connect-timeout: ${KRUG_KEYCLOAK_CONNECT_TIMEOUT:5s}
       read-timeout: ${KRUG_KEYCLOAK_READ_TIMEOUT:10s}
       admin-token-skew: ${KRUG_KEYCLOAK_ADMIN_TOKEN_SKEW:30s}
@@ -143,6 +147,14 @@ krug:
       two-factor-user-window: ${KRUG_AUTH_BFF_2FA_USER_WINDOW:5m}
       two-factor-per-ip: ${KRUG_AUTH_BFF_2FA_PER_IP:60}
       two-factor-ip-window: ${KRUG_AUTH_BFF_2FA_IP_WINDOW:5m}
+    # #103: HttpOnly refresh cookie. Secure stays false for plain-http localhost dev and
+    # is forced on by the prod profile. Path is narrowed to the Auth BFF.
+    refresh-cookie:
+      name: ${KRUG_AUTH_BFF_REFRESH_COOKIE_NAME:sova_refresh}
+      path: ${KRUG_AUTH_BFF_REFRESH_COOKIE_PATH:/api/v1/auth}
+      secure: ${KRUG_AUTH_BFF_COOKIE_SECURE:false}
+      same-site: ${KRUG_AUTH_BFF_COOKIE_SAME_SITE:Lax}
+      max-age: ${KRUG_AUTH_BFF_REFRESH_COOKIE_MAX_AGE:30m}
     cleanup:
       enabled: ${KRUG_AUTH_BFF_CLEANUP_ENABLED:true}
       poll-interval: ${KRUG_AUTH_BFF_CLEANUP_POLL_INTERVAL:10m}
@@ -248,16 +260,23 @@ krug:
     call-signal-window: ${KRUG_REALTIME_CALL_SIGNAL_WINDOW:60s}
     call-sdp-max-bytes: ${KRUG_REALTIME_CALL_SDP_MAX_BYTES:32768}
     call-candidate-max-bytes: ${KRUG_REALTIME_CALL_CANDIDATE_MAX_BYTES:4096}
-  # D1.1 (#76): optional outbound translation. Empty URL = no provider, no external call;
-  # POST .../translate returns 503 TRANSLATION_UNAVAILABLE with Retry-After. If set, the
-  # provider must accept {"text","target"} and answer {"text"}; calls are bounded by the
-  # timeouts/size below and the source text is never logged.
+  # D1.1 (#76) / #104: optional outbound translation. Empty URL = no provider, no external
+  # call; POST .../translate returns 503 TRANSLATION_UNAVAILABLE with Retry-After. Only a
+  # self-hosted provider is supported (no public third-party translate API). `provider` is
+  # auto (path /translate => LibreTranslate, otherwise the legacy {"text","target"} shape),
+  # libretranslate or custom. Calls are bounded by the timeouts/size below and the source
+  # text is never logged.
   plugins:
     translate:
       url: ${KRUG_PLUGINS_TRANSLATE_URL:}
+      provider: ${KRUG_PLUGINS_TRANSLATE_PROVIDER:auto}
       connect-timeout: ${KRUG_PLUGINS_TRANSLATE_CONNECT_TIMEOUT:2s}
       request-timeout: ${KRUG_PLUGINS_TRANSLATE_REQUEST_TIMEOUT:5s}
       max-response-bytes: ${KRUG_PLUGINS_TRANSLATE_MAX_RESPONSE_BYTES:65536}
+  # #103: credentialed CORS for the browser API. Same-origin deploys leave it at the SPA
+  # origin; dev Vite (:5173) calls the backend directly. Never '*'.
+  cors:
+    allowed-origins: ${KRUG_CORS_ALLOWED_ORIGINS:${KRUG_WS_ALLOWED_ORIGINS:http://localhost:5173}}
   # OIDC resource-server settings (keycloak/prod profiles). Blank here so the dev HMAC
   # decoder is completely independent; the keycloak profile supplies local defaults and
   # prod requires the environment variables (fail fast).

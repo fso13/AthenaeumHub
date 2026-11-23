@@ -87,7 +87,9 @@ describe('Auth BFF client', () => {
 
     expect(session.token_type).toBe('Bearer');
     expect(session.access_token).toMatch(/^mock-access-/);
-    expect(session.refresh_token).toMatch(/^mock-refresh-/);
+    // #103: the refresh token is an HttpOnly cookie, never a response field.
+    expect(session).not.toHaveProperty('refresh_token');
+    expect(mockDb.authRefreshCookie).toMatch(/^mock-refresh-/);
     expect(session.user.email).toBe('verify@example.test');
     expect(mockDb.authUsers.find((user) => user.email === 'verify@example.test')?.verified).toBe(
       true,
@@ -167,7 +169,7 @@ describe('Auth BFF client', () => {
     expect(info.code).toBe('EMAIL_TAKEN');
   });
 
-  it('rotates refresh tokens and revokes the refresh token on logout', async () => {
+  it('rotates the HttpOnly refresh cookie and clears it on logout', async () => {
     const api = makeAuth();
     const login = await api.login({
       email: MOCK_DEMO_EMAIL,
@@ -175,18 +177,61 @@ describe('Auth BFF client', () => {
     });
     if (login.kind !== 'session') throw new Error('Expected a session login result');
     const session = login.session;
+    expect(session).not.toHaveProperty('refresh_token');
+    const firstCookie = mockDb.authRefreshCookie;
+    expect(firstCookie).toMatch(/^mock-refresh-/);
 
-    const refreshed = await api.refresh(session.refresh_token);
+    const refreshed = await api.refresh();
     expect(refreshed.access_token).not.toBe(session.access_token);
-    expect(refreshed.refresh_token).not.toBe(session.refresh_token);
-    expect(mockDb.authRefreshRequests).toEqual([session.refresh_token]);
+    expect(refreshed).not.toHaveProperty('refresh_token');
+    const rotatedCookie = mockDb.authRefreshCookie;
+    expect(rotatedCookie).toMatch(/^mock-refresh-/);
+    expect(rotatedCookie).not.toBe(firstCookie);
+    expect(mockDb.authRefreshRequests).toEqual([firstCookie]);
 
-    const rotated = await captureAuthError(() => api.refresh(session.refresh_token));
-    expect(rotated.code).toBe('INVALID_CREDENTIALS');
+    await expect(api.logout()).resolves.toBeUndefined();
+    expect(mockDb.authRefreshCookie).toBeNull();
+    expect(mockDb.authLogoutRequests).toEqual([rotatedCookie]);
 
-    await expect(api.logout(refreshed.refresh_token)).resolves.toBeUndefined();
-    expect(mockDb.authLogoutRequests).toEqual([refreshed.refresh_token]);
-    expect(mockDb.authRefreshTokens.has(refreshed.refresh_token)).toBe(false);
+    // Logout revoked the cookie's token: the same cookie no longer rotates.
+    mockDb.authRefreshCookie = rotatedCookie ?? null;
+    const revoked = await captureAuthError(() => api.refresh());
+    expect(revoked.code).toBe('INVALID_CREDENTIALS');
+  });
+
+  it('does not accept a rotated-away cookie and sends no refresh token body', async () => {
+    const api = makeAuth();
+    let bodyText: string | null = null;
+    server.use(
+      http.post('*/api/v1/auth/refresh', async ({ request }) => {
+        bodyText = await request.text();
+        if (mockDb.authRefreshCookie !== 'mock-refresh-current') {
+          return HttpResponse.json(
+            {
+              code: 'INVALID_CREDENTIALS',
+              message: 'Refresh cookie is invalid',
+              request_id: 'req_refresh',
+            },
+            { status: 401 },
+          );
+        }
+        return HttpResponse.json({
+          access_token: 'mock-access-refreshed',
+          expires_in: 900,
+          token_type: 'Bearer',
+          user: mockDb.me.user,
+        });
+      }),
+    );
+
+    mockDb.authRefreshCookie = 'mock-refresh-current';
+    const session = await api.refresh();
+    expect(session.access_token).toBe('mock-access-refreshed');
+    expect(bodyText).toBe('');
+
+    mockDb.authRefreshCookie = 'mock-refresh-stale';
+    const stale = await captureAuthError(() => api.refresh());
+    expect(stale.code).toBe('INVALID_CREDENTIALS');
   });
 
   it('maps 503 to AUTH_UNAVAILABLE and password-policy 422 to VALIDATION_FAILED', async () => {

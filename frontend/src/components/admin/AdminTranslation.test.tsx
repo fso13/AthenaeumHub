@@ -23,15 +23,16 @@ async function openPlugins(user: TestUser): Promise<HTMLElement> {
 }
 
 describe('#84 translation-provider admin settings', () => {
-  it('renders the effective enabled/https URL without any secret field', async () => {
+  it('renders the effective enabled URL and protocol without any secret field', async () => {
     const { user } = renderPasswordApp();
     const card = await openPlugins(user);
 
-    expect(await within(card).findByText('Провайдер включён')).toBeInTheDocument();
-    expect(within(card).getByLabelText('HTTPS URL провайдера')).toHaveValue(
+    expect(await within(card).findByText('Провайдер включён · не проверен')).toBeInTheDocument();
+    expect(within(card).getByLabelText('URL провайдера')).toHaveValue(
       'https://translate.example.test/v1',
     );
     expect(within(card).getByLabelText('Включить переводчик')).toBeChecked();
+    expect(within(card).getByLabelText('Протокол провайдера')).toHaveValue('AUTO');
     expect(card.querySelector('input[type="password"]')).toBeNull();
     expect(within(card).getByText(/секретов и API-ключей нет/i)).toBeInTheDocument();
     expect(mockDb.translationAdmin.getRequests).toBeGreaterThanOrEqual(1);
@@ -40,13 +41,17 @@ describe('#84 translation-provider admin settings', () => {
   it('rejects non-https/invalid URLs before sending a PATCH', async () => {
     const { user } = renderPasswordApp();
     const card = await openPlugins(user);
-    const input = within(card).getByLabelText('HTTPS URL провайдера');
+    const input = within(card).getByLabelText('URL провайдера');
 
     await user.clear(input);
     await user.type(input, 'http://translate.example.test/v1');
     await user.click(within(card).getByRole('button', { name: 'Сохранить переводчик' }));
 
-    expect(within(card).getByText('URL должен использовать https.')).toBeInTheDocument();
+    expect(
+      within(card).getByText(
+        'URL должен использовать https (http — только для внутреннего хоста).',
+      ),
+    ).toBeInTheDocument();
     expect(mockDb.translationAdmin.updates).toHaveLength(0);
 
     await user.clear(input);
@@ -59,7 +64,7 @@ describe('#84 translation-provider admin settings', () => {
   it('saves the switch and URL through PATCH and shows the audit state', async () => {
     const { user } = renderPasswordApp();
     const card = await openPlugins(user);
-    const input = within(card).getByLabelText('HTTPS URL провайдера');
+    const input = within(card).getByLabelText('URL провайдера');
 
     await user.clear(input);
     await user.type(input, 'https://translate.internal.example/api');
@@ -74,7 +79,40 @@ describe('#84 translation-provider admin settings', () => {
       changed: true,
     });
     expect(within(card).getByText('Провайдер выключен')).toBeInTheDocument();
-    expect(within(card).getByText(/url_changed, status и latency/)).toBeInTheDocument();
+    expect(within(card).getByText(/provider, url_changed, status и latency/)).toBeInTheDocument();
+  });
+
+  it('accepts an internal http LibreTranslate URL and saves the protocol', async () => {
+    const { user } = renderPasswordApp();
+    const card = await openPlugins(user);
+    const input = within(card).getByLabelText('URL провайдера');
+
+    await user.clear(input);
+    await user.type(input, 'http://libretranslate:5000/translate');
+    await user.selectOptions(within(card).getByLabelText('Протокол провайдера'), 'LIBRETRANSLATE');
+    await user.click(within(card).getByRole('button', { name: 'Сохранить переводчик' }));
+
+    expect(await within(card).findByText('Настройки переводчика сохранены.')).toBeInTheDocument();
+    expect(mockDb.translationAdmin.url).toBe('http://libretranslate:5000/translate');
+    expect(mockDb.translationAdmin.provider).toBe('LIBRETRANSLATE');
+    expect(mockDb.translationAdmin.updates.at(-1)).toMatchObject({
+      body: { url: 'http://libretranslate:5000/translate', provider: 'LIBRETRANSLATE' },
+      changed: true,
+    });
+  });
+
+  it('does not fake a healthy state when the provider is down', async () => {
+    mockDb.translationAdmin.testStatus = 'UNAVAILABLE';
+    mockDb.translationAdmin.testLatencyMs = 120;
+    const { user } = renderPasswordApp();
+    const card = await openPlugins(user);
+
+    expect(await within(card).findByText('Провайдер включён · не проверен')).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: 'Проверить соединение' }));
+
+    expect(await within(card).findByText('Провайдер включён, но недоступен')).toBeInTheDocument();
+    expect(within(card).getByText(/переводы в чатах вернут 503/)).toBeInTheDocument();
+    expect(within(card).getByText('Провайдер недоступен · 120 мс.')).toBeInTheDocument();
   });
 
   it('surfaces the server 422 validation codes honestly', async () => {
@@ -85,16 +123,14 @@ describe('#84 translation-provider admin settings', () => {
     };
     const { user } = renderPasswordApp();
     const card = await openPlugins(user);
-    const input = within(card).getByLabelText('HTTPS URL провайдера');
+    const input = within(card).getByLabelText('URL провайдера');
 
     await user.clear(input);
     await user.type(input, 'https://translate.internal.example/v2');
     await user.click(within(card).getByRole('button', { name: 'Сохранить переводчик' }));
 
     expect(
-      await within(card).findByText(
-        'Для включения нужен https URL: сохранённого или из окружения нет.',
-      ),
+      await within(card).findByText('Для включения нужен URL: сохранённого или из окружения нет.'),
     ).toBeInTheDocument();
     expect(within(card).getAllByText(/TRANSLATION_URL_REQUIRED/).length).toBeGreaterThan(0);
   });
@@ -147,7 +183,7 @@ describe('#84 translation-provider admin settings', () => {
   it('passes axe without serious/critical violations', async () => {
     const { user } = renderPasswordApp();
     const card = await openPlugins(user);
-    await within(card).findByText('Провайдер включён');
+    await within(card).findByText('Провайдер включён · не проверен');
 
     const canvas = HTMLCanvasElement.prototype as unknown as {
       getContext: (...args: unknown[]) => unknown;

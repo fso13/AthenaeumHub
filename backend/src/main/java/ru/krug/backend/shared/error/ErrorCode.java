@@ -104,6 +104,8 @@ public final class ErrorCode {
     public static final String AUTH_UNAVAILABLE = "AUTH_UNAVAILABLE";
     /** #101: the server-side session exceeded the workspace idle timeout at refresh. */
     public static final String AUTH_SESSION_EXPIRED = "AUTH_SESSION_EXPIRED";
+    /** #103: a state-changing auth request arrived from a foreign browser Origin. */
+    public static final String CSRF_REJECTED = "CSRF_REJECTED";
 
     // E8-B: first-run setup, platform admin and installation chat limits (R-01…R-04).
     public static final String SETUP_ALREADY_COMPLETED = "SETUP_ALREADY_COMPLETED";
@@ -173,10 +175,15 @@ public final class ErrorCode {
     public static final String TASK_ASSIGNEE_INVALID = "TASK_ASSIGNEE_INVALID";
     public static final String MESSAGE_NOT_TRANSLATABLE = "MESSAGE_NOT_TRANSLATABLE";
     public static final String TRANSLATION_UNAVAILABLE = "TRANSLATION_UNAVAILABLE";
-    /** #84: the configured translation URL must be an absolute https URL without secrets. */
+    /**
+     * #84: the configured translation URL must be an absolute https URL (or an internal
+     * http host for a self-hosted LibreTranslate) without secrets.
+     */
     public static final String TRANSLATION_URL_INVALID = "TRANSLATION_URL_INVALID";
     /** #84: enabling the provider requires an explicit or environment URL. */
     public static final String TRANSLATION_URL_REQUIRED = "TRANSLATION_URL_REQUIRED";
+    /** #104: the provider protocol must be AUTO, CUSTOM or LIBRETRANSLATE. */
+    public static final String TRANSLATION_PROVIDER_INVALID = "TRANSLATION_PROVIDER_INVALID";
 
     // #96: Slack-like bots (MVP backend). A bot token can only write chat messages; there is
     // no read/call/file scope. Credential errors intentionally reuse UNAUTHENTICATED.

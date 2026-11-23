@@ -21,4 +21,9 @@ public class TranslationEnvAdapter implements TranslationEnvPort {
     public String fallbackUrl() {
         return properties.url() == null ? "" : properties.url();
     }
+
+    @Override
+    public String fallbackProvider() {
+        return properties.provider() == null ? "" : properties.provider();
+    }
 }

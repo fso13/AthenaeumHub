@@ -2,8 +2,6 @@ import type { ApiClient } from './http';
 import { ApiError } from './problem';
 import type {
   AuthLoginRequest,
-  AuthLogoutRequest,
-  AuthRefreshRequest,
   AuthRegisterRequest,
   AuthRegisterResponse,
   AuthResendEmailCodeRequest,
@@ -37,8 +35,9 @@ export type AuthVerifyEmailResult = AuthLoginResult;
 /**
  * Typed Auth BFF client (`contracts/openapi.yaml` §auth). Every endpoint is
  * public (`security: []`): the browser sends no Keycloak token here — the
- * backend is the BFF and returns the session. Refresh/logout pass the token in
- * the body, never in the URL.
+ * backend is the BFF and returns the session. #103: refresh/logout carry no
+ * token at all; the HttpOnly `sova_refresh` cookie travels with
+ * `credentials: 'include'` and the response never contains a refresh token.
  */
 export interface AuthApi {
   register(body: AuthRegisterRequest): Promise<AuthRegisterResponse>;
@@ -71,8 +70,10 @@ export interface AuthApi {
     accessToken: string,
     password: string,
   ): Promise<TwoFactorRecoveryCodes>;
-  refresh(refreshToken: string): Promise<AuthSession>;
-  logout(refreshToken: string): Promise<void>;
+  /** #103: rotate the HttpOnly refresh cookie; body and JSON token are absent. */
+  refresh(): Promise<AuthSession>;
+  /** #103: revoke the cookie's token and clear the cookie server-side. */
+  logout(): Promise<void>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -84,9 +85,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function readAuthSession(value: unknown): AuthSession | null {
   const record = asRecord(value);
   if (!record) return null;
-  if (typeof record.access_token !== 'string' || typeof record.refresh_token !== 'string') {
+  if (typeof record.access_token !== 'string') {
     return null;
   }
+  // #103: refresh_token is intentionally absent; the cookie is the only carrier.
   if (typeof record.expires_in !== 'number' || !asRecord(record.user)) return null;
   return record as unknown as AuthSession;
 }
@@ -190,15 +192,15 @@ export function createAuthApi(client: ApiClient): AuthApi {
       return response.data;
     },
 
-    async refresh(refreshToken) {
-      const body: AuthRefreshRequest = { refresh_token: refreshToken };
-      const response = await client.post<AuthSession>('/auth/refresh', body, { auth: false });
+    async refresh() {
+      const response = await client.post<AuthSession>('/auth/refresh', undefined, {
+        auth: false,
+      });
       return response.data;
     },
 
-    async logout(refreshToken) {
-      const body: AuthLogoutRequest = { refresh_token: refreshToken };
-      await client.post('/auth/logout', body, { auth: false });
+    async logout() {
+      await client.post('/auth/logout', undefined, { auth: false });
     },
   };
 }

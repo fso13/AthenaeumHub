@@ -47,6 +47,7 @@ class TranslationProviderAdminIT extends IntegrationTestBase {
         CONTRACT.assertValid("TranslationProviderSettings", defaults);
         assertThat(defaults.get("enabled").asBoolean()).isFalse();
         assertThat(defaults.get("url").asText()).isEmpty();
+        assertThat(defaults.get("provider").asText()).isEqualTo("AUTO");
 
         assertError(patchProvider(admin, "{\"url\":\"http://example.test/translate\"}"),
                 "TRANSLATION_URL_INVALID");
@@ -61,6 +62,8 @@ class TranslationProviderAdminIT extends IntegrationTestBase {
                 "TRANSLATION_URL_INVALID");
         assertError(patchProvider(admin, "{\"enabled\":true}"),
                 "TRANSLATION_URL_REQUIRED");
+        assertError(patchProvider(admin, "{\"provider\":\"libra\"}"),
+                "TRANSLATION_PROVIDER_INVALID");
 
         mockMvc.perform(authed(patch("/api/v1/admin/plugins/translate"), admin)
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
@@ -75,20 +78,24 @@ class TranslationProviderAdminIT extends IntegrationTestBase {
     void storesRuntimeSettingsAndHealthReturnsStatusAndLatencyOnly() throws Exception {
         SessionResponse admin = adminSession();
         MvcResult updated = patchProvider(admin,
-                "{\"enabled\":true,\"url\":\"" + PROVIDER_URL + "\"}");
+                "{\"enabled\":true,\"url\":\"" + PROVIDER_URL
+                        + "\",\"provider\":\"LIBRETRANSLATE\"}");
         assertThat(updated.getResponse().getStatus()).isEqualTo(200);
         JsonNode settings = json(updated);
         CONTRACT.assertValid("TranslationProviderSettings", settings);
         assertThat(settings.get("enabled").asBoolean()).isTrue();
         assertThat(settings.get("url").asText()).isEqualTo(PROVIDER_URL);
+        assertThat(settings.get("provider").asText()).isEqualTo("LIBRETRANSLATE");
 
         JsonNode read = json(mockMvc.perform(authed(
                         get("/api/v1/admin/plugins/translate"), admin))
                 .andExpect(status().isOk()).andReturn());
         assertThat(read.get("url").asText()).isEqualTo(PROVIDER_URL);
         assertThat(migrator().queryForMap(
-                "SELECT enabled, url FROM ops.plugin_translation_settings WHERE id = 1"))
-                .containsEntry("enabled", true).containsEntry("url", PROVIDER_URL);
+                "SELECT enabled, url, provider FROM ops.plugin_translation_settings"
+                        + " WHERE id = 1"))
+                .containsEntry("enabled", true).containsEntry("url", PROVIDER_URL)
+                .containsEntry("provider", "LIBRETRANSLATE");
 
         MvcResult test = mockMvc.perform(authed(
                         post("/api/v1/admin/plugins/translate/test"), admin))
@@ -106,7 +113,8 @@ class TranslationProviderAdminIT extends IntegrationTestBase {
                  WHERE action = 'admin.plugin.translate.updated'
                  ORDER BY created_at DESC LIMIT 1
                 """, String.class);
-        assertThat(updateAudit).contains("enabled", "url_changed")
+        assertThat(updateAudit).contains("enabled", "url_changed", "provider",
+                        "provider_changed", "LIBRETRANSLATE")
                 .doesNotContain(PROVIDER_URL, "secret");
         String testAudit = migrator().queryForObject("""
                 SELECT metadata::text FROM audit.audit_events
@@ -120,7 +128,8 @@ class TranslationProviderAdminIT extends IntegrationTestBase {
                 SELECT count(*) FROM audit.audit_events
                  WHERE action = 'admin.plugin.translate.updated'
                 """, Integer.class);
-        patchProvider(admin, "{\"enabled\":true,\"url\":\"" + PROVIDER_URL + "\"}");
+        patchProvider(admin, "{\"enabled\":true,\"url\":\"" + PROVIDER_URL
+                + "\",\"provider\":\"LIBRETRANSLATE\"}");
         assertThat(migrator().queryForObject("""
                 SELECT count(*) FROM audit.audit_events
                  WHERE action = 'admin.plugin.translate.updated'
@@ -128,12 +137,33 @@ class TranslationProviderAdminIT extends IntegrationTestBase {
 
         JsonNode disabled = json(patchProvider(admin, "{\"enabled\":false}"));
         assertThat(disabled.get("enabled").asBoolean()).isFalse();
+        assertThat(disabled.get("provider").asText()).isEqualTo("LIBRETRANSLATE");
         JsonNode disabledHealth = json(mockMvc.perform(authed(
                         post("/api/v1/admin/plugins/translate/test"), admin))
                 .andExpect(status().isOk()).andReturn());
         CONTRACT.assertValid("TranslationProviderTest", disabledHealth);
         assertThat(disabledHealth.get("status").asText()).isEqualTo("DISABLED");
         assertThat(disabledHealth.get("latency_ms").asLong()).isZero();
+    }
+
+    @Test
+    void acceptsAnInternalHttpLibreTranslateUrlOnly() throws Exception {
+        SessionResponse admin = adminSession();
+        MvcResult updated = patchProvider(admin,
+                "{\"enabled\":true,\"url\":\"http://libretranslate:5000/translate\","
+                        + "\"provider\":\"LIBRETRANSLATE\"}");
+        assertThat(updated.getResponse().getStatus()).isEqualTo(200);
+        JsonNode settings = json(updated);
+        CONTRACT.assertValid("TranslationProviderSettings", settings);
+        assertThat(settings.get("url").asText())
+                .isEqualTo("http://libretranslate:5000/translate");
+        assertThat(settings.get("provider").asText()).isEqualTo("LIBRETRANSLATE");
+
+        assertError(patchProvider(admin,
+                "{\"url\":\"http://translate.example.test/translate\"}"),
+                "TRANSLATION_URL_INVALID");
+        assertError(patchProvider(admin, "{\"url\":\"http://8.8.8.8:5000/translate\"}"),
+                "TRANSLATION_URL_INVALID");
     }
 
     @Test

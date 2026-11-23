@@ -13,7 +13,8 @@ public final class PluginTranslationApiMapper {
 
     public static TranslationProviderSettingsResponse toResponse(
             TranslationSettingsView view) {
-        return new TranslationProviderSettingsResponse(view.enabled(), view.url());
+        return new TranslationProviderSettingsResponse(view.enabled(), view.url(),
+                view.providerWire());
     }
 
     public static TranslationProviderTestResponse toResponse(TranslationHealthView view) {

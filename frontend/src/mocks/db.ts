@@ -620,6 +620,7 @@ export function createMockAdminSessionsState(): MockAdminSessionsState {
 export interface MockTranslationAdminState {
   enabled: boolean;
   url: string;
+  provider: 'AUTO' | 'CUSTOM' | 'LIBRETRANSLATE';
   updates: Array<{ body: Record<string, unknown>; changed: boolean }>;
   getRequests: number;
   testRequests: number;
@@ -635,6 +636,7 @@ export function createMockTranslationAdminState(): MockTranslationAdminState {
   return {
     enabled: true,
     url: 'https://translate.example.test/v1',
+    provider: 'AUTO',
     updates: [],
     getRequests: 0,
     testRequests: 0,
@@ -1304,6 +1306,8 @@ export interface MockDb {
   authVerifications: Map<string, MockEmailVerification>;
   authAccessTokens: Map<string, MockAuthTokenRecord>;
   authRefreshTokens: Map<string, MockAuthTokenRecord>;
+  /** #103: the simulated HttpOnly `sova_refresh` cookie (browser-owned in production). */
+  authRefreshCookie: string | null;
   authRegisterRequests: AuthRegisterRequest[];
   authLoginRequests: AuthLoginRequest[];
   authVerifyRequests: AuthVerifyEmailRequest[];
@@ -1960,6 +1964,7 @@ export function createMockDb(): MockDb {
     authVerifications: new Map(),
     authAccessTokens: new Map(),
     authRefreshTokens: new Map(),
+    authRefreshCookie: null,
     authRegisterRequests: [],
     authLoginRequests: [],
     authVerifyRequests: [],
@@ -2221,6 +2226,7 @@ export function resetMockDb(db: MockDb): void {
   db.authVerifications.clear();
   db.authAccessTokens.clear();
   db.authRefreshTokens.clear();
+  db.authRefreshCookie = null;
   db.authRegisterRequests = [];
   db.authLoginRequests = [];
   db.authVerifyRequests = [];

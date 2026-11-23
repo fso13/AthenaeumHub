@@ -2,12 +2,13 @@ import { clearE2eeAccountStateOnLogout } from '../e2ee/account/logout';
 import type { StoredAuthSession, StoredPendingVerification } from './types';
 
 /**
- * AUTH-D-06: the SPA keeps the Auth BFF session (access + refresh token) in
- * sessionStorage; localStorage is never used for auth material (only the
- * non-secret workspace id lives in `workspace/deviceWorkspace.ts`). This is the
- * only module allowed to touch sessionStorage; scripts/check-security.mjs
- * enforces that allow-list.
- * Passwords and email codes are never persisted here.
+ * AUTH-D-06 / #103: the SPA keeps only the short-lived access token and the
+ * user projection in sessionStorage; the refresh token is an HttpOnly cookie
+ * and never reaches JavaScript (so it is never persisted here). localStorage is
+ * never used for auth material (only the non-secret workspace id lives in
+ * `workspace/deviceWorkspace.ts`). This is the only module allowed to touch
+ * sessionStorage; scripts/check-security.mjs enforces that allow-list.
+ * Passwords, email codes and refresh tokens are never persisted here.
  *
  * Keys are namespaced with `krug.` so logout can clear only app state.
  */
@@ -86,8 +87,6 @@ function isStoredAuthSession(value: unknown): value is StoredAuthSession {
   return (
     typeof candidate.accessToken === 'string' &&
     candidate.accessToken.length > 0 &&
-    typeof candidate.refreshToken === 'string' &&
-    candidate.refreshToken.length > 0 &&
     typeof candidate.expiresAt === 'number' &&
     Number.isFinite(candidate.expiresAt) &&
     typeof user === 'object' &&
@@ -108,6 +107,17 @@ export function readAuthSession(): StoredAuthSession | null {
   if (!raw) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
+    // #103 migration: a session written by an older build may still contain a
+    // refresh token. It must be purged immediately rather than left readable in
+    // sessionStorage; the cookie is the only refresh-token carrier now.
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Object.prototype.hasOwnProperty.call(parsed, 'refreshToken')
+    ) {
+      clearAuthSession();
+      return null;
+    }
     return isStoredAuthSession(parsed) ? parsed : null;
   } catch {
     return null;

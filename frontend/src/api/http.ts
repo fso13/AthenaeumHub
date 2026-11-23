@@ -98,7 +98,7 @@ export class ApiClient {
         headers,
         signal: controller.signal,
         cache: 'no-store',
-        credentials: 'omit',
+        credentials: 'include',
       });
     } catch (error) {
       if (controller.signal.aborted) throw ApiError.timeout();
@@ -267,6 +267,9 @@ export class ApiClient {
       };
 
       xhr.open('POST', url, true);
+      // #103: the HttpOnly refresh cookie is scoped to /api/v1/auth; credentials must be
+      // enabled here as well so sign-out/refresh work if these endpoints ever use XHR.
+      xhr.withCredentials = true;
       xhr.timeout = timeoutMs;
       for (const [name, value] of headers.entries()) xhr.setRequestHeader(name, value);
 
@@ -354,7 +357,7 @@ export class ApiClient {
         body: encoded.body,
         signal: options.signal,
         cache: 'no-store',
-        credentials: 'omit',
+        credentials: 'include',
       });
     } catch (error) {
       if (options.signal?.aborted) throw ApiError.client('ABORTED', 'Upload was cancelled');
@@ -451,7 +454,7 @@ export class ApiClient {
         body: fetchBody,
         signal: controller.signal,
         cache: 'no-store',
-        credentials: 'omit',
+        credentials: 'include',
       });
     } catch (error) {
       if (controller.signal.aborted) {

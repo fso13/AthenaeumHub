@@ -55,6 +55,28 @@ class ProdGuardTest {
     }
 
     @Test
+    void prodRequiresTheServiceAccountAndASecureRefreshCookie() {
+        MockEnvironment environment = prodEnvironment()
+                .withProperty("krug.auth-bff.keycloak.service-client-id", "")
+                .withProperty("krug.auth-bff.keycloak.service-client-secret", "")
+                .withProperty("krug.auth-bff.refresh-cookie.secure", "false")
+                .withProperty("krug.cors.allowed-origins", "");
+
+        assertThatThrownBy(() -> new ProdGuard(environment).validate())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("KRUG_KEYCLOAK_SERVICE_CLIENT_ID")
+                .hasMessageContaining("KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET")
+                .hasMessageContaining("KRUG_AUTH_BFF_COOKIE_SECURE must be true in prod")
+                .hasMessageContaining("KRUG_CORS_ALLOWED_ORIGINS");
+    }
+
+    @Test
+    void keycloakProfileDoesNotRequireTheServiceAccountForLocalDev() {
+        MockEnvironment keycloak = keycloakEnvironment();
+        assertThatCode(() -> new ProdGuard(keycloak).validate()).doesNotThrowAnyException();
+    }
+
+    @Test
     void keycloakProfileDoesNotRequireTheHmacSecretButRejectsTheDevContentKey() {
         MockEnvironment keycloak = keycloakEnvironment();
         assertThatCode(() -> new ProdGuard(keycloak).validate()).doesNotThrowAnyException();
@@ -87,6 +109,13 @@ class ProdGuardTest {
                         "https://id.example/realms/krug/protocol/openid-connect/certs")
                 .withProperty("krug.oidc.audience", "krug-api")
                 .withProperty("krug.oidc.authorized-party", "krug-web")
+                // #103: prod requires the client-credentials service account and a Secure
+                // refresh cookie.
+                .withProperty("krug.auth-bff.keycloak.service-client-id", "svc-krug-bff")
+                .withProperty("krug.auth-bff.keycloak.service-client-secret",
+                        "prod-test-service-client-secret-at-least-32-bytes")
+                .withProperty("krug.auth-bff.refresh-cookie.secure", "true")
+                .withProperty("krug.cors.allowed-origins", "https://chat.example.com")
                 .withProperty("spring.datasource.url",
                         "jdbc:postgresql://localhost:5432/krug")
                 .withProperty("spring.datasource.username", "krug_app")

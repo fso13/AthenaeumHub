@@ -76,6 +76,21 @@ class ArchitectureTest {
                 .check(classes);
     }
 
+    /**
+     * #103: HttpOnly cookie/CSRF handling is a transport concern. Application services may
+     * carry an opaque refresh token, but must not depend on servlet/HTTP types.
+     */
+    @ArchTest
+    static void applicationLayerHasNoHttpTransportTypes(JavaClasses classes) {
+        noClasses()
+                .that().resideInAPackage("ru.krug.backend..application..")
+                .should().dependOnClassesThat().resideInAnyPackage(
+                        "jakarta.servlet..",
+                        "org.springframework.http..",
+                        "org.springframework.web..")
+                .check(classes);
+    }
+
     @ArchTest
     static void applicationDoesNotUseJpa(JavaClasses classes) {
         noClasses()

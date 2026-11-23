@@ -19,8 +19,8 @@ import ru.krug.backend.shared.application.model.Principal;
  * Platform-admin translation provider configuration (#84).
  *
  * <pre>
- * GET   /admin/plugins/translate       -> {enabled, url}
- * PATCH /admin/plugins/translate       -> {enabled, url} (https URL only, no secrets)
+ * GET   /admin/plugins/translate       -> {enabled, url, provider}
+ * PATCH /admin/plugins/translate       -> {enabled, url, provider} (no secrets)
  * POST  /admin/plugins/translate/test  -> {status, latency_ms}
  * </pre>
  *
@@ -49,7 +49,8 @@ public class PluginTranslationAdminController {
     public TranslationProviderSettingsResponse update(
             @RequestBody UpdateTranslationProviderRequest request, Principal principal) {
         return PluginTranslationApiMapper.toResponse(
-                settings.update(principal, request.enabled(), request.url()));
+                settings.update(principal, request.enabled(), request.url(),
+                        request.provider()));
     }
 
     @PostMapping("/test")

@@ -17,6 +17,7 @@
 | `keycloak-postgres` | отдельная PostgreSQL для Keycloak | internal |
 | `minio` | MinIO (Chainguard), S3 для managed-файлов | `9000` API, `9001` console |
 | `mailpit` | SMTP + UI для писем подтверждения | `1025`, `8025` |
+| `libretranslate` | опционально: self-hosted переводчик, profile `translate` | internal (не публикуется) |
 
 ## Быстрый старт
 
@@ -38,6 +39,21 @@ docker compose --env-file .env ps
 Админ Keycloak (только ops): `http://localhost:8180/admin/`, `admin` / `KC_ADMIN_PASSWORD`.
 
 Первый запуск занимает несколько минут: Maven собирает backend, npm — frontend, Keycloak импортирует realm.
+
+### Перевод (опционально, #104)
+
+Self-hosted LibreTranslate, только внутренняя сеть; наружу порт не публикуется:
+
+```bash
+docker compose --env-file .env --profile translate up -d --build
+```
+
+Backend уже настроен на `http://libretranslate:5000/translate`. Первый старт
+скачивает модели `en,ru` (~1–2 ГБ) в volume `krug_krug-libretranslate-models`.
+Включите провайдера в **Администрирование → Плагины → Переводчик** и нажмите
+«Проверить соединение»; подробности, ресурсы, языки и приватность —
+[`docs/TRANSLATION.md`](../docs/TRANSLATION.md). Без профиля `translate`
+health-check честно покажет `UNAVAILABLE`, перевод вернёт `503`.
 
 ## Проверка
 
@@ -97,6 +113,7 @@ docker compose --env-file .env logs -f backend
 | `krug_krug-keycloak-import` | отрендеренный realm |
 | `krug_krug-minio-data` | S3-объекты MinIO |
 | `krug_krug-clamav-data` | базы ClamAV |
+| `krug_krug-libretranslate-models` | модели LibreTranslate (не данные; скачиваются заново) |
 
 Полный сброс **удаляет все данные**:
 

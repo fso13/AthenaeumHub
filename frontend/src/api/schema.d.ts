@@ -456,7 +456,7 @@ export interface paths {
         };
         /**
          * Настройки translation-провайдера (platform_admin)
-         * @description Возвращает действующую конфигурацию `{enabled, url}`. Явная настройка администратора имеет приоритет; пока строки нет, действует fallback `KRUG_PLUGINS_TRANSLATE_URL`. Секретов/API-ключей в конфигурации нет, URL не логируется.
+         * @description Возвращает действующую конфигурацию `{enabled, url, provider}`. Явная настройка администратора имеет приоритет; пока строки нет, действует fallback `KRUG_PLUGINS_TRANSLATE_URL`/`KRUG_PLUGINS_TRANSLATE_PROVIDER`. `provider` — `AUTO` (LibreTranslate при path `/translate`, иначе legacy `{text,target}`), `CUSTOM` или `LIBRETRANSLATE`. Поддерживается только self-hosted провайдер: `https`-URL либо `http` для внутреннего хоста (compose-имя, localhost, RFC 1918). Секретов/API-ключей в конфигурации нет, URL не логируется.
          */
         get: operations["getAdminTranslationProvider"];
         put?: never;
@@ -466,7 +466,7 @@ export interface paths {
         head?: never;
         /**
          * Изменить translation-провайдера (platform_admin)
-         * @description Частичное обновление; минимум одно поле. `url` — только абсолютный `https` URL с опциональным path; credentials/userinfo, query и fragment запрещены, длина ≤ 2048 (`422 TRANSLATION_URL_INVALID`). Включение без сохранённого и без environment URL — `422 TRANSLATION_URL_REQUIRED`. Повтор с теми же значениями идемпотентен и не создаёт второй audit-события. Аудит содержит `enabled` и `url_changed`, но не сам URL. Секреты не хранятся.
+         * @description Частичное обновление; минимум одно поле. `url` — абсолютный `https` URL с опциональным path; `http` допустим только для внутреннего хоста (self-hosted LibreTranslate). credentials/userinfo, query и fragment запрещены, длина ≤ 2048 (`422 TRANSLATION_URL_INVALID`). `provider` — `AUTO`, `CUSTOM` или `LIBRETRANSLATE`; неизвестное значение — `422 TRANSLATION_PROVIDER_INVALID`, пустая строка сбрасывает на `AUTO`. Включение без сохранённого и без environment URL — `422 TRANSLATION_URL_REQUIRED`. Повтор с теми же значениями идемпотентен и не создаёт второй audit-события. Аудит содержит `enabled`, `url_changed`, `provider` и `provider_changed`, но не сам URL. Секреты не хранятся.
          */
         patch: operations["updateAdminTranslationProvider"];
         trace?: never;
@@ -482,7 +482,7 @@ export interface paths {
         put?: never;
         /**
          * Проверить доступность translation-провайдера (platform_admin)
-         * @description Один ограниченный по timeouts/size probe с константным текстом; ответ провайдера не возвращается и не логируется. `status` — `OK`, `DISABLED` (провайдер выключен, сетевого вызова нет) или `UNAVAILABLE` (ошибка/таймаут/непригодный ответ). `latency_ms` — измеренная длительность (0 для DISABLED). Тест аудируется (`admin.plugin.translate.tested`, только status/latency).
+         * @description Один ограниченный по timeouts/size probe с константным текстом `ping` → `en`; ответ провайдера не возвращается и не логируется. Для LibreTranslate это реальный `POST /translate`, поэтому `en` должен быть среди загруженных моделей (`LT_LOAD_ONLY`). `status` — `OK`, `DISABLED` (провайдер выключен, сетевого вызова нет) или `UNAVAILABLE` (ошибка/таймаут/непригодный ответ/сервис не запущен). `latency_ms` — измеренная длительность (0 для DISABLED). Тест аудируется (`admin.plugin.translate.tested`, только status/latency).
          */
         post: operations["testAdminTranslationProvider"];
         delete?: never;
@@ -628,8 +628,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Обновить пару токенов через Keycloak
-         * @description Refresh-токен передаётся в теле, не в URL. Keycloak ротирует пару; недействительный refresh — `401 INVALID_CREDENTIALS`. #101: если серверная сессия простаивала дольше `session_timeout_minutes` активного воркспейса (strictest wins), refresh отклоняется с `401 AUTH_SESSION_EXPIRED`, а новый refresh-токен отзывается. Время простоя считается по реальным API-запросам, а не по самому refresh.
+         * Обновить сессию по HttpOnly cookie
+         * @description #103: refresh-токен читается только из cookie `sova_refresh` (HttpOnly; Secure в prod; SameSite=Lax; Path=/api/v1/auth). Тело запроса не требуется и не читается. Keycloak ротирует пару, ответ ставит новую cookie и никогда не возвращает refresh-токен в JSON. Недействительный/отсутствующий cookie — `401 INVALID_CREDENTIALS`. #101: если серверная сессия простаивала дольше `session_timeout_minutes` активного воркспейса (strictest wins), refresh отклоняется с `401 AUTH_SESSION_EXPIRED`, а новый refresh-токен отзывается. Время простоя считается по реальным API-запросам, а не по самому refresh. CSRF: SameSite=Lax + проверка Origin/Referer (чужой origin — `403 CSRF_REJECTED`).
          */
         post: operations["authRefresh"];
         delete?: never;
@@ -648,8 +648,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Отозвать refresh-токен в Keycloak
-         * @description Идемпотентно; недействительный refresh-токен также даёт `204`.
+         * Отозвать refresh-токен и очистить cookie
+         * @description #103: отзывает Keycloak refresh-токен из cookie `sova_refresh` и всегда возвращает истёкшую cookie (`Max-Age=0`), поэтому работает идемпотентно даже для уже недействительного токена. Тело запроса не требуется. Чужой браузерный origin — `403 CSRF_REJECTED`.
          */
         post: operations["authLogout"];
         delete?: never;
@@ -1902,7 +1902,7 @@ export interface paths {
         put?: never;
         /**
          * Перевод managed TEXT-сообщения (плагин `translate`)
-         * @description Только ACTIVE-участник чата при включённом плагине `translate` и только для managed-сообщения типа `TEXT`, которое не удалено и не скрыто вызывающим. E2EE-чат/сообщение — `422 E2EE_METADATA_FORBIDDEN` (сервер не читает ciphertext); не-TEXT — `422 MESSAGE_NOT_TRANSLATABLE`. Внешний провайдер по умолчанию не настроен: без `krug.plugins.translate.url` запрос немедленно возвращает `503 TRANSLATION_UNAVAILABLE` с `Retry-After` и не делает сетевых вызовов. При настроенном URL сервер делает bounded HTTP-вызов (connect/read timeout, лимит размера ответа), не логирует текст, не сохраняет секреты и отклоняет HTML/control-символы в ответе. Audit — только id сообщения; вопрос, заголовок и текст никогда не пишутся. #101: вход и результат перевода проверяются workspace DLP (`scope=PLUGIN` или `ALL`); BLOCK → `422 DLP_BLOCKED`, провайдер не вызывается для заблокированного входа, результат не возвращается.
+         * @description Только ACTIVE-участник чата при включённом плагине `translate` и только для managed-сообщения типа `TEXT`, которое не удалено и не скрыто вызывающим. E2EE-чат/сообщение — `422 E2EE_METADATA_FORBIDDEN` (сервер не читает ciphertext); не-TEXT — `422 MESSAGE_NOT_TRANSLATABLE`. Внешний провайдер по умолчанию не настроен: без `krug.plugins.translate.url` запрос немедленно возвращает `503 TRANSLATION_UNAVAILABLE` с `Retry-After` и не делает сетевых вызовов. Поддерживается только self-hosted провайдер (LibreTranslate или собственный совместимый сервис); публичные сторонние translate API не используются. При настроенном URL сервер делает bounded HTTP-вызов (connect/read timeout, лимит размера ответа), не логирует текст, не сохраняет секреты и отклоняет HTML/control-символы в ответе. Audit — только id сообщения; вопрос, заголовок и текст никогда не пишутся. #101: вход и результат перевода проверяются workspace DLP (`scope=PLUGIN` или `ALL`); BLOCK → `422 DLP_BLOCKED`, провайдер не вызывается для заблокированного входа, результат не возвращается.
          */
         post: operations["translateMessage"];
         delete?: never;
@@ -2923,7 +2923,7 @@ export interface components {
         BlockedUserList: {
             items: components["schemas"]["BlockedUser"][];
         };
-        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. #99 workspace lifecycle reuses LAST_OWNER (409) and WORKSPACE_PERMISSION_DENIED (403); it adds no new error codes. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.2 (#86, external plugin packages): PLUGIN_PACKAGE_INVALID (400) — unsafe or malformed ZIP/manifest (traversal, symlink, limits, missing entry); PLUGIN_PACKAGE_TOO_LARGE (413) — archive above 5 MiB; PLUGIN_ALREADY_INSTALLED (409) — the package id is already installed; PLUGIN_ID_RESERVED (409) — the id belongs to a built-in plugin; PLUGIN_STORAGE_UNAVAILABLE (503) — object storage is unavailable and the operation can be retried. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). P0-2 (#80, channel settings): CHAT_READ_ONLY (403) — write in a read-only channel; CHAT_PERMISSION_DENIED (403) — the role lacks a matrix right; CHAT_COVER_INVALID (422) — the referenced attachment is not an image; CHAT_AVATAR_INVALID (422) — the referenced channel-avatar attachment is not an image; CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT (409) — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description, cover or avatar in an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE chat. */
+        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE; #103 adds CSRF_REJECTED (403) for a foreign browser Origin. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. #99 workspace lifecycle reuses LAST_OWNER (409) and WORKSPACE_PERMISSION_DENIED (403); it adds no new error codes. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.2 (#86, external plugin packages): PLUGIN_PACKAGE_INVALID (400) — unsafe or malformed ZIP/manifest (traversal, symlink, limits, missing entry); PLUGIN_PACKAGE_TOO_LARGE (413) — archive above 5 MiB; PLUGIN_ALREADY_INSTALLED (409) — the package id is already installed; PLUGIN_ID_RESERVED (409) — the id belongs to a built-in plugin; PLUGIN_STORAGE_UNAVAILABLE (503) — object storage is unavailable and the operation can be retried. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). #84/#104 (admin translation provider): TRANSLATION_URL_INVALID (422) — URL is not an absolute https URL / internal http host, or contains credentials/query/fragment; TRANSLATION_URL_REQUIRED (422) — enabling without a stored or environment URL; TRANSLATION_PROVIDER_INVALID (422) — provider is not AUTO/CUSTOM/LIBRETRANSLATE. P0-2 (#80, channel settings): CHAT_READ_ONLY (403) — write in a read-only channel; CHAT_PERMISSION_DENIED (403) — the role lacks a matrix right; CHAT_COVER_INVALID (422) — the referenced attachment is not an image; CHAT_AVATAR_INVALID (422) — the referenced channel-avatar attachment is not an image; CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT (409) — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description, cover or avatar in an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE chat. */
         Error: {
             code: string;
             message: string;
@@ -3193,15 +3193,25 @@ export interface components {
             revoked_sessions: number;
             affected_users: number;
         };
-        /** @description Действующая конфигурация translation-провайдера. Секретов нет; `url` — абсолютный https URL или пустая строка. */
+        /** @description Действующая конфигурация translation-провайдера. Секретов нет; `url` — абсолютный https URL, `http` для внутреннего self-hosted хоста, или пустая строка. `provider` — выбранный протокол; `AUTO` определяет LibreTranslate по path `/translate`. */
         TranslationProviderSettings: {
             enabled: boolean;
             url: string;
+            /**
+             * @description `AUTO` — LibreTranslate при завершении path на `/translate`, иначе legacy custom `{text,target}`. `CUSTOM` и `LIBRETRANSLATE` — явные переопределения.
+             * @enum {string}
+             */
+            provider: "AUTO" | "CUSTOM" | "LIBRETRANSLATE";
         };
         TranslationProviderUpdate: {
             enabled?: boolean;
-            /** @description Пустая строка очищает URL. Непустое значение — только абсолютный https URL с опциональным path; userinfo/query/fragment запрещены. */
+            /** @description Пустая строка очищает URL. Непустое значение — абсолютный https URL либо http для внутреннего хоста; userinfo/query/fragment запрещены. */
             url?: string;
+            /**
+             * @description Протокол провайдера. Пустая строка сбрасывает на `AUTO`; неизвестное значение — `422 TRANSLATION_PROVIDER_INVALID`.
+             * @enum {string}
+             */
+            provider?: "AUTO" | "CUSTOM" | "LIBRETRANSLATE";
         };
         /** @description Результат health-check без содержимого провайдера. `status` — OK, DISABLED или UNAVAILABLE; `latency_ms` — длительность probe (0 для DISABLED). */
         TranslationProviderTest: {
@@ -3255,11 +3265,21 @@ export interface components {
             email: string;
             password: string;
         };
+        /**
+         * @deprecated
+         * @description Устарело с #103: refresh-токен читается только из HttpOnly cookie `sova_refresh`, тело игнорируется. Схема сохранена для обратной совместимости клиентов.
+         */
         AuthRefreshRequest: {
-            refresh_token: string;
+            /** @deprecated */
+            refresh_token?: string;
         };
+        /**
+         * @deprecated
+         * @description Устарело с #103: logout отзывает refresh-токен из HttpOnly cookie и всегда очищает cookie. Тело игнорируется.
+         */
         AuthLogoutRequest: {
-            refresh_token: string;
+            /** @deprecated */
+            refresh_token?: string;
         };
         AuthSessionUser: {
             /**
@@ -3273,9 +3293,14 @@ export interface components {
             /** @description Серверный флаг платформенного администратора (R-03) */
             is_platform_admin: boolean;
         };
+        /** @description #103: the refresh token is never returned in JSON. It is delivered as an `HttpOnly; SameSite=Lax; Path=/api/v1/auth` cookie (`sova_refresh`) and rotated on every refresh. Only the short-lived access token is readable by JavaScript. */
         AuthSession: {
             access_token: string;
-            refresh_token: string;
+            /**
+             * @deprecated
+             * @description Никогда не возвращается с #103; refresh-токен живёт в HttpOnly cookie.
+             */
+            refresh_token?: string;
             expires_in: number;
             /** @enum {string} */
             token_type: "Bearer";
@@ -6218,9 +6243,10 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Сессия выдана (2FA не включена) */
+            /** @description Сессия выдана (2FA не включена); refresh-токен установлен HttpOnly cookie `sova_refresh` и в JSON не возвращается. */
             200: {
                 headers: {
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6266,23 +6292,20 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AuthRefreshRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Новая сессия */
+            /** @description Новая сессия; refresh-токен ротирован в cookie */
             200: {
                 headers: {
+                    /** @description `sova_refresh=<rotated>; HttpOnly; SameSite=Lax; Path=/api/v1/auth; Max-Age=…` (+ `Secure` в prod). */
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["AuthSession"];
                 };
             };
-            400: components["responses"]["BadRequest"];
-            /** @description Refresh-токен недействителен (`INVALID_CREDENTIALS`) */
+            /** @description Refresh-cookie отсутствует или недействительна (`INVALID_CREDENTIALS`) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -6291,7 +6314,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Сессия не проходила обязательный второй фактор (`TWO_FACTOR_REQUIRED`). Такой refresh-токен нельзя использовать для продления парольной сессии; нужен новый вход с TOTP/ENROLL. */
+            /** @description Сессия не проходила обязательный второй фактор (`TWO_FACTOR_REQUIRED`) или запрос пришёл с чужого браузерного origin (`CSRF_REJECTED`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -6310,20 +6333,26 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AuthLogoutRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description Сессия отозвана (или уже была недействительна) */
+            /** @description Сессия отозвана (или уже была недействительна), cookie очищена */
             204: {
                 headers: {
+                    /** @description `sova_refresh=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/api/v1/auth` (+ `Secure` в prod). */
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            400: components["responses"]["BadRequest"];
+            /** @description Запрос пришёл с чужого браузерного origin (`CSRF_REJECTED`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     me: {
