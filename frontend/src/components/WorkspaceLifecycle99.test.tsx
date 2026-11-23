@@ -186,20 +186,18 @@ describe('#99 workspace lifecycle UI', () => {
     expect(screen.getByText('Удалить пространство может только владелец.')).toBeInTheDocument();
   });
 
-  it('hides the rail leave action for the sole OWNER and exposes delete', async () => {
+  it('never exposes destructive delete on the rail icon', async () => {
     const { user } = renderPasswordApp();
     await login(user);
 
     expect(
       screen.queryByRole('button', { name: `Покинуть пространство: ${WORKSPACE_NAME}` }),
     ).toBeNull();
-    const remove = screen.getByRole('button', {
-      name: `Удалить пространство: ${WORKSPACE_NAME}`,
-    });
-    await user.click(remove);
+    // Delete lives only in Settings → Опасная зона; the tiny rail icon must not
+    // offer a one-click destructive action.
     expect(
-      await screen.findByRole('dialog', { name: `Удалить пространство «${WORKSPACE_NAME}»?` }),
-    ).toBeInTheDocument();
+      screen.queryByRole('button', { name: `Удалить пространство: ${WORKSPACE_NAME}` }),
+    ).toBeNull();
   });
 
   it('exposes leave (not delete) in the rail and switcher for a MEMBER', async () => {

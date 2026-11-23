@@ -446,6 +446,7 @@ function WorkspaceLogoCard({
       {pickerOpen && canManage ? (
         <ImageFilePicker
           target="WORKSPACE"
+          aspect={1}
           workspaceId={workspace.id}
           currentFileId={workspace.logo_file_id ?? null}
           pending={busy}

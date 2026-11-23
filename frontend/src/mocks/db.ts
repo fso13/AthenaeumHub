@@ -1111,6 +1111,12 @@ export interface MockDb {
   forceTranslationError: ForcedSendError | null;
   /** #105 rooms: metadata + TTL presence, no server-side call state. */
   rooms: MockRoomRecord[];
+  /**
+   * #106: room avatars are the backing GROUP channel icons. The seeded rooms
+   * have no row in `chats` (they stay out of the sidebar), so the mock keeps
+   * their `avatar_file_id` here and the chat-avatar handlers resolve it.
+   */
+  roomChatAvatars: Map<string, string | null>;
   roomListRequests: Array<{ workspaceId: string; deviceId: string | null }>;
   roomRequests: Array<{
     action: 'create' | 'rename' | 'close';
@@ -1849,6 +1855,7 @@ export function createMockDb(): MockDb {
     forceTaskUpdateError: null,
     forceTranslationError: null,
     rooms: buildRooms(),
+    roomChatAvatars: new Map(),
     roomListRequests: [],
     roomRequests: [],
     roomPresenceRequests: [],
@@ -2127,6 +2134,7 @@ export function resetMockDb(db: MockDb): void {
   db.forceTaskUpdateError = null;
   db.forceTranslationError = null;
   db.rooms = fresh.rooms;
+  db.roomChatAvatars = fresh.roomChatAvatars;
   db.roomListRequests = [];
   db.roomRequests = [];
   db.roomPresenceRequests = [];

@@ -7,7 +7,7 @@ import {
   type WorkspaceLifecycleAction,
 } from '../workspace/lifecycle';
 import { Avatar } from './Avatar';
-import { LogoutIcon, PlusIcon, TrashIcon } from './Icons';
+import { LogoutIcon, PlusIcon } from './Icons';
 
 interface SpaceRailProps {
   spaces: RailSpace[];
@@ -56,13 +56,13 @@ export function SpaceRail({
             unread > 0
               ? t('rail.spaceUnread', { name: space.name, count: unreadLabel(unread) })
               : t('rail.space', { name: space.name });
-          const action = onWorkspaceAction ? workspaceLifecycleActionForRole(space.role) : null;
-          const actionLabel =
-            action === 'delete'
-              ? t('workspace.lifecycle.railDelete', { name: space.name })
-              : action === 'leave'
-                ? t('workspace.lifecycle.railLeave', { name: space.name })
-                : null;
+          const roleAction = onWorkspaceAction ? workspaceLifecycleActionForRole(space.role) : null;
+          // #99: deletion is destructive and belongs to the Settings danger zone,
+          // never to the tiny rail icon where it can be hit accidentally.
+          const action = roleAction === 'leave' ? roleAction : null;
+          const actionLabel = action
+            ? t('workspace.lifecycle.railLeave', { name: space.name })
+            : null;
           return (
             <li className="space-rail__row" key={space.id}>
               <button
@@ -94,11 +94,7 @@ export function SpaceRail({
                   title={actionLabel}
                   onClick={() => onWorkspaceAction?.(space.id, action)}
                 >
-                  {action === 'delete' ? (
-                    <TrashIcon aria-hidden="true" />
-                  ) : (
-                    <LogoutIcon aria-hidden="true" />
-                  )}
+                  <LogoutIcon aria-hidden="true" />
                 </button>
               ) : null}
             </li>

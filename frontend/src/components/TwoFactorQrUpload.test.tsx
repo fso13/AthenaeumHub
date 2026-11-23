@@ -76,6 +76,18 @@ async function openChatSettings(user: TestUser): Promise<HTMLElement> {
   return screen.findByRole('dialog', { name: 'Настройки чата' });
 }
 
+/**
+ * #106: device uploads are framed first. These upload-contract tests keep the
+ * original bytes via the cropper's explicit "Без обрезки" action.
+ */
+async function useOriginal(user: TestUser): Promise<void> {
+  const cropper = await screen.findByRole('dialog', { name: 'Кадрирование изображения' });
+  await user.click(within(cropper).getByRole('button', { name: 'Без обрезки' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: 'Кадрирование изображения' })).toBeNull(),
+  );
+}
+
 function seedAuthenticatedSession(): void {
   writeAuthSession({
     accessToken: 'mock-access-token',
@@ -245,10 +257,11 @@ describe('#93 device image uploads', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Сменить аватар' }));
     const input = within(dialog).getByLabelText('Выбрать файл');
     await user.upload(input, pngFile());
+    await useOriginal(user);
 
     expect(
       await within(dialog).findByAltText('Предпросмотр выбранного изображения'),
-    ).toHaveAttribute('src', 'blob:sova-preview-1');
+    ).toHaveAttribute('src', 'blob:sova-preview-2');
     expect(
       within(dialog).getByRole('progressbar', { name: 'Загрузка изображения' }),
     ).toBeInTheDocument();
@@ -311,6 +324,7 @@ describe('#93 device image uploads', () => {
     const dialog = await openProfile(user);
     await user.click(within(dialog).getByRole('button', { name: 'Сменить аватар' }));
     await user.upload(within(dialog).getByLabelText('Выбрать файл'), pngFile());
+    await useOriginal(user);
 
     expect(
       await within(dialog).findByText('Сервис загрузки недоступен. Повторите позже.'),
@@ -328,6 +342,7 @@ describe('#93 device image uploads', () => {
     await waitFor(() => expect(changeCover).toBeEnabled());
     await user.click(changeCover);
     await user.upload(within(dialog).getByLabelText('Выбрать файл'), pngFile('cover.png'));
+    await useOriginal(user);
 
     await waitFor(() => expect(mockDb.chatCoverRequests).toHaveLength(1));
     const coverUpload = [...mockDb.mediaImages.values()][0];
@@ -345,6 +360,7 @@ describe('#93 device image uploads', () => {
     await screen.findByRole('heading', { name: 'Настройки пространства' });
     await user.click(screen.getByRole('button', { name: 'Выбрать логотип' }));
     await user.upload(screen.getByLabelText('Выбрать файл'), pngFile('logo.png'));
+    await useOriginal(user);
 
     await waitFor(() => expect(mockDb.workspaceAvatarRequests).toHaveLength(1));
     const logoUpload = [...mockDb.mediaImages.values()][1];

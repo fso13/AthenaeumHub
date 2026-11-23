@@ -8159,6 +8159,17 @@ export class ChatStore {
     const chat = this.state.chats.find((item) => item.id === frame.chat_id) ?? null;
     if (chat && chat.type !== 'DIRECT' && frame.payload.conference !== true) return;
     this.calls.handleSignal(frame);
+    // #105/#3: a room is a conference. If this tab is already present in the
+    // room, a peer's conference offer is joined automatically instead of
+    // ringing like a 1:1 call.
+    queueMicrotask(() => {
+      const call = this.calls.getState();
+      if (call.phase !== 'incoming' || !call.conference) return;
+      const rooms = this.rooms.getSnapshot();
+      const room = rooms.items.find((item) => item.chat_id === frame.chat_id);
+      if (!room || rooms.presenceRoomId !== room.id) return;
+      this.calls.accept();
+    });
   }
 
   private handleCallUnavailable(frame: CallUnavailableFrame): void {

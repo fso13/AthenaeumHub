@@ -389,6 +389,45 @@ function findMockRoom(db: MockDb, roomId: string): MockRoomRecord | null {
   return db.rooms.find((room) => room.id === roomId) ?? null;
 }
 
+/* #106: seeded rooms have a backing GROUP channel outside `db.chats`. */
+function findRoomByChatId(db: MockDb, chatId: string): MockRoomRecord | null {
+  return db.rooms.find((room) => room.chatId === chatId) ?? null;
+}
+
+/** Chat OWNER/ADMIN equivalent for a room avatar: creator or workspace manager. */
+function canManageRoomChat(db: MockDb, room: MockRoomRecord): boolean {
+  if (room.createdBy === db.me.user.id) return true;
+  const workspace = findMockWorkspace(db, room.workspaceId);
+  return workspace?.role === 'OWNER' || workspace?.role === 'ADMIN';
+}
+
+function roomChatAvatarId(db: MockDb, room: MockRoomRecord): string | null {
+  return db.roomChatAvatars.get(room.chatId) ?? null;
+}
+
+/** Minimal `Chat` projection returned by the existing avatar setter. */
+function roomChatResponseOf(db: MockDb, room: MockRoomRecord): Chat {
+  const workspace = findMockWorkspace(db, room.workspaceId);
+  return {
+    id: room.chatId,
+    type: 'GROUP',
+    security_mode: workspace?.security_mode ?? 'MANAGED',
+    visibility: 'PUBLIC',
+    peer_id: null,
+    peer_has_e2ee_capable_devices: false,
+    name: room.name,
+    description: null,
+    last_seq: 0,
+    unread_count: 0,
+    created_at: room.createdAt,
+    cover_file_id: null,
+    avatar_file_id: roomChatAvatarId(db, room),
+    read_only: false,
+    join_policy: 'OPEN',
+    archived: false,
+  };
+}
+
 /* ------------------------------------------------------------------------- */
 /* P0-4 (#82): avatar, TOTP authenticator, workspace settings/invites          */
 /* ------------------------------------------------------------------------- */
@@ -2818,7 +2857,7 @@ export function createHandlers(db: MockDb) {
         );
       }
       if (chatId !== null) {
-        if (!UUID_RE.test(chatId) || !db.chats[chatId]) {
+        if (!UUID_RE.test(chatId) || (!db.chats[chatId] && !findRoomByChatId(db, chatId))) {
           return errorResponse(404, 'NOT_FOUND', 'Chat not found');
         }
       }
@@ -6460,7 +6499,8 @@ export function createHandlers(db: MockDb) {
       if (unauthorized) return unauthorized;
       const chatId = String(params.chatId);
       const record = db.chats[chatId];
-      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const room = record ? null : findRoomByChatId(db, chatId);
+      if (!record && !room) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
       const body = asRecord(await readJson(request));
       if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
       const fileId = typeof body.file_id === 'string' ? body.file_id : null;
@@ -6477,14 +6517,24 @@ export function createHandlers(db: MockDb) {
           retryAfterSeconds: forced.retryAfterSeconds,
         });
       }
-      if (record.summary.type === 'DIRECT') {
-        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no avatar');
-      }
-      if (record.summary.security_mode === 'E2EE') {
-        return errorResponse(422, 'CHAT_SETTINGS_E2EE_UNSUPPORTED', 'E2EE has no avatar');
-      }
-      if (!actorCanManage(chatActorMember(db, chatId))) {
-        return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+      if (record) {
+        if (record.summary.type === 'DIRECT') {
+          return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no avatar');
+        }
+        if (record.summary.security_mode === 'E2EE') {
+          return errorResponse(422, 'CHAT_SETTINGS_E2EE_UNSUPPORTED', 'E2EE has no avatar');
+        }
+        if (!actorCanManage(chatActorMember(db, chatId))) {
+          return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+        }
+      } else if (room) {
+        const workspace = findMockWorkspace(db, room.workspaceId);
+        if (workspace?.security_mode === 'E2EE') {
+          return errorResponse(422, 'CHAT_SETTINGS_E2EE_UNSUPPORTED', 'E2EE has no avatar');
+        }
+        if (!canManageRoomChat(db, room)) {
+          return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+        }
       }
       if (fileId === null) {
         return errorResponse(422, 'VALIDATION_FAILED', 'file_id is required', {
@@ -6504,8 +6554,15 @@ export function createHandlers(db: MockDb) {
           'Attachment is not avatar-ready',
         );
       }
-      record.summary = { ...record.summary, avatar_file_id: file.id };
-      return HttpResponse.json(chatResponseOf(record.summary));
+      if (record) {
+        record.summary = { ...record.summary, avatar_file_id: file.id };
+        return HttpResponse.json(chatResponseOf(record.summary));
+      }
+      if (room) {
+        db.roomChatAvatars.set(room.chatId, file.id);
+        return HttpResponse.json(roomChatResponseOf(db, room));
+      }
+      return errorResponse(404, 'NOT_FOUND', 'Chat not found');
     }),
 
     http.delete(`${API}/chats/:chatId/avatar`, ({ request, params }) => {
@@ -6513,7 +6570,8 @@ export function createHandlers(db: MockDb) {
       if (unauthorized) return unauthorized;
       const chatId = String(params.chatId);
       const record = db.chats[chatId];
-      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const room = record ? null : findRoomByChatId(db, chatId);
+      if (!record && !room) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
       db.chatAvatarRequests.push({
         chatId,
         fileId: null,
@@ -6527,13 +6585,20 @@ export function createHandlers(db: MockDb) {
           retryAfterSeconds: forced.retryAfterSeconds,
         });
       }
-      if (record.summary.type === 'DIRECT') {
-        return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no avatar');
+      if (record) {
+        if (record.summary.type === 'DIRECT') {
+          return errorResponse(422, 'CHAT_MEMBERSHIP_UNSUPPORTED', 'DIRECT has no avatar');
+        }
+        if (!actorCanManage(chatActorMember(db, chatId))) {
+          return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+        }
+        record.summary = { ...record.summary, avatar_file_id: null };
+      } else if (room) {
+        if (!canManageRoomChat(db, room)) {
+          return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
+        }
+        db.roomChatAvatars.delete(room.chatId);
       }
-      if (!actorCanManage(chatActorMember(db, chatId))) {
-        return errorResponse(403, 'FORBIDDEN', 'Not a channel owner/admin');
-      }
-      record.summary = { ...record.summary, avatar_file_id: null };
       return new HttpResponse(null, { status: 204 });
     }),
 
@@ -6547,10 +6612,16 @@ export function createHandlers(db: MockDb) {
       if (unauthorized) return unauthorized;
       const chatId = String(params.chatId);
       const record = db.chats[chatId];
-      if (!record) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const room = record ? null : findRoomByChatId(db, chatId);
+      if (!record && !room) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      const avatarId = record
+        ? (record.summary.avatar_file_id ?? null)
+        : room
+          ? roomChatAvatarId(db, room)
+          : null;
       db.chatAvatarRequests.push({
         chatId,
-        fileId: record.summary.avatar_file_id ?? null,
+        fileId: avatarId,
         action: 'GET',
         deviceId: request.headers.get('x-device-id'),
       });
@@ -6561,10 +6632,10 @@ export function createHandlers(db: MockDb) {
           retryAfterSeconds: forced.retryAfterSeconds,
         });
       }
-      if (record.summary.type === 'DIRECT' || record.summary.security_mode === 'E2EE') {
+      if (record && (record.summary.type === 'DIRECT' || record.summary.security_mode === 'E2EE')) {
         return errorResponse(404, 'NOT_FOUND', 'Avatar is not set');
       }
-      if (!record.summary.avatar_file_id) {
+      if (!avatarId) {
         return errorResponse(404, 'NOT_FOUND', 'Avatar is not set');
       }
       return new HttpResponse(new Uint8Array([137, 80, 78, 71]), {
@@ -7636,6 +7707,8 @@ export function createHandlers(db: MockDb) {
       record.status = 'CLOSED';
       record.updatedAt = new Date().toISOString();
       record.participants = [];
+      // #106: the backing channel and its avatar disappear together.
+      db.roomChatAvatars.delete(record.chatId);
       // The backing channel is soft-deleted, so it leaves the chat list.
       delete db.chats[record.chatId];
       return new HttpResponse(null, { status: 204 });

@@ -8,8 +8,16 @@ import {
   type RoomsActionKind,
   type RoomsState,
 } from '../../rooms/roomsStore';
-import { useChatState, useChatStore, useRoomsState, useRoomsStore } from '../../store/ChatProvider';
+import {
+  useAvatarsState,
+  useAvatarsStore,
+  useChatState,
+  useChatStore,
+  useRoomsState,
+  useRoomsStore,
+} from '../../store/ChatProvider';
 import { Avatar } from '../Avatar';
+import { DeviceImageUpload } from '../DeviceImageUpload';
 import { CloseIcon, PlusIcon, VideoIcon } from '../Icons';
 import { PageShell } from './PageShell';
 
@@ -70,6 +78,20 @@ function presenceErrorText(error: ApiError): string {
   return describeError(error).message || t('rooms.presence.lost');
 }
 
+/**
+ * #106 room avatar errors come from the existing chat avatar setter. The server
+ * stays authoritative; the page only explains the contract status/code.
+ */
+function roomAvatarErrorText(error: ApiError | null): string {
+  if (!error) return t('rooms.avatar.error');
+  if (error.code === 'CHAT_AVATAR_INVALID') return t('rooms.avatar.invalid');
+  if (error.status === 403) return t('rooms.avatar.forbidden');
+  if (error.status === 404) return t('rooms.avatar.notFound');
+  if (error.status === 409 || error.status === 423) return t('rooms.avatar.notReady');
+  if (error.status === 422) return t('rooms.avatar.invalid');
+  return t('rooms.avatar.error');
+}
+
 function countLabel(room: Room): string {
   if (room.participant_count === 0) return t('rooms.count.none');
   if (room.participant_count === 1) return t('rooms.count.one');
@@ -87,6 +109,8 @@ function countLabel(room: Room): string {
 export function RoomsPage({ onBack }: RoomsPageProps) {
   const store = useRoomsStore();
   const chatStore = useChatStore();
+  const avatarsStore = useAvatarsStore();
+  const avatars = useAvatarsState();
   const rooms = useRoomsState();
   const state = useChatState();
   const workspaceId = state.activeWorkspaceId ?? state.session?.workspace.id ?? null;
@@ -109,6 +133,9 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
     error: string | null;
   } | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
+  const [avatarEditorRoomId, setAvatarEditorRoomId] = useState<string | null>(null);
+  const [avatarNotice, setAvatarNotice] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
 
   // `GET /me` is the only contract source of the caller's workspace role. It
   // is read once when the session projection lacks it (dev mode).
@@ -135,6 +162,14 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
     return () => window.clearInterval(interval);
   }, [store, workspaceId]);
 
+  // #106: a room card shows the avatar of its backing GROUP channel. The
+  // avatar store dedupes the authenticated GET per chat id across the app.
+  useEffect(() => {
+    for (const room of rooms.items) {
+      if (room.status === 'ACTIVE') void avatarsStore.ensureChat(room.chat_id);
+    }
+  }, [avatarsStore, rooms.items]);
+
   // Leaving the section stops the heartbeat, hangs up a room call and DELETEs
   // presence; the server TTL is only the fallback when the DELETE loses a race.
   useEffect(() => {
@@ -147,6 +182,15 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
     role === 'OWNER' || role === 'ADMIN' || (selfId !== null && room.created_by === selfId);
   const canClose = (room: Room): boolean =>
     role === 'OWNER' || (selfId !== null && room.created_by === selfId);
+  /**
+   * #106: the avatar belongs to the backing chat and is set through the existing
+   * chat avatar endpoint, which allows the chat OWNER/ADMIN. A room creator is
+   * the backing channel owner in the contract, and workspace OWNER/ADMIN already
+   * manage room metadata here, so the same rule gates the entry point; the
+   * server still rejects a caller without the chat role.
+   */
+  const canManageAvatar = canRename;
+  const roomAvatarUrl = (room: Room): string | null => avatars.chats[room.chat_id]?.url ?? null;
   const isPresent = (room: Room): boolean => store.isPresent(room);
   const callForRoom = (room: Room): boolean =>
     call.phase !== 'idle' && call.chatId !== null && call.chatId === room.chat_id;
@@ -181,6 +225,25 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
 
   const join = async (room: Room) => {
     await store.joinRoom(room.id);
+  };
+
+  /**
+   * #106: upload → existing chat avatar setter → refresh the room list and the
+   * authenticated avatar bytes. Nothing is patched optimistically.
+   */
+  const handleRoomAvatar = async (room: Room, fileId: string): Promise<boolean> => {
+    setAvatarNotice(null);
+    setAvatarError(null);
+    const ok = await chatStore.setChatAvatar(room.chat_id, fileId);
+    if (!ok) {
+      const snapshot = chatStore.getSnapshot();
+      setAvatarError(roomAvatarErrorText(snapshot.chatAvatar.actionError));
+      return false;
+    }
+    setAvatarEditorRoomId(null);
+    setAvatarNotice(t('rooms.avatar.saved', { name: room.name }));
+    await store.load(true);
+    return true;
   };
 
   const leave = async () => {
@@ -308,6 +371,27 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
         </div>
       ) : null}
 
+      {avatarNotice ? (
+        <p className="chat-settings-notice" role="status">
+          {avatarNotice}
+        </p>
+      ) : null}
+
+      {avatarError ? (
+        <div className="pg-inline-error" role="alert">
+          <p>{avatarError}</p>
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => setAvatarError(null)}
+            aria-label={t('rooms.dismiss')}
+            title={t('rooms.dismiss')}
+          >
+            <CloseIcon aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+
       {rooms.status === 'loading' && rooms.items.length === 0 ? (
         <p className="rooms-loading" role="status">
           {t('rooms.loading')}
@@ -348,27 +432,35 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
             return (
               <li className="room-card" key={room.id}>
                 <div className="room-card__head">
-                  <div className="room-card__titles">
-                    <h2 className="room-card__name" id={nameId}>
-                      {room.name}
-                    </h2>
-                    <div className="room-card__chips">
-                      {present ? (
-                        <span className="chip chip--accent">{t('rooms.present')}</span>
-                      ) : null}
-                      {inCall ? (
-                        <span className="chip room-call-chip">
-                          <VideoIcon aria-hidden="true" />
-                          {call.phase === 'incoming'
-                            ? t('rooms.call.incoming')
-                            : call.mediaPending || call.phase !== 'connected'
-                              ? t('rooms.call.connecting')
-                              : t('rooms.call.active')}
-                        </span>
-                      ) : null}
-                      {room.created_by === selfId ? (
-                        <span className="chip">{t('rooms.createdByYou')}</span>
-                      ) : null}
+                  <div className="room-card__identity">
+                    <Avatar
+                      name={room.name}
+                      seed={room.chat_id}
+                      size="md"
+                      src={roomAvatarUrl(room)}
+                    />
+                    <div className="room-card__titles">
+                      <h2 className="room-card__name" id={nameId}>
+                        {room.name}
+                      </h2>
+                      <div className="room-card__chips">
+                        {present ? (
+                          <span className="chip chip--accent">{t('rooms.present')}</span>
+                        ) : null}
+                        {inCall ? (
+                          <span className="chip room-call-chip">
+                            <VideoIcon aria-hidden="true" />
+                            {call.phase === 'incoming'
+                              ? t('rooms.call.incoming')
+                              : call.mediaPending || call.phase !== 'connected'
+                                ? t('rooms.call.connecting')
+                                : t('rooms.call.active')}
+                          </span>
+                        ) : null}
+                        {room.created_by === selfId ? (
+                          <span className="chip">{t('rooms.createdByYou')}</span>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                   <span className="room-card__count">{countLabel(room)}</span>
@@ -495,6 +587,21 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                   </div>
                 ) : null}
 
+                {avatarEditorRoomId === room.id ? (
+                  <section
+                    className="room-avatar-editor"
+                    aria-label={t('rooms.avatar.section', { name: room.name })}
+                  >
+                    <p className="room-avatar-editor__title">{t('rooms.avatar.sectionTitle')}</p>
+                    <p className="room-avatar-editor__hint">{t('rooms.avatar.hint')}</p>
+                    <DeviceImageUpload
+                      chatId={room.chat_id}
+                      aspect={1}
+                      onUploaded={(fileId) => handleRoomAvatar(room, fileId)}
+                    />
+                  </section>
+                ) : null}
+
                 <div className="room-card__actions">
                   {present ? (
                     <button
@@ -528,10 +635,35 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                       onClick={() => {
                         store.clearActionError();
                         setClosingId(null);
+                        setAvatarEditorRoomId(null);
                         setRenaming({ roomId: room.id, name: room.name, error: null });
                       }}
                     >
                       {t('rooms.rename')}
+                    </button>
+                  ) : null}
+                  {canManageAvatar(room) ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy || closingId === room.id}
+                      aria-label={
+                        avatarEditorRoomId === room.id
+                          ? t('rooms.avatar.closeAction', { name: room.name })
+                          : t('rooms.avatar.changeAction', { name: room.name })
+                      }
+                      aria-expanded={avatarEditorRoomId === room.id}
+                      onClick={() => {
+                        setAvatarNotice(null);
+                        setAvatarError(null);
+                        setRenaming(null);
+                        setClosingId(null);
+                        setAvatarEditorRoomId((current) => (current === room.id ? null : room.id));
+                      }}
+                    >
+                      {avatarEditorRoomId === room.id
+                        ? t('rooms.avatar.close')
+                        : t('rooms.avatar.change')}
                     </button>
                   ) : null}
                   {canClose(room) ? (
@@ -543,6 +675,7 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                       onClick={() => {
                         store.clearActionError();
                         setRenaming(null);
+                        setAvatarEditorRoomId(null);
                         setClosingId(room.id);
                       }}
                     >

@@ -772,6 +772,7 @@ export function ProfileDialog({
               {avatarPickerOpen ? (
                 <ImageFilePicker
                   target="PROFILE"
+                  aspect={1}
                   pending={avatar.actionStatus !== 'idle'}
                   onSelect={(fileId) => {
                     void profileStore.setAvatar('PROFILE', fileId).then((ok) => {

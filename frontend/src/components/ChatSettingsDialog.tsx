@@ -887,6 +887,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
           <p className="cover-picker__title">{t('chatSettings.cover.pickerTitle')}</p>
           <DeviceImageUpload
             chatId={chat.id}
+            aspect={16 / 9}
             disabled={coverBusy || saving}
             onUploaded={(fileId) => handleSelectCover(fileId)}
           />
@@ -942,6 +943,7 @@ export function ChatSettingsDialog({ open, chat, onClose }: ChatSettingsDialogPr
           <p className="cover-picker__title">{t('chatSettings.avatar.pickerTitle')}</p>
           <DeviceImageUpload
             chatId={chat.id}
+            aspect={1}
             disabled={avatarBusy || saving}
             onUploaded={(fileId) => handleSelectAvatar(fileId)}
           />

@@ -14,6 +14,8 @@ export interface ImageFilePickerProps {
   currentFileId?: string | null;
   pending?: boolean;
   onSelect: (fileId: string) => void;
+  /** #106 crop window: avatars/logos are square, covers can pass 16/9. */
+  aspect?: number;
 }
 
 /**
@@ -30,6 +32,7 @@ export function ImageFilePicker({
   currentFileId = null,
   pending = false,
   onSelect,
+  aspect = 1,
 }: ImageFilePickerProps) {
   const store = useProfileWorkspaceStore();
   const state = useProfileWorkspaceState();
@@ -47,7 +50,11 @@ export function ImageFilePicker({
       <p className="cover-picker__title">{t('imagePicker.title')}</p>
       <p className="pane-sub">{t('imagePicker.hint')}</p>
 
-      <DeviceImageUpload disabled={pending} onUploaded={(fileId) => onSelect(fileId)} />
+      <DeviceImageUpload
+        disabled={pending}
+        aspect={aspect}
+        onUploaded={(fileId) => onSelect(fileId)}
+      />
 
       {status === 'loading' || status === 'idle' ? (
         <p className="pane-sub" role="status">
