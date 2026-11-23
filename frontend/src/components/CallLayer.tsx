@@ -829,10 +829,11 @@ export function CallLayer() {
               </>
             ) : (
               <>
-                {connected ? (
+                {!incoming ? (
                   <>
                     <button
                       type="button"
+                      disabled={!call.localStream}
                       className={`call-button call-button--round${call.muted ? ' is-active' : ''}`}
                       onClick={() => store.toggleCallMute()}
                       aria-pressed={call.muted}
@@ -844,6 +845,7 @@ export function CallLayer() {
                     {call.video ? (
                       <button
                         type="button"
+                        disabled={!call.localStream}
                         className={`call-button call-button--round${
                           call.cameraOn ? '' : ' is-active'
                         }`}
@@ -858,6 +860,7 @@ export function CallLayer() {
                     {call.video ? (
                       <button
                         type="button"
+                        disabled={!call.localStream}
                         className={`call-button call-button--round${
                           call.screenSharing ? ' is-active' : ''
                         }`}
