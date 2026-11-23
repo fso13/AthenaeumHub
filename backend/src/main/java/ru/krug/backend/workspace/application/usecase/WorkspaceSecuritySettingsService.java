@@ -28,9 +28,10 @@ import ru.krug.backend.workspace.domain.repository.WorkspaceSecuritySettingsRepo
  * <p>The workspace {@code security_mode} is immutable (V16 trigger) and is never part of
  * this surface: an explicit {@code security_mode} field is rejected with
  * {@code 422 MODE_CHANGE_FORBIDDEN} instead of being silently ignored. DLP can only be
- * enabled in a MANAGED workspace. Values are stored here for the security UI and for
- * downstream policy consumption; this slice does not add a new enforcement point in the
- * login or message pipeline.</p>
+ * enabled in a MANAGED workspace. #101 consumes {@code dlp_enabled},
+ * {@code session_timeout_minutes} and {@code retention_days} at real enforcement points:
+ * the content DLP gate (text/edit/attachment/plugin), the BFF refresh idle-timeout guard
+ * and the daily workspace-retention job.</p>
  */
 @Service
 public class WorkspaceSecuritySettingsService {

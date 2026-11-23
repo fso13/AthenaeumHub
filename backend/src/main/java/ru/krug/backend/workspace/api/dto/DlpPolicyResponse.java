@@ -10,6 +10,8 @@ public record DlpPolicyResponse(
         String action,
         String patternType,
         String pattern,
+        String scope,
+        Long maxFileSizeBytes,
         boolean enabled,
         Instant createdAt,
         Instant updatedAt) {

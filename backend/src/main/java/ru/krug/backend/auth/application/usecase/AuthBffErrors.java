@@ -73,6 +73,11 @@ final class AuthBffErrors {
                 "Two-factor authentication is required", Map.of());
     }
 
+    static DomainException sessionExpired() {
+        return DomainException.unauthorized(ErrorCode.AUTH_SESSION_EXPIRED,
+                "The session has been idle for longer than the workspace allows", Map.of());
+    }
+
     static DomainException passwordRejected() {
         return DomainException.unprocessable(ErrorCode.VALIDATION_FAILED,
                 "Password does not meet the identity provider policy",

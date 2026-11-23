@@ -7,7 +7,9 @@ public record WorkspaceInviteAcceptance(Outcome outcome, UUID inviteId, UUID wor
                                         String role, boolean alreadyMember) {
 
     public enum Outcome {
-        OK, NOT_FOUND, FORBIDDEN, WORKSPACE_UNAVAILABLE, REVOKED, EXPIRED, EXHAUSTED;
+        OK, NOT_FOUND, FORBIDDEN, WORKSPACE_UNAVAILABLE, REVOKED, EXPIRED, EXHAUSTED,
+        /** #100: the invite is bound to another email address; it is not consumed. */
+        EMAIL_MISMATCH;
 
         public static Outcome parse(String value) {
             if (value == null) {

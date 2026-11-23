@@ -25,6 +25,7 @@ import ru.krug.backend.workspace.application.service.WorkspaceSecurityActions;
 import ru.krug.backend.workspace.domain.model.DlpAction;
 import ru.krug.backend.workspace.domain.model.DlpPatternType;
 import ru.krug.backend.workspace.domain.model.DlpPolicy;
+import ru.krug.backend.workspace.domain.model.DlpScope;
 import ru.krug.backend.workspace.domain.repository.DlpPolicyRepository;
 
 /**
@@ -73,6 +74,10 @@ public class DlpPolicyService {
         DlpAction action = DlpPolicyRequests.action(command.action());
         DlpPatternType type = DlpPolicyRequests.patternType(command.patternType());
         String pattern = DlpPolicyRequests.pattern(command.pattern(), type);
+        DlpScope scope = DlpPolicyRequests.scope(command.scope());
+        Long maxFileSizeBytes =
+                DlpPolicyRequests.maxFileSizeBytes(command.maxFileSizeBytes());
+        DlpPolicyRequests.validateMaxFileSizeScope(scope, maxFileSizeBytes);
         boolean enabled = DlpPolicyRequests.enabled(command.enabled());
 
         if (policies.count(workspaceId) >= DlpPolicyRequests.MAX_POLICIES_PER_WORKSPACE) {
@@ -86,7 +91,7 @@ public class DlpPolicyService {
 
         Instant now = clock.now();
         DlpPolicy policy = new DlpPolicy(UUID.randomUUID(), workspaceId, name, action, type,
-                pattern, enabled, principal.userId(), now, now);
+                pattern, scope, maxFileSizeBytes, enabled, principal.userId(), now, now);
         if (!policies.insert(policy)) {
             // The unique (workspace_id, lower(name)) index won a concurrent create.
             throw nameTaken();
@@ -95,7 +100,8 @@ public class DlpPolicyService {
                 WorkspaceSecurityActions.DLP_POLICY_CREATED, TARGET_TYPE, policy.id(),
                 principal.requestId(),
                 Map.of("policy_id", policy.id().toString(), "action", action.name(),
-                        "pattern_type", type.name(), "enabled", enabled),
+                        "pattern_type", type.name(), "scope", scope.name(),
+                        "has_size_limit", maxFileSizeBytes != null, "enabled", enabled),
                 clock.now()));
         return view(policy);
     }
@@ -122,9 +128,16 @@ public class DlpPolicyService {
                 ? existing.pattern() : command.pattern();
         // Re-validate the merged pair: a type change also re-checks the wildcard bound.
         pattern = DlpPolicyRequests.pattern(pattern, type);
+        DlpScope scope = command.scope() == null
+                ? existing.scope() : DlpPolicyRequests.scope(command.scope());
+        Long maxFileSizeBytes = command.maxFileSizeBytes() == null
+                ? existing.maxFileSizeBytes()
+                : DlpPolicyRequests.maxFileSizeBytes(command.maxFileSizeBytes());
+        DlpPolicyRequests.validateMaxFileSizeScope(scope, maxFileSizeBytes);
         boolean enabled = command.enabled() == null ? existing.enabled() : command.enabled();
 
-        List<String> changed = changed(existing, name, action, type, pattern, enabled);
+        List<String> changed = changed(existing, name, action, type, pattern, scope,
+                maxFileSizeBytes, enabled);
         if (changed.isEmpty()) {
             return view(existing);
         }
@@ -132,8 +145,8 @@ public class DlpPolicyService {
             throw nameTaken();
         }
 
-        DlpPolicy updated = existing.withDetails(name, action, type, pattern, enabled,
-                clock.now());
+        DlpPolicy updated = existing.withDetails(name, action, type, pattern, scope,
+                maxFileSizeBytes, enabled, clock.now());
         if (!policies.update(updated)) {
             throw DomainException.notFound("DLP policy not found");
         }
@@ -142,7 +155,7 @@ public class DlpPolicyService {
                 principal.requestId(),
                 Map.of("policy_id", policyId.toString(), "changed", changed,
                         "action", action.name(), "pattern_type", type.name(),
-                        "enabled", enabled),
+                        "scope", scope.name(), "enabled", enabled),
                 clock.now()));
         return view(updated);
     }
@@ -178,7 +191,8 @@ public class DlpPolicyService {
     }
 
     private static List<String> changed(DlpPolicy existing, String name, DlpAction action,
-                                        DlpPatternType type, String pattern, boolean enabled) {
+                                        DlpPatternType type, String pattern, DlpScope scope,
+                                        Long maxFileSizeBytes, boolean enabled) {
         List<String> changed = new ArrayList<>();
         if (!Objects.equals(existing.name(), name)) {
             changed.add("name");
@@ -192,6 +206,12 @@ public class DlpPolicyService {
         if (!Objects.equals(existing.pattern(), pattern)) {
             changed.add("pattern");
         }
+        if (existing.scope() != scope) {
+            changed.add("scope");
+        }
+        if (!Objects.equals(existing.maxFileSizeBytes(), maxFileSizeBytes)) {
+            changed.add("max_file_size_bytes");
+        }
         if (existing.enabled() != enabled) {
             changed.add("enabled");
         }
@@ -200,7 +220,8 @@ public class DlpPolicyService {
 
     private static DlpPolicyView view(DlpPolicy policy) {
         return new DlpPolicyView(policy.id(), policy.name(), policy.action().name(),
-                policy.patternType().name(), policy.pattern(), policy.enabled(),
-                policy.createdAt(), policy.updatedAt());
+                policy.patternType().name(), policy.pattern(), policy.scope().name(),
+                policy.maxFileSizeBytes(), policy.enabled(), policy.createdAt(),
+                policy.updatedAt());
     }
 }

@@ -24,6 +24,7 @@ import ru.krug.backend.file.domain.service.SafeFileName;
 import ru.krug.backend.file.domain.repository.AttachmentRepository;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
 import ru.krug.backend.workspace.application.port.WorkspaceAccessPort;
@@ -56,18 +57,20 @@ public class FileMutationService {
     private final ObjectStoragePort storage;
     private final WorkspaceAccessPort workspaceAccess;
     private final AuditPort audit;
+    private final ContentDlpPort dlp;
     private final ClockPort clock;
 
     public FileMutationService(FileAccessGuard accessGuard, AttachmentRepository attachments,
                                WorkspaceQuotaPort quota, ObjectStoragePort storage,
                                WorkspaceAccessPort workspaceAccess, AuditPort audit,
-                               ClockPort clock) {
+                               ContentDlpPort dlp, ClockPort clock) {
         this.accessGuard = accessGuard;
         this.attachments = attachments;
         this.quota = quota;
         this.storage = storage;
         this.workspaceAccess = workspaceAccess;
         this.audit = audit;
+        this.dlp = dlp;
         this.clock = clock;
     }
 
@@ -79,6 +82,10 @@ public class FileMutationService {
                 .orElseThrow(UploadNotFoundException::new);
         requireOwner(scoped, attachment);
         requireActive(attachment);
+        // #101: a rename must not bypass an attachment rule. The check uses the new
+        // filename; a BLOCK leaves the stored name unchanged.
+        dlp.enforceAttachment(scoped, attachment.chatId(), safeName,
+                attachment.mimeType(), attachment.sizeBytes());
 
         Instant now = clock.now();
         Attachment renamed = attachment.rename(safeName, now);

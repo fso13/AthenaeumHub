@@ -5,6 +5,9 @@
 deploy/.env
 deploy/.env.*
 !deploy/.env.example
+# Production template is committed; the real .env.prod is not.
+!deploy/production/.env.prod.example
+deploy/backups/
 *.pem
 *.key
 *.p12

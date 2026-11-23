@@ -26,6 +26,7 @@ import ru.krug.backend.message.domain.repository.MessageRepository;
 import ru.krug.backend.message.domain.service.MessageReactionPolicy;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.application.port.TenantContext;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
@@ -57,6 +58,7 @@ public class MessageActionsService {
     private final MessageEnvelopeRepository envelopeRepository;
     private final MessageAttachmentPort attachmentPort;
     private final MessageQueryHandler queryHandler;
+    private final ContentDlpPort dlp;
     private final ClockPort clock;
     private final ApplicationEventPublisher events;
 
@@ -66,8 +68,8 @@ public class MessageActionsService {
                                  MessageReactionRepository reactionRepository,
                                  MessageEnvelopeRepository envelopeRepository,
                                  MessageAttachmentPort attachmentPort,
-                                 MessageQueryHandler queryHandler, ClockPort clock,
-                                 ApplicationEventPublisher events) {
+                                 MessageQueryHandler queryHandler, ContentDlpPort dlp,
+                                 ClockPort clock, ApplicationEventPublisher events) {
         this.tenantContext = tenantContext;
         this.chatAccess = chatAccess;
         this.chatWorkspace = chatWorkspace;
@@ -76,6 +78,7 @@ public class MessageActionsService {
         this.envelopeRepository = envelopeRepository;
         this.attachmentPort = attachmentPort;
         this.queryHandler = queryHandler;
+        this.dlp = dlp;
         this.clock = clock;
         this.events = events;
     }
@@ -105,6 +108,10 @@ public class MessageActionsService {
         if (expectedVersion != null && expectedVersion != message.version()) {
             throw versionConflict(message.version());
         }
+        // #101: an edit is a new content write, so it must pass the same DLP gate as the
+        // original send. A BLOCK leaves the stored message and its version untouched; the
+        // content-free decision event is written independently.
+        dlp.enforceText(scoped, chatId, text);
         Message updated = messageRepository.editText(scoped.workspaceId(), chatId, messageId,
                         text, expectedVersion, clock.now())
                 .orElseThrow(() -> expectedVersion == null ? notFound()

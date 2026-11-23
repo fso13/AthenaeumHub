@@ -56,8 +56,12 @@ export class ApiClient {
     this.options = options;
   }
 
-  get<T>(path: string, query?: RequestOptions['query']): Promise<ApiResponse<T>> {
-    return this.request<T>({ method: 'GET', path, query });
+  get<T>(
+    path: string,
+    query?: RequestOptions['query'],
+    options: { auth?: boolean } = {},
+  ): Promise<ApiResponse<T>> {
+    return this.request<T>({ method: 'GET', path, query, auth: options.auth });
   }
 
   /**

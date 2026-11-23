@@ -47,6 +47,12 @@ public class InMemoryRateLimiter implements RateLimitPort {
     private final long botCommandUserWindowNanos;
     private final int botResponsePerToken;
     private final long botResponseTokenWindowNanos;
+    private final int inviteEmailPerWorkspace;
+    private final long inviteEmailWorkspaceWindowNanos;
+    private final int inviteEmailPerAddress;
+    private final long inviteEmailAddressWindowNanos;
+    private final int invitePreviewPerIp;
+    private final long invitePreviewIpWindowNanos;
     private final ConcurrentHashMap<String, Window> windows = new ConcurrentHashMap<>();
 
     public InMemoryRateLimiter(KrugProperties properties) {
@@ -72,6 +78,12 @@ public class InMemoryRateLimiter implements RateLimitPort {
         this.botCommandUserWindowNanos = config.botCommandWindow().toNanos();
         this.botResponsePerToken = config.botResponsePerToken();
         this.botResponseTokenWindowNanos = config.botResponseWindow().toNanos();
+        this.inviteEmailPerWorkspace = config.inviteEmailPerWorkspace();
+        this.inviteEmailWorkspaceWindowNanos = config.inviteEmailWorkspaceWindow().toNanos();
+        this.inviteEmailPerAddress = config.inviteEmailPerAddress();
+        this.inviteEmailAddressWindowNanos = config.inviteEmailAddressWindow().toNanos();
+        this.invitePreviewPerIp = config.invitePreviewPerIp();
+        this.invitePreviewIpWindowNanos = config.invitePreviewIpWindow().toNanos();
     }
 
     @Override
@@ -145,6 +157,31 @@ public class InMemoryRateLimiter implements RateLimitPort {
                 botResponseTokenWindowNanos, "token");
         enforce("bot-response:bot:" + botId, botResponsePerToken,
                 botResponseTokenWindowNanos, "bot");
+    }
+
+    @Override
+    public void checkInviteEmailSend(Principal principal, UUID workspaceId, String email) {
+        if (!enabled) {
+            return;
+        }
+        enforce("invite-email:workspace:" + workspaceId, inviteEmailPerWorkspace,
+                inviteEmailWorkspaceWindowNanos, "workspace");
+        enforce("invite-email:address:" + normalize(email), inviteEmailPerAddress,
+                inviteEmailAddressWindowNanos, "email");
+    }
+
+    @Override
+    public void checkInvitePreview(String clientIp) {
+        if (!enabled) {
+            return;
+        }
+        enforce("invite-preview:ip:" + normalize(clientIp), invitePreviewPerIp,
+                invitePreviewIpWindowNanos, "ip");
+    }
+
+    private static String normalize(String value) {
+        return value == null || value.isBlank()
+                ? "unknown" : value.strip().toLowerCase(java.util.Locale.ROOT);
     }
 
     private void enforce(String key, int limit, long windowNanos, String scope) {

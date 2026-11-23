@@ -92,16 +92,30 @@ describe('P0-3 security API', () => {
       action: 'WARN',
       pattern_type: 'PATTERN',
       pattern: 'contract-*',
+      scope: 'ATTACHMENT',
+      max_file_size_bytes: 5 * 1024 * 1024,
       enabled: true,
     });
-    expect(created).toMatchObject({ name: 'Контракты', action: 'WARN' });
+    expect(created).toMatchObject({
+      name: 'Контракты',
+      action: 'WARN',
+      scope: 'ATTACHMENT',
+      max_file_size_bytes: 5 * 1024 * 1024,
+    });
     expect(mockDb.security.policyRequests.at(-1)?.action).toBe('create');
 
     const updated = await api.updateWorkspaceDlpPolicy(IDS.workspace, created.id, {
       name: 'Контракты и сметы',
+      scope: 'ALL',
+      max_file_size_bytes: 1024,
       enabled: false,
     });
-    expect(updated).toMatchObject({ name: 'Контракты и сметы', enabled: false });
+    expect(updated).toMatchObject({
+      name: 'Контракты и сметы',
+      scope: 'ALL',
+      max_file_size_bytes: 1024,
+      enabled: false,
+    });
     expect(mockDb.security.policyRequests.at(-1)?.action).toBe('update');
 
     await api.deleteWorkspaceDlpPolicy(IDS.workspace, created.id);

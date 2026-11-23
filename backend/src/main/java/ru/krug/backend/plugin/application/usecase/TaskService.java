@@ -22,6 +22,7 @@ import ru.krug.backend.plugin.domain.model.ChatTask;
 import ru.krug.backend.plugin.domain.repository.ChatTaskRepository;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.application.port.RequestCanonicalizer;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
@@ -52,11 +53,12 @@ public class TaskService {
     private final IdempotencyPort idempotency;
     private final RequestCanonicalizer canonicalizer;
     private final PluginMessagePort messages;
+    private final ContentDlpPort dlp;
 
     public TaskService(PluginActionGate gate, PluginChatAccessPort access,
                        ChatTaskRepository repository, AuditPort audit, ClockPort clock,
                        IdempotencyPort idempotency, RequestCanonicalizer canonicalizer,
-                       PluginMessagePort messages) {
+                       PluginMessagePort messages, ContentDlpPort dlp) {
         this.gate = gate;
         this.access = access;
         this.repository = repository;
@@ -65,6 +67,7 @@ public class TaskService {
         this.idempotency = idempotency;
         this.canonicalizer = canonicalizer;
         this.messages = messages;
+        this.dlp = dlp;
     }
 
     @Transactional(readOnly = true)
@@ -88,6 +91,9 @@ public class TaskService {
         ChatTask task = ChatTask.create(UUID.randomUUID(), context.workspaceId(), chatId,
                 principal.userId(), assigneeId, title, dueAt, clock.now());
         Principal scoped = principal.withWorkspace(context.workspaceId());
+        // #101: the title is user-supplied plugin payload. A BLOCK is answered before the
+        // idempotency key is reserved, so a rejected attempt cannot be replayed.
+        dlp.enforcePluginPayload(scoped, chatId, List.of(task.title()));
         byte[] requestHash = requestHash(chatId, task);
         IdempotencyReservation reservation = idempotency.reserve(scoped,
                 CREATE_IDEMPOTENCY_SCOPE, idempotencyKey.toString(), requestHash);

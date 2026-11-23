@@ -195,6 +195,8 @@ export function createMockSecurityState(): MockSecurityState {
         action: 'BLOCK',
         pattern_type: 'KEYWORD',
         pattern: 'пароль',
+        scope: 'ALL',
+        max_file_size_bytes: null,
         enabled: true,
         created_at: '2026-11-10T09:00:00.000Z',
         updated_at: '2026-11-10T09:00:00.000Z',
@@ -205,6 +207,8 @@ export function createMockSecurityState(): MockSecurityState {
         action: 'WARN',
         pattern_type: 'PATTERN',
         pattern: '*@external.*',
+        scope: 'ALL',
+        max_file_size_bytes: null,
         enabled: true,
         created_at: '2026-11-11T09:00:00.000Z',
         updated_at: '2026-11-11T09:00:00.000Z',
@@ -819,6 +823,11 @@ export interface MockEmailVerification {
   attempts: number;
   consumed: boolean;
   lastSentAt: number;
+  /**
+   * #100 mock-only pending invite. The real backend stores a SHA-256 hash of
+   * this token next to the verification; it is never exposed by a response.
+   */
+  inviteToken?: string | null;
 }
 
 export interface MockAuthTokenRecord {
@@ -1232,7 +1241,7 @@ export interface MockDb {
   workspaceInvites: MockWorkspaceInviteRecord[];
   workspaceInviteRequests: Array<{
     workspaceId: string;
-    action: 'LIST' | 'CREATE' | 'REVOKE' | 'ACCEPT';
+    action: 'LIST' | 'CREATE' | 'REVOKE' | 'ACCEPT' | 'PREVIEW';
     role?: string;
     inviteId?: string;
   }>;

@@ -5,17 +5,25 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import ru.krug.backend.auth.application.model.EmailCodeMessage;
 import ru.krug.backend.auth.application.port.MailPort;
+import ru.krug.backend.ops.application.model.OutboundEmail;
+import ru.krug.backend.ops.application.port.EmailDeliveryPort;
 import ru.krug.backend.ops.application.port.TestEmailPort;
 
-/** Captures Auth BFF emails and admin SMTP probes instead of talking to SMTP. */
-public class MockMailSender implements MailPort, TestEmailPort {
+/** Captures Auth BFF emails and generic outbound emails instead of talking to SMTP. */
+public class MockMailSender implements MailPort, TestEmailPort, EmailDeliveryPort {
 
     private final List<EmailCodeMessage> sent = new CopyOnWriteArrayList<>();
+    private final List<OutboundEmail> outbound = new CopyOnWriteArrayList<>();
     private final List<String> testEmails = new CopyOnWriteArrayList<>();
 
     @Override
     public void sendEmailCode(EmailCodeMessage message) {
         sent.add(message);
+    }
+
+    @Override
+    public void sendEmail(OutboundEmail email) {
+        outbound.add(email);
     }
 
     @Override
@@ -48,12 +56,28 @@ public class MockMailSender implements MailPort, TestEmailPort {
                 .orElseThrow(() -> new IllegalStateException("No email for the requested user"));
     }
 
+    public OutboundEmail lastOutbound() {
+        if (outbound.isEmpty()) {
+            throw new IllegalStateException("No outbound email was sent");
+        }
+        return outbound.get(outbound.size() - 1);
+    }
+
+    public List<OutboundEmail> outbound() {
+        return List.copyOf(outbound);
+    }
+
+    public int outboundCount() {
+        return outbound.size();
+    }
+
     public int count() {
         return sent.size();
     }
 
     public void clear() {
         sent.clear();
+        outbound.clear();
         testEmails.clear();
     }
 }

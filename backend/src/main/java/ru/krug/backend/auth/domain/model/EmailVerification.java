@@ -22,10 +22,12 @@ public final class EmailVerification {
     private final Instant consumedAt;
     private final Instant lastSentAt;
     private final Instant createdAt;
+    /** #100: SHA-256 of an invite token supplied at registration; never the raw token. */
+    private final String inviteTokenHash;
 
     private EmailVerification(UUID id, String email, String displayName, UUID keycloakUserId,
                               String secret, Instant expiresAt, int attempts, Instant consumedAt,
-                              Instant lastSentAt, Instant createdAt) {
+                              Instant lastSentAt, Instant createdAt, String inviteTokenHash) {
         this.id = Objects.requireNonNull(id, "id");
         this.email = normalizeEmail(email);
         this.displayName = requireDisplayName(displayName);
@@ -42,13 +44,25 @@ public final class EmailVerification {
         if (!expiresAt.isAfter(createdAt)) {
             throw new IllegalArgumentException("expiresAt must be after createdAt");
         }
+        if (inviteTokenHash != null && !inviteTokenHash.matches("[a-f0-9]{64}")) {
+            throw new IllegalArgumentException("inviteTokenHash must be a SHA-256 hex digest");
+        }
+        this.inviteTokenHash = inviteTokenHash;
     }
 
     public static EmailVerification create(UUID id, String email, String displayName,
                                            UUID keycloakUserId, String secret,
                                            Instant expiresAt, Instant now) {
+        return create(id, email, displayName, keycloakUserId, secret, expiresAt, now, null);
+    }
+
+    /** #100: registration may pin a workspace invite for the post-verification claim. */
+    public static EmailVerification create(UUID id, String email, String displayName,
+                                           UUID keycloakUserId, String secret,
+                                           Instant expiresAt, Instant now,
+                                           String inviteTokenHash) {
         return new EmailVerification(id, email, displayName, keycloakUserId, secret, expiresAt,
-                0, null, now, now);
+                0, null, now, now, inviteTokenHash);
     }
 
     public static EmailVerification reconstitute(UUID id, String email, String displayName,
@@ -56,8 +70,17 @@ public final class EmailVerification {
                                                  Instant expiresAt, int attempts,
                                                  Instant consumedAt, Instant lastSentAt,
                                                  Instant createdAt) {
+        return reconstitute(id, email, displayName, keycloakUserId, secret, expiresAt, attempts,
+                consumedAt, lastSentAt, createdAt, null);
+    }
+
+    public static EmailVerification reconstitute(UUID id, String email, String displayName,
+                                                 UUID keycloakUserId, String secret,
+                                                 Instant expiresAt, int attempts,
+                                                 Instant consumedAt, Instant lastSentAt,
+                                                 Instant createdAt, String inviteTokenHash) {
         return new EmailVerification(id, email, displayName, keycloakUserId, secret, expiresAt,
-                attempts, consumedAt, lastSentAt, createdAt);
+                attempts, consumedAt, lastSentAt, createdAt, inviteTokenHash);
     }
 
     public UUID id() {
@@ -100,6 +123,11 @@ public final class EmailVerification {
         return createdAt;
     }
 
+    /** #100 SHA-256 hex of the invite token supplied at registration, or {@code null}. */
+    public String inviteTokenHash() {
+        return inviteTokenHash;
+    }
+
     public boolean isConsumed() {
         return consumedAt != null;
     }
@@ -123,18 +151,18 @@ public final class EmailVerification {
 
     public EmailVerification withFailedAttempt() {
         return new EmailVerification(id, email, displayName, keycloakUserId, secret, expiresAt,
-                attempts + 1, consumedAt, lastSentAt, createdAt);
+                attempts + 1, consumedAt, lastSentAt, createdAt, inviteTokenHash);
     }
 
     /** Rotates the secret and records the send time; the expiration window is unchanged. */
     public EmailVerification withNewSecret(String newSecret, Instant sentAt) {
         return new EmailVerification(id, email, displayName, keycloakUserId, newSecret, expiresAt,
-                attempts, consumedAt, sentAt, createdAt);
+                attempts, consumedAt, sentAt, createdAt, inviteTokenHash);
     }
 
     public EmailVerification consumed(Instant at) {
         return new EmailVerification(id, email, displayName, keycloakUserId, secret, expiresAt,
-                attempts, at, lastSentAt, createdAt);
+                attempts, at, lastSentAt, createdAt, inviteTokenHash);
     }
 
     public static String normalizeEmail(String value) {

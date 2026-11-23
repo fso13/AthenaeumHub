@@ -12,6 +12,7 @@ import { maxSeq } from './domain/messages';
 import { AuthRoot } from './auth/AuthRoot';
 import { useAppAuth } from './auth/AuthContext';
 import { useLocation, useNavigate } from './router/router';
+import { parseInviteRoute, parseWorkspaceInviteRoute } from './router/inviteRoutes';
 import { AuthGate } from './components/auth/AuthGate';
 import { TwoFactorEnrollmentGate } from './components/auth/TwoFactorEnrollmentGate';
 import {
@@ -37,42 +38,10 @@ interface AppProps {
 }
 
 /**
- * #79 `/invite/:token` route. The app has no routing library, so the pathname
- * is parsed here and both auth contours render the same accept screen. Any
- * `/invite/...` URL is claimed so a malformed token gets an honest error
- * instead of falling through to the chat surface.
+ * App shell. The workspace invite route is also rendered anonymously inside
+ * `AuthGate` (#100 public preview); every other route keeps the existing
+ * guarded behaviour.
  */
-function parseWorkspaceInviteRoute(location: string): {
-  matched: boolean;
-  token: string | null;
-} {
-  const pathname = location.split('?')[0] ?? '/';
-  if (pathname !== '/workspace-invite' && !pathname.startsWith('/workspace-invite/')) {
-    return { matched: false, token: null };
-  }
-  const raw = pathname.slice('/workspace-invite'.length).replace(/^\/+|\/+$/g, '');
-  if (raw.length === 0) return { matched: true, token: null };
-  try {
-    return { matched: true, token: decodeURIComponent(raw) };
-  } catch {
-    return { matched: true, token: null };
-  }
-}
-
-function parseInviteRoute(location: string): { matched: boolean; token: string | null } {
-  const pathname = location.split('?')[0] ?? '/';
-  if (pathname !== '/invite' && !pathname.startsWith('/invite/')) {
-    return { matched: false, token: null };
-  }
-  const raw = pathname.slice('/invite'.length).replace(/^\/+|\/+$/g, '');
-  if (raw.length === 0) return { matched: true, token: null };
-  try {
-    return { matched: true, token: decodeURIComponent(raw) };
-  } catch {
-    return { matched: true, token: null };
-  }
-}
-
 export function App({ store, config }: AppProps) {
   return (
     <ChatProvider store={store}>

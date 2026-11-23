@@ -38,6 +38,25 @@ public interface RateLimitPort {
     void checkInviteCreate(Principal principal, UUID chatId);
 
     /**
+     * #100: email-invite send guard. Sending mail to an arbitrary address is an outbound
+     * side effect, so it is bounded per workspace and per normalized recipient address in
+     * independent windows; neither consumes the link-invite window.
+     *
+     * @throws ru.krug.backend.shared.error.DomainException 429 {@code RATE_LIMITED} with
+     *         {@code Retry-After} when the window is exhausted
+     */
+    void checkInviteEmailSend(Principal principal, UUID workspaceId, String email);
+
+    /**
+     * #100: anonymous invite-preview guard. The preview URL is a bearer token with no
+     * session, so guessing attempts are bounded per client IP.
+     *
+     * @throws ru.krug.backend.shared.error.DomainException 429 {@code RATE_LIMITED} with
+     *         {@code Retry-After} when the window is exhausted
+     */
+    void checkInvitePreview(String clientIp);
+
+    /**
      * #96: bot message-send guard. A bot credential is a bearer secret with no user session,
      * so it gets its own per-bot and per-chat windows, independent of user sends.
      *

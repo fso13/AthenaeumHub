@@ -43,6 +43,10 @@ public class EmailVerificationEntity {
     @Column(name = "created_at", insertable = false, updatable = false)
     private Instant createdAt;
 
+    /** #100: SHA-256 of a registration invite token; the raw token never reaches storage. */
+    @Column(name = "invite_token_hash")
+    private String inviteTokenHash;
+
     protected EmailVerificationEntity() {
     }
 
@@ -120,5 +124,13 @@ public class EmailVerificationEntity {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getInviteTokenHash() {
+        return inviteTokenHash;
+    }
+
+    public void setInviteTokenHash(String inviteTokenHash) {
+        this.inviteTokenHash = inviteTokenHash;
     }
 }

@@ -12,19 +12,23 @@ import ru.krug.backend.auth.application.model.EmailCodeMessage;
 import ru.krug.backend.auth.application.port.MailDeliveryException;
 import ru.krug.backend.auth.application.port.MailPort;
 import ru.krug.backend.auth.infrastructure.config.AuthBffProperties;
+import ru.krug.backend.ops.application.model.OutboundEmail;
 import ru.krug.backend.ops.application.model.RuntimeSmtpSettings;
+import ru.krug.backend.ops.application.port.EmailDeliveryException;
+import ru.krug.backend.ops.application.port.EmailDeliveryPort;
 import ru.krug.backend.ops.application.port.SystemSettingsPort;
 import ru.krug.backend.ops.application.port.TestEmailException;
 import ru.krug.backend.ops.application.port.TestEmailPort;
 
 /**
- * SMTP delivery for verification codes and admin test emails. Runtime settings from
- * {@code ops.system_settings} override the environment ({@code spring.mail.*}); when the
- * installer has not configured SMTP yet, the environment-configured sender is the fallback.
- * The SMTP password is decrypted in memory only and is never logged or returned.
+ * SMTP delivery for verification codes, generic outbound email (workspace invitations) and
+ * admin test emails. Runtime settings from {@code ops.system_settings} override the
+ * environment ({@code spring.mail.*}); when the installer has not configured SMTP yet, the
+ * environment-configured sender is the fallback. The SMTP password is decrypted in memory
+ * only and is never logged or returned.
  */
 @Component
-public class SmtpMailAdapter implements MailPort, TestEmailPort {
+public class SmtpMailAdapter implements MailPort, TestEmailPort, EmailDeliveryPort {
 
     private final JavaMailSender envSender;
     private final AuthBffProperties properties;
@@ -50,6 +54,15 @@ public class SmtpMailAdapter implements MailPort, TestEmailPort {
                 Код действует %d мин. Если вы не регистрировались в Сове, проигнорируйте письмо.
                 """.formatted(message.code(), message.expiresInMinutes()));
         send(mail, MailDeliveryException::new);
+    }
+
+    @Override
+    public void sendEmail(OutboundEmail email) {
+        SimpleMailMessage mail = new SimpleMailMessage();
+        mail.setTo(email.to());
+        mail.setSubject(email.subject());
+        mail.setText(email.body());
+        send(mail, EmailDeliveryException::new);
     }
 
     @Override

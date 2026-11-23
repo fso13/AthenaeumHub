@@ -476,6 +476,8 @@ function WorkspaceInvitesCard({
   const [role, setRole] = useState<WorkspaceInviteRole>(roles[0] ?? 'MEMBER');
   const [expiry, setExpiry] = useState<ExpiryValue>('604800');
   const [maxUses, setMaxUses] = useState('');
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [revokeTarget, setRevokeTarget] = useState<WorkspaceInvite | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -483,6 +485,7 @@ function WorkspaceInvitesCard({
   const roleId = useId();
   const expiryId = useId();
   const maxUsesId = useId();
+  const emailId = useId();
   const createdLinkId = useId();
 
   const creating = invites?.createStatus === 'creating';
@@ -491,6 +494,7 @@ function WorkspaceInvitesCard({
   const listError = invites?.status === 'error' ? invites.error : null;
   const revokeError = invites?.revokeError ?? null;
   const createdUrl = invites?.created ? inviteUrl(invites.created.token) : '';
+  const emailBound = email.trim().length > 0;
 
   useEffect(() => {
     if (roles.includes(role)) return;
@@ -515,14 +519,31 @@ function WorkspaceInvitesCard({
     event.preventDefault();
     if (!canManage || creating) return;
     setNotice(null);
+    const trimmedEmail = email.trim();
+    if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setEmailError(t('workspace.invites.emailInvalid'));
+      return;
+    }
+    setEmailError(null);
     const anyUses = Number.parseInt(maxUses, 10);
     const body: WorkspaceInviteCreateRequest = {
       role,
       expires_in_seconds: Number(expiry),
-      max_uses: Number.isFinite(anyUses) && anyUses > 0 ? Math.min(anyUses, 1000) : null,
+      // #100: an email invite is single-use by contract; the server rejects a
+      // different max_uses with 400, so the UI sends exactly 1.
+      max_uses:
+        trimmedEmail.length > 0
+          ? 1
+          : Number.isFinite(anyUses) && anyUses > 0
+            ? Math.min(anyUses, 1000)
+            : null,
+      ...(trimmedEmail.length > 0 ? { email: trimmedEmail } : {}),
     };
     const created = await store.createWorkspaceInvite(workspace.id, body);
-    if (created) setCopyState('idle');
+    if (created) {
+      setCopyState('idle');
+      if (created.invite.email) setEmail('');
+    }
   };
 
   const handleRevoke = async () => {
@@ -551,6 +572,34 @@ function WorkspaceInvitesCard({
 
       {canManage ? (
         <form className="workspace-invites__form" onSubmit={(event) => void handleCreate(event)}>
+          <div className="form-row">
+            <label htmlFor={emailId}>{t('workspace.invites.email')}</label>
+            <input
+              id={emailId}
+              className="input"
+              type="email"
+              inputMode="email"
+              autoComplete="off"
+              maxLength={254}
+              value={email}
+              placeholder={t('workspace.invites.emailPlaceholder')}
+              disabled={creating}
+              aria-invalid={emailError !== null}
+              aria-describedby={`${emailId}-hint${emailError ? ` ${emailId}-error` : ''}`}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                setEmailError(null);
+              }}
+            />
+            <p className="field__meta" id={`${emailId}-hint`}>
+              {t('workspace.invites.emailHint')}
+            </p>
+            {emailError ? (
+              <p className="sec-field-error" id={`${emailId}-error`}>
+                {emailError}
+              </p>
+            ) : null}
+          </div>
           <div className="form-grid form-grid--three">
             <div className="form-row">
               <label htmlFor={roleId}>{t('workspace.invites.role')}</label>
@@ -596,11 +645,17 @@ function WorkspaceInvitesCard({
                 inputMode="numeric"
                 min={1}
                 max={1000}
-                value={maxUses}
+                value={emailBound ? '1' : maxUses}
                 placeholder={t('workspace.invites.maxUsesHint')}
-                disabled={creating}
+                disabled={creating || emailBound}
+                aria-describedby={emailBound ? `${maxUsesId}-email` : undefined}
                 onChange={(event) => setMaxUses(event.target.value.replace(/[^0-9]/g, ''))}
               />
+              {emailBound ? (
+                <p className="field__meta" id={`${maxUsesId}-email`}>
+                  {t('workspace.invites.emailSingleUse')}
+                </p>
+              ) : null}
             </div>
           </div>
           {createError ? (
@@ -611,7 +666,11 @@ function WorkspaceInvitesCard({
           <div className="form-actions">
             <button type="submit" className="btn btn--accent" disabled={creating}>
               <LinkIcon aria-hidden="true" />
-              {creating ? t('workspace.invites.creating') : t('workspace.invites.create')}
+              {creating
+                ? t('workspace.invites.creating')
+                : emailBound
+                  ? t('workspace.invites.send')
+                  : t('workspace.invites.create')}
             </button>
           </div>
         </form>
@@ -619,8 +678,16 @@ function WorkspaceInvitesCard({
 
       {invites?.created ? (
         <div className="invite-created" role="status">
-          <p className="invite-created__note">{t('workspace.invites.createdTitle')}</p>
-          <p className="mini-card__note">{t('workspace.invites.createdHint')}</p>
+          <p className="invite-created__note">
+            {invites.created.invite.email
+              ? t('workspace.invites.sentTitle')
+              : t('workspace.invites.createdTitle')}
+          </p>
+          <p className="mini-card__note">
+            {invites.created.invite.email
+              ? t('workspace.invites.sentHint', { email: invites.created.invite.email })
+              : t('workspace.invites.createdHint')}
+          </p>
           <div className="invite-row">
             <input
               id={createdLinkId}
@@ -709,13 +776,20 @@ function WorkspaceInvitesCard({
                     <span className={`members-row__role members-row__role--${invite.status}`}>
                       {t(STATUS_LABEL[invite.status])}
                     </span>
+                    {invite.email ? (
+                      <span className="chip chip--accent">
+                        {t('workspace.invites.emailBound', { email: invite.email })}
+                      </span>
+                    ) : null}
                     <span className="chat-invite__meta">
-                      {invite.max_uses === null || invite.max_uses === undefined
-                        ? t('workspace.invites.usedUnlimited', { used: invite.used_count })
-                        : t('workspace.invites.used', {
-                            used: invite.used_count,
-                            max: invite.max_uses,
-                          })}
+                      {invite.email
+                        ? t('workspace.invites.singleUseMeta')
+                        : invite.max_uses === null || invite.max_uses === undefined
+                          ? t('workspace.invites.usedUnlimited', { used: invite.used_count })
+                          : t('workspace.invites.used', {
+                              used: invite.used_count,
+                              max: invite.max_uses,
+                            })}
                       {' · '}
                       {t('workspace.invites.expires', { date: formatDateTime(invite.expires_at) })}
                     </span>
@@ -748,6 +822,11 @@ function WorkspaceInvitesCard({
               <p className="admin-confirm__lead">
                 {t('workspace.invites.revokeLead', { role: t(ROLE_LABEL[revokeTarget.role]) })}
               </p>
+              {revokeTarget.email ? (
+                <p className="admin-confirm__lead">
+                  {t('workspace.invites.emailBound', { email: revokeTarget.email })}
+                </p>
+              ) : null}
               <ul className="admin-confirm__list">
                 <li>{t('workspace.invites.revokeEffect')}</li>
               </ul>

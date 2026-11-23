@@ -102,6 +102,8 @@ public final class ErrorCode {
     public static final String EMAIL_TAKEN = "EMAIL_TAKEN";
     public static final String REGISTRATION_CLOSED = "REGISTRATION_CLOSED";
     public static final String AUTH_UNAVAILABLE = "AUTH_UNAVAILABLE";
+    /** #101: the server-side session exceeded the workspace idle timeout at refresh. */
+    public static final String AUTH_SESSION_EXPIRED = "AUTH_SESSION_EXPIRED";
 
     // E8-B: first-run setup, platform admin and installation chat limits (R-01…R-04).
     public static final String SETUP_ALREADY_COMPLETED = "SETUP_ALREADY_COMPLETED";
@@ -236,6 +238,9 @@ public final class ErrorCode {
     public static final String WORKSPACE_INVITE_EXHAUSTED = "WORKSPACE_INVITE_EXHAUSTED";
     public static final String WORKSPACE_INVITE_ROLE_FORBIDDEN =
             "WORKSPACE_INVITE_ROLE_FORBIDDEN";
+    /** #100: the invite is bound to a different email address (403, not consumed). */
+    public static final String WORKSPACE_INVITE_EMAIL_MISMATCH =
+            "WORKSPACE_INVITE_EMAIL_MISMATCH";
     public static final String WORKSPACE_PERMISSION_DENIED = "WORKSPACE_PERMISSION_DENIED";
     public static final String OWNER_PERMISSIONS_IMMUTABLE = "OWNER_PERMISSIONS_IMMUTABLE";
     public static final String PERMISSION_CHANGE_FORBIDDEN = "PERMISSION_CHANGE_FORBIDDEN";

@@ -1,0 +1,79 @@
+# Caddy edge for the production stack.
+#
+# DOMAIN        public SPA/API/WS origin, e.g. chat.example.com
+# FILES_DOMAIN  public S3 host for presigned downloads, e.g. files.example.com
+# ACME_EMAIL    ACME account contact
+# ACME_CA       ACME directory URL (override for the Let's Encrypt staging CA)
+#
+# Caddy obtains and renews certificates automatically. Ports 80 and 443 must be
+# reachable from the internet and the DNS names must point at this host.
+{
+	email {$ACME_EMAIL}
+	acme_ca {$ACME_CA}
+	# Only loopback inside the container; used by the compose healthcheck.
+	admin 127.0.0.1:2019
+}
+
+# Application origin: SPA, REST API and WebSocket.
+{$DOMAIN} {
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(self), geolocation=()"
+		-Server
+	}
+
+	# API responses may contain personal data; never let a shared cache keep them.
+	header /api/* Cache-Control "no-store"
+
+	encode zstd gzip
+
+	# Access logs can contain one-time WS tickets and invite tokens in the query
+	# string, so only errors are logged. Enable redacted access logs only after
+	# query-string scrubbing is configured.
+	log {
+		output stdout
+		format json
+		level ERROR
+	}
+
+	# WebSocket upgrade is handled natively; nginx applies the long read timeout.
+	reverse_proxy frontend:80
+}
+
+# S3 host for presigned GET URLs. MinIO validates the SigV4 signature against
+# the Host header, so it must stay FILES_DOMAIN all the way to MinIO.
+{$FILES_DOMAIN} {
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# No access log: presigned query strings are credentials for their TTL.
+	log {
+		output stdout
+		format json
+		level ERROR
+	}
+
+	# Downloads are presigned GETs. Uploads go through the backend API, so the
+	# browser never needs PUT/POST against MinIO.
+	@not_read not method GET HEAD OPTIONS
+	respond @not_read 405
+
+	reverse_proxy minio:9000 {
+		# SigV4 covers Host; keep the public FILES_DOMAIN, not minio:9000.
+		header_up Host {host}
+	}
+}

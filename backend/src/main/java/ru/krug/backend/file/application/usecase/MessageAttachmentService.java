@@ -22,6 +22,7 @@ import ru.krug.backend.message.application.model.MessageAttachmentView;
 import ru.krug.backend.message.application.port.MessageAttachmentPort;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
 
@@ -36,12 +37,15 @@ public class MessageAttachmentService implements MessageAttachmentPort {
 
     private final AttachmentRepository attachmentRepository;
     private final UploadRepository uploadRepository;
+    private final ContentDlpPort dlp;
     private final ClockPort clock;
 
     public MessageAttachmentService(AttachmentRepository attachmentRepository,
-                                    UploadRepository uploadRepository, ClockPort clock) {
+                                    UploadRepository uploadRepository, ContentDlpPort dlp,
+                                    ClockPort clock) {
         this.attachmentRepository = attachmentRepository;
         this.uploadRepository = uploadRepository;
+        this.dlp = dlp;
         this.clock = clock;
     }
 
@@ -86,7 +90,15 @@ public class MessageAttachmentService implements MessageAttachmentPort {
                         Map.of("field", "attachment_ids",
                                 "reason", "direct_image_not_bindable"));
             }
+            // AV state keeps precedence: a quarantined/not-ready attachment is 423/409
+            // before any policy question is asked. Then #101 re-evaluates the metadata at
+            // bind time, so a rule created after the upload (or a rename) cannot be
+            // bypassed by binding an old upload. A BLOCK rolls the whole message
+            // transaction back; the decision event is committed independently and stays
+            // content-free.
             attachment.assertBindable();
+            dlp.enforceAttachment(principal, chatId, attachment.filename(),
+                    attachment.mimeType(), attachment.sizeBytes());
             // #83: a global workspace file joins the message's chat at bind time; a regular
             // chat attachment keeps its (already matching) chat id.
             Attachment stored = unboundWorkspaceFile

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Repository;
 import ru.krug.backend.workspace.domain.model.DlpAction;
 import ru.krug.backend.workspace.domain.model.DlpPatternType;
 import ru.krug.backend.workspace.domain.model.DlpPolicy;
+import ru.krug.backend.workspace.domain.model.DlpScope;
 import ru.krug.backend.workspace.domain.repository.DlpPolicyRepository;
 
 /**
@@ -34,7 +35,8 @@ public class DlpPolicyRepositoryAdapter implements DlpPolicyRepository {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT id, workspace_id, name, action, pattern_type, pattern,
-                               enabled, created_by, created_at, updated_at
+                               scope, max_file_size_bytes, enabled, created_by,
+                               created_at, updated_at
                           FROM workspace.dlp_policies
                          WHERE workspace_id = ?1
                          ORDER BY created_at DESC, id DESC
@@ -50,7 +52,8 @@ public class DlpPolicyRepositoryAdapter implements DlpPolicyRepository {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT id, workspace_id, name, action, pattern_type, pattern,
-                               enabled, created_by, created_at, updated_at
+                               scope, max_file_size_bytes, enabled, created_by,
+                               created_at, updated_at
                           FROM workspace.dlp_policies
                          WHERE workspace_id = ?1 AND id = ?2
                         """)
@@ -91,8 +94,9 @@ public class DlpPolicyRepositoryAdapter implements DlpPolicyRepository {
         int inserted = entityManager.createNativeQuery("""
                         INSERT INTO workspace.dlp_policies
                                (id, workspace_id, name, action, pattern_type, pattern,
-                                enabled, created_by, created_at, updated_at)
-                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                                scope, max_file_size_bytes, enabled, created_by, created_at,
+                                updated_at)
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                         ON CONFLICT DO NOTHING
                         """)
                 .setParameter(1, policy.id())
@@ -101,10 +105,12 @@ public class DlpPolicyRepositoryAdapter implements DlpPolicyRepository {
                 .setParameter(4, policy.action().name())
                 .setParameter(5, policy.patternType().name())
                 .setParameter(6, policy.pattern())
-                .setParameter(7, policy.enabled())
-                .setParameter(8, policy.createdBy())
-                .setParameter(9, Timestamp.from(policy.createdAt()))
-                .setParameter(10, Timestamp.from(policy.updatedAt()))
+                .setParameter(7, policy.scope().name())
+                .setParameter(8, policy.maxFileSizeBytes())
+                .setParameter(9, policy.enabled())
+                .setParameter(10, policy.createdBy())
+                .setParameter(11, Timestamp.from(policy.createdAt()))
+                .setParameter(12, Timestamp.from(policy.updatedAt()))
                 .executeUpdate();
         return inserted == 1;
     }
@@ -117,8 +123,10 @@ public class DlpPolicyRepositoryAdapter implements DlpPolicyRepository {
                                action = ?4,
                                pattern_type = ?5,
                                pattern = ?6,
-                               enabled = ?7,
-                               updated_at = ?8
+                               scope = ?7,
+                               max_file_size_bytes = ?8,
+                               enabled = ?9,
+                               updated_at = ?10
                          WHERE workspace_id = ?1 AND id = ?2
                         """)
                 .setParameter(1, policy.workspaceId())
@@ -127,8 +135,10 @@ public class DlpPolicyRepositoryAdapter implements DlpPolicyRepository {
                 .setParameter(4, policy.action().name())
                 .setParameter(5, policy.patternType().name())
                 .setParameter(6, policy.pattern())
-                .setParameter(7, policy.enabled())
-                .setParameter(8, Timestamp.from(policy.updatedAt()))
+                .setParameter(7, policy.scope().name())
+                .setParameter(8, policy.maxFileSizeBytes())
+                .setParameter(9, policy.enabled())
+                .setParameter(10, Timestamp.from(policy.updatedAt()))
                 .executeUpdate();
         return updated == 1;
     }
@@ -146,10 +156,11 @@ public class DlpPolicyRepositoryAdapter implements DlpPolicyRepository {
     }
 
     private static DlpPolicy map(Object[] row) {
+        Long maxFileSizeBytes = row[7] == null ? null : ((Number) row[7]).longValue();
         return new DlpPolicy((UUID) row[0], (UUID) row[1], (String) row[2],
                 DlpAction.valueOf((String) row[3]), DlpPatternType.valueOf((String) row[4]),
-                (String) row[5], Boolean.TRUE.equals(row[6]), (UUID) row[7],
-                instant(row[8]), instant(row[9]));
+                (String) row[5], DlpScope.valueOf((String) row[6]), maxFileSizeBytes,
+                Boolean.TRUE.equals(row[8]), (UUID) row[9], instant(row[10]), instant(row[11]));
     }
 
     private static Instant instant(Object value) {

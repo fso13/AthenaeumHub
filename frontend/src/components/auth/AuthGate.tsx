@@ -1,6 +1,12 @@
 import { useEffect, type ReactNode } from 'react';
 import { useAppAuth, usePasswordAuth } from '../../auth/AuthContext';
 import { useLocation, useNavigate } from '../../router/router';
+import {
+  parseWorkspaceInviteRoute,
+  readInviteToken,
+  workspaceInvitePath,
+} from '../../router/inviteRoutes';
+import { WorkspaceInviteAcceptPage } from '../WorkspaceInviteAcceptPage';
 import { LoginScreen } from './LoginScreen';
 import { RegisterScreen } from './RegisterScreen';
 import { SplashScreen } from './AuthStatusScreens';
@@ -23,6 +29,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.split('?')[0] ?? '/';
+  const workspaceInvite = parseWorkspaceInviteRoute(location);
   // #79: the invite route must survive the login round-trip. It stays in the
   // URL while the anonymous user sees the login screen, so the accept page is
   // restored immediately after authentication.
@@ -46,14 +53,23 @@ export function AuthGate({ children }: { children: ReactNode }) {
       return;
     }
     if (auth.status === 'authenticated' && AUTH_ROUTES.has(pathname)) {
-      navigate('/', { replace: true });
+      // #100: a token carried through login/register returns to the invite
+      // page so the authenticated user can accept it. The token is only in
+      // the URL, never in storage.
+      const inviteToken = readInviteToken(location);
+      navigate(inviteToken ? workspaceInvitePath(inviteToken) : '/', { replace: true });
     }
-  }, [auth.status, challenge, isInviteRoute, pathname, pending, navigate]);
+  }, [auth.status, challenge, isInviteRoute, location, pathname, pending, navigate]);
 
   if (auth.status === 'loading') return <SplashScreen />;
 
   if (auth.status === 'anonymous') {
     if (challenge) return <TwoFactorChallengeScreen />;
+    // #100: the public preview works without an account; the accept action
+    // is rendered on the same page after authentication.
+    if (workspaceInvite.matched) {
+      return <WorkspaceInviteAcceptPage token={workspaceInvite.token} anonymous />;
+    }
     if (pathname === '/register') return <RegisterScreen />;
     if (pathname === '/verify' && pending) return <VerifyEmailScreen />;
     return <LoginScreen />;

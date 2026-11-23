@@ -186,6 +186,19 @@ krug:
     bot-command-window: ${KRUG_RATE_LIMIT_BOT_COMMAND_WINDOW:60s}
     bot-response-per-token: ${KRUG_RATE_LIMIT_BOT_RESPONSE_PER_TOKEN:10}
     bot-response-window: ${KRUG_RATE_LIMIT_BOT_RESPONSE_WINDOW:1m}
+    # #100: email invitations are an outbound side effect. Per workspace and per normalized
+    # recipient address (independent of the link-invite windows); the anonymous preview is
+    # bounded per client IP.
+    invite-email-per-workspace: ${KRUG_RATE_LIMIT_INVITE_EMAIL_PER_WORKSPACE:20}
+    invite-email-workspace-window: ${KRUG_RATE_LIMIT_INVITE_EMAIL_WORKSPACE_WINDOW:1h}
+    invite-email-per-address: ${KRUG_RATE_LIMIT_INVITE_EMAIL_PER_ADDRESS:5}
+    invite-email-address-window: ${KRUG_RATE_LIMIT_INVITE_EMAIL_ADDRESS_WINDOW:1h}
+    invite-preview-per-ip: ${KRUG_RATE_LIMIT_INVITE_PREVIEW_PER_IP:120}
+    invite-preview-ip-window: ${KRUG_RATE_LIMIT_INVITE_PREVIEW_IP_WINDOW:1m}
+  # #100: clickable invitation link origin. Deploy already passes PUBLIC_URL as the SPA
+  # origin (also used for the WS allowlist); the nested fallback keeps dev at Vite :5173.
+  workspace-invites:
+    accept-base-url: ${PUBLIC_URL:${KRUG_WS_ALLOWED_ORIGINS:http://localhost:5173}}
   # #98: signed bot webhooks. The response-url base is the public API prefix; the token
   # itself is appended by the slash-command service.
   bots:
@@ -214,6 +227,9 @@ krug:
     idempotency-in-progress-timeout: ${KRUG_RETENTION_IN_PROGRESS_TIMEOUT:1h}
     outbox-retention: ${KRUG_RETENTION_OUTBOX:7d}
     ticket-retention: ${KRUG_RETENTION_TICKETS:1d}
+    # #101: daily workspace retention (messages/files) uses the same `enabled` flag and
+    # `batch-size`; the cron is server-local and runs once a day.
+    workspace-cron: "${KRUG_RETENTION_WORKSPACE_CRON:0 30 3 * * *}"
   realtime:
     # E3 single-node WebSocket slice. Behind a reverse proxy use wss://... here.
     ws-url: "${KRUG_REALTIME_WS_URL:ws://localhost:8081/ws}"

@@ -39,6 +39,7 @@ import ru.krug.backend.file.domain.repository.UploadRepository;
 import ru.krug.backend.file.domain.service.SafeFileName;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
 
@@ -70,6 +71,7 @@ public class WorkspaceFileUploadHandler {
     private final ObjectStoragePort storage;
     private final FileSettingsPort settings;
     private final AuditPort audit;
+    private final ContentDlpPort dlp;
     private final ClockPort clock;
     private final AudioMetadataExtractor audioMetadataExtractor;
 
@@ -77,7 +79,7 @@ public class WorkspaceFileUploadHandler {
                                       UploadRepository uploadRepository,
                                       AttachmentRepository attachmentRepository,
                                       ObjectStoragePort storage, FileSettingsPort settings,
-                                      AuditPort audit, ClockPort clock,
+                                      AuditPort audit, ContentDlpPort dlp, ClockPort clock,
                                       AudioMetadataExtractor audioMetadataExtractor) {
         this.accessGuard = accessGuard;
         this.quota = quota;
@@ -86,6 +88,7 @@ public class WorkspaceFileUploadHandler {
         this.storage = storage;
         this.settings = settings;
         this.audit = audit;
+        this.dlp = dlp;
         this.clock = clock;
         this.audioMetadataExtractor = audioMetadataExtractor;
     }
@@ -126,6 +129,10 @@ public class WorkspaceFileUploadHandler {
             throw new UnsupportedFileTypeException(mime,
                     FileTypePolicy.extensionOf(filename), FileTypePolicy.allowedExamples());
         }
+        // #101: a workspace-scoped (not yet bound) file is still managed content. Check the
+        // DLP attachment rules before the object is written; chat_id is null because the
+        // file has no chat yet.
+        dlp.enforceAttachment(scoped, null, filename, mime, command.sizeBytes());
 
         Instant now = clock.now();
         Instant expiresAt = now.plus(settings.uploadTtl());

@@ -6,10 +6,12 @@ public record UpdateDlpPolicyCommand(
         String action,
         String patternType,
         String pattern,
+        String scope,
+        Long maxFileSizeBytes,
         Boolean enabled) {
 
     public boolean isEmpty() {
         return name == null && action == null && patternType == null && pattern == null
-                && enabled == null;
+                && scope == null && maxFileSizeBytes == null && enabled == null;
     }
 }

@@ -3,19 +3,23 @@ import type {
   DlpPatternType,
   DlpPolicyCreateRequest,
   DlpPolicyUpdateRequest,
+  DlpScope,
   WorkspaceSecurity,
   WorkspaceSecurityUpdateRequest,
   WorkspaceSession,
 } from '../api/types';
 
 /**
- * P0-3 (#81) contract mirrors used by the UI. These constants come from
+ * P0-3 (#81) / #101 contract mirrors used by the UI. These constants come from
  * `contracts/openapi.yaml`; the server remains the source of truth.
  */
 export const DLP_NAME_MAX = 120;
 export const DLP_PATTERN_MAX = 200;
 export const DLP_WILDCARD_MAX = 20;
 export const DLP_POLICY_LIMIT = 100;
+/** #101 `max_file_size_bytes` bounds (1 B … 10 GiB), attachment/ALL rules only. */
+export const DLP_MAX_FILE_SIZE_MIN = 1;
+export const DLP_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024;
 export const SESSION_TIMEOUT_MIN = 15;
 export const SESSION_TIMEOUT_MAX = 10_080;
 export const RETENTION_MIN = 1;
@@ -24,7 +28,11 @@ export const DLP_EVENTS_PAGE_SIZE = 30;
 export const AUDIT_PAGE_SIZE = 30;
 export const SESSIONS_PAGE_SIZE = 50;
 
+/** Contract order; used by the select and by draft validation. */
+export const DLP_SCOPES: readonly DlpScope[] = ['ALL', 'TEXT', 'ATTACHMENT', 'PLUGIN'];
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BYTES_RE = /^[0-9]+$/;
 
 /** Literal control-character check (no regex, matching the backend guard). */
 export function hasControlCharacters(value: string): boolean {
@@ -50,6 +58,16 @@ export interface DlpPolicyDraft {
   action: DlpAction;
   patternType: DlpPatternType;
   pattern: string;
+  /** #101: which managed surface the rule applies to (`ALL` by default). */
+  scope: DlpScope;
+  /** Input text; empty means "no threshold". Bytes are parsed on submit. */
+  maxFileSizeBytes: string;
+  /**
+   * #101: the stored threshold of the policy being edited. The additive PATCH
+   * contract keeps an absent `max_file_size_bytes`, so an existing threshold
+   * cannot be cleared. The form uses this to keep TEXT/PLUGIN honest.
+   */
+  originalMaxFileSizeBytes?: number | null;
   enabled: boolean;
 }
 
@@ -58,10 +76,21 @@ export interface DlpPolicyFieldErrors {
   action?: string;
   patternType?: string;
   pattern?: string;
+  scope?: string;
+  maxFileSizeBytes?: string;
 }
 
 export function emptyDlpDraft(): DlpPolicyDraft {
-  return { name: '', action: 'WARN', patternType: 'KEYWORD', pattern: '', enabled: true };
+  return {
+    name: '',
+    action: 'WARN',
+    patternType: 'KEYWORD',
+    pattern: '',
+    scope: 'ALL',
+    maxFileSizeBytes: '',
+    originalMaxFileSizeBytes: null,
+    enabled: true,
+  };
 }
 
 export function draftFromPolicy(policy: {
@@ -69,21 +98,47 @@ export function draftFromPolicy(policy: {
   action: DlpAction;
   pattern_type: DlpPatternType;
   pattern: string;
+  scope?: DlpScope;
+  max_file_size_bytes?: number | null;
   enabled: boolean;
 }): DlpPolicyDraft {
+  const size = policy.max_file_size_bytes;
   return {
     name: policy.name,
     action: policy.action,
     patternType: policy.pattern_type,
     pattern: policy.pattern,
+    scope: policy.scope ?? 'ALL',
+    maxFileSizeBytes: typeof size === 'number' ? String(size) : '',
+    originalMaxFileSizeBytes: typeof size === 'number' ? size : null,
     enabled: policy.enabled,
   };
+}
+
+/** Size thresholds are meaningful only for attachment/ALL rules (#101). */
+export function scopeSupportsFileSize(scope: DlpScope): boolean {
+  return scope === 'ALL' || scope === 'ATTACHMENT';
+}
+
+/** `true` when an existing stored threshold blocks a switch to TEXT/PLUGIN. */
+export function hasUnclearableFileSize(draft: DlpPolicyDraft): boolean {
+  return typeof draft.originalMaxFileSizeBytes === 'number';
+}
+
+/** Parse the byte input; `null` means "no threshold", `NaN` means invalid. */
+export function parseMaxFileSizeBytes(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (!BYTES_RE.test(trimmed)) return Number.NaN;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : Number.NaN;
 }
 
 /**
  * Matches the backend envelope: 1..120 name, 1..200 printable pattern, no
  * control characters. PATTERN allows at most 20 `*` wildcards; KEYWORD treats
- * `*` as an ordinary character. No regex is compiled on either side.
+ * `*` as an ordinary character. No regex is compiled on either side. #101 adds
+ * the surface and the attachment-only byte threshold.
  */
 export function validateDlpDraft(draft: DlpPolicyDraft): DlpPolicyFieldErrors {
   const errors: DlpPolicyFieldErrors = {};
@@ -97,6 +152,9 @@ export function validateDlpDraft(draft: DlpPolicyDraft): DlpPolicyFieldErrors {
   if (draft.patternType !== 'KEYWORD' && draft.patternType !== 'PATTERN') {
     errors.patternType = 'security.validation.patternTypeInvalid';
   }
+  if (!DLP_SCOPES.includes(draft.scope)) {
+    errors.scope = 'security.validation.scopeInvalid';
+  }
 
   const pattern = draft.pattern;
   if (pattern.length === 0) errors.pattern = 'security.validation.patternRequired';
@@ -108,11 +166,34 @@ export function validateDlpDraft(draft: DlpPolicyDraft): DlpPolicyFieldErrors {
     const wildcards = pattern.match(/\*/g)?.length ?? 0;
     if (wildcards > DLP_WILDCARD_MAX) errors.pattern = 'security.validation.patternWildcards';
   }
+
+  const size = parseMaxFileSizeBytes(draft.maxFileSizeBytes);
+  if (size !== null) {
+    if (!scopeSupportsFileSize(draft.scope)) {
+      errors.maxFileSizeBytes = 'security.validation.maxFileSizeScope';
+    } else if (
+      Number.isNaN(size) ||
+      size < DLP_MAX_FILE_SIZE_MIN ||
+      size > DLP_MAX_FILE_SIZE_BYTES
+    ) {
+      errors.maxFileSizeBytes = 'security.validation.maxFileSizeRange';
+    }
+  } else if (hasUnclearableFileSize(draft) && !scopeSupportsFileSize(draft.scope)) {
+    // The contract cannot clear a stored threshold (absent = keep), so the
+    // server would reject this combination. Keep the reason in the form.
+    errors.scope = 'security.validation.scopeLocked';
+  }
   return errors;
 }
 
 export function hasDlpErrors(errors: DlpPolicyFieldErrors): boolean {
   return Object.keys(errors).length > 0;
+}
+
+function draftMaxFileSize(draft: DlpPolicyDraft): number | undefined {
+  if (!scopeSupportsFileSize(draft.scope)) return undefined;
+  const size = parseMaxFileSizeBytes(draft.maxFileSizeBytes);
+  return size === null || Number.isNaN(size) ? undefined : size;
 }
 
 /** Create body: trims only the name, the pattern is matched literally. */
@@ -122,17 +203,29 @@ export function toCreateDlpBody(draft: DlpPolicyDraft): DlpPolicyCreateRequest {
     action: draft.action,
     pattern_type: draft.patternType,
     pattern: draft.pattern,
+    scope: draft.scope,
+    ...(draftMaxFileSize(draft) === undefined
+      ? {}
+      : { max_file_size_bytes: draftMaxFileSize(draft) }),
     enabled: draft.enabled,
   };
 }
 
-/** PATCH body: send the full editable rule; the server keeps it idempotent. */
+/**
+ * PATCH body: send the full editable rule; the server keeps it idempotent.
+ * An empty size input omits `max_file_size_bytes`, which the additive contract
+ * defines as "keep the stored value" (a threshold cannot be cleared).
+ */
 export function toUpdateDlpBody(draft: DlpPolicyDraft): DlpPolicyUpdateRequest {
   return {
     name: draft.name.trim(),
     action: draft.action,
     pattern_type: draft.patternType,
     pattern: draft.pattern,
+    scope: draft.scope,
+    ...(draftMaxFileSize(draft) === undefined
+      ? {}
+      : { max_file_size_bytes: draftMaxFileSize(draft) }),
     enabled: draft.enabled,
   };
 }

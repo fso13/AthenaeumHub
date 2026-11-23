@@ -22,6 +22,7 @@ import ru.krug.backend.plugin.domain.model.Poll;
 import ru.krug.backend.plugin.domain.repository.PollRepository;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.application.port.RequestCanonicalizer;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
@@ -49,11 +50,12 @@ public class PollService {
     private final IdempotencyPort idempotency;
     private final RequestCanonicalizer canonicalizer;
     private final PluginMessagePort messages;
+    private final ContentDlpPort dlp;
 
     public PollService(PluginActionGate gate, ChatPermissionPort chatPermissions,
                        PollRepository repository, AuditPort audit, ClockPort clock,
                        IdempotencyPort idempotency, RequestCanonicalizer canonicalizer,
-                       PluginMessagePort messages) {
+                       PluginMessagePort messages, ContentDlpPort dlp) {
         this.gate = gate;
         this.chatPermissions = chatPermissions;
         this.repository = repository;
@@ -62,6 +64,7 @@ public class PollService {
         this.idempotency = idempotency;
         this.canonicalizer = canonicalizer;
         this.messages = messages;
+        this.dlp = dlp;
     }
 
     @Transactional(readOnly = true)
@@ -84,6 +87,9 @@ public class PollService {
         Poll poll = Poll.create(context.workspaceId(), chatId, principal.userId(), question,
                 options, clock.now(), UUID::randomUUID);
         Principal scoped = principal.withWorkspace(context.workspaceId());
+        // #101: the question and every option are plugin payloads. A BLOCK is answered
+        // before the idempotency key is reserved, so the attempt leaves no reservation.
+        dlp.enforcePluginPayload(scoped, chatId, payload(poll));
         byte[] requestHash = requestHash(chatId, poll);
         IdempotencyReservation reservation = idempotency.reserve(scoped,
                 CREATE_IDEMPOTENCY_SCOPE, idempotencyKey.toString(), requestHash);
@@ -116,6 +122,13 @@ public class PollService {
                 .orElseThrow(() -> DomainException.conflict(ErrorCode.CONFLICT,
                         "Idempotent replay target is no longer available", Map.of()));
         return new PollCreateResult(PollView.from(replayed), ref.messageId(), true);
+    }
+
+    private static List<String> payload(Poll poll) {
+        List<String> fields = new java.util.ArrayList<>(poll.options().size() + 1);
+        fields.add(poll.question());
+        poll.options().forEach(option -> fields.add(option.text()));
+        return fields;
     }
 
     private byte[] requestHash(UUID chatId, Poll poll) {

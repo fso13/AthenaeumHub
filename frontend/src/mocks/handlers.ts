@@ -37,6 +37,7 @@ import type {
   DlpEventPage,
   DlpPolicy,
   DlpPolicyList,
+  DlpScope,
   FileItem,
   Mention,
   MessageCreateBody,
@@ -99,6 +100,7 @@ import {
   type MockDb,
   type MockPluginAssetRecord,
   type MockUpload,
+  type MockWorkspaceInviteRecord,
 } from './db';
 import {
   IDS,
@@ -355,6 +357,16 @@ function requireAuth(request: Request): Response | null {
 const TWO_FACTOR_CHALLENGE_TTL_SECONDS = 300;
 const TWO_FACTOR_MAX_ATTEMPTS = 5;
 
+/** #101 DLP surface/size contract mirrors used by the CRUD mocks. */
+const DLP_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024;
+const DLP_SCOPES: ReadonlySet<string> = new Set(['ALL', 'TEXT', 'ATTACHMENT', 'PLUGIN']);
+
+function readDlpScope(raw: unknown): DlpScope | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toUpperCase();
+  return DLP_SCOPES.has(normalized) ? (normalized as DlpScope) : null;
+}
+
 function findMockWorkspace(db: MockDb, workspaceId: string): WorkspaceSummary | null {
   return db.me.workspaces.find((workspace) => workspace.id === workspaceId) ?? null;
 }
@@ -469,6 +481,34 @@ function twoFactorCodeAccepted(db: MockDb, code: string | null): boolean {
 function workspaceInviteView(invite: { token?: string } & WorkspaceInvite): WorkspaceInvite {
   const { token: _token, ...rest } = invite;
   return rest;
+}
+
+/**
+ * #100 shared status guard for preview/accept: revoked, expired and exhausted
+ * are distinct 410 codes and are never collapsed into 404.
+ */
+function workspaceInviteUnavailable(invite: MockWorkspaceInviteRecord): Response | null {
+  if (invite.status === 'REVOKED') {
+    return errorResponse(410, 'WORKSPACE_INVITE_REVOKED', 'Invite was revoked');
+  }
+  if (new Date(invite.expires_at).getTime() <= Date.now() || invite.status === 'EXPIRED') {
+    return errorResponse(410, 'WORKSPACE_INVITE_EXPIRED', 'Invite expired');
+  }
+  if (
+    invite.status === 'EXHAUSTED' ||
+    (invite.max_uses !== null &&
+      invite.max_uses !== undefined &&
+      invite.used_count >= invite.max_uses)
+  ) {
+    return errorResponse(410, 'WORKSPACE_INVITE_EXHAUSTED', 'Invite is exhausted');
+  }
+  return null;
+}
+
+/** #100: an email-bound invite only accepts the invited account (case-insensitive). */
+function workspaceInviteEmailMismatch(db: MockDb, invite: MockWorkspaceInviteRecord): boolean {
+  if (!invite.email) return false;
+  return invite.email.trim().toLowerCase() !== db.me.user.email.trim().toLowerCase();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1932,10 +1972,14 @@ export function createHandlers(db: MockDb) {
       if (!email || !displayName || !password) {
         return errorResponse(400, 'VALIDATION_FAILED', 'Invalid registration payload');
       }
+      // #100: the token is stored with the pending verification and never
+      // returned; the response shape is identical with or without it.
+      const inviteToken = readStringField(body, 'invite_token');
       const payload: AuthRegisterRequest = {
         email: normalizeEmail(email),
         display_name: displayName,
         password,
+        ...(inviteToken ? { invite_token: inviteToken } : {}),
       };
       db.authRegisterRequests.push(payload);
 
@@ -1964,6 +2008,7 @@ export function createHandlers(db: MockDb) {
         attempts: 0,
         consumed: false,
         lastSentAt: now,
+        inviteToken: inviteToken ?? null,
       });
       return HttpResponse.json(
         {
@@ -5213,16 +5258,38 @@ export function createHandlers(db: MockDb) {
         );
       }
       const maxUsesRaw = body.max_uses;
+      const emailRaw = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+      if (emailRaw.length > 0) {
+        if (
+          emailRaw.length < 3 ||
+          emailRaw.length > 254 ||
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)
+        ) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'email is invalid', {
+            details: { field: 'email' },
+          });
+        }
+        if (maxUsesRaw !== undefined && maxUsesRaw !== null && maxUsesRaw !== 1) {
+          return errorResponse(
+            400,
+            'VALIDATION_FAILED',
+            'An email invite is single-use; max_uses must be 1',
+            { details: { field: 'max_uses' } },
+          );
+        }
+      }
       const maxUses =
-        typeof maxUsesRaw === 'number' && Number.isFinite(maxUsesRaw)
-          ? Math.min(1000, Math.max(1, Math.trunc(maxUsesRaw)))
-          : null;
+        emailRaw.length > 0
+          ? 1
+          : typeof maxUsesRaw === 'number' && Number.isFinite(maxUsesRaw)
+            ? Math.min(1000, Math.max(1, Math.trunc(maxUsesRaw)))
+            : null;
       const expiresIn =
         typeof body.expires_in_seconds === 'number' && Number.isFinite(body.expires_in_seconds)
           ? Math.min(2592000, Math.max(300, Math.trunc(body.expires_in_seconds)))
           : 604800;
       const token = `mock-workspace-invite-${newUuid()}`;
-      const created = {
+      const created: MockWorkspaceInviteRecord = {
         id: newUuid(),
         role,
         status: 'ACTIVE' as const,
@@ -5231,6 +5298,7 @@ export function createHandlers(db: MockDb) {
         expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
         created_at: new Date().toISOString(),
         created_by: db.me.user.id,
+        email: emailRaw.length > 0 ? emailRaw : null,
         token,
       };
       db.workspaceInvites.push(created);
@@ -5268,6 +5336,29 @@ export function createHandlers(db: MockDb) {
       return new HttpResponse(null, { status: 204 });
     }),
 
+    /**
+     * #100 public preview. It has no bearer guard and returns display metadata
+     * only: no token, hash or invited address.
+     */
+    http.get(`${API}/workspace-invites/:token`, ({ params }) => {
+      const token = String(params.token);
+      db.workspaceInviteRequests.push({ workspaceId: IDS.workspace, action: 'PREVIEW' });
+      const invite = db.workspaceInvites.find((item) => item.token === token);
+      if (!invite) {
+        return errorResponse(404, 'WORKSPACE_INVITE_NOT_FOUND', 'Invite was not found');
+      }
+      const unavailable = workspaceInviteUnavailable(invite);
+      if (unavailable) return unavailable;
+      const workspace = findMockWorkspace(db, IDS.workspace);
+      return HttpResponse.json({
+        workspace_name: workspace?.name ?? 'Workspace',
+        workspace_slug: workspace?.slug ?? 'workspace',
+        role: invite.role,
+        email_bound: Boolean(invite.email),
+        expires_at: invite.expires_at,
+      });
+    }),
+
     http.post(`${API}/workspace-invites/:token/accept`, ({ request, params }) => {
       const unauthorized = requireBearer(request);
       if (unauthorized) return unauthorized;
@@ -5284,18 +5375,14 @@ export function createHandlers(db: MockDb) {
       if (!invite) {
         return errorResponse(404, 'WORKSPACE_INVITE_NOT_FOUND', 'Invite was not found');
       }
-      if (invite.status === 'REVOKED') {
-        return errorResponse(410, 'WORKSPACE_INVITE_REVOKED', 'Invite was revoked');
-      }
-      if (new Date(invite.expires_at).getTime() <= Date.now()) {
-        return errorResponse(410, 'WORKSPACE_INVITE_EXPIRED', 'Invite expired');
-      }
-      if (
-        invite.max_uses !== null &&
-        invite.max_uses !== undefined &&
-        invite.used_count >= invite.max_uses
-      ) {
-        return errorResponse(410, 'WORKSPACE_INVITE_EXHAUSTED', 'Invite is exhausted');
+      const unavailable = workspaceInviteUnavailable(invite);
+      if (unavailable) return unavailable;
+      if (workspaceInviteEmailMismatch(db, invite)) {
+        return errorResponse(
+          403,
+          'WORKSPACE_INVITE_EMAIL_MISMATCH',
+          'The invite is bound to another email',
+        );
       }
       const workspace = findMockWorkspace(db, IDS.workspace);
       return HttpResponse.json({
@@ -9574,9 +9661,49 @@ export function createHandlers(db: MockDb) {
       }
       const body = asRecord(await readJson(request));
       if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
-      const allowed = ['name', 'action', 'pattern_type', 'pattern', 'enabled'];
+      const allowed = [
+        'name',
+        'action',
+        'pattern_type',
+        'pattern',
+        'scope',
+        'max_file_size_bytes',
+        'enabled',
+      ];
       if (Object.keys(body).some((key) => !allowed.includes(key))) {
         return errorResponse(400, 'VALIDATION_FAILED', 'Unknown DLP policy field');
+      }
+      const scope = body.scope === undefined ? 'ALL' : readDlpScope(body.scope);
+      if (scope === null) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'scope is invalid', {
+          details: { field: 'scope' },
+        });
+      }
+      const rawMaxFileSize = body.max_file_size_bytes;
+      if (
+        rawMaxFileSize !== undefined &&
+        (typeof rawMaxFileSize !== 'number' || !Number.isInteger(rawMaxFileSize))
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'max_file_size_bytes must be an integer', {
+          details: { field: 'max_file_size_bytes' },
+        });
+      }
+      const maxFileSizeBytes = rawMaxFileSize === undefined ? null : (rawMaxFileSize as number);
+      if (
+        maxFileSizeBytes !== null &&
+        (maxFileSizeBytes < 1 || maxFileSizeBytes > DLP_MAX_FILE_SIZE_BYTES)
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'max_file_size_bytes is out of bounds', {
+          details: { field: 'max_file_size_bytes', max: DLP_MAX_FILE_SIZE_BYTES },
+        });
+      }
+      if (maxFileSizeBytes !== null && scope !== 'ALL' && scope !== 'ATTACHMENT') {
+        return errorResponse(
+          400,
+          'VALIDATION_FAILED',
+          'max_file_size_bytes is supported only for an attachment rule',
+          { details: { field: 'max_file_size_bytes', scope } },
+        );
       }
       const name = typeof body.name === 'string' ? body.name.trim() : '';
       if (name.length < 1 || name.length > 120 || hasForbiddenControl(name, false)) {
@@ -9624,6 +9751,8 @@ export function createHandlers(db: MockDb) {
         action: body.action,
         pattern_type: body.pattern_type,
         pattern,
+        scope,
+        max_file_size_bytes: maxFileSizeBytes,
         enabled: body.enabled === undefined ? true : body.enabled,
         created_at: now,
         updated_at: now,
@@ -9664,7 +9793,15 @@ export function createHandlers(db: MockDb) {
         if (!current) return errorResponse(404, 'NOT_FOUND', 'DLP policy not found');
         const body = asRecord(await readJson(request));
         if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
-        const allowed = ['name', 'action', 'pattern_type', 'pattern', 'enabled'];
+        const allowed = [
+          'name',
+          'action',
+          'pattern_type',
+          'pattern',
+          'scope',
+          'max_file_size_bytes',
+          'enabled',
+        ];
         if (Object.keys(body).some((key) => !allowed.includes(key))) {
           return errorResponse(400, 'VALIDATION_FAILED', 'Unknown DLP policy field');
         }
@@ -9677,6 +9814,43 @@ export function createHandlers(db: MockDb) {
         const nextType = body.pattern_type === undefined ? current.pattern_type : body.pattern_type;
         const nextPattern = typeof body.pattern === 'string' ? body.pattern : current.pattern;
         const nextEnabled = body.enabled === undefined ? current.enabled : body.enabled;
+        const nextScope = body.scope === undefined ? current.scope : readDlpScope(body.scope);
+        if (nextScope === null) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'scope is invalid', {
+            details: { field: 'scope' },
+          });
+        }
+        let nextMaxFileSize = current.max_file_size_bytes;
+        if (body.max_file_size_bytes !== undefined && body.max_file_size_bytes !== null) {
+          if (
+            typeof body.max_file_size_bytes !== 'number' ||
+            !Number.isInteger(body.max_file_size_bytes)
+          ) {
+            return errorResponse(
+              400,
+              'VALIDATION_FAILED',
+              'max_file_size_bytes must be an integer',
+              { details: { field: 'max_file_size_bytes' } },
+            );
+          }
+          nextMaxFileSize = body.max_file_size_bytes;
+        }
+        if (
+          nextMaxFileSize !== null &&
+          (nextMaxFileSize < 1 || nextMaxFileSize > DLP_MAX_FILE_SIZE_BYTES)
+        ) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'max_file_size_bytes is out of bounds', {
+            details: { field: 'max_file_size_bytes', max: DLP_MAX_FILE_SIZE_BYTES },
+          });
+        }
+        if (nextMaxFileSize !== null && nextScope !== 'ALL' && nextScope !== 'ATTACHMENT') {
+          return errorResponse(
+            400,
+            'VALIDATION_FAILED',
+            'max_file_size_bytes is supported only for an attachment rule',
+            { details: { field: 'max_file_size_bytes', scope: nextScope } },
+          );
+        }
 
         if (nextName.length < 1 || nextName.length > 120 || hasForbiddenControl(nextName, false)) {
           return errorResponse(400, 'VALIDATION_FAILED', 'name is invalid', {
@@ -9722,6 +9896,8 @@ export function createHandlers(db: MockDb) {
           nextAction !== current.action ||
           nextType !== current.pattern_type ||
           nextPattern !== current.pattern ||
+          nextScope !== current.scope ||
+          nextMaxFileSize !== current.max_file_size_bytes ||
           nextEnabled !== current.enabled;
         if (!changed) {
           db.security.policyRequests.push({
@@ -9739,6 +9915,8 @@ export function createHandlers(db: MockDb) {
           action: nextAction,
           pattern_type: nextType,
           pattern: nextPattern,
+          scope: nextScope,
+          max_file_size_bytes: nextMaxFileSize,
           enabled: nextEnabled,
           updated_at: db.serverTime(),
         };

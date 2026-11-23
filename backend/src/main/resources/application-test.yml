@@ -19,6 +19,11 @@ krug:
     # #96: the shared suite never throttles bot sends; BotRateLimitIT lowers these explicitly.
     bot-send-per-bot: 10000
     bot-send-per-chat: 10000
+    # #100: email-invite/preview windows are exercised by the limiter unit test; the
+    # integration suite must not throttle repeated create/preview calls.
+    invite-email-per-workspace: 10000
+    invite-email-per-address: 10000
+    invite-preview-per-ip: 100000
   bots:
     events:
       # Tests call BotEventDeliveryService.deliverDue() directly; no background sends.

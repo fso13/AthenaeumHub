@@ -4,6 +4,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.header.writers.DelegatingRequestMatcherHeaderWriter;
 import org.springframework.security.web.header.writers.frameoptions.XFrameOptionsHeaderWriter;
@@ -18,6 +19,7 @@ import org.springframework.security.oauth2.server.resource.web.authentication.Be
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
+import ru.krug.backend.auth.infrastructure.security.SessionActivityFilter;
 import ru.krug.backend.bot.infrastructure.security.BotTokenAuthenticationFilter;
 
 @Configuration
@@ -32,6 +34,19 @@ public class SecurityConfig {
     public FilterRegistrationBean<BotTokenAuthenticationFilter> botTokenFilterRegistration(
             BotTokenAuthenticationFilter filter) {
         FilterRegistrationBean<BotTokenAuthenticationFilter> registration =
+                new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    /**
+     * #101: the activity filter is added to the user chain explicitly; disable the servlet
+     * container auto-registration so it runs exactly once, after device binding.
+     */
+    @Bean
+    public FilterRegistrationBean<SessionActivityFilter> sessionActivityFilterRegistration(
+            SessionActivityFilter filter) {
+        FilterRegistrationBean<SessionActivityFilter> registration =
                 new FilterRegistrationBean<>(filter);
         registration.setEnabled(false);
         return registration;
@@ -73,6 +88,7 @@ public class SecurityConfig {
             HttpSecurity http,
             JwtDecoder jwtDecoder,
             DeviceBindingFilter deviceBindingFilter,
+            SessionActivityFilter sessionActivityFilter,
             RestAuthenticationEntryPoint authenticationEntryPoint,
             RestAccessDeniedHandler accessDeniedHandler) throws Exception {
         http
@@ -98,6 +114,11 @@ public class SecurityConfig {
                                 // #98: the one-time response capability is the credential;
                                 // there is no user JWT or bot bearer on this endpoint.
                                 "/api/v1/bot-responses/**").permitAll()
+                        // #100: anonymous invite preview. The unguessable token is the only
+                        // credential and the response has no secrets. POST .../accept
+                        // still requires a session.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/workspace-invites/*")
+                        .permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt.decoder(jwtDecoder))
@@ -105,7 +126,8 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler))
-                .addFilterAfter(deviceBindingFilter, BearerTokenAuthenticationFilter.class);
+                .addFilterAfter(deviceBindingFilter, BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(sessionActivityFilter, DeviceBindingFilter.class);
         return http.build();
     }
 }

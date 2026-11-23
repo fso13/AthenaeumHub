@@ -14,5 +14,7 @@ public record WorkspaceInviteResponse(
         @JsonProperty("max_uses") Integer maxUses,
         @JsonProperty("expires_at") Instant expiresAt,
         @JsonProperty("created_at") Instant createdAt,
-        @JsonProperty("created_by") UUID createdBy) {
+        @JsonProperty("created_by") UUID createdBy,
+        // #100: normalized recipient of a single-use email invite; null for a link invite.
+        String email) {
 }

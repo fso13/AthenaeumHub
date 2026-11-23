@@ -1285,7 +1285,10 @@ paths:
       summary: Обновить пару токенов через Keycloak
       description: >
         Refresh-токен передаётся в теле, не в URL. Keycloak ротирует пару; недействительный
-        refresh — `401 INVALID_CREDENTIALS`.
+        refresh — `401 INVALID_CREDENTIALS`. #101: если серверная сессия простаивала
+        дольше `session_timeout_minutes` активного воркспейса (strictest wins), refresh
+        отклоняется с `401 AUTH_SESSION_EXPIRED`, а новый refresh-токен отзывается. Время
+        простоя считается по реальным API-запросам, а не по самому refresh.
       requestBody:
         required: true
         content:
@@ -2357,6 +2360,11 @@ paths:
       tags: [files]
       operationId: initUpload
       summary: Создать upload-сессию и резерв квоты
+      description: >
+        #101: до создания upload-сессии и резерва квоты имя/расширение/MIME/размер
+        вложения проверяются workspace DLP (`scope=ATTACHMENT` или `ALL`). BLOCK →
+        `422 DLP_BLOCKED` без upload-строки, резерва и записи объекта; имена файлов в
+        DLP-событие не попадают.
       parameters:
         - $ref: "#/components/parameters/DeviceId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -2820,6 +2828,8 @@ paths:
         через `attachment_ids` при отправке. Object key строится только из серверных UUID,
         имя файла — валидируемое display-имя; содержимое/ключ/hash/URL не возвращаются.
         Транспортный лимит multipart — 512 MiB; большие файлы — через resumable `/uploads`.
+        #101: имя/расширение/MIME/размер проверяются DLP-правилами (`scope=ATTACHMENT`
+        или `ALL`); BLOCK → `422 DLP_BLOCKED` до записи объекта, событие без имени файла.
       parameters:
         - name: workspaceId
           in: path
@@ -3604,7 +3614,9 @@ paths:
         вариантов по 1..200 символов. Создатель фиксируется сервером и только он может
         закрыть опрос. В read-only канале создание опроса — `403 CHAT_READ_ONLY`; без
         права — `403 CHAT_PERMISSION_DENIED`. В E2EE-чате плагин недоступен. Audit пишет
-        только id опроса и действие — без вопроса и текста вариантов.
+        только id опроса и действие — без вопроса и текста вариантов. #101: вопрос и
+        каждый вариант проверяются workspace DLP (`scope=PLUGIN` или `ALL`); BLOCK →
+        `422 DLP_BLOCKED` до резерва `Idempotency-Key`, содержимое не сохраняется.
       requestBody:
         required: true
         content:
@@ -3751,7 +3763,9 @@ paths:
         `tasks`. Заголовок — plain text 1..500 символов без HTML/control. `assignee_id`
         необязателен, но обязан быть ACTIVE-участником этого чата; произвольный/чужой
         user id — `422 TASK_ASSIGNEE_INVALID`. `due_at` необязателен. Создатель
-        фиксируется сервером. Audit — только id задачи.
+        фиксируется сервером. Audit — только id задачи. #101: заголовок проверяется
+        workspace DLP (`scope=PLUGIN` или `ALL`); BLOCK → `422 DLP_BLOCKED` до резерва
+        `Idempotency-Key`.
       requestBody:
         required: true
         content:
@@ -3838,7 +3852,9 @@ paths:
         вызовов. При настроенном URL сервер делает bounded HTTP-вызов (connect/read
         timeout, лимит размера ответа), не логирует текст, не сохраняет секреты и
         отклоняет HTML/control-символы в ответе. Audit — только id сообщения; вопрос,
-        заголовок и текст никогда не пишутся.
+        заголовок и текст никогда не пишутся. #101: вход и результат перевода
+        проверяются workspace DLP (`scope=PLUGIN` или `ALL`); BLOCK → `422 DLP_BLOCKED`,
+        провайдер не вызывается для заблокированного входа, результат не возвращается.
       requestBody:
         required: true
         content:
@@ -4039,7 +4055,10 @@ paths:
         `version` и публикует WS `message.updated`. Если передан `version` и он не совпал
         с текущим — `409 VERSION_CONFLICT` (оптимистичная блокировка). E2EE-чат →
         `422 E2EE_METADATA_FORBIDDEN` (сервер не редактирует шифротекст и не хранит
-        plaintext-метаданные); STICKER/SYSTEM → `422 MESSAGE_NOT_EDITABLE`.
+        plaintext-метаданные); STICKER/SYSTEM → `422 MESSAGE_NOT_EDITABLE`. #101:
+        отредактированный текст повторно проходит workspace DLP; BLOCK →
+        `422 DLP_BLOCKED`, исходный текст и версия не меняются, событие пишется без
+        содержимого.
       requestBody:
         required: true
         content:
@@ -5153,12 +5172,15 @@ paths:
     post:
       tags: [workspaces]
       operationId: createWorkspaceInvite
-      summary: Создать invite-ссылку (email-токен, письмо не отправляется)
+      summary: Создать invite-ссылку или email-приглашение
       description: >
-        Возвращает `token` и `accept_url` ровно один раз; в БД хранится только SHA-256
-        hash. OWNER может приглашать ADMIN/MEMBER/GUEST, ADMIN — MEMBER/GUEST; OWNER через
-        ссылку не выдаётся. `expires_in_seconds` 300..2592000 (по умолчанию 7 дней),
-        `max_uses` 1..1000 или unlimited. Письмо backend не отправляет.
+        Без `email` возвращает `token` и `accept_url` ровно один раз; в БД хранится только
+        SHA-256 hash. OWNER может приглашать ADMIN/MEMBER/GUEST, ADMIN — MEMBER/GUEST;
+        OWNER через ссылку не выдаётся. `expires_in_seconds` 300..2592000 (по умолчанию 7
+        дней), `max_uses` 1..1000 или unlimited. #100: с непустым `email` создаётся
+        одноразовое приглашение (max_uses = 1), нормализованный адрес сохраняется, письмо
+        с accept-ссылкой отправляется через SMTP (Mailpit в dev); токен/hash/адрес не
+        логируются. Отправка ограничена rate limit per workspace и per email.
       parameters:
         - $ref: "#/components/parameters/WorkspaceId"
       requestBody:
@@ -5216,6 +5238,41 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /workspace-invites/{token}:
+    get:
+      tags: [workspaces]
+      operationId: previewWorkspaceInvite
+      security: []
+      summary: Публичный предпросмотр invite-ссылки
+      description: >
+        #100: единственная анонимная операция с invite-токеном. Ответ содержит только имя
+        и slug воркспейса, роль, признак привязки к email и срок действия; сам токен, его
+        hash и адрес приглашённого не возвращаются. Неизвестный/недоступный токен — `404`,
+        отозванный/истёкший/исчерпанный — `410` с отдельным кодом. Rate limit per IP.
+      parameters:
+        - $ref: "#/components/parameters/InviteToken"
+      responses:
+        "200":
+          description: Приглашение активно
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceInvitePreview"
+        "404":
+          description: Ссылка не найдена (`WORKSPACE_INVITE_NOT_FOUND`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "410":
+          description: Ссылка отозвана/истекла/исчерпана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
   /workspace-invites/{token}/accept:
     post:
       tags: [workspaces]
@@ -5227,6 +5284,9 @@ paths:
         атомарно. Повторный accept действующим участником идемпотентен
         (`already_member=true`) и не расходует использование. Отозванная/истёкшая/
         исчерпанная ссылка — `410` с отдельным кодом; неизвестный токен — `404`.
+        #100: если приглашение привязано к email, принять его может только аккаунт с этим
+        адресом (сравнение без учёта регистра); другой аккаунт получает
+        `403 WORKSPACE_INVITE_EMAIL_MISMATCH`, приглашение при этом не расходуется.
       parameters:
         - name: token
           in: path
@@ -6658,6 +6718,15 @@ components:
           maxLength: 128
           writeOnly: true
           description: Передаётся только в Keycloak; backend не хранит и не логирует.
+        # #100: optional single-use workspace invite; only its SHA-256 digest is stored.
+        invite_token:
+          type: [string, "null"]
+          maxLength: 128
+          description: >
+            Необязательный invite-токен. Backend сохраняет только SHA-256 hash рядом с
+            pending-регистрацией; после подтверждения email приглашение принимается
+            автоматически, если оно ещё действительно и привязано к этому адресу. Ошибка
+            или истёкшее приглашение не меняют ответ регистрации (нет enumeration).
 
     AuthRegisterResponse:
       type: object
@@ -6787,17 +6856,39 @@ components:
 
     DlpPolicy:
       type: object
-      required: [id, name, action, pattern_type, pattern, enabled, created_at, updated_at]
+      required: [id, name, action, pattern_type, pattern, scope, max_file_size_bytes,
+                 enabled, created_at, updated_at]
       description: >
         DLP-правило. `pattern` — литерал (KEYWORD) или литерал с wildcard `*`
         (PATTERN), максимум 200 символов и 20 wildcard-сегментов. Регулярным
-        выражением значение не является и не компилируется.
+        выражением значение не является и не компилируется. `scope` выбирает
+        поверхность проверки; `ALL` (по умолчанию) применяет правило к тексту
+        сообщений/редактирования, метаданным вложений и plugin payload. Для
+        ATTACHMENT `pattern` проверяется по имени файла, базовому имени, расширению и
+        MIME; `max_file_size_bytes` дополнительно срабатывает на файл больше порога.
+        Байты файла и содержимое сообщения никогда не сохраняются в событии.
       properties:
         id: { type: string, format: uuid }
         name: { type: string, minLength: 1, maxLength: 120 }
         action: { type: string, enum: [WARN, BLOCK] }
         pattern_type: { type: string, enum: [KEYWORD, PATTERN] }
         pattern: { type: string, minLength: 1, maxLength: 200 }
+        scope:
+          type: string
+          enum: [ALL, TEXT, ATTACHMENT, PLUGIN]
+          default: ALL
+          description: >
+            `ALL` — все MANAGED-поверхности; `TEXT` — сообщения и редактирование;
+            `ATTACHMENT` — имя/расширение/MIME/размер вложения на upload/bind/rename;
+            `PLUGIN` — poll question/options, task title и перевод. E2EE не
+            оценивается: сервер не имеет plaintext.
+        max_file_size_bytes:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 10737418240
+          description: >
+            Только для scope `ATTACHMENT`/`ALL`: файл больше порога матчится даже без
+            совпадения `pattern`. `null` — порога нет. Значение — политика, не контент.
         enabled: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -6825,6 +6916,20 @@ components:
           description: >
             Literal без control characters. Для PATTERN допустим `*`, не более 20.
             Это не regex: ReDoS исключён по построению.
+        scope:
+          type: string
+          enum: [ALL, TEXT, ATTACHMENT, PLUGIN]
+          default: ALL
+          description: >
+            Поверхность правила (#101). Отсутствие = `ALL`: правило действует на
+            MANAGED-текст, имена/расширения/MIME/размер вложений и plugin payload.
+        max_file_size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 10737418240
+          description: >
+            Attachment-only порог размера (#101); допустим только для scope
+            `ATTACHMENT`/`ALL`, иначе 400.
         enabled: { type: boolean, default: true }
 
     DlpPolicyUpdateRequest:
@@ -6836,6 +6941,18 @@ components:
         action: { type: string, enum: [WARN, BLOCK] }
         pattern_type: { type: string, enum: [KEYWORD, PATTERN] }
         pattern: { type: string, minLength: 1, maxLength: 200 }
+        scope:
+          type: string
+          enum: [ALL, TEXT, ATTACHMENT, PLUGIN]
+          description: >
+            Смена поверхности правила (#101); отсутствие поля сохраняет значение.
+        max_file_size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 10737418240
+          description: >
+            Attachment-only порог размера (#101). Отсутствие поля сохраняет значение;
+            явный null в JSON трактуется как «не менять» на этом контракте.
         enabled: { type: boolean }
 
     DlpEvent:
@@ -9157,6 +9274,8 @@ components:
           minimum: 300
           maximum: 2592000
           default: 604800
+        # #100: non-null marks a single-use email-bound invite; max_uses must be 1.
+        email: { type: [string, "null"], format: email, maxLength: 254 }
 
     WorkspaceInvite:
       type: object
@@ -9171,6 +9290,21 @@ components:
         expires_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
         created_by: { type: string, format: uuid }
+        # #100: normalized recipient for a single-use email invite; null for a link invite.
+        email: { type: [string, "null"], format: email, maxLength: 254 }
+
+    WorkspaceInvitePreview:
+      type: object
+      required: [workspace_name, workspace_slug, role, email_bound, expires_at]
+      description: >
+        #100 анонимный предпросмотр: только отображаемые данные. Токен, hash и адрес
+        приглашённого не возвращаются.
+      properties:
+        workspace_name: { type: string }
+        workspace_slug: { type: string }
+        role: { type: string, enum: [ADMIN, MEMBER, GUEST] }
+        email_bound: { type: boolean }
+        expires_at: { type: string, format: date-time }
 
     WorkspaceInviteCreated:
       type: object

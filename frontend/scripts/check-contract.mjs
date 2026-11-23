@@ -894,8 +894,8 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 132,
-  'Contract must expose exactly 132 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #99 workspace lifecycle)',
+  Object.keys(spec.paths ?? {}).length === 133,
+  'Contract must expose exactly 133 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #99 workspace lifecycle + #100 email invitations)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
@@ -904,8 +904,8 @@ check(
   'Contract check must cover exactly 162 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #99 workspace lifecycle)',
 );
 check(
-  Object.keys(schemas).length === 212,
-  'Contract must expose exactly 212 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands)',
+  Object.keys(schemas).length === 213,
+  'Contract must expose exactly 213 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #100 email invitations)',
 );
 
 check(

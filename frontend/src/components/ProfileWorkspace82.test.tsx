@@ -337,6 +337,13 @@ describe('P0-4 workspace invite accept', () => {
     resetRouterForTests(`/workspace-invite/${invite.token}`);
 
     const { user } = renderPasswordApp();
+    // #100: the anonymous visitor sees the public preview first.
+    expect(
+      await screen.findByRole('heading', { name: 'Приглашение в пространство' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Студия «Восход»')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Войти' }));
+
     await user.type(await screen.findByLabelText('Email'), MOCK_DEMO_EMAIL);
     await user.type(screen.getByLabelText('Пароль'), MOCK_DEMO_PASSWORD);
     await user.click(screen.getByRole('button', { name: 'Войти' }));
@@ -344,7 +351,7 @@ describe('P0-4 workspace invite accept', () => {
     expect(
       await screen.findByRole('heading', { name: 'Приглашение в пространство' }),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Присоединиться' }));
+    await user.click(await screen.findByRole('button', { name: 'Присоединиться' }));
 
     expect(await screen.findByText(/Вы уже участник пространства/)).toBeInTheDocument();
     expect(mockDb.workspaceInviteRequests.some((request) => request.action === 'ACCEPT')).toBe(

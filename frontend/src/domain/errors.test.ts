@@ -44,6 +44,36 @@ describe('error mapping', () => {
     expect(described.message).toContain('2');
   });
 
+  it('maps DLP_BLOCKED to an honest policy error without exposing the rule', () => {
+    const text = describeError(
+      new ApiError({
+        source: 'http',
+        status: 422,
+        code: 'DLP_BLOCKED',
+        message: 'blocked',
+        details: { surface: 'TEXT', policy_id: 'p1', action: 'BLOCK' },
+      }),
+    );
+    expect(text.kind).toBe('validation');
+    expect(text.title).toBe('Заблокировано политикой DLP');
+    expect(text.message).toContain('Текст отклонён');
+    expect(text.canRestoreText).toBe(true);
+    expect(text.message).not.toContain('p1');
+    expect(text.message).not.toContain('BLOCK');
+
+    const attachment = describeError(
+      new ApiError({
+        source: 'http',
+        status: 422,
+        code: 'DLP_BLOCKED',
+        message: 'blocked',
+        details: { surface: 'ATTACHMENT' },
+      }),
+    );
+    expect(attachment.message).toContain('Вложение отклонено');
+    expect(attachment.canRestoreText).toBe(false);
+  });
+
   it('does not offer blind retry for a reused idempotency key and allows text restore', () => {
     const described = describeError(
       new ApiError({

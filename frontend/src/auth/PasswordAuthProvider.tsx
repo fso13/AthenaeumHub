@@ -5,7 +5,8 @@ import { isApiError } from '../api/problem';
 import type { AuthSession, AuthTwoFactorChallenge, TwoFactorSetup } from '../api/types';
 import type { AppConfig } from '../config/env';
 import type { MessageKey } from '../i18n/ru';
-import { useNavigate } from '../router/router';
+import { withInviteToken, readInviteToken, workspaceInvitePath } from '../router/inviteRoutes';
+import { useLocation, useNavigate } from '../router/router';
 import {
   AppAuthContext,
   PasswordAuthContext,
@@ -116,6 +117,13 @@ interface PasswordAuthProviderProps {
  */
 export function PasswordAuthProvider({ config, children }: PasswordAuthProviderProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  /**
+   * #100: the invite token may ride in the query string across login/register
+   * (`?invite_token=…`). It is read from the URL on demand and never written
+   * to storage; the URL itself is the only carrier.
+   */
+  const inviteToken = readInviteToken(location);
   const [state, setState] = useState<AuthState>(storedSessionState);
   const refreshPromise = useRef<Promise<boolean> | null>(null);
   /**
@@ -232,14 +240,16 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
           error: null,
           notice: null,
         });
-        if (requiresTwoFactor) navigate('/login?2fa=required', { replace: true });
+        if (requiresTwoFactor) {
+          navigate(withInviteToken('/login?2fa=required', inviteToken), { replace: true });
+        }
         return false;
       }
     })().finally(() => {
       refreshPromise.current = null;
     });
     return refreshPromise.current;
-  }, [api, applySession, navigate]);
+  }, [api, applySession, inviteToken, navigate]);
 
   useEffect(() => {
     setReauthHandler(refresh);
@@ -276,7 +286,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
             error: null,
             notice: null,
           }));
-          navigate('/2fa');
+          navigate(withInviteToken('/2fa', inviteToken));
           return true;
         }
         applySession(result.session);
@@ -300,14 +310,14 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
             error: null,
             notice: 'auth.verify.sent',
           });
-          navigate('/verify');
+          navigate(withInviteToken('/verify', inviteToken));
           return false;
         }
         setState((current) => ({ ...current, busy: false, error: info }));
         return false;
       }
     },
-    [api, applySession, navigate],
+    [api, applySession, inviteToken, navigate],
   );
 
   const verifyTwoFactor = useCallback(
@@ -450,8 +460,8 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
     const session = pendingEnrollmentSession.current;
     if (!session) return;
     applySession(session);
-    navigate('/', { replace: true });
-  }, [applySession, navigate]);
+    navigate(inviteToken ? workspaceInvitePath(inviteToken) : '/', { replace: true });
+  }, [applySession, inviteToken, navigate]);
 
   const resendChallenge = useCallback(async (): Promise<boolean> => {
     const credentials = challengeCredentials.current;
@@ -506,17 +516,21 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       error: null,
       notice: null,
     }));
-    navigate('/login', { replace: true });
-  }, [navigate]);
+    navigate(withInviteToken('/login', inviteToken), { replace: true });
+  }, [inviteToken, navigate]);
 
   const register = useCallback(
     async (input: RegisterInput): Promise<boolean> => {
       setState((current) => ({ ...current, busy: true, error: null, notice: null }));
+      // #100: the token comes from the URL/route flow. The server keeps only a
+      // SHA-256 hash with the pending verification; this client never stores it.
+      const registrationInviteToken = input.inviteToken ?? inviteToken;
       try {
         const response = await api.register({
           email: input.email.trim(),
           display_name: input.displayName.trim(),
           password: input.password,
+          ...(registrationInviteToken ? { invite_token: registrationInviteToken } : {}),
         });
         const now = Date.now();
         const pending: PendingVerification = {
@@ -542,14 +556,14 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
           error: null,
           notice: null,
         });
-        navigate('/verify');
+        navigate(withInviteToken('/verify', registrationInviteToken));
         return true;
       } catch (error) {
         setState((current) => ({ ...current, busy: false, error: toAuthError(error) }));
         return false;
       }
     },
-    [api, navigate],
+    [api, inviteToken, navigate],
   );
 
   const verify = useCallback(
@@ -588,7 +602,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
             error: null,
             notice: null,
           }));
-          navigate('/2fa');
+          navigate(withInviteToken('/2fa', inviteToken));
           return true;
         }
         applySession(result.session);
@@ -598,7 +612,7 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
         return false;
       }
     },
-    [api, applySession, navigate, state.pending],
+    [api, applySession, inviteToken, navigate, state.pending],
   );
 
   const resendCode = useCallback(async (): Promise<boolean> => {
@@ -639,18 +653,18 @@ export function PasswordAuthProvider({ config, children }: PasswordAuthProviderP
       await api.logout(stored.refreshToken).catch(() => undefined);
     }
     await clearAll(userId);
-    navigate('/login?logged_out=1', { replace: true });
-  }, [api, clearAll, navigate, state.user?.sub]);
+    navigate(withInviteToken('/login?logged_out=1', inviteToken), { replace: true });
+  }, [api, clearAll, inviteToken, navigate, state.user?.sub]);
 
   const openLogin = useCallback(() => {
     setState((current) => ({ ...current, error: null, notice: null }));
-    navigate('/login');
-  }, [navigate]);
+    navigate(withInviteToken('/login', inviteToken));
+  }, [inviteToken, navigate]);
 
   const openRegister = useCallback(() => {
     setState((current) => ({ ...current, error: null, notice: null }));
-    navigate('/register');
-  }, [navigate]);
+    navigate(withInviteToken('/register', inviteToken));
+  }, [inviteToken, navigate]);
 
   const clearError = useCallback(() => {
     setState((current) => (current.error ? { ...current, error: null } : current));

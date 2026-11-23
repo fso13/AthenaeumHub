@@ -203,6 +203,17 @@ export function SecuritySettingsCard({ mode }: SecuritySettingsCardProps) {
             <p className="pg-footnote">{t('security.settings.modeNote')}</p>
           </div>
 
+          <div
+            className="sec-immutable"
+            role="note"
+            aria-label={t('security.settings.enforcementTitle')}
+          >
+            <span>{t('security.settings.enforcementTitle')}</span>
+            <p className="pg-footnote">{t('security.settings.dlpEnforced')}</p>
+            <p className="pg-footnote">{t('security.settings.sessionEnforced')}</p>
+            <p className="pg-footnote">{t('security.settings.retentionEnforced')}</p>
+          </div>
+
           {settings.saveStatus === 'error' && settings.saveError ? (
             <div className="pg-inline-error" role="alert">
               <div>

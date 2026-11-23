@@ -32,6 +32,7 @@ import ru.krug.backend.ops.application.model.IdempotencyReservation;
 import ru.krug.backend.ops.application.port.IdempotencyPort;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.application.port.RequestCanonicalizer;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
@@ -52,13 +53,14 @@ public class InitUploadHandler {
     private final IdempotencyPort idempotency;
     private final RequestCanonicalizer canonicalizer;
     private final FileSettingsPort settings;
+    private final ContentDlpPort dlp;
     private final ClockPort clock;
 
     public InitUploadHandler(FileAccessGuard accessGuard, WorkspaceQuotaPort quota,
                              UploadRepository uploadRepository,
                              UploadPartRepository partRepository, ObjectStoragePort storage,
                              IdempotencyPort idempotency, RequestCanonicalizer canonicalizer,
-                             FileSettingsPort settings, ClockPort clock) {
+                             FileSettingsPort settings, ContentDlpPort dlp, ClockPort clock) {
         this.accessGuard = accessGuard;
         this.quota = quota;
         this.uploadRepository = uploadRepository;
@@ -67,6 +69,7 @@ public class InitUploadHandler {
         this.idempotency = idempotency;
         this.canonicalizer = canonicalizer;
         this.settings = settings;
+        this.dlp = dlp;
         this.clock = clock;
     }
 
@@ -115,6 +118,11 @@ public class InitUploadHandler {
                     command.mime(), FileTypePolicy.extensionOf(command.filename()),
                     FileTypePolicy.allowedExamples());
         }
+        // #101: a DLP attachment rule is checked before any upload row or quota
+        // reservation exists, so a blocked file leaves no state. The check uses the
+        // name/extension/MIME/size only and never reads the bytes.
+        dlp.enforceAttachment(scoped, command.chatId(), command.filename(), command.mime(),
+                command.size());
         // D1-BE2: MANAGED only. The non-MANAGED branch above already threw before this
         // point, so an E2EE upload never parses or stores client media metadata.
         MediaMetadata media = sanitizeMedia(command);

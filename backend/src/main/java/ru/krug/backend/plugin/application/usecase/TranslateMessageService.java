@@ -1,5 +1,6 @@
 package ru.krug.backend.plugin.application.usecase;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -17,6 +18,7 @@ import ru.krug.backend.plugin.application.port.TranslationUnavailableException;
 import ru.krug.backend.plugin.domain.service.PluginTextPolicy;
 import ru.krug.backend.shared.application.model.Principal;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.application.port.ContentDlpPort;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.shared.error.ErrorCode;
 
@@ -41,15 +43,17 @@ public class TranslateMessageService {
     private final MessageRepository messages;
     private final TranslationProviderPort provider;
     private final AuditPort audit;
+    private final ContentDlpPort dlp;
     private final ClockPort clock;
 
     public TranslateMessageService(PluginActionGate gate, MessageRepository messages,
                                    TranslationProviderPort provider, AuditPort audit,
-                                   ClockPort clock) {
+                                   ContentDlpPort dlp, ClockPort clock) {
         this.gate = gate;
         this.messages = messages;
         this.provider = provider;
         this.audit = audit;
+        this.dlp = dlp;
         this.clock = clock;
     }
 
@@ -74,6 +78,11 @@ public class TranslateMessageService {
                     "Only managed TEXT messages can be translated",
                     Map.of("reason", "not_text"));
         }
+        // #101: the translation input is plugin content leaving the server boundary. A
+        // BLOCK is answered before any provider call; the decision event never stores the
+        // message text.
+        Principal scoped = principal.withWorkspace(context.workspaceId());
+        dlp.enforcePluginPayload(scoped, chatId, List.of(message.body().value()));
         String translated;
         try {
             translated = provider.translate(message.body().value(), targetLanguage);
@@ -81,6 +90,9 @@ public class TranslateMessageService {
             throw unavailable();
         }
         translated = PluginTextPolicy.requireTranslated(translated);
+        // The provider output is new content as well; a blocked result is never returned or
+        // audited, and no provider payload is written to a log.
+        dlp.enforcePluginPayload(scoped, chatId, List.of(translated));
         audit.append(new AuditRecord(context.workspaceId(), principal.userId(), ACTION,
                 "message", messageId, principal.requestId(), Map.of(), clock.now()));
         return new TranslationView(translated);

@@ -12996,6 +12996,34 @@ td .sec-cell-meta {
   margin: 0;
 }
 
+/* #101: server-side DLP coverage notice (no client-side filtering). */
+.dlp-coverage {
+  margin: 4px 0 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.dlp-coverage__title {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dlp-coverage__list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.dlp-coverage .pg-footnote {
+  margin: 6px 0 0;
+}
+
 @media (max-width: 900px) {
   .sec-filters,
   .sec-filters--audit {

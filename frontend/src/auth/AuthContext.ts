@@ -41,6 +41,11 @@ export interface RegisterInput {
   displayName: string;
   email: string;
   password: string;
+  /**
+   * #100 invite token from the `/workspace-invite/{token}` flow. It is sent
+   * once to `POST /auth/register` and never persisted by the client.
+   */
+  inviteToken?: string | null;
 }
 
 /**

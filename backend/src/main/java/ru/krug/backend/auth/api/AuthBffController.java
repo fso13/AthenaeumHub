@@ -79,7 +79,8 @@ public class AuthBffController {
     public ResponseEntity<AuthRegisterResponse> register(
             @Valid @RequestBody AuthRegisterRequest request, HttpServletRequest http) {
         var view = registerUserService.register(new RegisterCommand(request.email(),
-                request.displayName(), request.password()), clientIp(http));
+                request.displayName(), request.password(), request.inviteToken()),
+                clientIp(http));
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(AuthBffApiMapper.toResponse(view));
     }

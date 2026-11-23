@@ -3,6 +3,7 @@ package ru.krug.backend.unit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,8 @@ import org.junit.jupiter.api.Test;
 import ru.krug.backend.workspace.domain.model.DlpAction;
 import ru.krug.backend.workspace.domain.model.DlpPatternType;
 import ru.krug.backend.workspace.domain.model.DlpPolicy;
+import ru.krug.backend.workspace.domain.model.DlpScope;
+import ru.krug.backend.workspace.domain.model.DlpSurface;
 import ru.krug.backend.workspace.domain.service.DlpMatcher;
 
 /**
@@ -63,8 +66,50 @@ class DlpMatcherTest {
         assertThat(elapsedMillis).isLessThan(1_000L);
     }
 
+    @Test
+    void attachmentHaystacksExposeNameStemExtensionAndMime() {
+        assertThat(DlpMatcher.attachmentHaystacks("Quarterly Report.EXE",
+                "application/x-msdownload"))
+                .containsExactly("Quarterly Report.EXE", "Quarterly Report", "EXE",
+                        "application/x-msdownload");
+        // A path is reduced to its base name; no directory is ever matched.
+        assertThat(DlpMatcher.attachmentHaystacks("/tmp/../../secret.pdf", "application/pdf"))
+                .containsExactly("/tmp/../../secret.pdf", "secret.pdf", "secret", "pdf",
+                        "application/pdf");
+        assertThat(DlpMatcher.attachmentHaystacks("README", null))
+                .containsExactly("README");
+        assertThat(DlpMatcher.attachmentHaystacks(".env", null))
+                .containsExactly(".env");
+    }
+
+    @Test
+    void attachmentRuleMatchesExtensionAndMimeWithLiteralOrGlob() {
+        DlpPolicy executable = policy("exe", DlpPatternType.PATTERN, "*.exe");
+        List<String> exe = DlpMatcher.attachmentHaystacks("setup.EXE", null);
+        assertThat(DlpMatcher.matchesAny(exe, executable)).isTrue();
+        assertThat(DlpMatcher.matchesAny(
+                DlpMatcher.attachmentHaystacks("setup.zip", null), executable)).isFalse();
+
+        DlpPolicy mime = policy("mime", DlpPatternType.KEYWORD, "x-msdownload");
+        assertThat(DlpMatcher.matchesAny(
+                DlpMatcher.attachmentHaystacks("setup.bin", "application/x-msdownload"),
+                mime)).isTrue();
+    }
+
+    @Test
+    void scopeAppliesOnlyToItsOwnSurfaceUnlessAll() {
+        assertThat(DlpScope.ALL.appliesTo(DlpSurface.TEXT)).isTrue();
+        assertThat(DlpScope.ALL.appliesTo(DlpSurface.ATTACHMENT)).isTrue();
+        assertThat(DlpScope.ALL.appliesTo(DlpSurface.PLUGIN)).isTrue();
+        assertThat(DlpScope.ATTACHMENT.appliesTo(DlpSurface.ATTACHMENT)).isTrue();
+        assertThat(DlpScope.ATTACHMENT.appliesTo(DlpSurface.TEXT)).isFalse();
+        assertThat(DlpScope.PLUGIN.appliesTo(DlpSurface.ATTACHMENT)).isFalse();
+        assertThat(DlpScope.TEXT.appliesTo(DlpSurface.PLUGIN)).isFalse();
+    }
+
     private static DlpPolicy policy(String name, DlpPatternType type, String pattern) {
         return new DlpPolicy(UUID.randomUUID(), UUID.randomUUID(), name, DlpAction.BLOCK,
-                type, pattern, true, UUID.randomUUID(), Instant.now(), Instant.now());
+                type, pattern, DlpScope.ALL, null, true, UUID.randomUUID(), Instant.now(),
+                Instant.now());
     }
 }

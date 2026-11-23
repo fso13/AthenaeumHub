@@ -84,7 +84,8 @@ public class EmailVerificationRepositoryAdapter implements EmailVerificationRepo
                 entity.getAttempts(),
                 entity.getConsumedAt(),
                 entity.getLastSentAt(),
-                entity.getCreatedAt());
+                entity.getCreatedAt(),
+                entity.getInviteTokenHash());
     }
 
     private EmailVerificationEntity toEntity(EmailVerification verification) {
@@ -99,6 +100,7 @@ public class EmailVerificationRepositoryAdapter implements EmailVerificationRepo
         entity.setAttempts(verification.attempts());
         entity.setConsumedAt(verification.consumedAt());
         entity.setLastSentAt(verification.lastSentAt());
+        entity.setInviteTokenHash(verification.inviteTokenHash());
         return entity;
     }
 }

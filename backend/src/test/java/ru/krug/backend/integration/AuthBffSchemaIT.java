@@ -27,7 +27,7 @@ class AuthBffSchemaIT extends IntegrationTestBase {
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM information_schema.columns
                  WHERE table_schema = 'auth' AND table_name = 'email_verifications'
-                """, Integer.class)).isEqualTo(10);
+                """, Integer.class)).isEqualTo(11);
 
         List<String> columns = jdbc.queryForList("""
                 SELECT column_name FROM information_schema.columns
@@ -35,7 +35,9 @@ class AuthBffSchemaIT extends IntegrationTestBase {
                 """, String.class);
         assertThat(columns).containsExactlyInAnyOrder(
                 "id", "email", "display_name", "keycloak_user_id", "secret", "expires_at",
-                "attempts", "consumed_at", "last_sent_at", "created_at");
+                "attempts", "consumed_at", "last_sent_at", "created_at",
+                // #100: SHA-256 digest of an optional registration invite token.
+                "invite_token_hash");
         assertThat(columns).noneMatch(column -> column.toLowerCase().contains("password"));
 
         assertThat(jdbc.queryForObject("""

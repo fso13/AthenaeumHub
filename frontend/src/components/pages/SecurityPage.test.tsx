@@ -183,6 +183,56 @@ describe('P0-3 workspace security page', () => {
     ).toBeInTheDocument();
   });
 
+  it('creates an ATTACHMENT rule with a size threshold and keeps an existing threshold honest', async () => {
+    const { user } = renderPasswordApp();
+    await openSecurity(user);
+    const policies = await screen.findByRole('region', { name: 'Политики DLP' });
+
+    // #101 coverage notice: which surfaces are enforced server-side.
+    expect(within(policies).getByText('Что проверяет DLP')).toBeInTheDocument();
+    expect(within(policies).getByText(/Вложения: имя, базовое имя/)).toBeInTheDocument();
+    expect(within(policies).getByText(/E2EE не проверяется/)).toBeInTheDocument();
+    // #101 enforcement notices for retention/session live in the settings card.
+    expect(screen.getByText(/Таймаут сессии: сервер отмечает активность/)).toBeInTheDocument();
+    expect(screen.getByText(/Хранение: ежедневное серверное задание/)).toBeInTheDocument();
+
+    await user.click(within(policies).getByRole('button', { name: 'Добавить правило' }));
+    await user.type(within(policies).getByLabelText('Название'), 'Большие архивы');
+    await user.selectOptions(within(policies).getByLabelText('Тип шаблона'), 'PATTERN');
+    await user.type(within(policies).getByLabelText('Шаблон'), '*.zip');
+    await user.selectOptions(within(policies).getByLabelText('Поверхность проверки'), 'ATTACHMENT');
+    await user.type(within(policies).getByLabelText('Порог размера вложения, байт'), '5242880');
+    await user.click(within(policies).getByRole('button', { name: 'Сохранить' }));
+
+    expect(await within(policies).findByText('Большие архивы')).toBeInTheDocument();
+    expect(mockDb.security.dlpPolicies.at(-1)).toMatchObject({
+      scope: 'ATTACHMENT',
+      max_file_size_bytes: 5 * 1024 * 1024,
+    });
+    expect(within(policies).getByText('5 МБ')).toBeInTheDocument();
+
+    // PATCH cannot clear a stored threshold, so TEXT/PLUGIN are disabled for
+    // this rule instead of letting the server answer an avoidable 400.
+    await user.click(within(policies).getByRole('button', { name: 'Изменить: Большие архивы' }));
+    const scopeSelect = within(policies).getByLabelText('Поверхность проверки');
+    const textOption = within(scopeSelect).getByRole('option', {
+      name: 'TEXT · сообщения',
+    }) as HTMLOptionElement;
+    expect(textOption.disabled).toBe(true);
+
+    const sizeInput = within(policies).getByLabelText('Порог размера вложения, байт');
+    await user.clear(sizeInput);
+    await user.type(sizeInput, '1048576');
+    await user.click(within(policies).getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() =>
+      expect(mockDb.security.dlpPolicies.at(-1)).toMatchObject({
+        scope: 'ATTACHMENT',
+        max_file_size_bytes: 1024 * 1024,
+      }),
+    );
+  });
+
   it('edits and deletes a DLP rule; historical events keep the name snapshot', async () => {
     const { user } = renderPasswordApp();
     await openSecurity(user);

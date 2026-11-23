@@ -3,12 +3,14 @@ package ru.krug.backend.workspace.api.mapper;
 import ru.krug.backend.workspace.api.dto.WorkspaceInviteAcceptanceResponse;
 import ru.krug.backend.workspace.api.dto.WorkspaceInviteCreatedResponse;
 import ru.krug.backend.workspace.api.dto.WorkspaceInviteListResponse;
+import ru.krug.backend.workspace.api.dto.WorkspaceInvitePreviewResponse;
 import ru.krug.backend.workspace.api.dto.WorkspaceInviteResponse;
 import ru.krug.backend.workspace.api.dto.WorkspaceMemberPageResponse;
 import ru.krug.backend.workspace.api.dto.WorkspaceMemberResponse;
 import ru.krug.backend.workspace.api.dto.WorkspaceSummaryResponse;
 import ru.krug.backend.workspace.application.model.WorkspaceInviteAcceptanceView;
 import ru.krug.backend.workspace.application.model.WorkspaceInviteCreatedView;
+import ru.krug.backend.workspace.application.model.WorkspaceInvitePreviewView;
 import ru.krug.backend.workspace.application.model.WorkspaceInviteView;
 import ru.krug.backend.workspace.application.model.WorkspaceMemberPageView;
 import ru.krug.backend.workspace.application.model.WorkspaceMemberView;
@@ -39,7 +41,12 @@ public final class WorkspaceApiMapper {
     public static WorkspaceInviteResponse toResponse(WorkspaceInviteView view) {
         return new WorkspaceInviteResponse(view.id(), view.role(), view.status(),
                 view.usedCount(), view.maxUses(), view.expiresAt(), view.createdAt(),
-                view.createdBy());
+                view.createdBy(), view.email());
+    }
+
+    public static WorkspaceInvitePreviewResponse toResponse(WorkspaceInvitePreviewView view) {
+        return new WorkspaceInvitePreviewResponse(view.workspaceName(), view.workspaceSlug(),
+                view.role(), view.emailBound(), view.expiresAt());
     }
 
     public static WorkspaceInviteCreatedResponse toResponse(WorkspaceInviteCreatedView view) {

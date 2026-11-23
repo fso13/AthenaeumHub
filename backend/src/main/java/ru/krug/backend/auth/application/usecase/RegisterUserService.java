@@ -24,6 +24,7 @@ import ru.krug.backend.auth.application.service.KeycloakIdentityFactory;
 import ru.krug.backend.auth.domain.model.EmailVerification;
 import ru.krug.backend.auth.domain.repository.EmailVerificationRepository;
 import ru.krug.backend.shared.application.port.ClockPort;
+import ru.krug.backend.shared.domain.model.TokenDigest;
 import ru.krug.backend.shared.error.DomainException;
 
 /**
@@ -84,6 +85,12 @@ public class RegisterUserService {
         }
         rateLimit.checkRegister(email, clientIp);
 
+        // #100: keep only the digest; a malformed token is simply not claimable and must not
+        // change the registration response (no account/invite enumeration).
+        String inviteToken = command.inviteToken() == null ? null : command.inviteToken().strip();
+        String inviteTokenHash = TokenDigest.isWellFormed(inviteToken)
+                ? TokenDigest.sha256Hex(inviteToken) : null;
+
         try {
             if (keycloak.findByEmail(email).isPresent()) {
                 throw AuthBffErrors.emailTaken();
@@ -113,7 +120,8 @@ public class RegisterUserService {
             keycloak.updateEnabledAndVerified(keycloakUserId, false, false);
 
             EmailVerification verification = EmailVerification.create(verificationId, email,
-                    command.displayName().strip(), keycloakUserId, secret, expiresAt, now);
+                    command.displayName().strip(), keycloakUserId, secret, expiresAt, now,
+                    inviteTokenHash);
             verifications.save(verification);
             rowSaved = true;
             pendingSessions.store(verificationId, pendingRefreshToken,

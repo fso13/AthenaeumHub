@@ -246,6 +246,11 @@ export type WorkspaceInvite = components['schemas']['WorkspaceInvite'];
 export type WorkspaceInviteRole = WorkspaceInvite['role'];
 export type WorkspaceInviteStatus = WorkspaceInvite['status'];
 export type WorkspaceInviteList = components['schemas']['WorkspaceInviteList'];
+/**
+ * #100 anonymous invite preview: display metadata only. The contract has no
+ * token, hash or invited address field, so the public page cannot leak them.
+ */
+export type WorkspaceInvitePreview = components['schemas']['WorkspaceInvitePreview'];
 /** `token`/`accept_url` exist only in this response and are shown once. */
 export type WorkspaceInviteCreated = components['schemas']['WorkspaceInviteCreated'];
 export type WorkspaceInviteCreateRequest = components['schemas']['WorkspaceInviteCreateRequest'];
@@ -452,6 +457,8 @@ export type Translation = components['schemas']['Translation'];
 export type DlpPolicy = components['schemas']['DlpPolicy'];
 export type DlpAction = DlpPolicy['action'];
 export type DlpPatternType = DlpPolicy['pattern_type'];
+/** #101 surface: `ALL` (default), message text/edit, attachment metadata, plugin payload. */
+export type DlpScope = DlpPolicy['scope'];
 export type DlpPolicyList = components['schemas']['DlpPolicyList'];
 export type DlpPolicyCreateRequest = components['schemas']['DlpPolicyCreateRequest'];
 /** PATCH body: every field optional; at least one is required by the contract. */

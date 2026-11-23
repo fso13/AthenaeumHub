@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { DlpPolicy, WorkspaceSecurity, WorkspaceSession } from '../api/types';
 import {
+  DLP_MAX_FILE_SIZE_BYTES,
   DLP_WILDCARD_MAX,
   draftFromPolicy,
   datetimeLocalToIso,
   emptyDlpDraft,
   groupSessions,
   hasDlpErrors,
+  hasUnclearableFileSize,
   invalidDateRange,
   isUuid,
+  parseMaxFileSizeBytes,
+  scopeSupportsFileSize,
   securityPatchFromDraft,
+  toCreateDlpBody,
+  toUpdateDlpBody,
   validateDlpDraft,
   validateSecurityDraft,
 } from './model';
@@ -20,6 +26,8 @@ const POLICY: DlpPolicy = {
   action: 'BLOCK',
   pattern_type: 'KEYWORD',
   pattern: 'пароль',
+  scope: 'ALL',
+  max_file_size_bytes: null,
   enabled: true,
   created_at: '2026-11-10T09:00:00.000Z',
   updated_at: '2026-11-10T09:00:00.000Z',
@@ -32,6 +40,10 @@ const SETTINGS: WorkspaceSecurity = {
   retention_days: 30,
   updated_at: '2026-11-19T12:10:00.000Z',
 };
+
+function attachmentDraft(base: ReturnType<typeof draftFromPolicy>) {
+  return { ...base, name: 'n', pattern: '*.exe', patternType: 'PATTERN' as const };
+}
 
 function session(id: string, userId: string, lastSeen: string): WorkspaceSession {
   return {
@@ -67,6 +79,65 @@ describe('P0-3 security model', () => {
 
     const tooLongName = { ...draftFromPolicy(POLICY), name: 'x'.repeat(121) };
     expect(validateDlpDraft(tooLongName).name).toBe('security.validation.nameTooLong');
+  });
+
+  it('carries the #101 scope and attachment size threshold through the draft', () => {
+    const attachment: DlpPolicy = {
+      ...POLICY,
+      scope: 'ATTACHMENT',
+      max_file_size_bytes: 10 * 1024 * 1024,
+      pattern: '*.exe',
+      pattern_type: 'PATTERN',
+    };
+    const draft = draftFromPolicy(attachment);
+    expect(draft.scope).toBe('ATTACHMENT');
+    expect(draft.maxFileSizeBytes).toBe(String(10 * 1024 * 1024));
+    expect(hasUnclearableFileSize(draft)).toBe(true);
+    expect(scopeSupportsFileSize(draft.scope)).toBe(true);
+
+    // ALL/ATTACHMENT accept a byte threshold; TEXT/PLUGIN reject it.
+    expect(validateDlpDraft({ ...draft, scope: 'ALL' })).toEqual({});
+    expect(validateDlpDraft({ ...draft, scope: 'TEXT' }).maxFileSizeBytes).toBe(
+      'security.validation.maxFileSizeScope',
+    );
+    expect(validateDlpDraft({ ...draft, scope: 'TEXT', maxFileSizeBytes: '' }).scope).toBe(
+      'security.validation.scopeLocked',
+    );
+
+    const textDraft = { ...emptyDlpDraft(), name: 't', pattern: 'x', scope: 'TEXT' as const };
+    expect(validateDlpDraft(textDraft)).toEqual({});
+    expect(validateDlpDraft({ ...textDraft, maxFileSizeBytes: '1024' }).maxFileSizeBytes).toBe(
+      'security.validation.maxFileSizeScope',
+    );
+    expect(
+      validateDlpDraft({ ...textDraft, scope: 'ATTACHMENT', maxFileSizeBytes: 'abc' })
+        .maxFileSizeBytes,
+    ).toBe('security.validation.maxFileSizeRange');
+    expect(
+      validateDlpDraft({
+        ...textDraft,
+        scope: 'ATTACHMENT',
+        maxFileSizeBytes: String(DLP_MAX_FILE_SIZE_BYTES + 1),
+      }).maxFileSizeBytes,
+    ).toBe('security.validation.maxFileSizeRange');
+    expect(parseMaxFileSizeBytes('')).toBeNull();
+    expect(parseMaxFileSizeBytes('1024')).toBe(1024);
+
+    const create = toCreateDlpBody({
+      ...attachmentDraft(draft),
+      maxFileSizeBytes: '1048576',
+    });
+    expect(create).toMatchObject({
+      scope: 'ATTACHMENT',
+      max_file_size_bytes: 1024 * 1024,
+    });
+    // An empty field keeps the stored threshold (PATCH cannot clear it).
+    expect(toUpdateDlpBody({ ...attachmentDraft(draft), maxFileSizeBytes: '' })).not.toHaveProperty(
+      'max_file_size_bytes',
+    );
+    expect(
+      toCreateDlpBody({ ...emptyDlpDraft(), name: 'n', pattern: 'p', scope: 'PLUGIN' }),
+    ).not.toHaveProperty('max_file_size_bytes');
   });
 
   it('groups sessions by user and preserves the server order', () => {

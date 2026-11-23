@@ -97,6 +97,27 @@ export function describeError(error: unknown, translator: Translator = t): Descr
     };
   }
 
+  if (error.code === 'DLP_BLOCKED') {
+    // #101: the server rejected content by workspace policy. The details carry
+    // only the surface (TEXT/ATTACHMENT/PLUGIN), never the pattern or payload.
+    const surface =
+      typeof error.details?.surface === 'string' ? error.details.surface.toUpperCase() : '';
+    const surfaceKey =
+      surface === 'TEXT' || surface === 'ATTACHMENT' || surface === 'PLUGIN'
+        ? (`errors.dlpBlocked.${surface}` as const)
+        : 'errors.dlpBlocked.text';
+    return {
+      ...meta,
+      kind: 'validation',
+      title: translate('errors.dlpBlocked.title'),
+      message: translate(surfaceKey),
+      retryable: false,
+      // The composer may restore the text for a blocked message/edit; a blocked
+      // file or plugin payload has nothing to restore here.
+      canRestoreText: surface === 'TEXT',
+    };
+  }
+
   if (error.code === 'E2EE_METADATA_FORBIDDEN') {
     return {
       ...meta,

@@ -138,7 +138,7 @@ jobs:
         run: python3 scripts/validate-yaml.py
 
       - name: ShellCheck
-        run: shellcheck --severity=warning scripts/*.sh
+        run: shellcheck --severity=warning scripts/*.sh deploy/scripts/*.sh
 
       - name: E2EE base flags stay off
         run: bash scripts/check-e2ee-base-flags.sh

@@ -56,6 +56,7 @@ import type {
   WorkspaceMember,
   WorkspaceMemberPage,
   WorkspaceInviteAcceptance,
+  WorkspaceInvitePreview,
   WorkspaceSummary,
 } from '../api/types';
 import { createFilesStore, type FilesStore } from './filesStore';
@@ -4187,6 +4188,21 @@ export class ChatStore {
   /** #93: device image upload (multipart); the caller applies the file_id. */
   uploadImage(file: File, options: ImageUploadOptions = {}): Promise<MediaImage> {
     return this.api.uploadImage(file, options);
+  }
+
+  /**
+   * #100 anonymous preview. It is a display-only read and deliberately does
+   * not touch store state or trigger a bootstrap, so it can run before login.
+   * The token stays in the URL/call stack and is never persisted here.
+   */
+  async previewWorkspaceInvite(
+    token: string,
+  ): Promise<{ preview: WorkspaceInvitePreview | null; error: ApiError | null }> {
+    try {
+      return { preview: await this.api.previewWorkspaceInvite(token), error: null };
+    } catch (error) {
+      return { preview: null, error: toApiError(error) };
+    }
   }
 
   /**

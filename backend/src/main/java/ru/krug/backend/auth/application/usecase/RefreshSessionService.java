@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import ru.krug.backend.auth.application.model.AuthSessionView;
 import ru.krug.backend.auth.application.model.KeycloakIdentity;
 import ru.krug.backend.auth.application.model.TokenSet;
+import ru.krug.backend.auth.application.port.AccessTokenSessionPort;
 import ru.krug.backend.auth.application.port.InvalidGrantException;
 import ru.krug.backend.auth.application.port.ProviderUnavailableException;
 import ru.krug.backend.auth.application.port.SecondFactorSessionPort;
@@ -29,15 +30,21 @@ public class RefreshSessionService {
     private final TwoFactorService twoFactor;
     private final KeycloakIdentityFactory identities;
     private final SecondFactorSessionPort completedSessions;
+    private final AccessTokenSessionPort accessTokenSessions;
+    private final SessionTimeoutGuard sessionTimeout;
 
     public RefreshSessionService(TokenExchangePort tokenExchange, AuthSessionService sessions,
                                  TwoFactorService twoFactor, KeycloakIdentityFactory identities,
-                                 SecondFactorSessionPort completedSessions) {
+                                 SecondFactorSessionPort completedSessions,
+                                 AccessTokenSessionPort accessTokenSessions,
+                                 SessionTimeoutGuard sessionTimeout) {
         this.tokenExchange = tokenExchange;
         this.sessions = sessions;
         this.twoFactor = twoFactor;
         this.identities = identities;
         this.completedSessions = completedSessions;
+        this.accessTokenSessions = accessTokenSessions;
+        this.sessionTimeout = sessionTimeout;
     }
 
     public AuthSessionView refresh(String refreshToken, String requestId) {
@@ -55,6 +62,14 @@ public class RefreshSessionService {
                 // again and complete the second factor. Never echo either token.
                 throw AuthBffErrors.twoFactorRequired();
             }
+            // #101: refresh is the only path that can extend a stateless BFF session.
+            // The idle clock is based on real API activity (not refresh), so an abandoned
+            // auto-refreshing tab is rejected here and the new refresh token is revoked.
+            String sessionId = accessTokenSessions.sessionId(tokens.accessToken()).orElse(null);
+            if (sessionTimeout.isExpired(localUserId, sessionId)) {
+                revokeQuietly(tokens.refreshToken());
+                throw AuthBffErrors.sessionExpired();
+            }
             AuthSessionView session = sessions.session(identity, tokens, requestId);
             if (requiresSecondFactor) {
                 completedSessions.markVerified(session.refreshToken());
@@ -64,6 +79,15 @@ public class RefreshSessionService {
             throw AuthBffErrors.invalidCredentials();
         } catch (ProviderUnavailableException ex) {
             throw AuthBffErrors.authUnavailable("keycloak_unavailable");
+        }
+    }
+
+    private void revokeQuietly(String refreshToken) {
+        try {
+            tokenExchange.revoke(refreshToken);
+        } catch (RuntimeException ignored) {
+            // The session must be rejected even if the IdP revocation call fails; the
+            // refresh token is never logged.
         }
     }
 }

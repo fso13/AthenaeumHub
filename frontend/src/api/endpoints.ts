@@ -133,6 +133,7 @@ import type {
   WorkspaceInviteCreateRequest,
   WorkspaceInviteCreated,
   WorkspaceInviteList,
+  WorkspaceInvitePreview,
   WorkspaceLimits,
   WorkspaceMember,
   WorkspaceMemberPage,
@@ -461,7 +462,12 @@ export interface ChatApi {
     body: WorkspaceInviteCreateRequest,
   ): Promise<WorkspaceInviteCreated>;
   revokeWorkspaceInvite(workspaceId: string, inviteId: string): Promise<void>;
-  /** No email is sent: the accept link is copied/shared by the inviter. */
+  /**
+   * #100 `GET /workspace-invites/{token}` — anonymous display metadata only.
+   * No bearer token is sent; the response has no token/hash/invited address.
+   */
+  previewWorkspaceInvite(token: string): Promise<WorkspaceInvitePreview>;
+  /** Accept requires an authenticated account; an email-bound invite must match. */
   acceptWorkspaceInvite(token: string): Promise<WorkspaceInviteAcceptance>;
   getWorkspacePermissions(workspaceId: string): Promise<WorkspacePermissionMatrix>;
   updateWorkspacePermissions(
@@ -1163,6 +1169,18 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
         await client.delete(
           `/workspaces/${encodeURIComponent(workspaceId)}/invites/${encodeURIComponent(inviteId)}`,
         );
+      });
+    },
+
+    previewWorkspaceInvite(token) {
+      // Public endpoint (`security: []`): never send the caller's bearer/device.
+      return withReauth(async () => {
+        const response = await client.get<WorkspaceInvitePreview>(
+          `/workspace-invites/${encodeURIComponent(token)}`,
+          undefined,
+          { auth: false },
+        );
+        return response.data;
       });
     },
 

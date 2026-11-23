@@ -1,0 +1,458 @@
+# Сова — single-host production stack.
+#
+#   cd deploy/production
+#   cp .env.prod.example .env.prod
+#   $EDITOR .env.prod                 # replace every change-me, never commit it
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+#
+# Differences from ../docker-compose.yml (the development stack):
+#   * only Caddy publishes ports (80/443); every application service stays on
+#     the internal Docker network(s) and has no host port mapping;
+#   * Caddy terminates TLS with automatic ACME certificates for DOMAIN and
+#     FILES_DOMAIN (MinIO presigned URLs need a browser-visible S3 host);
+#   * the production Keycloak realm has no demo users and no known passwords;
+#   * Mailpit is gone: real SMTP is supplied through SPRING_MAIL_*;
+#   * healthchecks, restart policies and bounded json-file logs are explicit.
+#
+# Secrets are never part of this file: every value comes from .env.prod, and
+# the compose interpolation fails fast (`:?`) when a required value is missing.
+# Keep KRUG_E2EE_ENABLED=false until the E2EE release gate is closed.
+
+name: krug-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Edge: the only service with published ports. Certificates and ACME account
+  # material live in the caddy_data volume; back it up or let Caddy reissue.
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: krug-prod-caddy
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      createbuckets:
+        condition: service_completed_successfully
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.prod}
+      FILES_DOMAIN: ${FILES_DOMAIN:?set FILES_DOMAIN in .env.prod}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.prod}
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - krug-prod-caddy-data:/data
+      - krug-prod-caddy-config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [edge]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Application tier
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_USE_MOCKS: "false"
+        VITE_AUTH_MODE: password
+        VITE_DEV_SESSION: "false"
+        VITE_DEVICE_NAME: "Сова — браузер"
+        VITE_APP_VERSION: ${KRUG_APP_VERSION:-0.1.0}
+        VITE_REALTIME_ENABLED: "true"
+        VITE_MEDIA_ORIGINS: https://${FILES_DOMAIN:?set FILES_DOMAIN in .env.prod}
+        VITE_E2EE_ENABLED: ${KRUG_E2EE_ENABLED:-false}
+    container_name: krug-prod-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [edge]
+    logging: *default-logging
+
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    container_name: krug-prod-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      createbuckets:
+        condition: service_completed_successfully
+    environment:
+      # `prod` loads the strict guard and disables the dev session endpoint;
+      # `keycloak` supplies the OIDC/BFF production defaults. Both are needed.
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-keycloak,prod}
+      SERVER_PORT: "8081"
+      TZ: UTC
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
+
+      DB_URL: jdbc:postgresql://postgres:5432/krug
+      DB_USER: krug_app
+      DB_PASSWORD: ${KRUG_APP_PASSWORD:?set KRUG_APP_PASSWORD in .env.prod}
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/krug
+      FLYWAY_USER: krug_migrator
+      FLYWAY_PASSWORD: ${KRUG_DB_PASSWORD:?set KRUG_DB_PASSWORD in .env.prod}
+
+      # Generated secrets. ProdGuard rejects values under 32 characters and
+      # the documented development defaults.
+      KRUG_AUTH_JWT_SECRET: ${KRUG_AUTH_JWT_SECRET:?set KRUG_AUTH_JWT_SECRET in .env.prod}
+      KRUG_CONTENT_KEY: ${KRUG_CONTENT_KEY:?set KRUG_CONTENT_KEY in .env.prod}
+      KRUG_AUTH_BFF_EMAIL_SECRET_KEY: ${KRUG_AUTH_BFF_EMAIL_SECRET_KEY:?set KRUG_AUTH_BFF_EMAIL_SECRET_KEY in .env.prod}
+
+      # OIDC: the issuer is the public HTTPS URL baked into tokens; the JWKS
+      # and Admin API are fetched over the internal Docker network.
+      KRUG_OIDC_ISSUER: https://${DOMAIN:?set DOMAIN in .env.prod}/realms/krug
+      KRUG_OIDC_JWKS_URI: http://keycloak:8080/realms/krug/protocol/openid-connect/certs
+      KRUG_OIDC_AUDIENCE: ${KRUG_OIDC_AUDIENCE:-krug-api}
+      KRUG_OIDC_AZP: ${KRUG_OIDC_AZP:-krug-web}
+      KRUG_KEYCLOAK_URL: http://keycloak:8080
+
+      # Runtime Keycloak administration must NOT use the master realm or
+      # admin-cli. Create a least-privilege technical user in the `krug` realm
+      # (see docs/PRODUCTION-RUNBOOK.md) and keep these values in sync.
+      KRUG_KEYCLOAK_ADMIN_REALM: ${KRUG_KEYCLOAK_ADMIN_REALM:-krug}
+      KC_ADMIN_CLIENT_ID: ${KC_ADMIN_CLIENT_ID:-krug-web}
+      KC_ADMIN_USER: ${KC_ADMIN_USER:?set KC_ADMIN_USER in .env.prod}
+      KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?set KC_ADMIN_PASSWORD in .env.prod}
+
+      # Real SMTP relay. The admin panel's runtime SMTP settings, once saved,
+      # take precedence over these environment values.
+      SPRING_MAIL_HOST: ${SPRING_MAIL_HOST:?set SPRING_MAIL_HOST in .env.prod}
+      SPRING_MAIL_PORT: ${SPRING_MAIL_PORT:-587}
+      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME:?set SPRING_MAIL_USERNAME in .env.prod}
+      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD:?set SPRING_MAIL_PASSWORD in .env.prod}
+      SPRING_MAIL_SMTP_AUTH: ${SPRING_MAIL_SMTP_AUTH:-true}
+      SPRING_MAIL_SMTP_STARTTLS: ${SPRING_MAIL_SMTP_STARTTLS:-true}
+      KRUG_MAIL_FROM: ${KRUG_MAIL_FROM:?set KRUG_MAIL_FROM in .env.prod}
+
+      # Same-origin SPA behind Caddy; Caddy replaces X-Forwarded-For with the
+      # real client address and nginx appends the proxy address.
+      PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env.prod}
+      KRUG_WS_ALLOWED_ORIGINS: https://${DOMAIN:?set DOMAIN in .env.prod}
+      KRUG_REALTIME_WS_URL: wss://${DOMAIN:?set DOMAIN in .env.prod}/ws
+      KRUG_AUTH_BFF_TRUST_XFF: "true"
+      KRUG_FILES_ARTWORK_BASE_URL: https://${DOMAIN:?set DOMAIN in .env.prod}
+      KRUG_BOTS_RESPONSE_URL_BASE: https://${DOMAIN:?set DOMAIN in .env.prod}/api/v1
+
+      # Internal S3 API is MinIO. Presigned URLs are signed for FILES_DOMAIN,
+      # which Caddy forwards to MinIO with the original Host header.
+      S3_ENDPOINT: http://minio:9000
+      S3_PUBLIC_ENDPOINT: https://${FILES_DOMAIN:?set FILES_DOMAIN in .env.prod}
+      S3_BUCKET: ${S3_BUCKET:-krug}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env.prod}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env.prod}
+      S3_PATH_STYLE: "true"
+      S3_SCAN_MODE: ${S3_SCAN_MODE:-noop}
+      CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+
+      # Keep false until the E2EE release gate is closed.
+      KRUG_E2EE_ENABLED: ${KRUG_E2EE_ENABLED:-false}
+
+      KRUG_RATE_LIMIT_ENABLED: "true"
+      KRUG_OUTBOX_RELAY_ENABLED: "true"
+      KRUG_RETENTION_ENABLED: "true"
+      JAVA_OPTS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+    expose:
+      - "8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    stop_grace_period: 30s
+    networks: [edge, internal]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL: application database and a separate Keycloak database.
+  # Neither service publishes a host port.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: krug-prod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: krug
+      POSTGRES_USER: krug_migrator
+      POSTGRES_PASSWORD: ${KRUG_DB_PASSWORD:?set KRUG_DB_PASSWORD in .env.prod}
+      TZ: UTC
+    expose:
+      - "5432"
+    volumes:
+      - krug-prod-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U krug_migrator -d krug"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    stop_grace_period: 60s
+    shm_size: "256mb"
+    networks: [internal]
+    logging: *default-logging
+
+  # One-shot, idempotent: creates/updates the runtime role krug_app before
+  # Flyway runs. V1 also creates the role, but this fixes its password.
+  db-bootstrap:
+    image: postgres:16-alpine
+    container_name: krug-prod-db-bootstrap
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${KRUG_DB_PASSWORD:?set KRUG_DB_PASSWORD in .env.prod}
+      KRUG_APP_PASSWORD: ${KRUG_APP_PASSWORD:?set KRUG_APP_PASSWORD in .env.prod}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        psql -h postgres -U krug_migrator -d krug -v ON_ERROR_STOP=1 <<SQL
+        DO \$\$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'krug_app') THEN
+            CREATE ROLE krug_app LOGIN PASSWORD '$${KRUG_APP_PASSWORD}';
+          ELSE
+            ALTER ROLE krug_app PASSWORD '$${KRUG_APP_PASSWORD}';
+          END IF;
+        END
+        \$\$;
+        SQL
+    networks: [internal]
+    logging: *default-logging
+
+  keycloak-postgres:
+    image: postgres:16-alpine
+    container_name: krug-prod-keycloak-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KC_DB_NAME:-keycloak}
+      POSTGRES_USER: ${KC_DB_USER:-keycloak}
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:?set KC_DB_PASSWORD in .env.prod}
+      TZ: UTC
+    expose:
+      - "5432"
+    volumes:
+      - krug-prod-keycloak-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    stop_grace_period: 60s
+    shm_size: "128mb"
+    networks: [internal]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Keycloak: internal only. The browser never talks to it; the SPA uses the
+  # BFF at https://DOMAIN/api/v1/auth/*. Admin console access is an operator
+  # concern (kcadm inside the container, see the runbook).
+  # ---------------------------------------------------------------------------
+  keycloak-realm-init:
+    image: alpine:3.20
+    container_name: krug-prod-keycloak-realm-init
+    restart: "no"
+    environment:
+      PUBLIC_URL: https://${DOMAIN:?set DOMAIN in .env.prod}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mkdir -p /import
+        sed "s|__PUBLIC_URL__|$${PUBLIC_URL}|g" /src/realm-export.prod.json \
+          > /import/realm-export.json
+        test -s /import/realm-export.json
+    volumes:
+      - ./realm-export.prod.json:/src/realm-export.prod.json:ro
+      - krug-prod-keycloak-import:/import
+    networks: [internal]
+    logging: *default-logging
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: krug-prod-keycloak
+    restart: unless-stopped
+    command: ["start", "--import-realm"]
+    depends_on:
+      keycloak-postgres:
+        condition: service_healthy
+      keycloak-realm-init:
+        condition: service_completed_successfully
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/${KC_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${KC_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?set KC_DB_PASSWORD in .env.prod}
+      KC_DB_POOL_INITIAL_SIZE: "5"
+      KC_DB_POOL_MIN_SIZE: "5"
+      KC_DB_POOL_MAX_SIZE: "20"
+
+      # Bootstrap admin is used only for the first provisioning (see runbook);
+      # the application must use the separate `krug` realm technical user.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set KC_BOOTSTRAP_ADMIN_PASSWORD in .env.prod}
+      # Operator contact for the runtime technical user; not a secret.
+      KC_ADMIN_EMAIL: ${KC_ADMIN_EMAIL:-ops@example.com}
+
+      KC_HEALTH_ENABLED: "true"
+      # The public issuer is HTTPS; the internal listener remains HTTP on the
+      # Docker network. No host port is published.
+      KC_HOSTNAME: https://${DOMAIN:?set DOMAIN in .env.prod}
+      # Keycloak has no host port; strict Host checks would also reject the
+      # loopback health probe. Host-header attacks require internal access.
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_CACHE: local
+      TZ: UTC
+    expose:
+      - "8080"
+      - "9000"   # health/management, internal only
+    volumes:
+      - krug-prod-keycloak-import:/opt/keycloak/data/import:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; cat <&3 | grep -q '200 OK'"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+    stop_grace_period: 30s
+    networks: [internal]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # MinIO: no host port. Caddy publishes FILES_DOMAIN for presigned GETs and
+  # preserves the Host header so SigV4 signatures stay valid. The S3 API is
+  # read-only through Caddy; uploads go through the backend.
+  # ---------------------------------------------------------------------------
+  minio:
+    image: chainguard/minio:latest
+    container_name: krug-prod-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env.prod}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env.prod}
+      TZ: UTC
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - krug-prod-minio-data:/data
+    stop_grace_period: 30s
+    networks: [edge, internal]
+    logging: *default-logging
+
+  createbuckets:
+    image: chainguard/minio-client:latest
+    container_name: krug-prod-createbuckets
+    restart: on-failure:10
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MC_HOST_local: http://${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env.prod}:${S3_SECRET_KEY:?set S3_SECRET_KEY in .env.prod}@minio:9000
+    entrypoint: ["/usr/bin/mc"]
+    command: ["mb", "--ignore-existing", "local/${S3_BUCKET:-krug}"]
+    networks: [internal]
+    logging: *default-logging
+
+  # One-off mc client for backup/restore. `docker compose run --rm` with this
+  # service mounts the backup directory and mirrors the bucket without exposing
+  # MinIO to the host. It is never started by `up` (ops profile only).
+  minio-backup:
+    image: chainguard/minio-client:latest
+    profiles: ["ops"]
+    environment:
+      MC_HOST_local: http://${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env.prod}:${S3_SECRET_KEY:?set S3_SECRET_KEY in .env.prod}@minio:9000
+    entrypoint: ["/usr/bin/mc"]
+    networks: [internal]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------------------
+  # Optional AV scanner. Production should run it, but it needs a large volume
+  # and a long signature update on first start:
+  #   S3_SCAN_MODE=clamav docker compose ... --profile scan up -d
+  # Until then S3_SCAN_MODE=noop is a documented launch blocker, not a default.
+  # ---------------------------------------------------------------------------
+  clamav:
+    image: clamav/clamav:stable
+    container_name: krug-prod-clamav
+    profiles: ["scan"]
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+    volumes:
+      - krug-prod-clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 30
+      start_period: 180s
+    networks: [internal]
+    logging: *default-logging
+
+volumes:
+  krug-prod-pgdata:
+  krug-prod-keycloak-pgdata:
+  krug-prod-keycloak-import:
+  krug-prod-minio-data:
+  krug-prod-clamav-data:
+  krug-prod-caddy-data:
+  krug-prod-caddy-config:
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true

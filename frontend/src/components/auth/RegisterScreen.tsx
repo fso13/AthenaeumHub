@@ -2,6 +2,8 @@ import { useState, type FormEvent } from 'react';
 import { usePasswordAuth } from '../../auth/AuthContext';
 import { authErrorMessage } from '../../auth/errors';
 import { t } from '../../i18n/ru';
+import { readInviteToken } from '../../router/inviteRoutes';
+import { useLocation } from '../../router/router';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_NAME = 80;
@@ -48,6 +50,10 @@ function validate(
  */
 export function RegisterScreen() {
   const auth = usePasswordAuth();
+  const location = useLocation();
+  // #100: carried in the URL from the invite page; included in the register
+  // request so the server can claim the invitation after email verification.
+  const inviteToken = readInviteToken(location);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -63,7 +69,7 @@ export function RegisterScreen() {
     event.preventDefault();
     setTouched(true);
     if (hasErrors || auth.busy) return;
-    void auth.register({ displayName, email, password });
+    void auth.register({ displayName, email, password, inviteToken });
   };
 
   return (
@@ -82,6 +88,12 @@ export function RegisterScreen() {
         {auth.error ? (
           <p className="auth-status auth-status--error" role="alert">
             {authErrorMessage(auth.error)}
+          </p>
+        ) : null}
+
+        {inviteToken ? (
+          <p className="auth-status" role="note">
+            {t('auth.register.inviteNotice')}
           </p>
         ) : null}
 

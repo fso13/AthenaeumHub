@@ -1,5 +1,11 @@
 # Сова — коробочный запуск
 
+> **Production:** отдельный стек с Caddy/TLS, internal-only сервисами, реальным
+> SMTP и бэкапами — [`production/`](production/),
+> [`docs/PRODUCTION-RUNBOOK.md`](../docs/PRODUCTION-RUNBOOK.md) и
+> [`PRODUCTION-REPORT.md`](PRODUCTION-REPORT.md). Файл ниже описывает
+> development/demo-стек и остаётся без изменений.
+
 Один `docker compose` поднимает:
 
 | Сервис | Роль | Порт хоста |

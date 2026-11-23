@@ -26,6 +26,8 @@ GLOBS = [
     ".github/workflows/*.yaml",
     "deploy/docker-compose*.yml",
     "deploy/docker-compose*.yaml",
+    "deploy/production/*.yml",
+    "deploy/production/*.yaml",
     "backend/src/main/resources/application*.yml",
     "contracts/openapi.yaml",
 ]

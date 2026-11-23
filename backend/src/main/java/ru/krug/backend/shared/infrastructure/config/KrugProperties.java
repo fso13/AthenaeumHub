@@ -55,7 +55,15 @@ public record KrugProperties(
             @DefaultValue("10") int botCommandPerUser,
             @DefaultValue("60s") Duration botCommandWindow,
             @DefaultValue("10") int botResponsePerToken,
-            @DefaultValue("1m") Duration botResponseWindow) {
+            @DefaultValue("1m") Duration botResponseWindow,
+            // #100: email-invite delivery is an outbound side effect; the preview URL is a
+            // bearer token reachable without a session.
+            @DefaultValue("20") int inviteEmailPerWorkspace,
+            @DefaultValue("1h") Duration inviteEmailWorkspaceWindow,
+            @DefaultValue("5") int inviteEmailPerAddress,
+            @DefaultValue("1h") Duration inviteEmailAddressWindow,
+            @DefaultValue("120") int invitePreviewPerIp,
+            @DefaultValue("1m") Duration invitePreviewIpWindow) {
     }
 
     public record Outbox(Relay relay) {

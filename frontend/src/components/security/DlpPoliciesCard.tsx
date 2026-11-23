@@ -1,14 +1,19 @@
 import { useId, useState, type FormEvent } from 'react';
 import type { ApiError } from '../../api/problem';
-import type { DlpAction, DlpPatternType, DlpPolicy } from '../../api/types';
+import type { DlpAction, DlpPatternType, DlpPolicy, DlpScope } from '../../api/types';
+import { formatBytes } from '../../files/format';
 import { t, type MessageKey } from '../../i18n/ru';
 import {
+  DLP_MAX_FILE_SIZE_BYTES,
   DLP_NAME_MAX,
   DLP_PATTERN_MAX,
+  DLP_SCOPES,
   DLP_WILDCARD_MAX,
   draftFromPolicy,
   emptyDlpDraft,
   hasDlpErrors,
+  hasUnclearableFileSize,
+  scopeSupportsFileSize,
   toCreateDlpBody,
   toUpdateDlpBody,
   validateDlpDraft,
@@ -33,6 +38,10 @@ const TYPE_OPTIONS: ReadonlyArray<{ value: DlpPatternType; label: MessageKey }> 
   { value: 'PATTERN', label: 'security.dlp.type.PATTERN' },
 ];
 
+const SCOPE_OPTIONS: ReadonlyArray<{ value: DlpScope; label: MessageKey }> = DLP_SCOPES.map(
+  (scope) => ({ value: scope, label: `security.dlp.scope.${scope}` as MessageKey }),
+);
+
 interface PolicyFormProps {
   initial: DlpPolicyDraft;
   policyId: string | null;
@@ -49,12 +58,18 @@ function PolicyForm({ initial, policyId, busy, serverError, onCancel, onSubmit }
   const nameId = useId();
   const actionId = useId();
   const typeId = useId();
+  const scopeId = useId();
+  const scopeErrorId = useId();
   const patternId = useId();
+  const sizeId = useId();
+  const sizeErrorId = useId();
   const enabledId = useId();
   const nameErrorId = useId();
   const patternErrorId = useId();
 
   const wildcards = draft.pattern.match(/\*/g)?.length ?? 0;
+  const sizeEnabled = scopeSupportsFileSize(draft.scope);
+  const lockedSize = hasUnclearableFileSize(draft);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -126,6 +141,43 @@ function PolicyForm({ initial, policyId, busy, serverError, onCancel, onSubmit }
           </select>
         </div>
         <div className="form-row">
+          <label htmlFor={scopeId}>{t('security.dlp.field.scope')}</label>
+          <select
+            id={scopeId}
+            className="select"
+            value={draft.scope}
+            aria-invalid={errors.scope !== undefined}
+            aria-describedby={`${scopeId}-hint${errors.scope ? ` ${scopeErrorId}` : ''}`}
+            onChange={(event) => {
+              const next = event.target.value as DlpScope;
+              setDraft((current) => ({
+                ...current,
+                scope: next,
+                maxFileSizeBytes: scopeSupportsFileSize(next) ? current.maxFileSizeBytes : '',
+              }));
+            }}
+          >
+            {SCOPE_OPTIONS.map((option) => (
+              <option
+                key={option.value}
+                value={option.value}
+                disabled={lockedSize && !scopeSupportsFileSize(option.value)}
+              >
+                {t(option.label)}
+              </option>
+            ))}
+          </select>
+          <p className="field__meta" id={`${scopeId}-hint`}>
+            {t('security.dlp.scopeHint')}
+          </p>
+          {lockedSize ? <p className="field__meta">{t('security.dlp.scopeLockedHint')}</p> : null}
+          {errors.scope ? (
+            <p className="sec-field-error" id={scopeErrorId}>
+              {t(errors.scope as MessageKey)}
+            </p>
+          ) : null}
+        </div>
+        <div className="form-row">
           <label htmlFor={enabledId}>{t('security.dlp.field.enabled')}</label>
           <label className="sec-switch" htmlFor={enabledId}>
             <input
@@ -162,6 +214,42 @@ function PolicyForm({ initial, policyId, busy, serverError, onCancel, onSubmit }
         {errors.pattern ? (
           <p className="sec-field-error" id={patternErrorId}>
             {t(errors.pattern as MessageKey)}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="form-row">
+        <label htmlFor={sizeId}>{t('security.dlp.field.maxFileSize')}</label>
+        <input
+          id={sizeId}
+          className="input mono"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={DLP_MAX_FILE_SIZE_BYTES}
+          step={1}
+          value={draft.maxFileSizeBytes}
+          placeholder={t('security.dlp.maxFileSizePlaceholder')}
+          disabled={!sizeEnabled}
+          aria-invalid={errors.maxFileSizeBytes !== undefined}
+          aria-describedby={`${sizeId}-hint${errors.maxFileSizeBytes ? ` ${sizeErrorId}` : ''}`}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              maxFileSizeBytes: event.target.value.replace(/[^0-9]/g, ''),
+            }))
+          }
+        />
+        <p className="field__meta" id={`${sizeId}-hint`}>
+          {sizeEnabled ? t('security.dlp.maxFileSizeHint') : t('security.dlp.maxFileSizeDisabled')}
+          {draft.maxFileSizeBytes.trim() ? ` · ${formatBytes(Number(draft.maxFileSizeBytes))}` : ''}
+        </p>
+        {lockedSize && !draft.maxFileSizeBytes.trim() ? (
+          <p className="field__meta">{t('security.dlp.maxFileSizeKeep')}</p>
+        ) : null}
+        {errors.maxFileSizeBytes ? (
+          <p className="sec-field-error" id={sizeErrorId}>
+            {t(errors.maxFileSizeBytes as MessageKey)}
           </p>
         ) : null}
       </div>
@@ -262,6 +350,16 @@ export function DlpPoliciesCard() {
       </div>
       <p className="pane-sub">{t('security.dlp.lead')}</p>
 
+      <div className="dlp-coverage" role="note" aria-label={t('security.dlp.coverage.title')}>
+        <p className="dlp-coverage__title">{t('security.dlp.coverage.title')}</p>
+        <ul className="dlp-coverage__list">
+          <li>{t('security.dlp.coverage.text')}</li>
+          <li>{t('security.dlp.coverage.attachments')}</li>
+          <li>{t('security.dlp.coverage.plugins')}</li>
+        </ul>
+        <p className="pg-footnote">{t('security.dlp.coverage.e2ee')}</p>
+      </div>
+
       {policies.status === 'loading' && !loaded ? (
         <SectionLoading label={t('security.dlp.loading')} />
       ) : null}
@@ -293,7 +391,9 @@ export function DlpPoliciesCard() {
                 <th scope="col">{t('security.dlp.column.name')}</th>
                 <th scope="col">{t('security.dlp.column.action')}</th>
                 <th scope="col">{t('security.dlp.column.type')}</th>
+                <th scope="col">{t('security.dlp.column.scope')}</th>
                 <th scope="col">{t('security.dlp.column.pattern')}</th>
+                <th scope="col">{t('security.dlp.column.maxFileSize')}</th>
                 <th scope="col">{t('security.dlp.column.enabled')}</th>
                 <th scope="col">{t('security.dlp.column.actions')}</th>
               </tr>
@@ -320,9 +420,25 @@ export function DlpPoliciesCard() {
                     <code>{policy.pattern_type}</code>
                   </td>
                   <td>
+                    <span className="chip">
+                      {t(`security.dlp.scope.${policy.scope}` as MessageKey)}
+                    </span>
+                  </td>
+                  <td>
                     <code className="sec-pattern" title={policy.pattern}>
                       {policy.pattern}
                     </code>
+                  </td>
+                  <td>
+                    {scopeSupportsFileSize(policy.scope) ? (
+                      <span title={String(policy.max_file_size_bytes ?? '')}>
+                        {formatBytes(policy.max_file_size_bytes)}
+                      </span>
+                    ) : (
+                      <span className="sec-cell-meta">
+                        {t('security.dlp.maxFileSizeNotApplicable')}
+                      </span>
+                    )}
                   </td>
                   <td>
                     <span className={`chip${policy.enabled ? '' : ' chip--muted'}`}>

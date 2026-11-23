@@ -557,6 +557,8 @@ export const ru = {
   'auth.login.loggedOut': 'Вы вышли из аккаунта.',
   'auth.register.title': 'Регистрация в Сова',
   'auth.register.lead': 'Создайте аккаунт — мы отправим 6-значный код на email.',
+  'auth.register.inviteNotice':
+    'Вы регистрируетесь по приглашению в пространство. После подтверждения email сервер автоматически примет приглашение, если оно ещё действительно и привязано к этому адресу.',
   'auth.register.nameLabel': 'Имя',
   'auth.register.nameRequired': 'Введите имя.',
   'auth.register.nameTooLong': 'Имя должно быть не длиннее 80 символов.',
@@ -1321,6 +1323,15 @@ export const ru = {
   'errors.e2eeMetadata.title': 'Действие недоступно в E2EE',
   'errors.e2eeMetadata.text':
     'E2EE-чат не передаёт серверу реакции и правки: это раскрыло бы метаданные. Удаление доступно.',
+  'errors.dlpBlocked.title': 'Заблокировано политикой DLP',
+  'errors.dlpBlocked.text':
+    'Сервер отклонил действие по DLP-правилу пространства. Содержимое не сохранено.',
+  'errors.dlpBlocked.TEXT':
+    'Текст отклонён DLP-правилом пространства. Сообщение или правка не сохранены.',
+  'errors.dlpBlocked.ATTACHMENT':
+    'Вложение отклонено DLP-правилом пространства: проверены имя, расширение, MIME и размер. Файл не загружен и не привязан.',
+  'errors.dlpBlocked.PLUGIN':
+    'Данные плагина отклонены DLP-правилом пространства. Действие не выполнено.',
   'errors.server.title': 'Сервер недоступен',
   'errors.server.text': 'Повторите попытку — сообщение сохранится.',
   'errors.network.title': 'Нет соединения',
@@ -2385,7 +2396,7 @@ export const ru = {
 
   'security.dlp.title': 'Политики DLP',
   'security.dlp.lead':
-    'Правила проверяют исходящий managed-текст. Администратор задаёт литерал или шаблон с «*»; регулярные выражения не поддерживаются.',
+    'Правила проверяют managed-текст и редактирование, метаданные вложений и plugin payload. Администратор задаёт литерал или шаблон с «*»; регулярные выражения не поддерживаются.',
   'security.dlp.add': 'Добавить правило',
   'security.dlp.edit': 'Изменить',
   'security.dlp.delete': 'Удалить',
@@ -2397,15 +2408,43 @@ export const ru = {
   'security.dlp.retry': 'Повторить',
   'security.dlp.emptyTitle': 'Правил пока нет',
   'security.dlp.emptyText':
-    'Создайте первое правило: WARN предупредит отправителя, BLOCK остановит отправку до записи сообщения.',
+    'Создайте первое правило: WARN предупредит отправителя, BLOCK остановит действие до сохранения контента.',
   'security.dlp.limitHint':
     'Не более 100 правил на пространство; название уникально без учёта регистра.',
   'security.dlp.column.name': 'Название',
   'security.dlp.column.action': 'Действие',
   'security.dlp.column.type': 'Тип',
+  'security.dlp.column.scope': 'Поверхность',
   'security.dlp.column.pattern': 'Шаблон',
+  'security.dlp.column.maxFileSize': 'Порог размера',
   'security.dlp.column.enabled': 'Статус',
   'security.dlp.column.actions': 'Действия',
+  'security.dlp.scope.ALL': 'ALL · все поверхности',
+  'security.dlp.scope.TEXT': 'TEXT · сообщения',
+  'security.dlp.scope.ATTACHMENT': 'ATTACHMENT · вложения',
+  'security.dlp.scope.PLUGIN': 'PLUGIN · плагины',
+  'security.dlp.field.scope': 'Поверхность проверки',
+  'security.dlp.scopeHint':
+    'ALL проверяет все управляемые поверхности. TEXT — текст и редактирование, ATTACHMENT — имя/расширение/MIME/размер файла, PLUGIN — poll, задачи и перевод.',
+  'security.dlp.scopeLockedHint':
+    'У правила уже есть порог размера. Контракт сохраняет порог при отсутствии поля и не умеет его очищать, поэтому TEXT/PLUGIN недоступны: измените порог или создайте новое правило.',
+  'security.dlp.field.maxFileSize': 'Порог размера вложения, байт',
+  'security.dlp.maxFileSizePlaceholder': 'Например, 10485760',
+  'security.dlp.maxFileSizeHint':
+    'Пусто — без порога. Файл больше порога блокируется/предупреждается даже без совпадения шаблона; применяется только к вложениям.',
+  'security.dlp.maxFileSizeDisabled': 'Порог размера не применяется к поверхностям TEXT и PLUGIN.',
+  'security.dlp.maxFileSizeKeep':
+    'Пустое поле сохранит текущий порог: контракт не поддерживает очистку.',
+  'security.dlp.maxFileSizeNotApplicable': '—',
+  'security.dlp.coverage.title': 'Что проверяет DLP',
+  'security.dlp.coverage.text':
+    'Текст сообщения и редактирование: сервер отвечает 422 DLP_BLOCKED до сохранения; WARN фиксируется событием.',
+  'security.dlp.coverage.attachments':
+    'Вложения: имя, базовое имя, расширение, MIME и порог размера на upload, bind и rename. Совпадение BLOCK не создаёт строку загрузки и не привязывает файл.',
+  'security.dlp.coverage.plugins':
+    'Плагины: вопрос и варианты poll, заголовок задачи, вход и результат перевода.',
+  'security.dlp.coverage.e2ee':
+    'E2EE не проверяется: у сервера нет открытого текста. Фильтрации на клиенте нет — все решения принимает сервер.',
   'security.dlp.action.WARN': 'WARN · предупредить',
   'security.dlp.action.BLOCK': 'BLOCK · заблокировать',
   'security.dlp.type.KEYWORD': 'KEYWORD · литерал',
@@ -2430,7 +2469,7 @@ export const ru = {
   'security.dlp.noRegex': 'Регулярные выражения не компилируются ни сервером, ни браузером.',
   'security.dlp.deleteTitle': 'Удалить DLP-правило?',
   'security.dlp.deleteText':
-    'Правило «{name}» перестанет проверять сообщения. Исторические события сохранят его название, но ссылка на правило станет пустой.',
+    'Правило «{name}» перестанет проверять контент. Исторические события сохранят его название, но ссылка на правило станет пустой.',
   'security.dlp.deleteConfirm': 'Удалить правило',
   'security.dlp.deleting': 'Удаляем…',
   'security.dlp.saveError': 'Не удалось сохранить правило.',
@@ -2548,7 +2587,7 @@ export const ru = {
   'security.settings.timeoutHint': 'Допустимо от 15 до 10 080 минут (7 суток).',
   'security.settings.dlp': 'DLP включена',
   'security.settings.dlpHint':
-    'Проверка исходящего managed-текста. В E2EE сервер не видит текст, поэтому DLP недоступна.',
+    'DLP проверяет текст и редактирование, метаданные вложений и plugin payload на сервере. В E2EE сервер не видит текст, поэтому DLP недоступна.',
   'security.settings.dlpE2ee': 'В E2EE DLP недоступна и остаётся выключенной.',
   'security.settings.retention': 'Хранение истории, дней',
   'security.settings.retentionHint': 'Допустимо от 1 до 3650 дней.',
@@ -2559,6 +2598,13 @@ export const ru = {
   'security.settings.noChanges': 'Изменений нет.',
   'security.settings.saveError': 'Не удалось сохранить настройки.',
   'security.settings.modeNote': 'Смена режима безопасности недоступна: значение неизменяемо.',
+  'security.settings.enforcementTitle': 'Где это применяется',
+  'security.settings.dlpEnforced':
+    'DLP: правила проверяет сервер — текст и редактирование, метаданные вложений на upload/bind/rename, plugin payload. Клиент не фильтрует контент.',
+  'security.settings.sessionEnforced':
+    'Таймаут сессии: сервер отмечает активность и отклоняет refresh после простоя. Уже выданный access-токен действует до своего срока, поэтому он должен быть короче минимального таймаута.',
+  'security.settings.retentionEnforced':
+    'Хранение: ежедневное серверное задание удаляет старые сообщения и вложения; счётчики запуска пишутся в журнал воркспейса. Интерфейс не удаляет данные сам.',
 
   'security.validation.nameRequired': 'Укажите название правила.',
   'security.validation.nameTooLong': 'Название длиннее 120 символов.',
@@ -2568,6 +2614,13 @@ export const ru = {
   'security.validation.patternTooLong': 'Шаблон длиннее 200 символов.',
   'security.validation.patternControl': 'Шаблон не должен содержать управляющие символы.',
   'security.validation.patternWildcards': 'В PATTERN не более 20 символов «*».',
+  'security.validation.scopeInvalid': 'Выберите поверхность ALL, TEXT, ATTACHMENT или PLUGIN.',
+  'security.validation.maxFileSizeScope':
+    'Порог размера доступен только для поверхностей ALL и ATTACHMENT.',
+  'security.validation.maxFileSizeRange':
+    'Порог должен быть целым числом от 1 Б до 10 ГБ (10 737 418 240 байт).',
+  'security.validation.scopeLocked':
+    'У правила уже есть порог размера, а контракт не позволяет его очистить. Оставьте ALL/ATTACHMENT.',
   'security.validation.timeoutRange': 'Укажите целое число от 15 до 10 080.',
   'security.validation.retentionRange': 'Укажите целое число от 1 до 3650.',
 
@@ -3139,11 +3192,24 @@ export const ru = {
   'workspace.logo.quarantined': 'Файл помещён в карантин и не может быть логотипом.',
   'workspace.logo.notFound': 'Изображение недоступно в этом пространстве.',
   'workspace.logo.error': 'Не удалось обновить логотип.',
-  'workspace.invites.title': 'Ссылки-приглашения',
-  'workspace.invites.hint': 'Письмо не отправляется: скопируйте ссылку и отправьте её сами.',
-  'workspace.invites.loading': 'Загружаем ссылки…',
-  'workspace.invites.loadError': 'Не удалось загрузить ссылки.',
-  'workspace.invites.empty': 'Ссылок пока нет.',
+  'workspace.invites.title': 'Приглашения',
+  'workspace.invites.hint':
+    'Без email — многоразовая ссылка, письмо не отправляется. С email — одноразовое приглашение: сервер отправит письмо на адрес.',
+  'workspace.invites.email': 'Email приглашённого (необязательно)',
+  'workspace.invites.emailPlaceholder': 'Например, colleague@example.com',
+  'workspace.invites.emailHint':
+    'Пусто — многоразовая ссылка. С email приглашение одноразовое, письмо отправляет сервер.',
+  'workspace.invites.emailInvalid': 'Укажите корректный email.',
+  'workspace.invites.emailSingleUse': 'Одноразовое приглашение: лимит всегда 1.',
+  'workspace.invites.emailBound': 'Email: {email}',
+  'workspace.invites.singleUseMeta': 'Одноразовое · письмо отправлено',
+  'workspace.invites.send': 'Отправить приглашение',
+  'workspace.invites.sentTitle': 'Письмо отправлено',
+  'workspace.invites.sentHint':
+    'Одноразовое приглашение для {email}. Ссылка ниже показана один раз — её можно передать вручную.',
+  'workspace.invites.loading': 'Загружаем приглашения…',
+  'workspace.invites.loadError': 'Не удалось загрузить приглашения.',
+  'workspace.invites.empty': 'Приглашений пока нет.',
   'workspace.invites.noAccess': 'Нет права управлять приглашениями.',
   'workspace.invites.role': 'Роль',
   'workspace.invites.status.ACTIVE': 'Активна',
@@ -3261,6 +3327,20 @@ export const ru = {
   'workspaceAccept.title': 'Приглашение в пространство',
   'workspaceAccept.lead': 'Ссылка-приглашение открывает доступ к пространству Сова.',
   'workspaceAccept.details': 'Приглашение',
+  'workspaceAccept.previewLoading': 'Проверяем приглашение…',
+  'workspaceAccept.previewError': 'Не удалось загрузить приглашение.',
+  'workspaceAccept.expires': 'Действует до {date}',
+  'workspaceAccept.emailBound': 'Приглашение привязано к email-адресу.',
+  'workspaceAccept.emailBoundHint':
+    'Войдите или зарегистрируйтесь с приглашённым адресом. Другой аккаунт сервер отклонит, не раскрывая адрес.',
+  'workspaceAccept.anonymousHint':
+    'Чтобы принять приглашение, войдите или создайте аккаунт. Ссылка останется в адресе страницы.',
+  'workspaceAccept.login': 'Войти',
+  'workspaceAccept.register': 'Создать аккаунт',
+  'workspaceAccept.secureHint':
+    'Токен не сохраняется в браузере: он остаётся только в адресе этой страницы и в запросе к серверу.',
+  'workspaceAccept.linkInvite': 'Многоразовая ссылка',
+  'workspaceAccept.singleUse': 'Одноразовое приглашение',
   'workspaceAccept.token': 'Код ссылки',
   'workspaceAccept.joinHint':
     'Присоединение произойдёт только после вашего подтверждения. Роль выдаёт сервер по ссылке.',
@@ -3276,6 +3356,8 @@ export const ru = {
   'workspaceAccept.revoked': 'Ссылка отозвана.',
   'workspaceAccept.exhausted': 'Лимит использований ссылки исчерпан.',
   'workspaceAccept.forbidden': 'Нет доступа к этому приглашению.',
+  'workspaceAccept.emailMismatch':
+    'Приглашение привязано к другому email. Войдите под приглашённым адресом.',
   'workspaceAccept.rateLimited': 'Слишком много попыток. Подождите и повторите.',
   'workspaceAccept.error': 'Не удалось принять приглашение.',
 

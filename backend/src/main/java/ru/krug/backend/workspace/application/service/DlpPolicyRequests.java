@@ -5,6 +5,7 @@ import java.util.Map;
 import ru.krug.backend.shared.error.DomainException;
 import ru.krug.backend.workspace.domain.model.DlpAction;
 import ru.krug.backend.workspace.domain.model.DlpPatternType;
+import ru.krug.backend.workspace.domain.model.DlpScope;
 
 /**
  * Validation of DLP rule input. Patterns are literal, bounded values:
@@ -22,6 +23,8 @@ public final class DlpPolicyRequests {
     public static final int MAX_PATTERN_LENGTH = 200;
     public static final int MAX_WILDCARDS = 20;
     public static final int MAX_POLICIES_PER_WORKSPACE = 100;
+    /** 10 GiB: an upper bound well above the installation file cap, so the check is bounded. */
+    public static final long MAX_ATTACHMENT_SIZE_BYTES = 10L * 1024 * 1024 * 1024;
 
     private DlpPolicyRequests() {
     }
@@ -89,6 +92,54 @@ public final class DlpPolicyRequests {
 
     public static boolean enabled(Boolean raw) {
         return raw == null || raw;
+    }
+
+    /**
+     * Optional #101 surface; absent means {@link DlpScope#ALL} (the pre-#101 behaviour).
+     * The literal is validated here so an invalid value is a 400, not an enum parse error.
+     */
+    public static DlpScope scope(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DlpScope.ALL;
+        }
+        String value = raw.strip();
+        try {
+            return DlpScope.valueOf(value.toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw DomainException.badRequest(
+                    "scope must be ALL, TEXT, ATTACHMENT or PLUGIN",
+                    Map.of("field", "scope", "allowed",
+                            java.util.List.of("ALL", "TEXT", "ATTACHMENT", "PLUGIN")));
+        }
+    }
+
+    /**
+     * Optional attachment size threshold. The value is a policy bound, never content; a
+     * non-positive or over-10-GiB value is rejected instead of being silently clamped.
+     */
+    public static Long maxFileSizeBytes(Long raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (raw < 1 || raw > MAX_ATTACHMENT_SIZE_BYTES) {
+            throw DomainException.badRequest(
+                    "max_file_size_bytes must be between 1 and " + MAX_ATTACHMENT_SIZE_BYTES,
+                    Map.of("field", "max_file_size_bytes",
+                            "max", MAX_ATTACHMENT_SIZE_BYTES));
+        }
+        return raw;
+    }
+
+    /**
+     * A size threshold is meaningful only for an attachment rule. Rejecting the
+     * combination keeps the policy semantics unambiguous instead of silently ignoring it.
+     */
+    public static void validateMaxFileSizeScope(DlpScope scope, Long maxFileSizeBytes) {
+        if (maxFileSizeBytes != null && scope != DlpScope.ATTACHMENT && scope != DlpScope.ALL) {
+            throw DomainException.badRequest(
+                    "max_file_size_bytes is supported only for an attachment rule",
+                    Map.of("field", "max_file_size_bytes", "scope", scope.name()));
+        }
     }
 
     /**

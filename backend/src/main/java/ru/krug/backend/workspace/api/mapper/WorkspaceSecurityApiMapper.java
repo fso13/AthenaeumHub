@@ -44,7 +44,8 @@ public final class WorkspaceSecurityApiMapper {
 
     public static DlpPolicyResponse toResponse(DlpPolicyView view) {
         return new DlpPolicyResponse(view.id(), view.name(), view.action(), view.patternType(),
-                view.pattern(), view.enabled(), view.createdAt(), view.updatedAt());
+                view.pattern(), view.scope(), view.maxFileSizeBytes(), view.enabled(),
+                view.createdAt(), view.updatedAt());
     }
 
     public static DlpPolicyListResponse toResponse(List<DlpPolicyView> views) {
@@ -105,12 +106,14 @@ public final class WorkspaceSecurityApiMapper {
 
     public static CreateDlpPolicyCommand toCommand(CreateDlpPolicyRequest request) {
         return new CreateDlpPolicyCommand(request.name(), request.action(),
-                request.patternType(), request.pattern(), request.enabled());
+                request.patternType(), request.pattern(), request.scope(),
+                request.maxFileSizeBytes(), request.enabled());
     }
 
     public static UpdateDlpPolicyCommand toCommand(UpdateDlpPolicyRequest request) {
         return new UpdateDlpPolicyCommand(request.name(), request.action(),
-                request.patternType(), request.pattern(), request.enabled());
+                request.patternType(), request.pattern(), request.scope(),
+                request.maxFileSizeBytes(), request.enabled());
     }
 
     public static UpdateWorkspaceSecurityCommand toCommand(
