@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { ApiError } from '../../api/problem';
 import type { Room } from '../../api/types';
 import { describeError } from '../../domain/errors';
@@ -133,6 +133,8 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
     error: string | null;
   } | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
+  const previewRef = useRef<HTMLVideoElement | null>(null);
+  const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
   const [avatarEditorRoomId, setAvatarEditorRoomId] = useState<string | null>(null);
   const [avatarNotice, setAvatarNotice] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
@@ -169,6 +171,45 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
       if (room.status === 'ACTIVE') void avatarsStore.ensureChat(room.chat_id);
     }
   }, [avatarsStore, rooms.items]);
+
+  // A conference with no peers has no WebRTC leg yet. Show the local camera so
+  // entering a room feels connected; the moment a second participant appears
+  // the room store starts the mesh and CallLayer takes over.
+  useEffect(() => {
+    if (!rooms.presenceRoomId || state.call.phase !== 'idle') {
+      setPreviewStream(null);
+      return;
+    }
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    void navigator.mediaDevices
+      ?.getUserMedia({ video: true, audio: false })
+      .then((next) => {
+        if (cancelled) {
+          next.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream = next;
+        setPreviewStream(next);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewStream(null);
+      });
+    return () => {
+      cancelled = true;
+      stream?.getTracks().forEach((track) => track.stop());
+      setPreviewStream(null);
+    };
+  }, [rooms.presenceRoomId, state.call.phase]);
+
+  useEffect(() => {
+    const video = previewRef.current;
+    if (!video || !previewStream) return;
+    video.srcObject = previewStream;
+    return () => {
+      video.srcObject = null;
+    };
+  }, [previewStream]);
 
   // Leaving the section stops the heartbeat, hangs up a room call and DELETEs
   // presence; the server TTL is only the fallback when the DELETE loses a race.
@@ -493,6 +534,30 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                 ) : (
                   <p className="room-card__empty">{t('rooms.participants.empty')}</p>
                 )}
+
+                {present && state.call.phase === 'idle' ? (
+                  <div className="room-preview" role="group" aria-label={t('rooms.preview.aria')}>
+                    {previewStream ? (
+                      <video
+                        ref={previewRef}
+                        className="room-preview__video"
+                        autoPlay
+                        muted
+                        playsInline
+                        aria-label={t('rooms.preview.self')}
+                      />
+                    ) : (
+                      <div className="room-preview__placeholder">
+                        <VideoIcon aria-hidden="true" />
+                      </div>
+                    )}
+                    <p className="room-preview__hint">
+                      {room.participant_count > 1
+                        ? t('rooms.preview.connecting')
+                        : t('rooms.preview.waiting')}
+                    </p>
+                  </div>
+                ) : null}
 
                 {issue !== null ? (
                   <p className="room-card__issue" role="status">

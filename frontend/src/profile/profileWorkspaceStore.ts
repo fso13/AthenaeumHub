@@ -350,7 +350,10 @@ export class ProfileWorkspaceStore {
       try {
         const page = await this.api.listFiles({
           kind: 'IMAGE',
-          workspaceId: target === 'WORKSPACE' ? (workspaceId ?? undefined) : undefined,
+          // Own-profile image selection still reads the file center, which is
+          // workspace-scoped. BFF access tokens carry no workspace claim, so the
+          // active workspace id must be explicit for PROFILE too.
+          workspaceId: workspaceId ?? undefined,
           limit: 50,
         });
         if (this.isStale(generation) || this.state.avatar.target !== target) return;

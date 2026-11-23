@@ -772,6 +772,7 @@ export function ProfileDialog({
               {avatarPickerOpen ? (
                 <ImageFilePicker
                   target="PROFILE"
+                  workspaceId={state.activeWorkspaceId ?? state.session?.workspace.id ?? null}
                   aspect={1}
                   pending={avatar.actionStatus !== 'idle'}
                   onSelect={(fileId) => {
