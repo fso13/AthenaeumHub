@@ -20903,3 +20903,113 @@ html[data-theme='dark'] .recent-thumb--video {
   font-size: 13px;
   background: rgba(0, 0, 0, 0.25);
 }
+
+/* #172: a connected call is a floating, non-modal widget. Ringing still uses
+   the focused overlay, but once connected the app stays usable. */
+.call-overlay--floating {
+  inset: auto 16px 16px auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+.call-dialog--floating {
+  width: min(370px, calc(100vw - 24px));
+  height: auto;
+  max-height: calc(100dvh - 36px);
+  border-radius: 18px;
+  pointer-events: auto;
+}
+.call-dialog--floating .call-stage {
+  flex: none;
+  height: 190px;
+}
+.call-dialog--floating .call-stage__info {
+  inset: auto 12px 10px 12px;
+}
+.call-dialog--floating .call-peer {
+  font-size: 16px;
+}
+.call-dialog--floating .call-controls {
+  padding: 10px 12px 12px;
+}
+.call-dialog--floating .call-audio {
+  max-height: 190px;
+  overflow-y: auto;
+}
+.call-minimize {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  cursor: pointer;
+}
+.call-mini {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 135;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: #101614;
+  color: #eef5f6;
+  box-shadow: 0 14px 40px -12px rgba(0, 0, 0, 0.7);
+}
+.call-mini__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+}
+.call-mini__title {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+.call-mini .call-timer {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.call-mini__button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  cursor: pointer;
+}
+.call-mini__button.is-active {
+  background: rgba(239, 68, 68, 0.75);
+}
+.call-mini__button--danger {
+  background: #dc2626;
+}
+@media (max-width: 720px) {
+  .call-overlay--floating {
+    inset: auto 8px 8px 8px;
+  }
+  .call-dialog--floating {
+    width: 100%;
+  }
+  .call-dialog--floating .call-stage {
+    height: 150px;
+  }
+}

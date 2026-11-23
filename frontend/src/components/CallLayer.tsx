@@ -22,6 +22,8 @@ import {
   SpeakerOffIcon,
   VideoIcon,
   VideoOffIcon,
+  ExpandIcon,
+  MinimizeIcon,
 } from './Icons';
 
 const FOCUSABLE =
@@ -200,6 +202,7 @@ export function CallLayer() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [outputVolume, setOutputVolume] = useState(readCallOutputVolume);
   const [outputMuted, setOutputMuted] = useState(false);
   const [outputDeviceId, setOutputDeviceId] = useState<string | null>(null);
@@ -242,6 +245,7 @@ export function CallLayer() {
   useEffect(() => {
     if (active) return;
     setConfirmEnd(false);
+    setCollapsed(false);
     setOutputMuted(false);
     setMicTest(false);
     setOutputError(null);
@@ -250,7 +254,8 @@ export function CallLayer() {
   // The call surface owns the viewport (full-screen on mobile): no background
   // scrolling while ringing or connected.
   useEffect(() => {
-    if (!active) return;
+    // Connected calls are non-modal: never lock the app behind the call.
+    if (!active || call.phase === 'connected') return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -263,7 +268,7 @@ export function CallLayer() {
   const liveRef = useRef({ phase: call.phase, confirmEnd });
   liveRef.current = { phase: call.phase, confirmEnd };
   useEffect(() => {
-    if (!active) return;
+    if (!active || call.phase === 'connected') return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusTimer = window.setTimeout(() => {
       if (liveRef.current.phase === 'incoming') acceptRef.current?.focus();
@@ -320,7 +325,7 @@ export function CallLayer() {
   // Accepting or connecting unmounts the focused control. Keep keyboard users
   // inside the dialog instead of dropping focus onto <body>.
   useEffect(() => {
-    if (!active) return;
+    if (!active || call.phase === 'connected') return;
     const element = document.activeElement;
     if (!(element instanceof HTMLElement) || !element.isConnected || element === document.body) {
       dialogRef.current?.focus();
@@ -423,12 +428,64 @@ export function CallLayer() {
     );
   }
 
+  if (connected && collapsed) {
+    return (
+      <div className="call-mini" role="region" aria-label={t('calls.miniLabel')}>
+        <span className="call-mini__dot" aria-hidden="true" />
+        <span className="call-mini__title">{infoTitle}</span>
+        {call.startedAt !== null ? <CallTimer startedAt={call.startedAt} /> : null}
+        <button
+          type="button"
+          className={`call-mini__button${call.muted ? ' is-active' : ''}`}
+          onClick={() => store.toggleCallMute()}
+          aria-pressed={call.muted}
+          aria-label={call.muted ? t('calls.unmute') : t('calls.mute')}
+          title={call.muted ? t('calls.unmute') : t('calls.mute')}
+        >
+          {call.muted ? <MicOffIcon /> : <MicIcon />}
+        </button>
+        {call.video ? (
+          <button
+            type="button"
+            className={`call-mini__button${call.cameraOn ? '' : ' is-active'}`}
+            onClick={() => store.toggleCallCamera()}
+            aria-pressed={call.cameraOn}
+            aria-label={call.cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
+            title={call.cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
+          >
+            {call.cameraOn ? <VideoIcon /> : <VideoOffIcon />}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="call-mini__button"
+          onClick={() => setCollapsed(false)}
+          aria-label={t('calls.expand')}
+          title={t('calls.expand')}
+        >
+          <ExpandIcon />
+        </button>
+        <button
+          type="button"
+          className="call-mini__button call-mini__button--danger"
+          onClick={() => store.endCall()}
+          aria-label={t('calls.hangup')}
+          title={t('calls.hangup')}
+        >
+          <PhoneOffIcon />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className={`call-overlay call-overlay--${call.phase}`}>
+    <div
+      className={`call-overlay call-overlay--${call.phase}${connected ? ' call-overlay--floating' : ''}`}
+    >
       <div
-        className="call-dialog"
+        className={`call-dialog${connected ? ' call-dialog--floating' : ''}`}
         role="dialog"
-        aria-modal="true"
+        aria-modal={connected ? undefined : true}
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         ref={dialogRef}
@@ -494,6 +551,17 @@ export function CallLayer() {
                   : t('calls.audio')}
             </span>
             {connected && call.startedAt !== null ? <CallTimer startedAt={call.startedAt} /> : null}
+            {connected ? (
+              <button
+                type="button"
+                className="call-minimize"
+                onClick={() => setCollapsed(true)}
+                aria-label={t('calls.minimize')}
+                title={t('calls.minimize')}
+              >
+                <MinimizeIcon />
+              </button>
+            ) : null}
           </div>
 
           <div className="call-stage__info">
