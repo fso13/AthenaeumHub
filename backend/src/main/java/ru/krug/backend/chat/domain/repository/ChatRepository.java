@@ -66,6 +66,13 @@ public interface ChatRepository {
     List<ChatSummary> listActiveSummaries(UUID workspaceId, UUID userId,
                                           Boolean archivedFilter);
 
+    /**
+     * Exact ACTIVE chat member count for the chat detail view (#99). Participants whose
+     * workspace membership is no longer ACTIVE are excluded, so a stale row can never
+     * inflate {@code ChatSummary.memberCount}.
+     */
+    int countActiveChatMembers(UUID workspaceId, UUID chatId);
+
     Optional<ChatCounter> lockCounter(UUID chatId);
 
     void saveCounter(ChatCounter counter);

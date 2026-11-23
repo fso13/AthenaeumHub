@@ -11,6 +11,11 @@ export const ru = {
   'sidebar.offline': 'Не в сети',
   'sidebar.unread': '{count} непрочитанных',
   'sidebar.noChats': 'Чатов пока нет',
+  'sidebar.pinned': 'Закреплённые',
+  'sidebar.pin': 'Закрепить чат',
+  'sidebar.unpin': 'Открепить чат',
+  'sidebar.pinChat': 'Закрепить чат: {name}',
+  'sidebar.unpinChat': 'Открепить чат: {name}',
 
   'sidebar.archived': 'Архив',
   'sidebar.archivedEmpty': 'В личном архиве нет чатов.',
@@ -355,6 +360,8 @@ export const ru = {
   'message.editedTitle': 'Изменено {time}',
   'message.actions': 'Действия с сообщением',
   'message.actionsMore': 'Ещё действия',
+  'message.translateRu': 'Перевести на русский',
+  'message.translateEn': 'Перевести на английский',
   'message.react': 'Поставить реакцию',
   'message.reactionsLabel': 'Реакции',
   'message.reactionsPicker': 'Выберите реакцию',
@@ -462,6 +469,7 @@ export const ru = {
   'attachments.closePreview': 'Закрыть просмотр',
   'attachments.lightboxHint': 'Esc — закрыть, Tab — перейти между кнопками',
   'attachments.videoPlayer': 'Видео: {name}',
+  'attachments.openFullscreen': 'Открыть на весь экран: {name}',
   'attachments.audioPlayer': 'Аудио: {name}',
   'attachments.mediaError': 'Не удалось загрузить превью — ссылка могла истечь.',
   'attachments.retryPreview': 'Обновить ссылку',
@@ -3195,6 +3203,48 @@ export const ru = {
   'workspace.permissions.column.manage_permissions': 'Права',
   'workspace.permissions.column.view_audit': 'Аудит',
   'workspace.permissions.column.manage_security': 'Защита',
+
+  /* #99: workspace self-leave / OWNER soft delete. */
+  'workspace.lifecycle.dangerTitle': 'Опасная зона',
+  'workspace.lifecycle.dangerHint':
+    'Выход и удаление действуют на всё пространство: чаты, участники и доступ к файлам.',
+  'workspace.lifecycle.leave': 'Покинуть пространство',
+  'workspace.lifecycle.leaveHint':
+    'Вы потеряете доступ к чатам, файлам и участникам пространства «{name}». Вернуться можно только по новому приглашению.',
+  'workspace.lifecycle.ownerCannotLeave':
+    'Вы последний владелец пространства. Выйти нельзя: передайте владение или удалите пространство.',
+  'workspace.lifecycle.leaveConfirmTitle': 'Покинуть пространство «{name}»?',
+  'workspace.lifecycle.leaveConfirmLead':
+    'Вы перестанете видеть чаты и участников пространства «{name}».',
+  'workspace.lifecycle.leaveConfirmNote':
+    'Сообщения останутся у других участников. Вернуться можно только по новому приглашению.',
+  'workspace.lifecycle.leaveConfirm': 'Покинуть',
+  'workspace.lifecycle.leaving': 'Выходим…',
+  'workspace.lifecycle.delete': 'Удалить пространство',
+  'workspace.lifecycle.deleteHint':
+    'Действие необратимо: пространство исчезнет у всех участников. Доступно только владельцу.',
+  'workspace.lifecycle.deleteOwnerOnly': 'Удалить пространство может только владелец.',
+  'workspace.lifecycle.deleteConfirmTitle': 'Удалить пространство «{name}»?',
+  'workspace.lifecycle.deleteConfirmLead':
+    'Пространство «{name}» будет удалено для всех участников. Это действие необратимо.',
+  'workspace.lifecycle.deleteConfirmNote':
+    'Все участники потеряют доступ, приглашения будут отозваны, боты выключены. Чаты, сообщения и файлы сохраняются на сервере по retention-политике, но доступ к ним исчезает сразу.',
+  'workspace.lifecycle.deleteTypeLabel': 'Введите название пространства для подтверждения',
+  'workspace.lifecycle.deleteTypeHint': 'Совпадение с «{name}» с учётом регистра.',
+  'workspace.lifecycle.deleteTypeMismatch': 'Название не совпадает.',
+  'workspace.lifecycle.deleteConfirm': 'Удалить навсегда',
+  'workspace.lifecycle.deleting': 'Удаляем…',
+  'workspace.lifecycle.menuLabel': 'Текущее пространство',
+  'workspace.lifecycle.railLeave': 'Покинуть пространство: {name}',
+  'workspace.lifecycle.railDelete': 'Удалить пространство: {name}',
+  'workspace.lifecycle.error.lastOwner':
+    'Вы последний владелец: выйти нельзя. Передайте владение или удалите пространство.',
+  'workspace.lifecycle.error.forbiddenLeave':
+    'Недостаточно прав для выхода. Возможно, вы уже не участник пространства.',
+  'workspace.lifecycle.error.forbiddenDelete': 'Удалить пространство может только владелец.',
+  'workspace.lifecycle.error.notFound': 'Пространство уже недоступно. Обновите список.',
+  'workspace.lifecycle.error.unavailable': 'Сервис недоступен. Повторите позже.',
+  'workspace.lifecycle.error.generic': 'Не удалось выполнить действие. Попробуйте ещё раз.',
 
   /* P0-4: settings page security card now reports the real 2FA state. */
   'settings.twoFactorEnabled': 'Включена',

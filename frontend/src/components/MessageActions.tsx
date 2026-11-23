@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+} from 'react';
 import { createPortal } from 'react-dom';
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
@@ -110,12 +117,14 @@ function useModal(
   dialogRef: RefObject<HTMLElement | null>,
   initialRef: RefObject<HTMLElement | null>,
   onClose: () => void,
+  fallbackRef?: RefObject<HTMLElement | null>,
 ): void {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const fallback = fallbackRef?.current ?? null;
     initialRef.current?.focus();
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -151,9 +160,32 @@ function useModal(
     document.addEventListener('keydown', handleKey, true);
     return () => {
       document.removeEventListener('keydown', handleKey, true);
+      // A dialog opened from the «…» menu has no surviving trigger (the menu
+      // item is unmounted); fall back to the primary overflow control.
       if (previous?.isConnected) previous.focus();
+      else fallback?.focus();
     };
-  }, [open, dialogRef, initialRef]);
+  }, [open, dialogRef, initialRef, fallbackRef]);
+}
+
+/**
+ * Arrow/Home/End roving focus for the non-modal action popup. The popup keeps
+ * normal button semantics (Tab also works); this only makes the compact list
+ * feel like a menu for keyboard users.
+ */
+function moveMenuFocus(event: ReactKeyboardEvent<HTMLElement>): void {
+  const key = event.key;
+  if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Home' && key !== 'End') return;
+  const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled])')];
+  if (items.length === 0) return;
+  event.preventDefault();
+  const active = document.activeElement;
+  const index = items.findIndex((item) => item === active);
+  let next = 0;
+  if (key === 'End') next = items.length - 1;
+  else if (key === 'ArrowUp') next = index <= 0 ? items.length - 1 : index - 1;
+  else if (key === 'ArrowDown') next = index === items.length - 1 ? 0 : index + 1;
+  items[next]?.focus();
 }
 
 interface ReactionBarProps {
@@ -258,7 +290,7 @@ export function MessageActions({
   const [toolsOpen, setToolsOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [translateMenuOpen, setTranslateMenuOpen] = useState(false);
+  const [deleteMenuOpen, setDeleteMenuOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -300,19 +332,16 @@ export function MessageActions({
   const confirmTitleId = useId();
   const confirmTextId = useId();
 
-  const pickerRef = useRef<HTMLDivElement>(null);
+  const toolsRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const translateMenuRef = useRef<HTMLDivElement>(null);
   const editDialogRef = useRef<HTMLDivElement>(null);
   const confirmDialogRef = useRef<HTMLDivElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const editTriggerRef = useRef<HTMLButtonElement>(null);
-  const deleteTriggerRef = useRef<HTMLButtonElement>(null);
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const reactTriggerRef = useRef<HTMLButtonElement>(null);
-  const translateTriggerRef = useRef<HTMLButtonElement>(null);
-  const firstTranslateRef = useRef<HTMLButtonElement>(null);
   const firstReactionRef = useRef<HTMLButtonElement>(null);
-  const firstMenuItemRef = useRef<HTMLButtonElement>(null);
+  const firstDeleteItemRef = useRef<HTMLButtonElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
 
   const closePicker = () => {
@@ -321,11 +350,11 @@ export function MessageActions({
   };
   const closeMenu = () => {
     setMenuOpen(false);
-    deleteTriggerRef.current?.focus();
+    moreTriggerRef.current?.focus();
   };
-  const closeTranslateMenu = () => {
-    setTranslateMenuOpen(false);
-    translateTriggerRef.current?.focus();
+  const closeDeleteMenu = () => {
+    setDeleteMenuOpen(false);
+    moreTriggerRef.current?.focus();
   };
   const closeEdit = () => {
     if (busy) return;
@@ -336,23 +365,29 @@ export function MessageActions({
     setConfirmOpen(false);
   };
 
-  useDismiss(pickerOpen, pickerRef, closePicker);
-  useDismiss(menuOpen, menuRef, closeMenu);
-  useDismiss(translateMenuOpen, translateMenuRef, closeTranslateMenu);
-  useModal(editOpen, editDialogRef, editTextareaRef, closeEdit);
-  useModal(confirmOpen, confirmDialogRef, confirmCancelRef, closeConfirm);
+  // Dismiss on a click anywhere outside the toolbar. Using the shared toolbar
+  // container keeps a second click on «…» / the reaction button a true toggle
+  // instead of close-on-mousedown followed by re-open.
+  useDismiss(pickerOpen, toolsRef, closePicker);
+  useDismiss(menuOpen, toolsRef, closeMenu);
+  useDismiss(deleteMenuOpen, toolsRef, closeDeleteMenu);
+  useModal(editOpen, editDialogRef, editTextareaRef, closeEdit, moreTriggerRef);
+  useModal(confirmOpen, confirmDialogRef, confirmCancelRef, closeConfirm, moreTriggerRef);
 
   // Keyboard users land inside the opened popover, not on the next toolbar
   // button; closing returns focus to the trigger (see closePicker/closeMenu).
   useEffect(() => {
     if (pickerOpen) firstReactionRef.current?.focus();
   }, [pickerOpen]);
+  // Land on the first enabled advanced action, skipping a disabled edit item.
   useEffect(() => {
-    if (menuOpen) firstMenuItemRef.current?.focus();
+    if (!menuOpen) return;
+    const items = menuRef.current?.querySelectorAll<HTMLElement>('button:not([disabled])');
+    items?.[0]?.focus();
   }, [menuOpen]);
   useEffect(() => {
-    if (translateMenuOpen) firstTranslateRef.current?.focus();
-  }, [translateMenuOpen]);
+    if (deleteMenuOpen) firstDeleteItemRef.current?.focus();
+  }, [deleteMenuOpen]);
 
   // A WS tombstone while the dialog is open must not leave an editor over a
   // deleted row (and an E2EE switch must disable it too).
@@ -366,10 +401,6 @@ export function MessageActions({
   const pluginGate = usePluginGate(message.chat_id, e2eeChat);
   const translateAvailable =
     !e2eeChat && message.type === 'TEXT' && !message.deleted_at && pluginGate.enabled('translate');
-
-  useEffect(() => {
-    if (translateMenuOpen && !translateAvailable) setTranslateMenuOpen(false);
-  }, [translateMenuOpen, translateAvailable]);
 
   if (message.deleted_at) return null;
 
@@ -422,7 +453,7 @@ export function MessageActions({
   };
 
   const removeForMe = async () => {
-    setMenuOpen(false);
+    setDeleteMenuOpen(false);
     setActionFailure(null);
     const ok = await store.deleteMessage(message.chat_id, message.id, 'me');
     if (!ok) {
@@ -432,7 +463,7 @@ export function MessageActions({
           ? describeError(failure.error).message
           : t('message.actionFailed'),
       );
-      deleteTriggerRef.current?.focus();
+      moreTriggerRef.current?.focus();
       return;
     }
     focusAfterRowChange(message.id);
@@ -463,8 +494,8 @@ export function MessageActions({
   };
 
   const chooseTranslation = (target: 'ru' | 'en') => {
-    setTranslateMenuOpen(false);
-    translateTriggerRef.current?.focus();
+    setMenuOpen(false);
+    moreTriggerRef.current?.focus();
     void pluginActions.translateMessage(message.chat_id, message.id, target);
   };
 
@@ -473,7 +504,12 @@ export function MessageActions({
       <button
         type="button"
         className="msg-tool"
-        onClick={() => onReply(message)}
+        onClick={() => {
+          setPickerOpen(false);
+          setMenuOpen(false);
+          setDeleteMenuOpen(false);
+          onReply(message);
+        }}
         aria-label={`${t('chat.reply')}: ${author}`}
         title={t('chat.reply')}
       >
@@ -481,58 +517,51 @@ export function MessageActions({
       </button>
     ) : null;
 
-  // With replies the always-visible ThreadLink is the single entry point; the
-  // hover action only creates an empty thread (no duplicate accessible name).
-  const pinAction =
-    !e2eeChat && pinAllowed ? (
-      <button
-        type="button"
-        className="msg-tool"
-        disabled={pinPending}
-        aria-pressed={pinned}
-        aria-label={pinned ? t('message.unpin') : t('message.pin')}
-        title={
-          pinned
-            ? t('message.unpin')
-            : pinsState.limitReached
-              ? t('message.pinLimit')
-              : t('message.pin')
-        }
-        onClick={() => void togglePin()}
-      >
-        <PinIcon aria-hidden="true" />
-      </button>
-    ) : null;
+  // #61/#63 + Chat UI polish: only the three primary actions (reaction, reply,
+  // «…») stay on the hover toolbar. Every mutating/advanced action lives in the
+  // accessible overflow popup below. With replies the always-visible ThreadLink
+  // is the single thread entry point; the popup only creates an empty thread.
+  const pinAvailable = !e2eeChat && pinAllowed;
+  const threadAvailable =
+    allowThread && canThread && threadsAvailable && Boolean(onOpenThread) && threadReplyCount === 0;
+  const threadDisabled =
+    allowThread && canThread && !threadsAvailable && threadDisabledReason !== null;
+  const editAvailable = mine && !botMessage;
+  const deleteAvailable = !botMessage;
+  const hasMoreActions =
+    editAvailable ||
+    translateAvailable ||
+    pinAvailable ||
+    threadAvailable ||
+    threadDisabled ||
+    deleteAvailable;
 
-  const threadAction =
-    allowThread && canThread && threadsAvailable && onOpenThread && threadReplyCount === 0 ? (
-      <button
-        type="button"
-        className="msg-tool"
-        onClick={() => onOpenThread(message)}
-        aria-label={t('thread.startLabel', { author })}
-        title={t('thread.start')}
-      >
-        <ThreadIcon aria-hidden="true" />
-      </button>
-    ) : allowThread && canThread && !threadsAvailable && threadDisabledReason ? (
-      <button
-        type="button"
-        className="msg-tool"
-        disabled
-        aria-label={threadDisabledReason}
-        title={threadDisabledReason}
-      >
-        <ThreadIcon aria-hidden="true" />
-      </button>
-    ) : null;
+  const openEditFromMenu = () => {
+    setMenuOpen(false);
+    moreTriggerRef.current?.focus();
+    openEdit();
+  };
+  const openDeleteMenu = () => {
+    setMenuOpen(false);
+    moreTriggerRef.current?.focus();
+    setDeleteMenuOpen(true);
+  };
+  const pinFromMenu = () => {
+    setMenuOpen(false);
+    moreTriggerRef.current?.focus();
+    void togglePin();
+  };
+  const threadFromMenu = () => {
+    setMenuOpen(false);
+    moreTriggerRef.current?.focus();
+    onOpenThread?.(message);
+  };
 
   const picker = pickerOpen ? (
     <div
       className="msg-popover reaction-picker"
       role="dialog"
       aria-label={t('message.reactionsPicker')}
-      ref={pickerRef}
     >
       <p className="msg-popover__title">{t('message.reactionsPicker')}</p>
       <div className="reaction-picker__grid">
@@ -552,72 +581,146 @@ export function MessageActions({
     </div>
   ) : null;
 
-  const translateMenu = translateMenuOpen ? (
+  const menu = menuOpen ? (
     <div
-      className="msg-popover translate-menu"
+      className="msg-popover msg-menu"
       role="dialog"
-      aria-label={t('pluginActions.translateMenuTitle')}
-      ref={translateMenuRef}
+      aria-label={t('message.actions')}
+      ref={menuRef}
+      onKeyDown={moveMenuFocus}
     >
-      <p className="msg-popover__title">{t('pluginActions.translateMenuTitle')}</p>
-      <button
-        type="button"
-        ref={firstTranslateRef}
-        className="translate-menu__item"
-        onClick={() => chooseTranslation('ru')}
-      >
-        {t('pluginActions.langRu')}
-      </button>
-      <button
-        type="button"
-        className="translate-menu__item"
-        onClick={() => chooseTranslation('en')}
-      >
-        {t('pluginActions.langEn')}
-      </button>
+      <p className="msg-popover__title">{t('message.actions')}</p>
+      {editAvailable ? (
+        <button
+          type="button"
+          ref={editTriggerRef}
+          className="msg-menu__item"
+          disabled={editDisabledReason !== null}
+          aria-label={t('message.edit')}
+          title={editDisabledReason ?? t('message.edit')}
+          onClick={openEditFromMenu}
+        >
+          <EditIcon aria-hidden="true" />
+          <span className="msg-menu__text">{t('message.edit')}</span>
+          {editDisabledReason ? <span className="msg-menu__hint">{editDisabledReason}</span> : null}
+        </button>
+      ) : null}
+      {translateAvailable ? (
+        <>
+          <span className="msg-menu__section">{t('pluginActions.translateMenuTitle')}</span>
+          <button type="button" className="msg-menu__item" onClick={() => chooseTranslation('ru')}>
+            <TranslateIcon aria-hidden="true" />
+            <span className="msg-menu__text">{t('message.translateRu')}</span>
+          </button>
+          <button type="button" className="msg-menu__item" onClick={() => chooseTranslation('en')}>
+            <TranslateIcon aria-hidden="true" />
+            <span className="msg-menu__text">{t('message.translateEn')}</span>
+          </button>
+        </>
+      ) : null}
+      {pinAvailable ? (
+        <button
+          type="button"
+          className="msg-menu__item"
+          disabled={pinPending}
+          aria-pressed={pinned}
+          aria-label={pinned ? t('message.unpin') : t('message.pin')}
+          title={
+            pinned
+              ? t('message.unpin')
+              : pinsState.limitReached
+                ? t('message.pinLimit')
+                : t('message.pin')
+          }
+          onClick={pinFromMenu}
+        >
+          <PinIcon aria-hidden="true" />
+          <span className="msg-menu__text">{pinned ? t('message.unpin') : t('message.pin')}</span>
+          {!pinned && pinsState.limitReached ? (
+            <span className="msg-menu__hint">{t('message.pinLimit')}</span>
+          ) : null}
+        </button>
+      ) : null}
+      {threadAvailable ? (
+        <button
+          type="button"
+          className="msg-menu__item"
+          onClick={threadFromMenu}
+          aria-label={t('thread.startLabel', { author })}
+          title={t('thread.start')}
+        >
+          <ThreadIcon aria-hidden="true" />
+          <span className="msg-menu__text">{t('thread.start')}</span>
+        </button>
+      ) : threadDisabled && threadDisabledReason ? (
+        <button
+          type="button"
+          className="msg-menu__item"
+          disabled
+          aria-label={threadDisabledReason}
+          title={threadDisabledReason}
+        >
+          <ThreadIcon aria-hidden="true" />
+          <span className="msg-menu__text">{t('thread.start')}</span>
+          <span className="msg-menu__hint">{threadDisabledReason}</span>
+        </button>
+      ) : null}
+      {deleteAvailable ? (
+        <>
+          <span className="msg-menu__sep" aria-hidden="true" />
+          <button
+            type="button"
+            className="msg-menu__item msg-menu__item--danger"
+            aria-haspopup="dialog"
+            aria-expanded={deleteMenuOpen}
+            aria-label={t('message.delete')}
+            title={t('message.delete')}
+            onClick={openDeleteMenu}
+          >
+            <TrashIcon aria-hidden="true" />
+            <span className="msg-menu__text">{t('message.delete')}</span>
+          </button>
+        </>
+      ) : null}
     </div>
   ) : null;
 
-  const menu =
-    menuOpen && !botMessage ? (
-      <div
-        className="msg-popover delete-menu"
-        role="dialog"
-        aria-label={t('message.deleteTitle')}
-        ref={menuRef}
+  const deleteMenu = deleteMenuOpen ? (
+    <div
+      className="msg-popover delete-menu"
+      role="dialog"
+      aria-label={t('message.deleteTitle')}
+      onKeyDown={moveMenuFocus}
+    >
+      <p className="msg-popover__title">{t('message.deleteTitle')}</p>
+      <button
+        type="button"
+        ref={firstDeleteItemRef}
+        className="delete-menu__item"
+        onClick={() => void removeForMe()}
       >
-        <p className="msg-popover__title">{t('message.deleteTitle')}</p>
+        <span className="delete-menu__label">{t('message.deleteMe')}</span>
+        <span className="delete-menu__hint">{t('message.deleteMeHint')}</span>
+      </button>
+      {mine && !structured ? (
         <button
           type="button"
-          ref={firstMenuItemRef}
-          className="delete-menu__item"
-          onClick={() => void removeForMe()}
+          className="delete-menu__item delete-menu__item--danger"
+          onClick={() => {
+            setDeleteMenuOpen(false);
+            setConfirmError(null);
+            // Capture a stable return target for the confirm dialog.
+            moreTriggerRef.current?.focus();
+            setConfirmOpen(true);
+          }}
         >
-          <span className="delete-menu__label">{t('message.deleteMe')}</span>
-          <span className="delete-menu__hint">{t('message.deleteMeHint')}</span>
+          <span className="delete-menu__label">{t('message.deleteAll')}</span>
+          <span className="delete-menu__hint">{t('message.deleteAllHint')}</span>
         </button>
-        {mine && !structured ? (
-          <button
-            type="button"
-            className="delete-menu__item delete-menu__item--danger"
-            onClick={() => {
-              setMenuOpen(false);
-              setConfirmError(null);
-              // Capture a stable return target for the confirm dialog; the menu
-              // item that was clicked is unmounted in this same render.
-              deleteTriggerRef.current?.focus();
-              setConfirmOpen(true);
-            }}
-          >
-            <span className="delete-menu__label">{t('message.deleteAll')}</span>
-            <span className="delete-menu__hint">{t('message.deleteAllHint')}</span>
-          </button>
-        ) : null}
-        {structured ? (
-          <p className="delete-menu__hint">{t('message.deleteStructuredHint')}</p>
-        ) : null}
-      </div>
-    ) : null;
+      ) : null}
+      {structured ? <p className="delete-menu__hint">{t('message.deleteStructuredHint')}</p> : null}
+    </div>
+  ) : null;
 
   const editDialog = editOpen ? (
     <div
@@ -778,13 +881,13 @@ export function MessageActions({
         className="msg-actions-toggle"
         aria-expanded={toolsOpen}
         aria-controls={toolsId}
-        aria-label={t('message.actionsMore')}
+        aria-label={t('message.actions')}
         title={t('message.actions')}
         onClick={() => setToolsOpen((open) => !open)}
       >
         <MoreIcon aria-hidden="true" />
       </button>
-      <div className={`msg-tools${toolsOpen ? ' is-open' : ''}`} id={toolsId}>
+      <div className={`msg-tools${toolsOpen ? ' is-open' : ''}`} id={toolsId} ref={toolsRef}>
         <button
           type="button"
           ref={reactTriggerRef}
@@ -797,69 +900,35 @@ export function MessageActions({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={() => {
             setMenuOpen(false);
-            setTranslateMenuOpen(false);
+            setDeleteMenuOpen(false);
             setPickerOpen((open) => !open);
           }}
         >
           <EmojiIcon aria-hidden="true" />
         </button>
-        {mine && !botMessage ? (
+        {replyAction}
+        {hasMoreActions ? (
           <button
             type="button"
-            ref={editTriggerRef}
-            className="msg-tool"
-            disabled={editDisabledReason !== null}
-            aria-label={t('message.edit')}
-            title={editDisabledReason ?? t('message.edit')}
-            onClick={openEdit}
-          >
-            <EditIcon aria-hidden="true" />
-          </button>
-        ) : null}
-        {translateAvailable ? (
-          <button
-            type="button"
-            ref={translateTriggerRef}
-            className="msg-tool"
-            aria-haspopup="dialog"
-            aria-expanded={translateMenuOpen}
-            aria-label={t('pluginActions.translateLabel', { author })}
-            title={t('pluginActions.translate')}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={() => {
-              setPickerOpen(false);
-              setMenuOpen(false);
-              setTranslateMenuOpen((open) => !open);
-            }}
-          >
-            <TranslateIcon aria-hidden="true" />
-          </button>
-        ) : null}
-        {botMessage ? null : (
-          <button
-            type="button"
-            ref={deleteTriggerRef}
+            ref={moreTriggerRef}
             className="msg-tool"
             aria-haspopup="dialog"
             aria-expanded={menuOpen}
-            aria-label={t('message.delete')}
-            title={t('message.delete')}
+            aria-label={t('message.actionsMore')}
+            title={t('message.actionsMore')}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={() => {
               setPickerOpen(false);
-              setTranslateMenuOpen(false);
+              setDeleteMenuOpen(false);
               setMenuOpen((open) => !open);
             }}
           >
-            <TrashIcon aria-hidden="true" />
+            <MoreIcon aria-hidden="true" />
           </button>
-        )}
-        {replyAction}
-        {pinAction}
-        {threadAction}
+        ) : null}
         {picker}
-        {translateMenu}
         {menu}
+        {deleteMenu}
       </div>
       {actionFailure ? (
         <p className="msg-action-error" role="alert">

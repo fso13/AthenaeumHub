@@ -195,6 +195,8 @@ describe('@mentions in the managed composer', () => {
       if (element === null) throw new Error('thread root is not rendered yet');
       return element;
     });
+    await user.hover(rootRow);
+    await user.click(within(rootRow).getByRole('button', { name: 'Ещё действия' }));
     await user.click(within(rootRow).getByRole('button', { name: /Начать тред|Открыть тред/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Тред' });
     const input = within(dialog).getByLabelText('Ответ в тред');

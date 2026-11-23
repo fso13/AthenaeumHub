@@ -19,5 +19,6 @@ public record ChatSummaryResponse(
         UUID avatarFileId,
         boolean readOnly,
         String joinPolicy,
-        boolean archived) {
+        boolean archived,
+        int memberCount) {
 }

@@ -27,6 +27,8 @@ function mainRowCount(container: HTMLElement): number {
 
 async function openThreadFromAction(user: TestUser, id: string): Promise<HTMLElement> {
   const row = rowFor(id);
+  await user.hover(row);
+  await user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
   await user.click(within(row).getByRole('button', { name: /Начать тред|Открыть тред/ }));
   return screen.findByRole('dialog', { name: 'Тред' });
 }
@@ -141,6 +143,9 @@ describe('D1-FE3 thread UI', () => {
     await waitForChat();
     const rootId = messageId(44);
     const row = rowFor(rootId);
+    const more = within(row).getByRole('button', { name: 'Ещё действия' });
+    await user.hover(row);
+    await user.click(more);
     const trigger = within(row).getByRole('button', { name: /Начать тред/ });
     await user.click(trigger);
 
@@ -155,10 +160,11 @@ describe('D1-FE3 thread UI', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Тред' })).not.toBeInTheDocument(),
     );
-    expect(trigger).toHaveFocus();
+    expect(more).toHaveFocus();
 
     // The explicit close/back control works the same way.
-    await user.click(trigger);
+    await user.click(more);
+    await user.click(within(row).getByRole('button', { name: /Начать тред/ }));
     const dialogAgain = await screen.findByRole('dialog', { name: 'Тред' });
     await user.click(within(dialogAgain).getByRole('button', { name: 'Закрыть тред' }));
     await waitFor(() =>
@@ -192,7 +198,7 @@ describe('D1-FE3 thread UI', () => {
     const direct = mockDb.chats[IDS.directChat];
     if (!direct) throw new Error('Direct chat fixture is missing');
     direct.summary.security_mode = 'E2EE';
-    const { store } = renderApp();
+    const { store, user } = renderApp();
     await waitForChat();
 
     await act(async () => {
@@ -200,7 +206,11 @@ describe('D1-FE3 thread UI', () => {
     });
     await screen.findByRole('heading', { name: 'Анна Петрова' });
 
-    const disabled = screen.getAllByRole('button', { name: /Треды недоступны/ });
+    const row = document.getElementById(`message-${messageId(1)}`);
+    if (!row) throw new Error('Direct chat row is not rendered');
+    await user.hover(row);
+    await user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
+    const disabled = within(row).getAllByRole('button', { name: /Треды недоступны/ });
     expect(disabled.length).toBeGreaterThan(0);
     expect(disabled[0]).toBeDisabled();
     expect(store.threadsAvailable(IDS.directChat)).toBe(false);

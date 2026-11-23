@@ -56,12 +56,21 @@ async function waitForOnline(store: ChatStore): Promise<void> {
   );
 }
 
+/** Chat UI polish: secondary actions live behind the «…» overflow button. */
+async function openMore(
+  user: ReturnType<typeof renderApp>['user'],
+  row: HTMLElement,
+): Promise<void> {
+  await user.hover(row);
+  await user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
+}
+
 async function openEdit(
   user: ReturnType<typeof renderApp>['user'],
   id: string,
 ): Promise<HTMLElement> {
   const row = rowFor(id);
-  await user.hover(row);
+  await openMore(user, row);
   await user.click(within(row).getByRole('button', { name: 'Редактировать сообщение' }));
   return screen.findByRole('dialog', { name: 'Редактировать сообщение' });
 }
@@ -71,7 +80,7 @@ async function openDeleteMenu(
   id: string,
 ): Promise<HTMLElement> {
   const row = rowFor(id);
-  await user.hover(row);
+  await openMore(user, row);
   await user.click(within(row).getByRole('button', { name: 'Удалить сообщение' }));
   return screen.findByRole('dialog', { name: 'Удалить сообщение' });
 }
@@ -300,11 +309,14 @@ describe('#62 edit', () => {
     await waitForChat(result.store);
 
     const peer = rowFor(messageId(35));
+    await openMore(result.user, peer);
     expect(
       within(peer).queryByRole('button', { name: 'Редактировать сообщение' }),
     ).not.toBeInTheDocument();
+    await result.user.keyboard('{Escape}');
 
     const sticker = rowFor(messageId(34));
+    await openMore(result.user, sticker);
     const stickerEdit = within(sticker).getByRole('button', { name: 'Редактировать сообщение' });
     expect(stickerEdit).toBeDisabled();
     expect(stickerEdit).toHaveAttribute('title', 'Можно редактировать только текстовые сообщения');
@@ -418,6 +430,7 @@ describe('E2EE honesty', () => {
       name: 'Реакции недоступны в E2EE-чате',
     });
     expect(reaction).toBeDisabled();
+    await openMore(result.user, row);
     const edit = within(row).getByRole('button', { name: 'Редактировать сообщение' });
     expect(edit).toBeDisabled();
     expect(edit).toHaveAttribute('title', 'Редактирование недоступно в E2EE-чате');
@@ -465,8 +478,12 @@ describe('keyboard and a11y', () => {
     stores.push(result.store);
     await waitForChat(result.store);
     const row = rowFor(messageId(37));
-    const trigger = within(row).getByRole('button', { name: 'Редактировать сообщение' });
+    const trigger = within(row).getByRole('button', { name: 'Ещё действия' });
     trigger.focus();
+    await result.user.keyboard('{Enter}');
+    // The popup focuses its first enabled action; Enter opens the editor.
+    const edit = await within(row).findByRole('button', { name: 'Редактировать сообщение' });
+    await waitFor(() => expect(edit).toHaveFocus());
     await result.user.keyboard('{Enter}');
     const dialog = await screen.findByRole('dialog', { name: 'Редактировать сообщение' });
     const textarea = within(dialog).getByLabelText('Редактировать сообщение');
@@ -515,6 +532,7 @@ describe('keyboard and a11y', () => {
     ).toEqual([]);
 
     await result.user.keyboard('{Escape}');
+    await result.user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
     await result.user.click(within(row).getByRole('button', { name: 'Редактировать сообщение' }));
     await screen.findByRole('dialog', { name: 'Редактировать сообщение' });
     results = await axe.run(document.body, {

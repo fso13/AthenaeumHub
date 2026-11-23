@@ -27,12 +27,18 @@ public class WorkspaceRepositoryAdapter implements WorkspaceRepository {
 
     @Override
     public boolean isActiveMember(UUID workspaceId, UUID userId) {
+        // #99: a soft-deleted (or suspended) workspace grants no access even if a stale
+        // ACTIVE membership row survived a partial write. Membership and workspace status
+        // are checked in one statement, so every chat/file/session guard inherits it.
         Number count = (Number) entityManager.createNativeQuery("""
                         SELECT count(*)
-                          FROM workspace.memberships
-                         WHERE workspace_id = ?1
-                           AND user_id = ?2
-                           AND status = 'ACTIVE'
+                          FROM workspace.memberships m
+                          JOIN workspace.workspaces w
+                            ON w.id = m.workspace_id
+                           AND w.status = 'ACTIVE'
+                         WHERE m.workspace_id = ?1
+                           AND m.user_id = ?2
+                           AND m.status = 'ACTIVE'
                         """)
                 .setParameter(1, workspaceId)
                 .setParameter(2, userId)

@@ -7038,6 +7038,88 @@ export function createHandlers(db: MockDb) {
     }),
 
     /**
+     * #99: `DELETE /workspaces/{id}/members/me`. The literal `/me` route is
+     * registered before the `:userId` template, mirroring the backend's
+     * literal-first mapping. The sole OWNER is `409 LAST_OWNER`; the mock drops
+     * the workspace row and its chats so `/me` and the chat list agree.
+     */
+    http.delete(`${API}/workspaces/:workspaceId/members/me`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      db.workspaceLifecycleRequests.push({
+        workspaceId,
+        action: 'LEAVE',
+        role: workspace.role,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceWorkspaceLeaveError) {
+        const forced = db.forceWorkspaceLeaveError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (workspace.role === 'OWNER') {
+        return errorResponse(409, 'LAST_OWNER', 'The last owner cannot leave');
+      }
+      db.me.workspaces = db.me.workspaces.filter((item) => item.id !== workspaceId);
+      db.me.default_workspace_id = db.me.workspaces[0]?.id ?? null;
+      db.workspaceMembers = db.workspaceMembers.filter(
+        (member) => member.user_id !== db.me.user.id,
+      );
+      for (const [chatId, record] of Object.entries(db.chats)) {
+        if (record.workspaceId === workspaceId) delete db.chats[chatId];
+      }
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /**
+     * #99: `DELETE /workspaces/{id}`. OWNER-only soft delete; a non-owner gets
+     * `403 WORKSPACE_PERMISSION_DENIED`. The mock removes the workspace row and
+     * its chats (the real server keeps message rows for retention, but they are
+     * unreachable and the client must not render them).
+     */
+    http.delete(`${API}/workspaces/:workspaceId`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      db.workspaceLifecycleRequests.push({
+        workspaceId,
+        action: 'DELETE',
+        role: workspace.role,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceWorkspaceDeleteError) {
+        const forced = db.forceWorkspaceDeleteError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (workspace.role !== 'OWNER') {
+        return errorResponse(
+          403,
+          'WORKSPACE_PERMISSION_DENIED',
+          'Only the workspace owner can delete it',
+        );
+      }
+      db.me.workspaces = db.me.workspaces.filter((item) => item.id !== workspaceId);
+      db.me.default_workspace_id = db.me.workspaces[0]?.id ?? null;
+      db.workspaceMembers = db.workspaceMembers.filter(
+        (member) => member.user_id !== db.me.user.id,
+      );
+      for (const [chatId, record] of Object.entries(db.chats)) {
+        if (record.workspaceId === workspaceId) delete db.chats[chatId];
+      }
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    /**
      * E12-F (R-09): soft removal. The row disappears from the mock directory,
      * matching the ACTIVE-only read model; self/last-owner guards stay 409.
      */

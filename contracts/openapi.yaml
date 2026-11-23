@@ -86,7 +86,8 @@ paths:
         `archived=true` возвращает только личный архив вызывающего. Архив user-local:
         архивирование одним участником не меняет список других. Элемент `ChatSummary`
         содержит аддитивные `cover_file_id`, `avatar_file_id`, `read_only`, `join_policy` и
-        `archived`.
+        `archived`, а также точный `member_count` (число ACTIVE-участников чата, не
+        участников воркспейса).
       parameters:
         - $ref: "#/components/parameters/WorkspaceId"
         - $ref: "#/components/parameters/DeviceId"
@@ -350,6 +351,35 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /workspaces/{workspaceId}/members/me:
+    parameters:
+      - $ref: "#/components/parameters/WorkspaceId"
+      - $ref: "#/components/parameters/DeviceId"
+    delete:
+      tags: [workspaces]
+      operationId: leaveWorkspace
+      summary: Выйти из воркспейса (self-leave)
+      description: >
+        ACTIVE-участник удаляет собственное членство: строка становится `REMOVED`,
+        `joined_at` сохраняется, все участия в чатах этого воркспейса также становятся
+        `REMOVED`. Пользователь сразу теряет доступ к списку чатов, участникам, сессиям,
+        файлам и realtime-подпискам воркспейса; `GET /me` перестаёт его возвращать, а
+        точный `member_count` чатов уменьшается. Повторный вызов (в том числе после
+        удаления администратором) идемпотентен — `204` без нового аудит-события.
+        Последний ACTIVE OWNER выйти не может — `409 LAST_OWNER` (в текущей схеме OWNER
+        ровно один; правило проверяется по живому счётчику). Stateless access-токены не
+        отзываются глобально: доступ перепроверяется на каждом запросе. Аудит содержит
+        `user_id` (вызывающий), `role` и число удалённых участий в чатах.
+      responses:
+        "204":
+          description: Вы вышли из воркспейса (или уже не были ACTIVE-участником)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
 
@@ -5008,6 +5038,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+    delete:
+      tags: [workspaces]
+      operationId: deleteWorkspace
+      summary: Мягко удалить воркспейс (только OWNER)
+      description: >
+        Только ACTIVE OWNER. Устанавливает `status = 'DELETED'`, `deleted_at`/`deleted_by`,
+        переводит все членства и участия в чатах в `REMOVED`, отзывает все invite-ссылки
+        (`revoked_at`) и выключает ботов (`DISABLED`). Чужая/неизвестная workspace — `403
+        FORBIDDEN` без раскрытия существования; ACTIVE-участник не-OWNER — `403
+        WORKSPACE_PERMISSION_DENIED`. Повтор владельцем идемпотентен (`204`, без второго
+        аудит-события). Строки чатов, сообщений, вложений и байты объектного хранилища
+        намеренно не удаляются: их обрабатывает retention/export job позже; API-доступ
+        пропадает сразу, потому что все guard'ы требуют ACTIVE-членство. Stateless
+        access-токены глобально не отзываются (один Keycloak-сеанс может обслуживать другие
+        воркспейсы): доступ перепроверяется на каждом запросе, включая /sessions, чаты и
+        файлы. Аудит содержит только id и счётчики.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "204":
+          description: Воркспейс мягко удалён (или уже был удалён этим OWNER)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /workspaces/{workspaceId}/avatar:
     post:
@@ -6050,7 +6105,8 @@ components:
         CHAT_ALREADY_DELETED.
         E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND,
         MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN,
-        LAST_OWNER.
+        LAST_OWNER. #99 workspace lifecycle reuses LAST_OWNER (409) and
+        WORKSPACE_PERMISSION_DENIED (403); it adds no new error codes.
         D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND,
         THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED.
         D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio
@@ -8092,6 +8148,15 @@ components:
           description: >
             P0-2 caller-local archive flag. The main list excludes archived chats;
             `?archived=true` returns only them.
+        member_count:
+          type: integer
+          minimum: 0
+          description: >
+            #99 exact number of ACTIVE chat members, never the workspace member count.
+            GROUP: ACTIVE chat participants that also hold an ACTIVE workspace membership.
+            DIRECT: 2 while both participants remain ACTIVE workspace members; it falls
+            to 1 after the other participant leaves the workspace (their participant row
+            becomes REMOVED). Additive field.
 
     ChatList:
       type: object
@@ -8917,6 +8982,13 @@ components:
           description: >
             P0-2 caller-local archive state (never another participant's). The legacy
             D1-BE3 `created_at` and all previous fields are unchanged.
+        member_count:
+          type: integer
+          minimum: 0
+          description: >
+            #99 exact ACTIVE chat member count (GROUP: ACTIVE chat participants with an
+            ACTIVE workspace membership; DIRECT: 2 while both participants remain in the
+            workspace). Never the workspace member count. Additive field.
 
     ReadRequest:
       type: object

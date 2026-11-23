@@ -2,8 +2,12 @@ import type { RailSpace } from '../domain/unread';
 import { formatUnreadBadge, unreadLabel } from '../domain/unread';
 import { t } from '../i18n/ru';
 import { workspaceInitial } from '../domain/workspace';
+import {
+  workspaceLifecycleActionForRole,
+  type WorkspaceLifecycleAction,
+} from '../workspace/lifecycle';
 import { Avatar } from './Avatar';
-import { PlusIcon } from './Icons';
+import { LogoutIcon, PlusIcon, TrashIcon } from './Icons';
 
 interface SpaceRailProps {
   spaces: RailSpace[];
@@ -13,6 +17,12 @@ interface SpaceRailProps {
   onCreateWorkspace?: () => void;
   /** Workspace logo object/presigned URLs keyed by workspace id (optional). */
   logoUrls?: Record<string, string | null>;
+  /**
+   * #99: opens the shared leave/delete confirmation. The role decides whether
+   * the row exposes an action at all: the sole OWNER only gets delete, other
+   * ACTIVE members only get leave.
+   */
+  onWorkspaceAction?: (workspaceId: string, action: WorkspaceLifecycleAction) => void;
 }
 
 /**
@@ -28,6 +38,7 @@ export function SpaceRail({
   onSelect,
   onCreateWorkspace,
   logoUrls,
+  onWorkspaceAction,
 }: SpaceRailProps) {
   if (spaces.length === 0) return null;
 
@@ -45,8 +56,15 @@ export function SpaceRail({
             unread > 0
               ? t('rail.spaceUnread', { name: space.name, count: unreadLabel(unread) })
               : t('rail.space', { name: space.name });
+          const action = onWorkspaceAction ? workspaceLifecycleActionForRole(space.role) : null;
+          const actionLabel =
+            action === 'delete'
+              ? t('workspace.lifecycle.railDelete', { name: space.name })
+              : action === 'leave'
+                ? t('workspace.lifecycle.railLeave', { name: space.name })
+                : null;
           return (
-            <li key={space.id}>
+            <li className="space-rail__row" key={space.id}>
               <button
                 type="button"
                 className={`space-rail__item${active ? ' space-rail__item--active' : ''}`}
@@ -68,6 +86,21 @@ export function SpaceRail({
                   </span>
                 ) : null}
               </button>
+              {action && actionLabel ? (
+                <button
+                  type="button"
+                  className={`space-rail__action space-rail__action--${action}`}
+                  aria-label={actionLabel}
+                  title={actionLabel}
+                  onClick={() => onWorkspaceAction?.(space.id, action)}
+                >
+                  {action === 'delete' ? (
+                    <TrashIcon aria-hidden="true" />
+                  ) : (
+                    <LogoutIcon aria-hidden="true" />
+                  )}
+                </button>
+              ) : null}
             </li>
           );
         })}

@@ -7,5 +7,5 @@ public record ChatView(UUID id, String type, String securityMode, String visibil
                        boolean peerHasE2eeCapableDevices, String name, String description,
                        Integer keyEpoch, long lastSeq, long unreadCount, Instant createdAt,
                        UUID coverFileId, UUID avatarFileId, boolean readOnly, String joinPolicy,
-                       boolean archived) {
+                       boolean archived, int memberCount) {
 }

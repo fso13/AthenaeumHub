@@ -106,6 +106,9 @@ export function AttachmentCard({
   const video = isSupportedVideoMime(attachment.mime_type);
   const audio = isSupportedAudioMime(attachment.mime_type);
   const inlineMedia = image || video || audio;
+  // Telegram-style media: images/videos drop the card chrome and fill the
+  // feed column. Audio keeps its compact card (player + filename).
+  const mediaCard = image || video;
   const pdf = isPdfMime(attachment.mime_type);
   const isClean = attachment.scan_status === 'CLEAN';
   // PENDING/INFECTED never get a URL, a player or a download attempt.
@@ -133,6 +136,8 @@ export function AttachmentCard({
   const posterArtwork = useArtwork(attachment.id, media, video);
   const poster = video ? posterArtwork.url : null;
   const durationMs = elementDurationMs ?? media?.duration_ms ?? null;
+  const imageAspect =
+    image && media?.width && media?.height ? `${media.width} / ${media.height}` : undefined;
   const dimensions =
     media?.width && media?.height
       ? t('attachments.dimensions', { width: media.width, height: media.height })
@@ -205,10 +210,10 @@ export function AttachmentCard({
   const downloadLabel =
     pdf || isVideoMime(attachment.mime_type) ? t('attachments.open') : t('attachments.download');
   const cardClass = `attachment-card${outgoing ? ' attachment-card--outgoing' : ''}${
-    showPlayer ? ' attachment-card--player' : ''
-  }${songVariant ? ' attachment-card--song' : ''}${voiceVariant ? ' attachment-card--voice' : ''}${
-    scanBlocked ? ' attachment-card--blocked' : ''
-  }`;
+    mediaCard ? ' attachment-card--media' : ''
+  }${showPlayer ? ' attachment-card--player' : ''}${songVariant ? ' attachment-card--song' : ''}${
+    voiceVariant ? ' attachment-card--voice' : ''
+  }${scanBlocked ? ' attachment-card--blocked' : ''}`;
 
   const songCard =
     songVariant && media ? (
@@ -245,7 +250,10 @@ export function AttachmentCard({
   return (
     <div className={cardClass}>
       {image ? (
-        <div className="attachment-card__media attachment-card__media--image">
+        <div
+          className="attachment-card__media attachment-card__media--image"
+          style={imageAspect ? { aspectRatio: imageAspect } : undefined}
+        >
           {mediaUrl && !mediaFailed ? (
             <button
               type="button"
@@ -290,6 +298,7 @@ export function AttachmentCard({
           poster={poster}
           onError={() => setMediaFailed(true)}
           onDuration={onPlayerDuration}
+          onExpand={() => setLightboxOpen(true)}
         />
       ) : null}
 
@@ -380,10 +389,12 @@ export function AttachmentCard({
         </p>
       ) : null}
 
-      {image ? (
+      {mediaCard ? (
         <MediaLightbox
           open={lightboxOpen && Boolean(mediaUrl)}
           src={mediaUrl}
+          kind={video ? 'video' : 'image'}
+          poster={poster}
           name={name}
           onClose={closeLightbox}
           onDownload={() => void handleDownload()}

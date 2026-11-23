@@ -18,6 +18,9 @@ import ru.krug.backend.chat.domain.repository.ChatRepository;
  * participant the personal summary (unread counter, archive flag) is used; a workspace
  * OWNER/ADMIN who is not a member still gets a valid settings view without a personal
  * counter.
+ *
+ * <p>#99: {@code memberCount} always comes from the exact chat participant rows (bounded by
+ * an ACTIVE workspace membership), never from the workspace member count.</p>
  */
 @Component
 public class ChatViewAssembler {
@@ -44,7 +47,7 @@ public class ChatViewAssembler {
                     summary.createdAt(), summary.coverFileId(), summary.avatarFileId(),
                     summary.readOnly(),
                     summary.joinPolicy() == null ? null : summary.joinPolicy().name(),
-                    summary.archived());
+                    summary.archived(), summary.memberCount());
         }
         ChannelSettings settings = chatRepository
                 .findChannelSettings(chat.workspaceId(), chat.id())
@@ -59,23 +62,25 @@ public class ChatViewAssembler {
                 visibility == null ? null : visibility.name(), null, false, chat.name(),
                 chat.description(), null, chatRepository.lastSeq(chat.id()), 0,
                 chat.createdAt(), settings.coverFileId(), settings.avatarFileId(),
-                settings.readOnly(), joinPolicy, false);
+                settings.readOnly(), joinPolicy, false,
+                chatRepository.countActiveChatMembers(chat.workspaceId(), chat.id()));
     }
 
     /** Convenience for the freshly created GROUP channel before any summary row exists. */
     public static ChatView createdGroup(Chat chat, ChannelVisibility visibility,
-                                        ChannelJoinPolicy joinPolicy, Instant createdAt) {
+                                        ChannelJoinPolicy joinPolicy, Instant createdAt,
+                                        int memberCount) {
         return new ChatView(chat.id(), "GROUP", chat.securityMode().name(),
                 visibility == null ? null : visibility.name(), null, false, chat.name(),
                 chat.description(), null, 0, 0, createdAt, null, null, false,
-                joinPolicy == null ? null : joinPolicy.name(), false);
+                joinPolicy == null ? null : joinPolicy.name(), false, memberCount);
     }
 
-    /** Convenience for the freshly created DIRECT chat. */
+    /** Convenience for the freshly created DIRECT chat (two ACTIVE participant rows). */
     public static ChatView createdDirect(Chat chat, UUID peerId, boolean peerCapable,
-                                         Instant createdAt) {
+                                         Instant createdAt, int memberCount) {
         return new ChatView(chat.id(), "DIRECT", chat.securityMode().name(), null, peerId,
                 peerCapable, null, null, null, 0, 0, createdAt, null, null, false, null,
-                false);
+                false, memberCount);
     }
 }

@@ -29,6 +29,7 @@ import { BlockedUsersCard } from '../BlockedUsersCard';
 import { WorkspaceBotsCard } from '../bots/WorkspaceBotsCard';
 import { NotificationPreferencesDialog } from '../NotificationPreferencesDialog';
 import { WorkspaceSettingsPanel } from '../workspace/WorkspaceSettingsPanel';
+import type { WorkspaceLifecycleAction } from '../../workspace/lifecycle';
 import { PageShell } from './PageShell';
 import { roleLabel, securityModeLabel, storageLimit, storageUsed, tariffLabel } from './pageData';
 
@@ -85,6 +86,8 @@ interface SettingsPageProps {
   onOpenProfile?: () => void;
   onLogout?: () => void;
   onNavigate?: (view: AppView) => void;
+  /** #99: opens the shared leave/delete confirmation. */
+  onWorkspaceAction?: (workspaceId: string, action: WorkspaceLifecycleAction) => void;
 }
 
 /**
@@ -101,6 +104,7 @@ export function SettingsPage({
   onOpenProfile,
   onLogout,
   onNavigate,
+  onWorkspaceAction,
 }: SettingsPageProps) {
   const store = useChatStore();
   const profileStore = useProfileWorkspaceStore();
@@ -444,6 +448,7 @@ export function SettingsPage({
                   workspace={workspace}
                   actorRole={workspace.role}
                   onOpenMembers={onOpenMembers}
+                  onWorkspaceAction={onWorkspaceAction}
                 />
               ) : null}
               <section className="card" aria-labelledby="settings-workspace">

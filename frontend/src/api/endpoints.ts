@@ -436,6 +436,19 @@ export interface ChatApi {
   setWorkspaceAvatar(workspaceId: string, fileId: string): Promise<WorkspaceSummary>;
   deleteWorkspaceAvatar(workspaceId: string): Promise<void>;
   /**
+   * #99 `DELETE /workspaces/{id}/members/me` (ACTIVE participant self-leave).
+   * Idempotent `204`; the sole OWNER is `409 LAST_OWNER`, a non-member/foreign
+   * workspace is an indistinguishable `403`. The server removes the caller's
+   * chat participants too, so the client must drop every workspace-scoped row.
+   */
+  leaveWorkspace(workspaceId: string): Promise<void>;
+  /**
+   * #99 `DELETE /workspaces/{id}` (ACTIVE OWNER only, soft delete).
+   * Idempotent `204`. MEMBER/ADMIN get `403 WORKSPACE_PERMISSION_DENIED`; the
+   * client hides the action but still surfaces the honest server error.
+   */
+  deleteWorkspace(workspaceId: string): Promise<void>;
+  /**
    * P0-4 workspace logo bytes. The contract/backend expose only POST/DELETE for
    * `/workspaces/{id}/avatar`; `logo_file_id` is an existing managed attachment,
    * so the read resolves its presigned download URL and follows it.
@@ -1100,6 +1113,21 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       return withReauth(async () => {
         // Idempotent `204`; the logo attachment stays in the file center.
         await client.delete(`/workspaces/${encodeURIComponent(workspaceId)}/avatar`);
+      });
+    },
+
+    leaveWorkspace(workspaceId) {
+      return withReauth(async () => {
+        // Self-leave is a bodyless idempotent `204`; the literal `/me` route is
+        // chosen by the server before the `{userId}` template.
+        await client.delete(`/workspaces/${encodeURIComponent(workspaceId)}/members/me`);
+      });
+    },
+
+    deleteWorkspace(workspaceId) {
+      return withReauth(async () => {
+        // OWNER-only soft delete; a repeat is still `204` by contract.
+        await client.delete(`/workspaces/${encodeURIComponent(workspaceId)}`);
       });
     },
 

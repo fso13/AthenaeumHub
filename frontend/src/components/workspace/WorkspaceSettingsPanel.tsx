@@ -17,6 +17,11 @@ import { safeHttpUrl } from '../../files/format';
 import { t, type MessageKey } from '../../i18n/ru';
 import { permissionAllowed, WORKSPACE_PERMISSION_KEYS } from '../../profile/profileWorkspaceStore';
 import { useProfileWorkspaceState, useProfileWorkspaceStore } from '../../store/ChatProvider';
+import {
+  canDeleteWorkspace,
+  canLeaveWorkspace,
+  type WorkspaceLifecycleAction,
+} from '../../workspace/lifecycle';
 import { formatDateTime } from '../admin/format';
 import { AdminConfirmDialog } from '../admin/AdminConfirmDialog';
 import type { AdminActionErrorInfo } from '../admin/actionErrors';
@@ -130,6 +135,8 @@ export interface WorkspaceSettingsPanelProps {
   /** Caller's workspace role; the server still enforces every guard. */
   actorRole: WorkspacePermissionRole | 'GUEST' | null;
   onOpenMembers: () => void;
+  /** Opens the shared leave/delete confirmation owned by the app shell. */
+  onWorkspaceAction?: (workspaceId: string, action: WorkspaceLifecycleAction) => void;
 }
 
 /**
@@ -149,6 +156,7 @@ export function WorkspaceSettingsPanel({
   workspace,
   actorRole,
   onOpenMembers,
+  onWorkspaceAction,
 }: WorkspaceSettingsPanelProps) {
   const store = useProfileWorkspaceStore();
   const state = useProfileWorkspaceState();
@@ -197,6 +205,11 @@ export function WorkspaceSettingsPanel({
         canManage={canManagePermissions}
         permissionsLoading={permissionsLoading}
         onOpenMembers={onOpenMembers}
+      />
+      <WorkspaceDangerZoneCard
+        workspace={workspace}
+        actorRole={actorRole}
+        onWorkspaceAction={onWorkspaceAction}
       />
     </div>
   );
@@ -962,6 +975,71 @@ function WorkspacePermissionsCard({
           </div>
         </>
       ) : null}
+    </section>
+  );
+}
+
+/**
+ * #99 danger zone. The sole OWNER cannot leave (`409 LAST_OWNER`), so the leave
+ * button is disabled with the reason instead of pretending to work; delete is
+ * OWNER-only and disabled for every other role. Both confirmations are rendered
+ * by the app shell so the space rail and switcher share the same flow.
+ */
+function WorkspaceDangerZoneCard({
+  workspace,
+  actorRole,
+  onWorkspaceAction,
+}: {
+  workspace: WorkspaceSummary;
+  actorRole: WorkspacePermissionRole | 'GUEST' | null;
+  onWorkspaceAction?: (workspaceId: string, action: WorkspaceLifecycleAction) => void;
+}) {
+  const titleId = useId();
+  const leaveAllowed = canLeaveWorkspace(actorRole);
+  const deleteAllowed = canDeleteWorkspace(actorRole);
+
+  return (
+    <section className="card workspace-danger" aria-labelledby={`${titleId}-title`}>
+      <h3 id={`${titleId}-title`}>{t('workspace.lifecycle.dangerTitle')}</h3>
+      <p className="pane-sub">{t('workspace.lifecycle.dangerHint')}</p>
+
+      <div className="danger-cards">
+        <div className="danger-card">
+          <h4>{t('workspace.lifecycle.leave')}</h4>
+          <p>
+            {leaveAllowed
+              ? t('workspace.lifecycle.leaveHint', { name: workspace.name })
+              : t('workspace.lifecycle.ownerCannotLeave')}
+          </p>
+          <button
+            type="button"
+            className="btn btn--danger"
+            disabled={!leaveAllowed || !onWorkspaceAction}
+            title={leaveAllowed ? undefined : t('workspace.lifecycle.ownerCannotLeave')}
+            onClick={() => onWorkspaceAction?.(workspace.id, 'leave')}
+          >
+            {t('workspace.lifecycle.leave')}
+          </button>
+        </div>
+
+        <div className="danger-card">
+          <h4>{t('workspace.lifecycle.delete')}</h4>
+          <p>
+            {deleteAllowed
+              ? t('workspace.lifecycle.deleteHint')
+              : t('workspace.lifecycle.deleteOwnerOnly')}
+          </p>
+          <button
+            type="button"
+            className="btn btn--danger"
+            disabled={!deleteAllowed || !onWorkspaceAction}
+            title={deleteAllowed ? undefined : t('workspace.lifecycle.deleteOwnerOnly')}
+            onClick={() => onWorkspaceAction?.(workspace.id, 'delete')}
+          >
+            {t('workspace.lifecycle.delete')}
+          </button>
+        </div>
+      </div>
     </section>
   );
 }

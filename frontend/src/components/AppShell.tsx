@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { AppConfig } from '../config/env';
+import type { WorkspaceSummary } from '../api/types';
 import { describeError } from '../domain/errors';
 import { railSpaces, sumUnread } from '../domain/unread';
 import { t } from '../i18n/ru';
@@ -16,6 +17,8 @@ import { useTheme } from '../hooks/useTheme';
 import { ChatScreen } from './ChatScreen';
 import { CallLayer } from './CallLayer';
 import { WorkspaceCreateDialog } from './WorkspaceCreateDialog';
+import { WorkspaceLifecycleDialogs } from './WorkspaceLifecycleDialogs';
+import type { WorkspaceLifecycleAction } from '../workspace/lifecycle';
 import { FilesPage } from './pages/FilesPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PluginsPage } from './pages/PluginsPage';
@@ -77,6 +80,10 @@ export function AppShell({
   const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
   const [workspaceCreateBusy, setWorkspaceCreateBusy] = useState(false);
   const [workspaceCreateError, setWorkspaceCreateError] = useState<string | null>(null);
+  const [workspaceAction, setWorkspaceAction] = useState<{
+    workspace: WorkspaceSummary;
+    action: WorkspaceLifecycleAction;
+  } | null>(null);
   const [navCollapsed, setNavCollapsed] = useState(() => {
     try {
       return globalThis.localStorage?.getItem('krug.navCollapsed') === '1';
@@ -158,6 +165,26 @@ export function AppShell({
     onSelectWorkspace?.(workspaceId);
   };
 
+  /**
+   * #99: one confirmation surface for the settings danger zone, the rail and
+   * the switcher. The row is resolved from the refreshed `/me` list so the
+   * dialog always names the workspace the server will act on.
+   */
+  const requestWorkspaceAction = useCallback(
+    (workspaceId: string, action: WorkspaceLifecycleAction) => {
+      const workspace = currentState.workspaces.find((item) => item.id === workspaceId);
+      if (!workspace) return;
+      setNavOpen(false);
+      setWorkspaceAction({ workspace, action });
+    },
+    [currentState.workspaces],
+  );
+
+  const handleWorkspaceRemoved = useCallback(() => {
+    setWorkspaceAction(null);
+    go('chat');
+  }, [go]);
+
   const openWorkspaceCreate = () => {
     setWorkspaceCreateError(null);
     setWorkspaceCreateOpen(true);
@@ -192,6 +219,7 @@ export function AppShell({
           onSelect={handleWorkspace}
           onCreateWorkspace={openWorkspaceCreate}
           logoUrls={workspaceLogoUrls}
+          onWorkspaceAction={requestWorkspaceAction}
         />
         <Sidebar
           state={currentState}
@@ -205,6 +233,7 @@ export function AppShell({
           onSelectWorkspace={handleWorkspace}
           onCreateChat={onCreateChat}
           onCreateWorkspace={openWorkspaceCreate}
+          onWorkspaceAction={requestWorkspaceAction}
           onOpenAdmin={onOpenAdmin}
           onOpenMembers={onOpenMembers}
           onOpenProfile={() => setProfileOpen(true)}
@@ -255,6 +284,7 @@ export function AppShell({
             onOpenProfile={() => setProfileOpen(true)}
             onLogout={onLogout}
             onNavigate={go}
+            onWorkspaceAction={requestWorkspaceAction}
           />
         ) : page === 'plugins' ? (
           <PluginsPage onBack={() => go('chat')} />
@@ -276,6 +306,12 @@ export function AppShell({
         onLogout={onLogout}
       />
       <CallLayer />
+      <WorkspaceLifecycleDialogs
+        workspace={workspaceAction?.workspace ?? null}
+        action={workspaceAction?.action ?? null}
+        onClose={() => setWorkspaceAction(null)}
+        onRemoved={handleWorkspaceRemoved}
+      />
       <WorkspaceCreateDialog
         open={workspaceCreateOpen}
         busy={workspaceCreateBusy}

@@ -70,6 +70,6 @@ public class ChatQueryService {
                 summary.peerId(), summary.peerHasE2eeCapableDevices(), summary.createdAt(),
                 summary.coverFileId(), summary.avatarFileId(), summary.readOnly(),
                 summary.joinPolicy() == null ? null : summary.joinPolicy().name(),
-                summary.archived());
+                summary.archived(), summary.memberCount());
     }
 }

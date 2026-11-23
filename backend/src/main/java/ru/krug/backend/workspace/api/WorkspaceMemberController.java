@@ -25,6 +25,7 @@ import ru.krug.backend.workspace.application.command.AddWorkspaceMemberCommand;
 import ru.krug.backend.workspace.application.command.ChangeWorkspaceMemberRoleCommand;
 import ru.krug.backend.workspace.application.usecase.AddWorkspaceMemberService;
 import ru.krug.backend.workspace.application.usecase.ChangeWorkspaceMemberRoleService;
+import ru.krug.backend.workspace.application.usecase.LeaveWorkspaceService;
 import ru.krug.backend.workspace.application.usecase.ListWorkspaceMembersService;
 import ru.krug.backend.workspace.application.usecase.RemoveWorkspaceMemberService;
 
@@ -36,6 +37,7 @@ import ru.krug.backend.workspace.application.usecase.RemoveWorkspaceMemberServic
  * POST   /workspaces/{workspaceId}/members              — add an existing user by email
  * PATCH  /workspaces/{workspaceId}/members/{userId}     — change one role
  * DELETE /workspaces/{workspaceId}/members/{userId}     — soft-remove one member
+ * DELETE /workspaces/{workspaceId}/members/me           — leave the workspace (self, #99)
  * </pre>
  *
  * <p>The controller stays thin: authorization (OWNER/ADMIN, owner/self protections), the
@@ -50,15 +52,18 @@ public class WorkspaceMemberController {
     private final AddWorkspaceMemberService addMember;
     private final ChangeWorkspaceMemberRoleService changeRole;
     private final RemoveWorkspaceMemberService removeMember;
+    private final LeaveWorkspaceService leaveWorkspace;
 
     public WorkspaceMemberController(ListWorkspaceMembersService members,
                                      AddWorkspaceMemberService addMember,
                                      ChangeWorkspaceMemberRoleService changeRole,
-                                     RemoveWorkspaceMemberService removeMember) {
+                                     RemoveWorkspaceMemberService removeMember,
+                                     LeaveWorkspaceService leaveWorkspace) {
         this.members = members;
         this.addMember = addMember;
         this.changeRole = changeRole;
         this.removeMember = removeMember;
+        this.leaveWorkspace = leaveWorkspace;
     }
 
     @GetMapping
@@ -98,6 +103,17 @@ public class WorkspaceMemberController {
             @PathVariable UUID userId,
             Principal principal) {
         removeMember.remove(principal, workspaceId, userId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Self-leave (#99). The literal {@code me} segment is more specific than the
+     * {@code {userId}} template, so Spring routes it here instead of failing UUID
+     * conversion. Idempotent: 204 even when the membership is already REMOVED.
+     */
+    @DeleteMapping("/me")
+    public ResponseEntity<Void> leave(@PathVariable UUID workspaceId, Principal principal) {
+        leaveWorkspace.leave(principal, workspaceId);
         return ResponseEntity.noContent().build();
     }
 }

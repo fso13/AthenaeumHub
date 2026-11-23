@@ -15,6 +15,8 @@ export interface AdminConfirmDialogProps {
   confirmLabel: string;
   busyLabel: string;
   cancelLabel?: string;
+  /** `true` while a required typed confirmation is still incomplete. */
+  confirmDisabled?: boolean;
   /** Destructive confirm styling (danger button). */
   destructive?: boolean;
   busy: boolean;
@@ -43,6 +45,7 @@ export function AdminConfirmDialog({
   busyLabel,
   cancelLabel,
   destructive = false,
+  confirmDisabled = false,
   busy,
   error,
   errorDetails = null,
@@ -165,7 +168,7 @@ export function AdminConfirmDialog({
             type="button"
             className={destructive ? 'button button--danger' : 'button button--primary'}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             aria-busy={busy}
           >
             {busy ? busyLabel : error?.retryable ? t('admin.actions.retry') : confirmLabel}

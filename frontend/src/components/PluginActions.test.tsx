@@ -288,6 +288,7 @@ describe('#95 POLL/TASK cards in the flat feed', () => {
     await user.click(await screen.findByRole('button', { name: '👍' }));
     expect(await within(row).findByRole('button', { name: /👍: 1/ })).toBeInTheDocument();
 
+    await user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
     await user.click(within(row).getByRole('button', { name: 'Удалить сообщение' }));
     expect(await within(row).findByText('Удалить у себя')).toBeVisible();
     expect(within(row).queryByText('Удалить у всех')).not.toBeInTheDocument();

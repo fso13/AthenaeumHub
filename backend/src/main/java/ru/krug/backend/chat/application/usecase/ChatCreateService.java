@@ -170,7 +170,8 @@ public class ChatCreateService {
         boolean peerCapable = chatRepository.peerHasE2eeCapableDevices(workspaceId, chat.id(),
                 principal.userId());
         return new CreateChatResult(201,
-                ChatViewAssembler.createdDirect(chat, peerId, peerCapable, clock.now()), false);
+                ChatViewAssembler.createdDirect(chat, peerId, peerCapable, clock.now(), 2),
+                false);
     }
 
     private CreateChatResult createGroup(Principal principal, UUID workspaceId, String mode,
@@ -237,7 +238,7 @@ public class ChatCreateService {
                 chat.id());
         return new CreateChatResult(201, ChatViewAssembler.createdGroup(chat, visibility,
                 ru.krug.backend.chat.domain.model.ChannelJoinPolicy.forVisibility(visibility),
-                clock.now()),
+                clock.now(), memberCount),
                 false);
     }
 
@@ -323,8 +324,8 @@ public class ChatCreateService {
                 .orElse(null);
     }
 
-    private static ChatView toView(Chat chat, ChatSummary summary, UUID viewerId,
-                                   ChannelVisibility fallbackVisibility) {
+    private ChatView toView(Chat chat, ChatSummary summary, UUID viewerId,
+                            ChannelVisibility fallbackVisibility) {
         if (summary != null) {
             ChannelVisibility visibility = summary.visibility() != null
                     ? summary.visibility() : fallbackVisibility;
@@ -336,7 +337,7 @@ public class ChatCreateService {
                     summary.createdAt(), summary.coverFileId(), summary.avatarFileId(),
                     summary.readOnly(),
                     summary.joinPolicy() == null ? null : summary.joinPolicy().name(),
-                    summary.archived());
+                    summary.archived(), summary.memberCount());
         }
         return new ChatView(chat.id(), chat.type().name(), chat.securityMode().name(),
                 fallbackVisibility == null ? null : fallbackVisibility.name(), null, false,
@@ -344,7 +345,7 @@ public class ChatCreateService {
                 fallbackVisibility == null ? null
                         : ru.krug.backend.chat.domain.model.ChannelJoinPolicy
                                 .forVisibility(fallbackVisibility).name(),
-                false);
+                false, chatRepository.countActiveChatMembers(chat.workspaceId(), chat.id()));
     }
 
     private static Chat.Type parseType(String value) {

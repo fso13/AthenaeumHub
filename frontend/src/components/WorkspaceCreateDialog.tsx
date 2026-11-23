@@ -53,7 +53,9 @@ export function WorkspaceCreateDialog({
     >
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header className="modal-head">
-          <h2 id={titleId}>{t('workspace.create.title')}</h2>
+          <h2 className="modal-title" id={titleId}>
+            {t('workspace.create.title')}
+          </h2>
           <button
             type="button"
             className="icon-button"
@@ -86,7 +88,7 @@ export function WorkspaceCreateDialog({
             </p>
           ) : null}
         </div>
-        <footer className="modal-actions">
+        <footer className="modal-foot">
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             {t('common.cancel')}
           </button>

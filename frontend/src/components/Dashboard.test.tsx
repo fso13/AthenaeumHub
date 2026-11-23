@@ -139,18 +139,16 @@ describe('D1-FE1 space rail', () => {
     const rail = screen.getByRole('navigation', { name: 'Пространства' });
     const second = await within(rail).findByRole('button', { name: /Второе пространство.*123/ });
     expect(within(second).getByText('99+')).toBeInTheDocument();
-    expect(within(rail).getByRole('button', { name: /Студия «Восход»/ })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    expect(
+      within(rail).getByRole('button', { name: /^Пространство: Студия «Восход»/ }),
+    ).toHaveAttribute('aria-current', 'page');
 
     await user.click(second);
     await waitFor(() => expect(store.getSnapshot().activeWorkspaceId).toBe(SECOND_WORKSPACE.id));
     const freshRail = screen.getByRole('navigation', { name: 'Пространства' });
-    expect(within(freshRail).getByRole('button', { name: /Второе пространство/ })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    expect(
+      within(freshRail).getByRole('button', { name: /^Пространство: Второе пространство/ }),
+    ).toHaveAttribute('aria-current', 'page');
   });
 
   it('recalculates the rail badge after a live message and after markRead', async () => {
@@ -176,7 +174,7 @@ describe('D1-FE1 space rail', () => {
           before + 1,
         ),
       );
-      const active = within(rail).getByRole('button', { name: /Студия «Восход»/ });
+      const active = within(rail).getByRole('button', { name: /^Пространство: Студия «Восход»/ });
       expect(active).toHaveAccessibleName(new RegExp(String(before + 1)));
 
       await act(async () => {
@@ -186,7 +184,7 @@ describe('D1-FE1 space rail', () => {
         expect(store.getSnapshot().chats.find((chat) => chat.id === GROUP)?.unread_count).toBe(0),
       );
       expect(
-        within(rail).getByRole('button', { name: /Студия «Восход»/ }),
+        within(rail).getByRole('button', { name: /^Пространство: Студия «Восход»/ }),
       ).not.toHaveAccessibleName(/непрочитанных/);
       store.dispose();
     } finally {

@@ -663,6 +663,14 @@ export interface MockMemberRemoveRequestRecord {
   deviceId: string | null;
 }
 
+/** #99: workspace self-leave / OWNER delete observed by the mock. */
+export interface MockWorkspaceLifecycleRequestRecord {
+  workspaceId: string;
+  action: 'LEAVE' | 'DELETE';
+  role: WorkspaceSummary['role'];
+  deviceId: string | null;
+}
+
 /** #79: channel-membership request observed by the mock. */
 export interface MockChatMemberRequestRecord {
   chatId: string;
@@ -941,6 +949,10 @@ export interface MockDb {
   memberAddRequests: MockMemberAddRequestRecord[];
   memberRoleRequests: MockMemberRoleRequestRecord[];
   memberRemoveRequests: MockMemberRemoveRequestRecord[];
+  /** #99: `DELETE .../members/me` and `DELETE /workspaces/{id}`. */
+  workspaceLifecycleRequests: MockWorkspaceLifecycleRequestRecord[];
+  forceWorkspaceLeaveError: ForcedSendError | null;
+  forceWorkspaceDeleteError: ForcedSendError | null;
   forceMemberAddError: ForcedSendError | null;
   forceMemberRoleError: ForcedSendError | null;
   forceMemberRemoveError: ForcedSendError | null;
@@ -1686,6 +1698,9 @@ export function createMockDb(): MockDb {
     memberAddRequests: [],
     memberRoleRequests: [],
     memberRemoveRequests: [],
+    workspaceLifecycleRequests: [],
+    forceWorkspaceLeaveError: null,
+    forceWorkspaceDeleteError: null,
     forceMemberAddError: null,
     forceMemberRoleError: null,
     forceMemberRemoveError: null,
@@ -1963,6 +1978,9 @@ export function resetMockDb(db: MockDb): void {
   db.memberAddRequests = [];
   db.memberRoleRequests = [];
   db.memberRemoveRequests = [];
+  db.workspaceLifecycleRequests = [];
+  db.forceWorkspaceLeaveError = null;
+  db.forceWorkspaceDeleteError = null;
   db.forceMemberAddError = null;
   db.forceMemberRoleError = null;
   db.forceMemberRemoveError = null;

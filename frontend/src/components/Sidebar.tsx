@@ -5,6 +5,7 @@ import type { Theme } from '../theme/themePreference';
 import { chatDisplayName } from '../domain/chatLabel';
 import { formatUnreadBadge } from '../domain/unread';
 import { t, type MessageKey } from '../i18n/ru';
+import type { WorkspaceLifecycleAction } from '../workspace/lifecycle';
 import {
   useAvatarsState,
   useAvatarsStore,
@@ -23,6 +24,7 @@ import {
   MoonIcon,
   OverviewIcon,
   PeopleIcon,
+  PinIcon,
   PlugIcon,
   PlusIcon,
   SettingsIcon,
@@ -30,6 +32,7 @@ import {
   SunIcon,
 } from './Icons';
 import { NotificationBell } from './NotificationBell';
+import { readPinnedChatIds, togglePinnedChatId } from '../sidebar/pins';
 
 const NAV_ITEMS: ReadonlyArray<{ view: PageView; label: MessageKey; Icon: typeof OverviewIcon }> = [
   { view: 'overview', label: 'nav.overview', Icon: OverviewIcon },
@@ -52,6 +55,8 @@ interface SidebarProps {
   onCreateChat?: () => void;
   /** Workspace switcher "Создать пространство" (same dialog as the rail "+"). */
   onCreateWorkspace?: () => void;
+  /** #99: leave/delete action shared with the settings danger zone. */
+  onWorkspaceAction?: (workspaceId: string, action: WorkspaceLifecycleAction) => void;
   onOpenAdmin?: () => void;
   onOpenMembers?: () => void;
   /** D1-FE5: opens the profile modal from the signed-in user row. */
@@ -72,6 +77,7 @@ export function Sidebar({
   onSelectWorkspace,
   onCreateChat,
   onCreateWorkspace,
+  onWorkspaceAction,
   onOpenMembers,
   onOpenProfile,
   navCollapsed = false,
@@ -86,8 +92,6 @@ export function Sidebar({
   // R-01/E10-F: GROUP needs OWNER/ADMIN, but DIRECT is available to every
   // active member, so the dialog (not the entry point) enforces the type.
   const canCreateChat = !chatLimitReached;
-  const channels = state.chats.filter((chat) => chat.type === 'GROUP');
-  const directs = state.chats.filter((chat) => chat.type === 'DIRECT');
   const store = useChatStore();
   const avatars = useAvatarsState();
   const avatarsStore = useAvatarsStore();
@@ -101,6 +105,30 @@ export function Sidebar({
   // #80: the personal archive is a separate list; it never mixes with `chats`.
   const [archivedOpen, setArchivedOpen] = useState(false);
   const archived = state.archivedChats;
+
+  // Personal pinned chats: ordered ids scoped to the signed-in user and kept
+  // in browser storage. They only reorder this client's sidebar.
+  const userId = user?.id ?? null;
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => readPinnedChatIds(userId));
+  useEffect(() => {
+    setPinnedIds(readPinnedChatIds(userId));
+  }, [userId]);
+  const pinnedSet = new Set(pinnedIds);
+  const pinnedChats = pinnedIds
+    .map((id) => state.chats.find((chat) => chat.id === id) ?? null)
+    .filter((chat): chat is AppState['chats'][number] => chat !== null);
+  const togglePinned = (chatId: string) => {
+    setPinnedIds((current) => togglePinnedChatId(userId, chatId, current));
+    // Pinning moves the row between two sections, so React remounts it. Return
+    // keyboard focus to the same chat's pin control instead of losing it to
+    // the document body.
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`.chat-pin[data-chat-id="${chatId}"]`)?.focus();
+    });
+  };
+  // Pinned chats live only in their own top section, never duplicated below.
+  const channels = state.chats.filter((chat) => chat.type === 'GROUP' && !pinnedSet.has(chat.id));
+  const directs = state.chats.filter((chat) => chat.type === 'DIRECT' && !pinnedSet.has(chat.id));
 
   // Own avatar: the authenticated `GET /me/avatar` blob is resolved once per
   // session (deduped in the store) and shared with the profile dialog.
@@ -130,8 +158,13 @@ export function Sidebar({
     const badge = formatUnreadBadge(unread);
     const label = chatDisplayName(chat, state.workspaceMembers.items);
     const typeLabel = chat.type === 'GROUP' ? t('chat.group') : t('chat.direct');
+    const pinned = pinnedSet.has(chat.id);
+    const nameId = `chat-name-${chat.id}`;
+    const pinLabel = pinned
+      ? t('sidebar.unpinChat', { name: label })
+      : t('sidebar.pinChat', { name: label });
     return (
-      <li key={chat.id}>
+      <li key={chat.id} className="chat-row">
         <button
           type="button"
           className={`chat-item${active ? ' chat-item--active' : ''}`}
@@ -141,7 +174,9 @@ export function Sidebar({
           onClick={() => onSelect(chat.id)}
         >
           <Avatar name={label} seed={chat.id} size="sm" src={avatars.chats[chat.id]?.url ?? null} />
-          <span className="chat-item__name">{label}</span>
+          <span className="chat-item__name" id={nameId}>
+            {label}
+          </span>
           {badge ? (
             <span
               className="unread-badge"
@@ -151,6 +186,18 @@ export function Sidebar({
               {badge}
             </span>
           ) : null}
+        </button>
+        <button
+          type="button"
+          className={`chat-pin${pinned ? ' is-pinned' : ''}`}
+          data-chat-id={chat.id}
+          aria-pressed={pinned}
+          aria-label={pinned ? t('sidebar.unpin') : t('sidebar.pin')}
+          aria-describedby={nameId}
+          title={pinLabel}
+          onClick={() => togglePinned(chat.id)}
+        >
+          <PinIcon aria-hidden="true" />
         </button>
       </li>
     );
@@ -205,6 +252,7 @@ export function Sidebar({
             currentName={workspaceName ?? (loading ? t('common.loading') : t('app.tagline'))}
             onSelect={onSelectWorkspace}
             onCreateWorkspace={onCreateWorkspace}
+            onWorkspaceAction={onWorkspaceAction}
           />
         ) : (
           <div className="ws-btn">
@@ -285,6 +333,17 @@ export function Sidebar({
           <p className="chat-list__empty">{t('sidebar.noChats')}</p>
         ) : (
           <>
+            {pinnedChats.length > 0 ? (
+              <section className="section section--pinned" aria-label={t('sidebar.pinned')}>
+                <div className="section-head">
+                  <span className="section-title">
+                    <PinIcon aria-hidden="true" />
+                    <span>{t('sidebar.pinned')}</span>
+                  </span>
+                </div>
+                <ul className="chat-list__items">{pinnedChats.map(renderChatItem)}</ul>
+              </section>
+            ) : null}
             {renderSection('channels', t('sidebar.channels'), channels)}
             {renderSection('directs', t('sidebar.directs'), directs)}
           </>

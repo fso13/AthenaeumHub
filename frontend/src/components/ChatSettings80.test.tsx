@@ -308,6 +308,7 @@ describe('#80 channel settings UI', () => {
     const row = document.getElementById(`message-${targetId}`);
     if (!row) throw new Error('Message row 38 is not rendered');
     await user.hover(row);
+    await user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
     await user.click(await within(row).findByRole('button', { name: 'Закрепить сообщение' }));
 
     await waitFor(() =>
@@ -319,6 +320,7 @@ describe('#80 channel settings UI', () => {
         }),
       ),
     );
+    await user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
     expect(
       await within(row).findByRole('button', { name: 'Открепить сообщение' }),
     ).toBeInTheDocument();
@@ -348,6 +350,7 @@ describe('#80 channel settings UI', () => {
     const row = document.getElementById(`message-${targetId}`);
     if (!row) throw new Error('Message row 38 is not rendered');
     await user.hover(row);
+    await user.click(within(row).getByRole('button', { name: 'Ещё действия' }));
     await user.click(await within(row).findByRole('button', { name: 'Закрепить сообщение' }));
 
     expect(

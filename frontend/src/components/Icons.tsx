@@ -610,6 +610,15 @@ export function MonitorIcon(props: IconProps) {
   );
 }
 
+/** Chat UI polish: expand an inline video into the full-screen lightbox. */
+export function ExpandIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M9.2 4H4v5.2M14.8 4H20v5.2M20 14.8V20h-5.2M4 14.8V20h5.2" />
+    </IconBase>
+  );
+}
+
 export function SmartphoneIcon(props: IconProps) {
   return (
     <IconBase {...props}>

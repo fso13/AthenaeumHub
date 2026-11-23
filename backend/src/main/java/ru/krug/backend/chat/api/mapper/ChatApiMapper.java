@@ -86,7 +86,7 @@ public final class ChatApiMapper {
                 view.securityMode(), view.visibility(), view.peerId(),
                 view.peerHasE2eeCapableDevices(), view.lastMessageAt(), view.unreadCount(),
                 view.lastSeq(), view.coverFileId(), view.avatarFileId(), view.readOnly(),
-                view.joinPolicy(), view.archived());
+                view.joinPolicy(), view.archived(), view.memberCount());
     }
 
     public static ChatResponse toResponse(ChatView view) {
@@ -94,7 +94,7 @@ public final class ChatApiMapper {
                 view.peerId(), view.peerHasE2eeCapableDevices(), view.name(),
                 view.description(), view.keyEpoch(), view.lastSeq(), view.unreadCount(),
                 view.createdAt(), view.coverFileId(), view.avatarFileId(), view.readOnly(),
-                view.joinPolicy(), view.archived());
+                view.joinPolicy(), view.archived(), view.memberCount());
     }
 
     public static ChatPermissionsResponse toResponse(ChatPermissionsView view) {

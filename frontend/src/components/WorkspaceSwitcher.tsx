@@ -9,9 +9,13 @@ import {
 import type { WorkspaceSummary } from '../api/types';
 import { useAvatarsState, useAvatarsStore } from '../store/ChatProvider';
 import { workspaceInitial } from '../domain/workspace';
+import {
+  workspaceLifecycleActionForRole,
+  type WorkspaceLifecycleAction,
+} from '../workspace/lifecycle';
 import { t } from '../i18n/ru';
 import { Avatar } from './Avatar';
-import { ChevronDownIcon, PlusIcon } from './Icons';
+import { ChevronDownIcon, LogoutIcon, PlusIcon, TrashIcon } from './Icons';
 
 interface WorkspaceSwitcherProps {
   workspaces: WorkspaceSummary[];
@@ -20,6 +24,8 @@ interface WorkspaceSwitcherProps {
   onSelect: (workspaceId: string) => void;
   /** Opens the shared create-workspace dialog (same as the rail "+"). */
   onCreateWorkspace?: () => void;
+  /** #99: leave/delete for the current workspace (role-aware). */
+  onWorkspaceAction?: (workspaceId: string, action: WorkspaceLifecycleAction) => void;
 }
 
 function modeLabel(workspace: WorkspaceSummary): string {
@@ -43,6 +49,7 @@ export function WorkspaceSwitcher({
   currentName,
   onSelect,
   onCreateWorkspace,
+  onWorkspaceAction,
 }: WorkspaceSwitcherProps) {
   const avatars = useAvatarsState();
   const avatarsStore = useAvatarsStore();
@@ -53,6 +60,12 @@ export function WorkspaceSwitcher({
   const menuId = useId();
 
   const activeIndex = workspaces.findIndex((workspace) => workspace.id === activeWorkspaceId);
+  const activeWorkspace =
+    workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+  // The sole OWNER sees delete and no leave; ADMIN/MEMBER/GUEST see leave only.
+  const lifecycleAction = onWorkspaceAction
+    ? workspaceLifecycleActionForRole(activeWorkspace?.role)
+    : null;
 
   // Workspace logos are existing attachments (`logo_file_id`), deduped per id.
   useEffect(() => {
@@ -214,6 +227,36 @@ export function WorkspaceSwitcher({
             <PlusIcon aria-hidden="true" />
             <span>{t('rail.add')}</span>
           </button>
+          {lifecycleAction && activeWorkspace ? (
+            <>
+              <div className="ws-switch__divider" role="separator" />
+              <div className="ws-switch__label">{t('workspace.lifecycle.menuLabel')}</div>
+              <button
+                type="button"
+                role="menuitem"
+                className={`ws-switch__item ws-switch__item--danger${
+                  lifecycleAction === 'delete' ? ' ws-switch__item--delete' : ''
+                }`}
+                onClick={() => {
+                  close(true);
+                  onWorkspaceAction?.(activeWorkspace.id, lifecycleAction);
+                }}
+              >
+                {lifecycleAction === 'delete' ? (
+                  <TrashIcon aria-hidden="true" />
+                ) : (
+                  <LogoutIcon aria-hidden="true" />
+                )}
+                <span className="ws-switch__name">
+                  {t(
+                    lifecycleAction === 'delete'
+                      ? 'workspace.lifecycle.delete'
+                      : 'workspace.lifecycle.leave',
+                  )}
+                </span>
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

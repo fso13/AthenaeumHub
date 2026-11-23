@@ -263,7 +263,18 @@ public class ChatRepositoryAdapter implements ChatRepository {
                                c.join_policy,
                                (ua.chat_id IS NOT NULL) AS archived,
                                -- Appended so the existing positional indices stay stable.
-                               c.avatar_file_id
+                               c.avatar_file_id,
+                               -- #99: exact ACTIVE chat members, never the workspace count.
+                               -- A participant without an ACTIVE workspace membership is
+                               -- excluded, so a stale row cannot inflate the number.
+                               (SELECT count(*)::integer
+                                  FROM chat.chat_members mm
+                                  JOIN workspace.memberships wm
+                                    ON wm.workspace_id = mm.workspace_id
+                                   AND wm.user_id = mm.user_id
+                                   AND wm.status = 'ACTIVE'
+                                 WHERE mm.chat_id = c.id
+                                   AND mm.status = 'ACTIVE') AS member_count
                           FROM chat.chats c
                           JOIN chat.chat_members cm
                             ON cm.chat_id = c.id
@@ -306,8 +317,31 @@ public class ChatRepositoryAdapter implements ChatRepository {
                     Boolean.TRUE.equals(row[13]),
                     type == Chat.Type.GROUP && row[14] != null
                             ? ChannelJoinPolicy.valueOf((String) row[14]) : null,
-                    Boolean.TRUE.equals(row[15]));
+                    Boolean.TRUE.equals(row[15]),
+                    ((Number) row[17]).intValue());
         }).toList();
+    }
+
+    @Override
+    public int countActiveChatMembers(UUID workspaceId, UUID chatId) {
+        Number count = (Number) entityManager.createNativeQuery("""
+                        SELECT count(*)
+                          FROM chat.chat_members cm
+                          JOIN chat.chats c
+                            ON c.id = cm.chat_id
+                           AND c.workspace_id = ?1
+                           AND c.deleted_at IS NULL
+                          JOIN workspace.memberships wm
+                            ON wm.workspace_id = cm.workspace_id
+                           AND wm.user_id = cm.user_id
+                           AND wm.status = 'ACTIVE'
+                         WHERE cm.chat_id = ?2
+                           AND cm.status = 'ACTIVE'
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, chatId)
+                .getSingleResult();
+        return count.intValue();
     }
 
     @Override

@@ -80,7 +80,11 @@ import {
   type WorkspaceOverviewStore,
 } from '../workspace/overviewStore';
 import { createBotsStore, type BotsStore } from '../bots/botsStore';
-import { readDeviceWorkspaceId, writeDeviceWorkspaceId } from '../workspace/deviceWorkspace';
+import {
+  clearDeviceWorkspaceId,
+  readDeviceWorkspaceId,
+  writeDeviceWorkspaceId,
+} from '../workspace/deviceWorkspace';
 import { getDeviceId, getSession, setSession } from '../auth/session';
 import { setRuntimeDeviceId } from '../auth/runtime';
 import {
@@ -739,6 +743,25 @@ export function createEmptyChatDeletionState(): ChatDeletionState {
   return { chatId: null, status: 'idle', error: null };
 }
 
+/**
+ * #99 workspace lifecycle (self-leave / OWNER soft delete).
+ *
+ * The mutation is workspace-scoped, not chat-scoped: a successful call removes
+ * every workspace row from the local read model. `error` is kept so the confirm
+ * dialog can show an honest `409 LAST_OWNER` / `403` instead of pretending the
+ * action succeeded.
+ */
+export interface WorkspaceLifecycleState {
+  workspaceId: string | null;
+  action: 'leave' | 'delete' | null;
+  status: 'idle' | 'leaving' | 'deleting' | 'error';
+  error: ApiError | null;
+}
+
+export function createEmptyWorkspaceLifecycleState(): WorkspaceLifecycleState {
+  return { workspaceId: null, action: null, status: 'idle', error: null };
+}
+
 /** #80 archived list (`GET /chats?archived=true`), separate from the main list. */
 export interface ArchivedChatsState {
   workspaceId: string | null;
@@ -864,6 +887,8 @@ export interface AppState {
   chatArchive: ChatArchiveState;
   /** P0-2 (#80): OWNER-only soft delete state. */
   chatDeletion: ChatDeletionState;
+  /** #99: workspace self-leave / OWNER soft-delete feedback. */
+  workspaceLifecycle: WorkspaceLifecycleState;
   /** P0-2 (#80): caller-local archived chats, kept out of the main list. */
   archivedChats: ArchivedChatsState;
   /** D1-FE5: `GET /devices` for the profile modal. */
@@ -1222,6 +1247,11 @@ export class ChatStore {
   private notificationsPromise: Promise<void> | null = null;
   private preferencesPromise: Promise<void> | null = null;
   private chatLimitsPromise: Promise<void> | null = null;
+  /**
+   * #99: invalidates the chat-list read of a workspace that was just left or
+   * deleted, so a late response cannot resurrect its chats/session-scoped rows.
+   */
+  private workspaceGeneration = 0;
   /** D1-FE1: workspaces whose chat list was read only for the unread badge. */
   private readonly unreadWorkspaceRequests = new Set<string>();
   /** E10-F: member directory race guards (search chain + load-more). */
@@ -1338,6 +1368,7 @@ export class ChatStore {
       chatPins: createEmptyChatPinsState(),
       chatArchive: createEmptyChatArchiveState(),
       chatDeletion: createEmptyChatDeletionState(),
+      workspaceLifecycle: createEmptyWorkspaceLifecycleState(),
       archivedChats: createEmptyArchivedChatsState(),
       devices: createEmptyDevicesState(),
     };
@@ -1741,6 +1772,7 @@ export class ChatStore {
   }
 
   private async activateWorkspace(workspace: WorkspaceSummary): Promise<void> {
+    const generation = ++this.workspaceGeneration;
     this.realtime?.stop();
     this.calls.stop();
     this.notificationEpoch += 1;
@@ -1770,7 +1802,12 @@ export class ChatStore {
     // D1-FE1: keep the outgoing workspace badge truthful after `chats` is
     // cleared; the value is the same sum the server just gave us.
     const previousWorkspaceId = this.state.activeWorkspaceId;
-    const previousUnread = previousWorkspaceId === null ? null : sumUnread(this.state.chats);
+    // #99: a workspace that was just left/deleted is no longer in the list, so
+    // its last badge must not be written back into `workspaceUnread`.
+    const previousStillKnown =
+      previousWorkspaceId !== null &&
+      this.state.workspaces.some((item) => item.id === previousWorkspaceId);
+    const previousUnread = previousStillKnown ? sumUnread(this.state.chats) : null;
     const workspaceUnread =
       previousWorkspaceId === null || previousUnread === null
         ? this.state.workspaceUnread
@@ -1824,6 +1861,7 @@ export class ChatStore {
       chatPins: createEmptyChatPinsState(),
       chatArchive: createEmptyChatArchiveState(),
       chatDeletion: createEmptyChatDeletionState(),
+      workspaceLifecycle: createEmptyWorkspaceLifecycleState(),
       archivedChats: createEmptyArchivedChatsState(),
       devices: createEmptyDevicesState(),
     });
@@ -1832,6 +1870,8 @@ export class ChatStore {
 
     try {
       const chatList = await this.api.listChats(workspace.id);
+      // A later switch/removal superseded this activation; discard its read.
+      if (generation !== this.workspaceGeneration) return;
       const chats = chatList.items;
       const slices: Record<string, ChatSlice> = {};
       for (const chat of chats) {
@@ -1861,6 +1901,7 @@ export class ChatStore {
         this.startRealtime();
       }
     } catch (error) {
+      if (generation !== this.workspaceGeneration) return;
       this.failBootstrap(error);
     }
   }
@@ -1894,6 +1935,8 @@ export class ChatStore {
             // A workspace switch/logout while the request was in flight must
             // not resurrect old badge state.
             if (this.state.sessionStatus !== 'ready') return;
+            // #99: the workspace may have been left/deleted meanwhile.
+            if (!this.state.workspaces.some((item) => item.id === workspace.id)) return;
             this.patch({
               workspaceUnread: {
                 ...this.state.workspaceUnread,
@@ -4221,6 +4264,266 @@ export class ChatStore {
     this.patch({ workspaces, activeWorkspace });
   }
 
+  /* ------------------------------------------------------------------ */
+  /* #99: workspace self-leave and OWNER soft delete                     */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * `DELETE /workspaces/{id}/members/me`.
+   *
+   * The server is the only source of truth: on `204` every workspace-scoped
+   * row is dropped, the authoritative `/me` list is read again, and the next
+   * workspace is activated (or onboarding opens when none is left). A `409
+   * LAST_OWNER` / `403` keeps the workspace and is returned to the dialog.
+   */
+  async leaveWorkspace(workspaceId: string): Promise<boolean> {
+    if (this.isWorkspaceLifecycleBusy()) return false;
+    if (!this.state.workspaces.some((item) => item.id === workspaceId)) return false;
+    this.patch({
+      workspaceLifecycle: {
+        workspaceId,
+        action: 'leave',
+        status: 'leaving',
+        error: null,
+      },
+    });
+    try {
+      await this.api.leaveWorkspace(workspaceId);
+      await this.completeWorkspaceRemoval(workspaceId);
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        workspaceLifecycle: {
+          workspaceId,
+          action: 'leave',
+          status: 'error',
+          error: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** `DELETE /workspaces/{id}` (ACTIVE OWNER only, idempotent soft delete). */
+  async deleteWorkspace(workspaceId: string): Promise<boolean> {
+    if (this.isWorkspaceLifecycleBusy()) return false;
+    if (!this.state.workspaces.some((item) => item.id === workspaceId)) return false;
+    this.patch({
+      workspaceLifecycle: {
+        workspaceId,
+        action: 'delete',
+        status: 'deleting',
+        error: null,
+      },
+    });
+    try {
+      await this.api.deleteWorkspace(workspaceId);
+      await this.completeWorkspaceRemoval(workspaceId);
+      return true;
+    } catch (error) {
+      const apiError = toApiError(error);
+      this.handleFailure(apiError);
+      this.patch({
+        workspaceLifecycle: {
+          workspaceId,
+          action: 'delete',
+          status: 'error',
+          error: apiError,
+        },
+        authExpired: apiError.status === 401 ? true : this.state.authExpired,
+      });
+      return false;
+    }
+  }
+
+  /** Clears the confirm-dialog feedback without touching workspace data. */
+  clearWorkspaceLifecycle(): void {
+    const current = this.state.workspaceLifecycle;
+    if (
+      current.workspaceId === null &&
+      current.action === null &&
+      current.status === 'idle' &&
+      current.error === null
+    ) {
+      return;
+    }
+    this.patch({ workspaceLifecycle: createEmptyWorkspaceLifecycleState() });
+  }
+
+  private isWorkspaceLifecycleBusy(): boolean {
+    const status = this.state.workspaceLifecycle.status;
+    return status === 'leaving' || status === 'deleting';
+  }
+
+  /**
+   * Applies a successful leave/delete: drop the workspace row and every
+   * workspace-scoped projection, re-read `/me` (the contract removes the row
+   * there), then switch to the next workspace or open onboarding.
+   *
+   * A failed `/me` read never turns a successful `204` into an error: the local
+   * list is already consistent, and `/me` is refreshed on the next bootstrap.
+   */
+  private async completeWorkspaceRemoval(workspaceId: string): Promise<void> {
+    // Any chat-list read for the removed workspace is now stale.
+    this.workspaceGeneration += 1;
+    const wasActive = this.currentWorkspaceId() === workspaceId;
+    let workspaces = this.state.workspaces.filter((item) => item.id !== workspaceId);
+    let me = this.state.me;
+
+    try {
+      const fresh = await this.api.getMe();
+      workspaces = fresh.workspaces.filter((item) => item.id !== workspaceId);
+      me = {
+        ...fresh,
+        workspaces,
+        default_workspace_id: workspaces.some((item) => item.id === fresh.default_workspace_id)
+          ? fresh.default_workspace_id
+          : (workspaces[0]?.id ?? null),
+      };
+    } catch {
+      // The mutation itself succeeded; keep the locally filtered, consistent
+      // view instead of surfacing a misleading failure.
+      if (me) {
+        const currentMe = me;
+        me = {
+          ...currentMe,
+          workspaces,
+          default_workspace_id: workspaces.some(
+            (item) => item.id === currentMe.default_workspace_id,
+          )
+            ? currentMe.default_workspace_id
+            : (workspaces[0]?.id ?? null),
+        };
+      }
+    }
+
+    const workspaceUnread = { ...this.state.workspaceUnread };
+    delete workspaceUnread[workspaceId];
+    this.unreadWorkspaceRequests.delete(workspaceId);
+    this.patch({
+      me,
+      user: me?.user ?? this.state.user,
+      workspaces,
+      workspaceUnread,
+      workspaceLifecycle: createEmptyWorkspaceLifecycleState(),
+    });
+
+    if (!wasActive) return;
+
+    const next = workspaces[0] ?? null;
+    if (next) {
+      await this.activateWorkspace(next);
+      return;
+    }
+    this.enterWorkspaceOnboarding();
+  }
+
+  /**
+   * Last-workspace removal: there is no workspace left to activate, so the
+   * authenticated shell is replaced by onboarding. Every workspace-bound store
+   * is reset and the realtime socket is stopped before the patch, so no stale
+   * subscription can call the now-forbidden API.
+   */
+  private enterWorkspaceOnboarding(): void {
+    this.workspaceGeneration += 1;
+    this.realtime?.stop();
+    this.calls.stop();
+    this.notificationEpoch += 1;
+    this.mentionEpoch += 1;
+    this.chatMembersToken += 1;
+    this.chatMembersInFlight = null;
+    this.chatInvitesToken += 1;
+    this.chatInvitesInFlight = null;
+    this.chatPermissionsToken += 1;
+    this.chatPermissionsInFlight = null;
+    this.chatCoverToken += 1;
+    this.chatCoverInFlight = null;
+    this.chatPinsToken += 1;
+    this.chatPinsInFlight = null;
+    this.archivedChatsToken += 1;
+    this.archivedChatsInFlight = null;
+    this.membersToken += 1;
+    this.membersInFlight = null;
+    this.membersLoadMoreInFlight = false;
+    this.blockedUsersInFlight = null;
+    this.inviteAcceptInFlight = null;
+    this.devicesInFlight = null;
+    this.chatLimitsPromise = null;
+    this.unreadWorkspaceRequests.clear();
+    this.files.reset();
+    this.workspaceOverview.reset();
+    this.security.reset();
+    this.profile.reset();
+    this.avatars.reset();
+    this.bots.reset();
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    this.seenEventIds.length = 0;
+    this.seenEventIdSet.clear();
+    this.gapInFlight.clear();
+    clearDeviceWorkspaceId();
+    this.patch({
+      sessionStatus: 'ready',
+      sessionError: null,
+      onboardingRequired: true,
+      onboardingStatus: 'idle',
+      onboardingError: null,
+      activeWorkspaceId: null,
+      activeWorkspace: null,
+      workspaceUnread: {},
+      chats: [],
+      activeChatId: null,
+      slices: {},
+      threads: {},
+      activeThread: null,
+      syncStatus: 'idle',
+      syncError: null,
+      lastSyncedAt: null,
+      realtimeStatus: 'idle',
+      realtimeIssue: null,
+      typing: {},
+      presence: {},
+      call: idleCallState(),
+      notifications: createEmptyNotificationsState(),
+      notificationPreferences: createEmptyNotificationPreferencesState(),
+      messageSearch: createEmptyMessageSearchState(),
+      mentions: createEmptyMentionsState(),
+      e2ee: { ...this.state.e2ee, chats: {} },
+      chatLimits: null,
+      chatLimitsStatus: 'idle',
+      chatLimitsError: null,
+      chatCreateStatus: 'idle',
+      chatCreateError: null,
+      workspaceMembers: createEmptyWorkspaceMembersState(),
+      workspaceMemberAdmin: createEmptyWorkspaceMemberAdminState(),
+      chatSettings: createEmptyChatSettingsState(),
+      chatMembers: createEmptyChatMembersState(),
+      chatInvites: createEmptyChatInvitesState(),
+      blockedUsers: createEmptyBlockedUsersState(),
+      inviteAccept: createEmptyInviteAcceptState(),
+      chatPermissions: createEmptyChatPermissionsState(),
+      chatCover: createEmptyChatCoverState(),
+      chatAvatar: createEmptyChatAvatarState(),
+      chatPins: createEmptyChatPinsState(),
+      chatArchive: createEmptyChatArchiveState(),
+      chatDeletion: createEmptyChatDeletionState(),
+      archivedChats: createEmptyArchivedChatsState(),
+    });
+    this.e2eeBridge?.invalidateChat();
+    // E2EE retries are chat/workspace-scoped; the user no longer has a workspace
+    // to resume them in, so drop them instead of retrying against a removed one.
+    this.pendingResets.clear();
+    this.e2eeResumeInFlight.clear();
+    if (this.e2eeDrainTimer !== null) {
+      clearTimeout(this.e2eeDrainTimer);
+      this.e2eeDrainTimer = null;
+    }
+    this.e2eeDrainInFlight = null;
+  }
+
   /** First-login onboarding: POST /workspaces then open the created chat. */
   async createWorkspace(name: string): Promise<boolean> {
     const trimmed = name.trim();
@@ -4287,6 +4590,7 @@ export class ChatStore {
 
   /** Drop all user-scoped state on logout or account switch. */
   reset(): void {
+    this.workspaceGeneration += 1;
     this.realtime?.stop();
     this.calls.stop();
     this.notificationEpoch += 1;
@@ -4377,6 +4681,7 @@ export class ChatStore {
       chatPins: createEmptyChatPinsState(),
       chatArchive: createEmptyChatArchiveState(),
       chatDeletion: createEmptyChatDeletionState(),
+      workspaceLifecycle: createEmptyWorkspaceLifecycleState(),
       archivedChats: createEmptyArchivedChatsState(),
       devices: createEmptyDevicesState(),
     });

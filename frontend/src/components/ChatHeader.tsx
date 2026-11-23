@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import type { ChatSummary } from '../api/types';
 import { chatDisplayName } from '../domain/chatLabel';
+import { chatMemberCount } from '../domain/chatMembers';
 import { formatTime } from '../domain/messages';
 import { t, type MessageKey } from '../i18n/ru';
 import { useAvatarsState, useAvatarsStore } from '../store/ChatProvider';
@@ -88,7 +89,9 @@ export function ChatHeader({
   const onlineCount = Object.values(state.presence).filter(
     (presence) => presence.status === 'ONLINE',
   ).length;
-  const membersCount = state.workspaceMembers.items.length;
+  // #99: prefer the chat's own contract count; the workspace directory is only
+  // a fallback while the additive field is absent (or still rolling out).
+  const membersCount = chatMemberCount(chat) ?? state.workspaceMembers.items.length;
   const realtimeLabel = t(REALTIME_LABEL[state.realtimeStatus]);
   const callableChat = chatType === 'DIRECT' || chatType === 'GROUP';
   const derivedCallReason = callActive

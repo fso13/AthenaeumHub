@@ -82,6 +82,10 @@ const operations = {
     spec.paths?.['/workspaces/{workspaceId}/members/{userId}']?.patch,
   'DELETE /workspaces/{workspaceId}/members/{userId}':
     spec.paths?.['/workspaces/{workspaceId}/members/{userId}']?.delete,
+  // #99 workspace lifecycle: self-leave + OWNER soft delete.
+  'DELETE /workspaces/{workspaceId}/members/me':
+    spec.paths?.['/workspaces/{workspaceId}/members/me']?.delete,
+  'DELETE /workspaces/{workspaceId}': spec.paths?.['/workspaces/{workspaceId}']?.delete,
   'POST /admin/users/{userId}/suspend': spec.paths?.['/admin/users/{userId}/suspend']?.post,
   'POST /admin/users/{userId}/activate': spec.paths?.['/admin/users/{userId}/activate']?.post,
   'DELETE /admin/chats/{chatId}': spec.paths?.['/admin/chats/{chatId}']?.delete,
@@ -890,14 +894,14 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 131,
-  'Contract must expose exactly 131 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands)',
+  Object.keys(spec.paths ?? {}).length === 132,
+  'Contract must expose exactly 132 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #99 workspace lifecycle)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 160,
-  'Contract check must cover exactly 160 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
+  Object.keys(operations).length === 162,
+  'Contract check must cover exactly 162 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #99 workspace lifecycle)',
 );
 check(
   Object.keys(schemas).length === 212,
@@ -909,6 +913,13 @@ check(
     schemas.Message?.properties?.type?.enum?.includes(type),
   ),
   'Message.type must allow TEXT/STICKER/SYSTEM',
+);
+
+// --- #99 workspace lifecycle --------------------------------------------
+check(
+  spec.paths?.['/workspaces/{workspaceId}/members/me']?.delete !== undefined &&
+    spec.paths?.['/workspaces/{workspaceId}']?.delete !== undefined,
+  '#99 workspace lifecycle operations (self-leave + OWNER delete) must be documented',
 );
 
 // --- #96 bots ------------------------------------------------------------

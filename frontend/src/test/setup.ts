@@ -8,6 +8,7 @@ import { clearAppStorage } from '../auth/storage';
 import { resetPasswordAuthForTests } from '../auth/PasswordAuthProvider';
 import { resetRouterForTests } from '../router/router';
 import { resetThemeForTests } from '../theme/themePreference';
+import { resetPinnedChatsForTests } from '../sidebar/pins';
 import { resetDeviceWorkspaceForTests } from '../workspace/deviceWorkspace';
 import { resetMockDb } from '../mocks/db';
 import { resetMockRealtime } from '../mocks/realtime';
@@ -37,6 +38,7 @@ beforeEach(() => {
   resetDeviceWorkspaceForTests();
   resetRouterForTests('/');
   resetThemeForTests();
+  resetPinnedChatsForTests();
 });
 
 afterEach(() => {

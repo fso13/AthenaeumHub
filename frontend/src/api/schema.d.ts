@@ -46,7 +46,7 @@ export interface paths {
         };
         /**
          * Список чатов воркспейса (основной список или личный архив)
-         * @description По умолчанию возвращает все чаты пользователя, кроме архивированных им лично. `archived=true` возвращает только личный архив вызывающего. Архив user-local: архивирование одним участником не меняет список других. Элемент `ChatSummary` содержит аддитивные `cover_file_id`, `avatar_file_id`, `read_only`, `join_policy` и `archived`.
+         * @description По умолчанию возвращает все чаты пользователя, кроме архивированных им лично. `archived=true` возвращает только личный архив вызывающего. Архив user-local: архивирование одним участником не меняет список других. Элемент `ChatSummary` содержит аддитивные `cover_file_id`, `avatar_file_id`, `read_only`, `join_policy` и `archived`, а также точный `member_count` (число ACTIVE-участников чата, не участников воркспейса).
          */
         get: operations["listChats"];
         put?: never;
@@ -129,6 +129,30 @@ export interface paths {
          * @description OWNER управляет ролями ADMIN/MEMBER/GUEST; ADMIN — только MEMBER/GUEST и не может менять OWNER/другого ADMIN. Назначить OWNER нельзя, последнего OWNER нельзя понизить, менять собственную роль нельзя. Нарушение прав — `403 ROLE_CHANGE_FORBIDDEN` (или `403 FORBIDDEN` для не-OWNER/ADMIN), self — `409 SELF_ACTION_FORBIDDEN`, последний OWNER — `409 LAST_OWNER`; неизвестное активное членство — `404 MEMBER_NOT_FOUND`. Повтор той же роли идемпотентен (`200`) и не создаёт аудит-событие. Аудит содержит `previous_role`/`role`, без email.
          */
         patch: operations["changeWorkspaceMemberRole"];
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/members/me": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Выйти из воркспейса (self-leave)
+         * @description ACTIVE-участник удаляет собственное членство: строка становится `REMOVED`, `joined_at` сохраняется, все участия в чатах этого воркспейса также становятся `REMOVED`. Пользователь сразу теряет доступ к списку чатов, участникам, сессиям, файлам и realtime-подпискам воркспейса; `GET /me` перестаёт его возвращать, а точный `member_count` чатов уменьшается. Повторный вызов (в том числе после удаления администратором) идемпотентен — `204` без нового аудит-события. Последний ACTIVE OWNER выйти не может — `409 LAST_OWNER` (в текущей схеме OWNER ровно один; правило проверяется по живому счётчику). Stateless access-токены не отзываются глобально: доступ перепроверяется на каждом запросе. Аудит содержит `user_id` (вызывающий), `role` и число удалённых участий в чатах.
+         */
+        delete: operations["leaveWorkspace"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/setup/status": {
@@ -2433,7 +2457,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Мягко удалить воркспейс (только OWNER)
+         * @description Только ACTIVE OWNER. Устанавливает `status = 'DELETED'`, `deleted_at`/`deleted_by`, переводит все членства и участия в чатах в `REMOVED`, отзывает все invite-ссылки (`revoked_at`) и выключает ботов (`DISABLED`). Чужая/неизвестная workspace — `403 FORBIDDEN` без раскрытия существования; ACTIVE-участник не-OWNER — `403 WORKSPACE_PERMISSION_DENIED`. Повтор владельцем идемпотентен (`204`, без второго аудит-события). Строки чатов, сообщений, вложений и байты объектного хранилища намеренно не удаляются: их обрабатывает retention/export job позже; API-доступ пропадает сразу, потому что все guard'ы требуют ACTIVE-членство. Stateless access-токены глобально не отзываются (один Keycloak-сеанс может обслуживать другие воркспейсы): доступ перепроверяется на каждом запросе, включая /sessions, чаты и файлы. Аудит содержит только id и счётчики.
+         */
+        delete: operations["deleteWorkspace"];
         options?: never;
         head?: never;
         /**
@@ -2872,7 +2900,7 @@ export interface components {
         BlockedUserList: {
             items: components["schemas"]["BlockedUser"][];
         };
-        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.2 (#86, external plugin packages): PLUGIN_PACKAGE_INVALID (400) — unsafe or malformed ZIP/manifest (traversal, symlink, limits, missing entry); PLUGIN_PACKAGE_TOO_LARGE (413) — archive above 5 MiB; PLUGIN_ALREADY_INSTALLED (409) — the package id is already installed; PLUGIN_ID_RESERVED (409) — the id belongs to a built-in plugin; PLUGIN_STORAGE_UNAVAILABLE (503) — object storage is unavailable and the operation can be retried. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). P0-2 (#80, channel settings): CHAT_READ_ONLY (403) — write in a read-only channel; CHAT_PERMISSION_DENIED (403) — the role lacks a matrix right; CHAT_COVER_INVALID (422) — the referenced attachment is not an image; CHAT_AVATAR_INVALID (422) — the referenced channel-avatar attachment is not an image; CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT (409) — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description, cover or avatar in an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE chat. */
+        /** @description `code` — свободная строка. E2EE-коды §4.8: DEVICE_LIMIT_REACHED, DEVICE_ID_CONFLICT, INVALID_KEY_FORMAT, INVALID_SPK_SIGNATURE, INVALID_PREKEY, PREKEY_ID_CONFLICT, PREKEY_LIMIT_EXCEEDED, NO_PREKEYS, UNKNOWN_DEVICE, KEY_GENERATION_MISMATCH, ENVELOPES_REQUIRED, ENVELOPES_NOT_ALLOWED, E2EE_PLAINTEXT_FORBIDDEN, TOO_MANY_ENVELOPES, DUPLICATE_ENVELOPE, INVALID_ENVELOPE_FORMAT, UNSUPPORTED_ENVELOPE_VERSION, ENVELOPE_TOO_LARGE, PAYLOAD_TOO_LARGE, E2EE_NO_ACTIVE_DEVICES, E2EE_NO_PEER_ENVELOPE, E2EE_DISABLED, MODE_NOT_SUPPORTED, MODE_CHANGE_FORBIDDEN, CLIENT_MESSAGE_ID_CONFLICT, IDENTITY_KEY_CONFLICT, INVALID_IDENTITY_BINDING, NO_KEYS, E2EE_LEGACY_DEVICE, VH_VERSION_UNSUPPORTED, E2EE_GROUP_NOT_SUPPORTED, KEY_CHANGED, DEVICE_REVOKED, INVALID_SAFETY_NUMBER_HASH, TOO_MANY_DEVICES. Auth BFF (docs/TASKS-AUTH-BFF.md §1): INVALID_CREDENTIALS, EMAIL_NOT_VERIFIED, CODE_INVALID, CODE_EXPIRED, EMAIL_TAKEN, RATE_LIMITED, REGISTRATION_CLOSED, AUTH_UNAVAILABLE. E8 (R-01…R-04, docs/TASKS-ADMIN-SETTINGS.md): CHAT_LIMIT_REACHED, SETUP_ALREADY_COMPLETED, SMTP_UNAVAILABLE. E11 (R-08, docs/TASKS-ADMIN-V2.md): SELF_ACTION_FORBIDDEN, USER_ALREADY_SUSPENDED, USER_ALREADY_ACTIVE, LAST_PLATFORM_ADMIN, CHAT_ALREADY_DELETED. E12 (R-09, docs/TASKS-ADMIN-V2.md): USER_NOT_FOUND, MEMBER_NOT_FOUND, MEMBER_ALREADY_EXISTS, WORKSPACE_MEMBER_LIMIT_REACHED, ROLE_CHANGE_FORBIDDEN, LAST_OWNER. #99 workspace lifecycle reuses LAST_OWNER (409) and WORKSPACE_PERMISSION_DENIED (403); it adds no new error codes. D1 (docs/TASKS-DASHBOARD-V1.md §3.2, threads): THREAD_ROOT_NOT_FOUND, THREAD_ROOT_DELETED, THREAD_NESTING_UNSUPPORTED, THREADS_E2EE_UNSUPPORTED. D1-BE2 (media metadata): MEDIA_METADATA_INVALID (422); a MIME outside the audio allowlist is 415 UNSUPPORTED_TYPE. D1-BE3 (chat settings): CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description in an E2EE chat; invalid/empty name or description and an empty patch are VALIDATION_FAILED (422). D1 message actions (#61–#63): E2EE_METADATA_FORBIDDEN (422) — edit/reaction in an E2EE chat; MESSAGE_NOT_EDITABLE (422) — non-TEXT edit; VERSION_CONFLICT (409) — stale optimistic version; MESSAGE_TOO_LONG (422) — edit text > 8000. D1.1 (#69, plugins): PLUGIN_NOT_FOUND (404) — unknown catalog id; PLUGIN_NOT_AVAILABLE (422) — the plugin's modes do not include the chat mode (server-side plugin in E2EE); PLUGIN_DISABLED (422) — catalog kill switch. D1.2 (#86, external plugin packages): PLUGIN_PACKAGE_INVALID (400) — unsafe or malformed ZIP/manifest (traversal, symlink, limits, missing entry); PLUGIN_PACKAGE_TOO_LARGE (413) — archive above 5 MiB; PLUGIN_ALREADY_INSTALLED (409) — the package id is already installed; PLUGIN_ID_RESERVED (409) — the id belongs to a built-in plugin; PLUGIN_STORAGE_UNAVAILABLE (503) — object storage is unavailable and the operation can be retried. D1.1 (#76, plugin actions): PLUGIN_NOT_ENABLED (422) — the per-chat toggle is off; POLL_CLOSED (422), POLL_OPTION_INVALID (422) — option does not belong to the poll; POLL_STATE_INVALID (422) — reopen is not supported; TASK_ASSIGNEE_INVALID (422) — assignee is not an ACTIVE chat member; MESSAGE_NOT_TRANSLATABLE (422) — not a managed TEXT message; TRANSLATION_UNAVAILABLE (503) — no provider configured or the bounded provider call failed (Retry-After is set). P0-2 (#80, channel settings): CHAT_READ_ONLY (403) — write in a read-only channel; CHAT_PERMISSION_DENIED (403) — the role lacks a matrix right; CHAT_COVER_INVALID (422) — the referenced attachment is not an image; CHAT_AVATAR_INVALID (422) — the referenced channel-avatar attachment is not an image; CHAT_JOIN_CLOSED (403) — invite accept on a CLOSED channel; CHAT_PIN_LIMIT (409) — more than 50 pins; CHAT_SETTINGS_E2EE_UNSUPPORTED (422) — description, cover or avatar in an E2EE chat; E2EE_METADATA_FORBIDDEN (422) — pins in an E2EE chat. */
         Error: {
             code: string;
             message: string;
@@ -4096,6 +4124,8 @@ export interface components {
             join_policy?: "OPEN" | "INVITE_ONLY" | "CLOSED" | null;
             /** @description P0-2 caller-local archive flag. The main list excludes archived chats; `?archived=true` returns only them. */
             archived?: boolean;
+            /** @description #99 exact number of ACTIVE chat members, never the workspace member count. GROUP: ACTIVE chat participants that also hold an ACTIVE workspace membership. DIRECT: 2 while both participants remain ACTIVE workspace members; it falls to 1 after the other participant leaves the workspace (their participant row becomes REMOVED). Additive field. */
+            member_count?: number;
         };
         ChatList: {
             items: components["schemas"]["ChatSummary"][];
@@ -4555,6 +4585,8 @@ export interface components {
             join_policy?: "OPEN" | "INVITE_ONLY" | "CLOSED" | null;
             /** @description P0-2 caller-local archive state (never another participant's). The legacy D1-BE3 `created_at` and all previous fields are unchanged. */
             archived?: boolean;
+            /** @description #99 exact ACTIVE chat member count (GROUP: ACTIVE chat participants with an ACTIVE workspace membership; DIRECT: 2 while both participants remain in the workspace). Never the workspace member count. Additive field. */
+            member_count?: number;
         };
         ReadRequest: {
             /** Format: int64 */
@@ -5342,6 +5374,31 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    leaveWorkspace: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Вы вышли из воркспейса (или уже не были ACTIVE-участником) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
         };
     };
@@ -9618,6 +9675,28 @@ export interface operations {
             };
             429: components["responses"]["TooManyRequests"];
             503: components["responses"]["ServiceUnavailable"];
+        };
+    };
+    deleteWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Воркспейс мягко удалён (или уже был удалён этим OWNER) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     updateWorkspace: {

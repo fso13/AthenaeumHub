@@ -9,27 +9,33 @@ const FOCUSABLE =
 
 export interface MediaLightboxProps {
   open: boolean;
-  /** Presigned URL of a raster image; `null` never opens the dialog. */
+  /** Presigned URL of a raster image or an allowlisted video; `null` never opens. */
   src: string | null;
   name: string;
+  /** `image` (default) or `video` full-screen player. */
+  kind?: 'image' | 'video';
+  /** Server/local poster for the video player, when one is available. */
+  poster?: string | null;
   onClose: () => void;
   onDownload: () => void;
-  /** The presigned image URL failed to load (expired/blocked link). */
+  /** The presigned media URL failed to load (expired/blocked link). */
   onImageError?: () => void;
   busy?: boolean;
   downloadError?: ApiError | null;
 }
 
 /**
- * Full-size image preview. It only ever receives raster presigned URLs
- * (`isSafePreviewImage`), so SVG/HTML can never become an `<img>` here.
- * Focus is trapped inside the dialog, Escape/backdrop close it, and focus
- * returns to the thumbnail that opened it.
+ * Full-size image/video preview. It only ever receives raster presigned URLs
+ * (`isSafePreviewImage`) or allowlisted video URLs, so SVG/HTML can never
+ * become an `<img>` here. Focus is trapped inside the dialog, Escape/backdrop
+ * close it, and focus returns to the control that opened it.
  */
 export function MediaLightbox({
   open,
   src,
   name,
+  kind = 'image',
+  poster = null,
   onClose,
   onDownload,
   onImageError,
@@ -124,13 +130,26 @@ export function MediaLightbox({
         </div>
 
         <div className="media-lightbox__stage">
-          <img
-            className="media-lightbox__image"
-            src={src}
-            alt={t('attachments.imageAlt', { name })}
-            referrerPolicy="no-referrer"
-            onError={onImageError}
-          />
+          {kind === 'video' ? (
+            <video
+              className="media-lightbox__video"
+              src={src}
+              poster={poster ?? undefined}
+              controls
+              playsInline
+              preload="metadata"
+              aria-label={t('attachments.videoPlayer', { name })}
+              onError={onImageError}
+            />
+          ) : (
+            <img
+              className="media-lightbox__image"
+              src={src}
+              alt={t('attachments.imageAlt', { name })}
+              referrerPolicy="no-referrer"
+              onError={onImageError}
+            />
+          )}
         </div>
 
         {described ? (
