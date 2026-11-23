@@ -163,6 +163,15 @@ const operations = {
   'POST /chats/{chatId}/bots': spec.paths?.['/chats/{chatId}/bots']?.post,
   'DELETE /chats/{chatId}/bots/{botId}': spec.paths?.['/chats/{chatId}/bots/{botId}']?.delete,
   'POST /bots/{botId}/messages': spec.paths?.['/bots/{botId}/messages']?.post,
+  // #98: signed events, delivery statuses, slash commands and one-time responses.
+  'POST /workspaces/{workspaceId}/bots/{botId}/secret':
+    spec.paths?.['/workspaces/{workspaceId}/bots/{botId}/secret']?.post,
+  'GET /workspaces/{workspaceId}/bots/{botId}/deliveries':
+    spec.paths?.['/workspaces/{workspaceId}/bots/{botId}/deliveries']?.get,
+  'POST /workspaces/{workspaceId}/bots/{botId}/test-event':
+    spec.paths?.['/workspaces/{workspaceId}/bots/{botId}/test-event']?.post,
+  'POST /chats/{chatId}/commands': spec.paths?.['/chats/{chatId}/commands']?.post,
+  'POST /bot-responses/{token}': spec.paths?.['/bot-responses/{token}']?.post,
   'GET /admin/audit': spec.paths?.['/admin/audit']?.get,
   'GET /me': spec.paths?.['/me']?.get,
   'POST /devices': spec.paths?.['/devices']?.post,
@@ -881,18 +890,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 126,
-  'Contract must expose exactly 126 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
+  Object.keys(spec.paths ?? {}).length === 131,
+  'Contract must expose exactly 131 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 155,
-  'Contract check must cover exactly 155 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
+  Object.keys(operations).length === 160,
+  'Contract check must cover exactly 160 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
 );
 check(
-  Object.keys(schemas).length === 204,
-  'Contract must expose exactly 204 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots)',
+  Object.keys(schemas).length === 212,
+  'Contract must expose exactly 212 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands)',
 );
 
 check(

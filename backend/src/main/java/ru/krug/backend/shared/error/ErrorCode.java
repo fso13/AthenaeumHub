@@ -184,6 +184,14 @@ public final class ErrorCode {
     public static final String BOT_SCOPE_FORBIDDEN = "BOT_SCOPE_FORBIDDEN";
     public static final String BOT_E2EE_UNSUPPORTED = "BOT_E2EE_UNSUPPORTED";
     public static final String BOT_AVATAR_INVALID = "BOT_AVATAR_INVALID";
+    // #98: signed bot events and slash commands.
+    public static final String BOT_EVENTS_URL_INVALID = "BOT_EVENTS_URL_INVALID";
+    public static final String BOT_EVENTS_NOT_CONFIGURED = "BOT_EVENTS_NOT_CONFIGURED";
+    public static final String BOT_COMMAND_NOT_FOUND = "BOT_COMMAND_NOT_FOUND";
+    public static final String BOT_COMMAND_AMBIGUOUS = "BOT_COMMAND_AMBIGUOUS";
+    public static final String BOT_RESPONSE_INVALID = "BOT_RESPONSE_INVALID";
+    public static final String BOT_RESPONSE_EXPIRED = "BOT_RESPONSE_EXPIRED";
+    public static final String BOT_RESPONSE_USED = "BOT_RESPONSE_USED";
 
     // P0-2 (#80): channel settings — cover, read-only, join policy, rights, archive, pins.
     public static final String CHAT_READ_ONLY = "CHAT_READ_ONLY";

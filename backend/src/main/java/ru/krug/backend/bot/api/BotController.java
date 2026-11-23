@@ -109,7 +109,11 @@ public class BotController {
         }
         return BotApiMapper.toResponse(updateBot.update(principal, workspaceId, botId,
                 new UpdateBotCommand(request.name(), request.scopes(), request.avatarFileId(),
-                        Boolean.TRUE.equals(request.clearAvatar()), request.status())));
+                        Boolean.TRUE.equals(request.clearAvatar()), request.status(),
+                        request.eventsUrl(), request.events(),
+                        request.eventsEnabled() != null
+                                ? request.eventsEnabled() : request.enabled(),
+                        toCommandInputs(request.commands()))).bot());
     }
 
     @DeleteMapping("/workspaces/{workspaceId}/bots/{botId}")
@@ -141,6 +145,18 @@ public class BotController {
         }
         ChatBotView view = installBot.install(principal, chatId, request.botId());
         return ResponseEntity.status(201).body(BotApiMapper.toResponse(view));
+    }
+
+    private static java.util.List<ru.krug.backend.bot.application.command.BotCommandInput>
+            toCommandInputs(java.util.List<ru.krug.backend.bot.api.dto.BotCommandRequest> items) {
+        if (items == null) {
+            return null;
+        }
+        return items.stream()
+                .map(item -> item == null ? null
+                        : new ru.krug.backend.bot.application.command.BotCommandInput(
+                                item.command(), item.description()))
+                .toList();
     }
 
     @DeleteMapping("/chats/{chatId}/bots/{botId}")

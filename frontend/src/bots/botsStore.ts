@@ -1,19 +1,32 @@
 import type { ChatApi } from '../api/endpoints';
 import { toApiError } from '../api/problem';
 import type { ApiError } from '../api/problem';
-import type { Bot, BotCreateRequest, BotToken, BotUpdateRequest, ChatBot } from '../api/types';
+import type {
+  Bot,
+  BotCommandAccepted,
+  BotCommandInvoke,
+  BotCreateRequest,
+  BotDelivery,
+  BotDeliveryAccepted,
+  BotSigningSecret,
+  BotToken,
+  BotUpdateRequest,
+  ChatBot,
+} from '../api/types';
 
 /**
- * #96 bots UI store (MVP: `chat.write` only).
+ * #96/#98 bots UI store.
  *
  * Security rules encoded here:
- *  * `BotToken.token` lives in this in-memory snapshot only. It is never
- *    written to storage/localStorage, never put into an audit/log call and is
- *    dropped by `clearToken()`, `reset()` and every workspace switch.
- *  * The list endpoint never returns a token; all mutations replace rows with
- *    the server response instead of inventing fields.
- *  * Bots are never treated as users: the chat/workspace rows stay separate
- *    from member directories and message senders.
+ *  * `BotToken.token` and `signing_secret` live in this in-memory snapshot
+ *    only. They are never written to storage/localStorage, never put into an
+ *    audit/log call and are dropped by `clearToken()`/`clearSigningSecret()`,
+ *    `reset()` and every workspace switch.
+ *  * A bot row never keeps `signing_secret`: it is split off the PATCH/rotate
+ *    response before the row is stored, so re-rendering the list cannot leak it.
+ *  * The list endpoint never returns a credential; all mutations replace rows
+ *    with the server response instead of inventing fields.
+ *  * Deliveries are the content-free statuses from `GET .../deliveries`.
  */
 
 export type BotsLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -22,6 +35,29 @@ export type BotsLoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 export interface BotsActionError {
   botId: string;
   error: ApiError;
+}
+
+/** One-time signing-secret reveal; cleared when its dialog closes. */
+export interface BotSigningSecretView {
+  botId: string;
+  secret: string;
+  reason: 'activated' | 'rotated';
+  createdAt: string | null;
+}
+
+export interface BotDeliveriesState {
+  botId: string;
+  status: BotsLoadStatus;
+  items: BotDelivery[];
+  error: ApiError | null;
+}
+
+/** The last command invocation: `202` means the delivery is queued only. */
+export interface BotCommandAcceptance {
+  deliveryId: string;
+  botId: string;
+  botName: string;
+  command: string;
 }
 
 export interface WorkspaceBotsState {
@@ -43,6 +79,17 @@ export interface WorkspaceBotsState {
   updateError: BotsActionError | null;
   disablePendingId: string | null;
   disableError: BotsActionError | null;
+  /** #98 event/command settings PATCH (separate from status/name updates). */
+  eventsSavingId: string | null;
+  eventsError: BotsActionError | null;
+  /** One-time signing secret of activation/rotation; never re-readable. */
+  signingSecret: BotSigningSecretView | null;
+  secretPendingId: string | null;
+  secretError: BotsActionError | null;
+  deliveries: BotDeliveriesState | null;
+  testPendingId: string | null;
+  testError: BotsActionError | null;
+  testAccepted: { botId: string; deliveryId: string } | null;
 }
 
 export interface ChatBotsState {
@@ -54,6 +101,10 @@ export interface ChatBotsState {
   installError: ApiError | null;
   uninstallPendingId: string | null;
   uninstallError: BotsActionError | null;
+  /** #98 slash-command invocation state for the active chat composer. */
+  commandPending: boolean;
+  commandError: ApiError | null;
+  commandAccepted: BotCommandAcceptance | null;
 }
 
 export interface BotsState {
@@ -72,6 +123,10 @@ export interface BotsStoreDeps {
     | 'listChatBots'
     | 'installChatBot'
     | 'uninstallChatBot'
+    | 'rotateBotSigningSecret'
+    | 'listBotDeliveries'
+    | 'testBotEvent'
+    | 'invokeBotCommand'
   >;
 }
 
@@ -91,6 +146,15 @@ export function createEmptyWorkspaceBotsState(): WorkspaceBotsState {
     updateError: null,
     disablePendingId: null,
     disableError: null,
+    eventsSavingId: null,
+    eventsError: null,
+    signingSecret: null,
+    secretPendingId: null,
+    secretError: null,
+    deliveries: null,
+    testPendingId: null,
+    testError: null,
+    testAccepted: null,
   };
 }
 
@@ -104,6 +168,9 @@ export function createEmptyChatBotsState(): ChatBotsState {
     installError: null,
     uninstallPendingId: null,
     uninstallError: null,
+    commandPending: false,
+    commandError: null,
+    commandAccepted: null,
   };
 }
 
@@ -127,6 +194,16 @@ function upsertChatBot(items: ChatBot[], chatBot: ChatBot): ChatBot[] {
   return [chatBot, ...filtered];
 }
 
+/**
+ * Splits the one-time secret off a PATCH/rotate response. Rows stored in
+ * `items` never carry `signing_secret`, so a re-render/list refresh cannot
+ * resurface it; only the explicit `signingSecret` view shows it once.
+ */
+function splitSigningSecret(bot: Bot): { bot: Bot; secret: string | null } {
+  const { signing_secret: secret, ...metadata } = bot;
+  return { bot: metadata, secret: secret ?? null };
+}
+
 export class BotsStore {
   private readonly api: BotsStoreDeps['api'];
   private state: BotsState;
@@ -138,6 +215,8 @@ export class BotsStore {
    */
   private workspaceGeneration = 0;
   private chatGeneration = 0;
+  /** Bumped by reset/dispose so an in-flight delivery read cannot leak across. */
+  private deliveriesGeneration = 0;
   private disposed = false;
   private workspaceInFlight: Promise<void> | null = null;
   private chatInFlight: Promise<void> | null = null;
@@ -161,6 +240,7 @@ export class BotsStore {
     this.listeners.clear();
     this.workspaceGeneration += 1;
     this.chatGeneration += 1;
+    this.deliveriesGeneration += 1;
     this.workspaceInFlight = null;
     this.chatInFlight = null;
   }
@@ -168,6 +248,7 @@ export class BotsStore {
   reset(): void {
     this.workspaceGeneration += 1;
     this.chatGeneration += 1;
+    this.deliveriesGeneration += 1;
     this.workspaceInFlight = null;
     this.chatInFlight = null;
     this.patch(createEmptyBotsState());
@@ -181,6 +262,57 @@ export class BotsStore {
         ...this.state.workspace,
         token: null,
         tokenReason: null,
+      },
+    });
+  }
+
+  /** Drops the one-time signing secret; it is never retrievable again. */
+  clearSigningSecret(): void {
+    const workspace = this.state.workspace;
+    if (workspace.signingSecret === null && workspace.secretError === null) return;
+    this.patch({
+      workspace: {
+        ...workspace,
+        signingSecret: null,
+        secretError: null,
+      },
+    });
+  }
+
+  /** Clears the composer command feedback when the chat changes. */
+  clearCommandState(): void {
+    const chat = this.state.chat;
+    if (!chat.commandPending && chat.commandError === null && chat.commandAccepted === null) {
+      return;
+    }
+    this.patch({
+      chat: { ...chat, commandPending: false, commandError: null, commandAccepted: null },
+    });
+  }
+
+  /**
+   * Settings dialog closes: drop the one-time secret, test notice and stale
+   * per-bot errors so reopening cannot show a value that is no longer valid.
+   */
+  clearBotEventFeedback(): void {
+    const workspace = this.state.workspace;
+    if (
+      workspace.signingSecret === null &&
+      workspace.secretError === null &&
+      workspace.testError === null &&
+      workspace.testAccepted === null &&
+      workspace.eventsError === null
+    ) {
+      return;
+    }
+    this.patch({
+      workspace: {
+        ...workspace,
+        signingSecret: null,
+        secretError: null,
+        testError: null,
+        testAccepted: null,
+        eventsError: null,
       },
     });
   }
@@ -251,19 +383,20 @@ export class BotsStore {
     try {
       const issued = await this.api.createBot(workspaceId, body);
       if (this.disposed) return null;
+      const { bot } = splitSigningSecret(issued.bot);
       this.patch({
         workspace: {
           ...this.state.workspace,
           workspaceId,
           status: 'ready',
-          items: upsertBot(this.state.workspace.items, issued.bot),
+          items: upsertBot(this.state.workspace.items, bot),
           createStatus: 'idle',
           createError: null,
-          token: issued,
+          token: { ...issued, bot },
           tokenReason: 'created',
         },
       });
-      return issued.bot;
+      return bot;
     } catch (error) {
       if (this.disposed) return null;
       this.patch({
@@ -289,17 +422,18 @@ export class BotsStore {
     try {
       const issued = await this.api.rotateBotToken(workspaceId, botId);
       if (this.disposed) return null;
+      const { bot } = splitSigningSecret(issued.bot);
       this.patch({
         workspace: {
           ...this.state.workspace,
-          items: upsertBot(this.state.workspace.items, issued.bot),
+          items: upsertBot(this.state.workspace.items, bot),
           rotatePendingId: null,
           rotateError: null,
-          token: issued,
+          token: { ...issued, bot },
           tokenReason: 'rotated',
         },
       });
-      return issued;
+      return { ...issued, bot };
     } catch (error) {
       if (this.disposed) return null;
       this.patch({
@@ -323,14 +457,25 @@ export class BotsStore {
       },
     });
     try {
-      const bot = await this.api.updateBot(workspaceId, botId, body);
+      const response = await this.api.updateBot(workspaceId, botId, body);
       if (this.disposed) return null;
+      const { bot, secret } = splitSigningSecret(response);
       this.patch({
         workspace: {
           ...this.state.workspace,
           items: upsertBot(this.state.workspace.items, bot),
           updatePendingId: null,
           updateError: null,
+          ...(secret !== null
+            ? {
+                signingSecret: {
+                  botId: bot.id,
+                  secret,
+                  reason: 'activated' as const,
+                  createdAt: bot.signing_secret_created_at ?? null,
+                },
+              }
+            : {}),
         },
       });
       return bot;
@@ -341,6 +486,103 @@ export class BotsStore {
           ...this.state.workspace,
           updatePendingId: null,
           updateError: { botId, error: toApiError(error) },
+        },
+      });
+      return null;
+    }
+  }
+
+  /**
+   * #98 event/command settings save. It is the same PATCH as `updateBot`, but
+   * with its own pending/error slot so the settings card does not disable the
+   * list actions and vice versa. A newly generated signing secret is split off
+   * the response and exposed once through `signingSecret`.
+   */
+  async saveBotEvents(
+    workspaceId: string,
+    botId: string,
+    body: BotUpdateRequest,
+  ): Promise<Bot | null> {
+    if (this.state.workspace.eventsSavingId !== null) return null;
+    this.patch({
+      workspace: {
+        ...this.state.workspace,
+        eventsSavingId: botId,
+        eventsError: null,
+      },
+    });
+    try {
+      const response = await this.api.updateBot(workspaceId, botId, body);
+      if (this.disposed) return null;
+      const { bot, secret } = splitSigningSecret(response);
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          items: upsertBot(this.state.workspace.items, bot),
+          eventsSavingId: null,
+          eventsError: null,
+          ...(secret !== null
+            ? {
+                signingSecret: {
+                  botId: bot.id,
+                  secret,
+                  reason: 'activated' as const,
+                  createdAt: bot.signing_secret_created_at ?? null,
+                },
+              }
+            : {}),
+        },
+      });
+      return bot;
+    } catch (error) {
+      if (this.disposed) return null;
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          eventsSavingId: null,
+          eventsError: { botId, error: toApiError(error) },
+        },
+      });
+      return null;
+    }
+  }
+
+  /** #98 rotate the signing secret; the raw value is exposed once. */
+  async rotateSigningSecret(workspaceId: string, botId: string): Promise<BotSigningSecret | null> {
+    if (this.state.workspace.secretPendingId !== null) return null;
+    this.patch({
+      workspace: {
+        ...this.state.workspace,
+        secretPendingId: botId,
+        secretError: null,
+      },
+    });
+    try {
+      const issued = await this.api.rotateBotSigningSecret(workspaceId, botId);
+      if (this.disposed) return null;
+      const { bot } = splitSigningSecret(issued.bot);
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          items: upsertBot(this.state.workspace.items, bot),
+          secretPendingId: null,
+          secretError: null,
+          signingSecret: {
+            botId: bot.id,
+            secret: issued.signing_secret,
+            reason: 'rotated',
+            createdAt: bot.signing_secret_created_at ?? null,
+          },
+        },
+      });
+      return issued;
+    } catch (error) {
+      if (this.disposed) return null;
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          secretPendingId: null,
+          secretError: { botId, error: toApiError(error) },
         },
       });
       return null;
@@ -380,6 +622,96 @@ export class BotsStore {
           ...this.state.workspace,
           disablePendingId: null,
           disableError: { botId, error: toApiError(error) },
+        },
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Content-free delivery statuses for one bot. The default `limit` is small:
+   * the settings card only needs the latest rows, and the server caps it at 100.
+   */
+  async loadBotDeliveries(
+    workspaceId: string,
+    botId: string,
+    limit = 20,
+    force = false,
+  ): Promise<void> {
+    const current = this.state.workspace.deliveries;
+    if (!force && current?.botId === botId && current.status === 'loading') return;
+    if (!force && current?.botId === botId && current.status === 'ready') return;
+    const generation = ++this.deliveriesGeneration;
+    this.patch({
+      workspace: {
+        ...this.state.workspace,
+        deliveries: {
+          botId,
+          status: 'loading',
+          items: current?.botId === botId ? current.items : [],
+          error: null,
+        },
+      },
+    });
+    try {
+      const response = await this.api.listBotDeliveries(workspaceId, botId, limit);
+      if (this.disposed || generation !== this.deliveriesGeneration) return;
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          deliveries: { botId, status: 'ready', items: response.items, error: null },
+        },
+      });
+    } catch (error) {
+      if (this.disposed || generation !== this.deliveriesGeneration) return;
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          deliveries: {
+            botId,
+            status: 'error',
+            items:
+              this.state.workspace.deliveries?.botId === botId
+                ? (this.state.workspace.deliveries?.items ?? [])
+                : [],
+            error: toApiError(error),
+          },
+        },
+      });
+    }
+  }
+
+  /** Queues a signed `test` ping (`202`); content-free statuses then refresh. */
+  async testBotEvent(workspaceId: string, botId: string): Promise<boolean> {
+    if (this.state.workspace.testPendingId !== null) return false;
+    this.patch({
+      workspace: {
+        ...this.state.workspace,
+        testPendingId: botId,
+        testError: null,
+        testAccepted: null,
+      },
+    });
+    try {
+      const accepted: BotDeliveryAccepted = await this.api.testBotEvent(workspaceId, botId);
+      if (this.disposed) return false;
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          testPendingId: null,
+          testError: null,
+          testAccepted: { botId, deliveryId: accepted.delivery_id },
+        },
+      });
+      await this.loadBotDeliveries(workspaceId, botId, 20, true);
+      return true;
+    } catch (error) {
+      if (this.disposed) return false;
+      this.patch({
+        workspace: {
+          ...this.state.workspace,
+          testPendingId: null,
+          testError: { botId, error: toApiError(error) },
         },
       });
       return false;
@@ -497,6 +829,68 @@ export class BotsStore {
         },
       });
       return false;
+    }
+  }
+
+  /**
+   * #98 slash-command invocation. The server answers `202` with only a
+   * `delivery_id`: no chat message exists yet, so the store never inserts one.
+   * The bot's later answer arrives through its backend-only response URL as a
+   * normal BOT message via the regular message pipeline.
+   */
+  async invokeBotCommand(
+    chatId: string,
+    body: BotCommandInvoke,
+  ): Promise<BotCommandAccepted | null> {
+    if (this.state.chat.commandPending) return null;
+    const command = body.command.trim().toLowerCase();
+    const installed = this.state.chat.chatId === chatId ? this.state.chat.items : [];
+    const owner =
+      installed.find(
+        (item) =>
+          item.enabled &&
+          item.bot.status === 'ACTIVE' &&
+          (item.bot.commands ?? []).some((entry) => entry.command === command),
+      ) ?? null;
+    this.patch({
+      chat: {
+        ...this.state.chat,
+        commandPending: true,
+        commandError: null,
+        commandAccepted: null,
+      },
+    });
+    try {
+      const accepted = await this.api.invokeBotCommand(chatId, {
+        command,
+        args: body.args ?? '',
+      });
+      if (this.disposed) return null;
+      this.patch({
+        chat: {
+          ...this.state.chat,
+          commandPending: false,
+          commandError: null,
+          commandAccepted: {
+            deliveryId: accepted.delivery_id,
+            botId: owner?.bot.id ?? '',
+            botName: owner?.bot.name ?? '',
+            command,
+          },
+        },
+      });
+      return accepted;
+    } catch (error) {
+      if (this.disposed) return null;
+      this.patch({
+        chat: {
+          ...this.state.chat,
+          commandPending: false,
+          commandError: toApiError(error),
+          commandAccepted: null,
+        },
+      });
+      return null;
     }
   }
 

@@ -25,8 +25,13 @@ import type {
   AuthUser,
   BlockedUserList,
   Bot,
+  BotCommandAccepted,
+  BotCommandInvoke,
   BotCreateRequest,
+  BotDeliveryAccepted,
+  BotDeliveryList,
   BotList,
+  BotSigningSecret,
   BotToken,
   BotUpdateRequest,
   ChangeChatMemberRoleRequest,
@@ -469,6 +474,21 @@ export interface ChatApi {
   installChatBot(chatId: string, botId: string): Promise<ChatBot>;
   /** `204` is idempotent: a missing installation is not an error. */
   uninstallChatBot(chatId: string, botId: string): Promise<void>;
+
+  /*
+   * #98 signed events and slash commands.
+   *  * The signing secret is a one-time response of rotate/activation; the
+   *    client keeps it in memory only until its dialog closes.
+   *  * Deliveries are content-free statuses (no payload/URL/secret).
+   *  * A command invocation returns `202` and never creates a chat message;
+   *    the bot answers later through its backend-only response URL.
+   */
+  rotateBotSigningSecret(workspaceId: string, botId: string): Promise<BotSigningSecret>;
+  listBotDeliveries(workspaceId: string, botId: string, limit?: number): Promise<BotDeliveryList>;
+  /** Queues a signed `test` ping; requires an events URL + signing secret. */
+  testBotEvent(workspaceId: string, botId: string): Promise<BotDeliveryAccepted>;
+  /** `202` only: the slash command delivery is queued, no message is written. */
+  invokeBotCommand(chatId: string, body: BotCommandInvoke): Promise<BotCommandAccepted>;
 
   /** #73: file-center page with metadata-only rows and the workspace quota. */
   listFiles(query?: ListFilesQuery): Promise<FilePage>;
@@ -1220,6 +1240,47 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
         await client.delete(
           `/chats/${encodeURIComponent(chatId)}/bots/${encodeURIComponent(botId)}`,
         );
+      });
+    },
+
+    /* #98: signed events and slash commands. Secrets stay one-time responses. */
+
+    rotateBotSigningSecret(workspaceId, botId) {
+      return withReauth(async () => {
+        // The previous secret stops verifying signatures immediately.
+        const response = await client.post<BotSigningSecret>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/secret`,
+        );
+        return response.data;
+      });
+    },
+
+    listBotDeliveries(workspaceId, botId, limit = 20) {
+      return withReauth(async () => {
+        const response = await client.get<BotDeliveryList>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/deliveries`,
+          { limit },
+        );
+        return response.data;
+      });
+    },
+
+    testBotEvent(workspaceId, botId) {
+      return withReauth(async () => {
+        const response = await client.post<BotDeliveryAccepted>(
+          `/workspaces/${encodeURIComponent(workspaceId)}/bots/${encodeURIComponent(botId)}/test-event`,
+        );
+        return response.data;
+      });
+    },
+
+    invokeBotCommand(chatId, body) {
+      return withReauth(async () => {
+        const response = await client.post<BotCommandAccepted>(
+          `/chats/${encodeURIComponent(chatId)}/commands`,
+          body,
+        );
+        return response.data;
       });
     },
 

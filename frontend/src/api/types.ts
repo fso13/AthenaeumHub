@@ -484,12 +484,14 @@ export type WorkspaceSecurityUpdateRequest =
   components['schemas']['WorkspaceSecurityUpdateRequest'];
 
 /* ------------------------------------------------------------------------- */
-/* #96: workspace bots (MVP: chat.write only, no event subscriptions)        */
+/* #96 bots + #98 signed events, deliveries and slash commands               */
 /* ------------------------------------------------------------------------- */
 
 /**
- * Bot metadata. The contract deliberately has no token/hash field: the bearer
- * token exists only in the one-time `BotToken` response of create/rotate.
+ * Bot metadata. The contract deliberately has no bearer token/hash field: the
+ * token exists only in the one-time `BotToken` response of create/rotate. #98
+ * adds the event configuration and slash commands; `signing_secret` appears
+ * only in the response that generated it and is stripped by the store.
  */
 export type Bot = components['schemas']['Bot'];
 export type BotStatus = Bot['status'];
@@ -511,6 +513,18 @@ export type BotToken = components['schemas']['BotToken'];
 export type ChatBot = components['schemas']['ChatBot'];
 export type ChatBotList = components['schemas']['ChatBotList'];
 export type ChatBotInstallRequest = components['schemas']['ChatBotInstallRequest'];
+/** #98 slash-command registration (lowercase name without the leading `/`). */
+export type BotCommand = components['schemas']['BotCommand'];
+/** #98 one-time signing-secret response of PATCH activation / POST .../secret. */
+export type BotSigningSecret = components['schemas']['BotSigningSecret'];
+export type BotDelivery = components['schemas']['BotDelivery'];
+export type BotDeliveryList = components['schemas']['BotDeliveryList'];
+export type BotDeliveryAccepted = components['schemas']['BotDeliveryAccepted'];
+export type BotCommandInvoke = components['schemas']['BotCommandInvoke'];
+export type BotCommandAccepted = components['schemas']['BotCommandAccepted'];
+/** Wire event types the bot can subscribe to (delivery statuses reuse it). */
+export type BotEventType = BotDelivery['event_type'];
+export type BotDeliveryStatus = BotDelivery['status'];
 /** `USER` for members, `BOT` for bot-authored rows (badge/identity gate). */
 export type MessageSenderType = ApiMessage['sender_type'];
 

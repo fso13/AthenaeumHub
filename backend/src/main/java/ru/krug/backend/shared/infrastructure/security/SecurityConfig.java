@@ -94,7 +94,10 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/v1/health", "/api/v1/dev/session", "/error",
-                                "/ws", "/api/v1/auth/**", "/api/v1/setup/status").permitAll()
+                                "/ws", "/api/v1/auth/**", "/api/v1/setup/status",
+                                // #98: the one-time response capability is the credential;
+                                // there is no user JWT or bot bearer on this endpoint.
+                                "/api/v1/bot-responses/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt.decoder(jwtDecoder))

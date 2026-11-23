@@ -43,6 +43,10 @@ public class InMemoryRateLimiter implements RateLimitPort {
     private final long botSendBotWindowNanos;
     private final int botSendPerChat;
     private final long botSendChatWindowNanos;
+    private final int botCommandPerUser;
+    private final long botCommandUserWindowNanos;
+    private final int botResponsePerToken;
+    private final long botResponseTokenWindowNanos;
     private final ConcurrentHashMap<String, Window> windows = new ConcurrentHashMap<>();
 
     public InMemoryRateLimiter(KrugProperties properties) {
@@ -64,6 +68,10 @@ public class InMemoryRateLimiter implements RateLimitPort {
         this.botSendBotWindowNanos = config.botSendWindow().toNanos();
         this.botSendPerChat = config.botSendPerChat();
         this.botSendChatWindowNanos = config.botSendChatWindow().toNanos();
+        this.botCommandPerUser = config.botCommandPerUser();
+        this.botCommandUserWindowNanos = config.botCommandWindow().toNanos();
+        this.botResponsePerToken = config.botResponsePerToken();
+        this.botResponseTokenWindowNanos = config.botResponseWindow().toNanos();
     }
 
     @Override
@@ -115,6 +123,28 @@ public class InMemoryRateLimiter implements RateLimitPort {
         }
         enforce("bot-send:bot:" + botId, botSendPerBot, botSendBotWindowNanos, "bot");
         enforce("bot-send:chat:" + chatId, botSendPerChat, botSendChatWindowNanos, "chat");
+    }
+
+    @Override
+    public void checkBotCommand(Principal principal, UUID chatId) {
+        if (!enabled) {
+            return;
+        }
+        enforce("bot-command:user:" + principal.userId(), botCommandPerUser,
+                botCommandUserWindowNanos, "user");
+        enforce("bot-command:chat:" + chatId, botCommandPerUser,
+                botCommandUserWindowNanos, "chat");
+    }
+
+    @Override
+    public void checkBotResponse(UUID tokenId, UUID botId) {
+        if (!enabled) {
+            return;
+        }
+        enforce("bot-response:token:" + tokenId, botResponsePerToken,
+                botResponseTokenWindowNanos, "token");
+        enforce("bot-response:bot:" + botId, botResponsePerToken,
+                botResponseTokenWindowNanos, "bot");
     }
 
     private void enforce(String key, int limit, long windowNanos, String scope) {

@@ -2661,6 +2661,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{workspaceId}/bots/{botId}/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Сгенерировать/ротировать signing secret бота (OWNER/ADMIN)
+         * @description #98. Новый HMAC-секрет генерируется сервером, в БД хранится только AES-256-GCM ciphertext, а открытое значение возвращается ровно один раз в этом ответе. Старый секрет сразу перестаёт проверять подписи. Секрет не попадает в audit/лог/read API.
+         */
+        post: operations["rotateBotSigningSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/bots/{botId}/deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Последние доставки событий бота (OWNER/ADMIN)
+         * @description #98. Content-free статусы outbox: id, тип/идентификатор события, чат, статус, число попыток, следующий retry, последний HTTP-код и безопасная причина ошибки. Payload, events_url и signing secret не возвращаются. Новые — первыми.
+         */
+        get: operations["listBotDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/bots/{botId}/test-event": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Поставить тестовый webhook в очередь (OWNER/ADMIN)
+         * @description #98. Ставит подписанный `test` event в outbox и возвращает `202 {delivery_id}`. Требуется настроенный `events_url` и существующий signing secret (`422 BOT_EVENTS_NOT_CONFIGURED`), иначе ping невозможен. Тест не зависит от `events_enabled` и не создаёт сообщение в чате.
+         */
+        post: operations["testBotEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chats/{chatId}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Вызвать slash-команду установленного бота (участник чата)
+         * @description #98. Доступно любому ACTIVE-участнику MANAGED-чата. Команда ищется среди installed+enabled ботов чата: ноль совпадений — `404 BOT_COMMAND_NOT_FOUND`, два и больше — `409 BOT_COMMAND_AMBIGUOUS`. У бота должен быть активный events_url и signing secret (`422 BOT_EVENTS_NOT_CONFIGURED`), E2EE-чат — `422 BOT_E2EE_UNSUPPORTED`. Создаётся подписанная доставка `slash_command` с одноразовым `response_url` (TTL 5 минут); сообщение в чат НЕ создаётся. Ответ — `202 {delivery_id}`. Действует rate limit по пользователю и чату (`429`).
+         */
+        post: operations["invokeBotCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bot-responses/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ответить на slash-команду по одноразовому response_url
+         * @description #98. Токен из `response_url` сам авторизует ровно одно сообщение: bot JWT и X-Device-Id не нужны, но и bot bearer не требуется. Токен одноразовый, живёт 5 минут, хранится только как SHA-256 hash и атомарно расходуется в одной транзакции с сообщением. Создаётся обычное BOT-сообщение в исходном чате через общий pipeline (scope/install/MANAGED/rate-limit проверки действуют). Повторное использование — `409 BOT_RESPONSE_USED`, истёкший — `410 BOT_RESPONSE_EXPIRED`, битый/чужой — `401 BOT_RESPONSE_INVALID`. Токен не логируется. Rate limit — по токену и боту.
+         */
+        post: operations["sendBotResponse"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bots/{botId}/messages": {
         parameters: {
             query?: never;
@@ -4653,6 +4753,23 @@ export interface components {
             updated_at: string;
             /** Format: date-time */
             token_rotated_at?: string | null;
+            /**
+             * Format: uri
+             * @description #98 https-only event endpoint. Пользовательские данные/query/fragment запрещены; при каждой доставке хост резолвится заново и приватные/loopback/ link-local адреса отклоняются (SSRF). Пустая строка в PATCH очищает URL и выключает доставку.
+             */
+            events_url?: string | null;
+            /** @description Явная подписка; только `message.created` и/или `app_mention`. */
+            events?: ("message.created" | "app_mention")[];
+            /** @description Эффективный переключатель webhook-доставки. `false`/отсутствие URL — webhook не отправляется; пустой `events` допустим для slash-command-only бота. В PATCH поле называется `events_enabled` (алиас `enabled`). */
+            events_enabled?: boolean;
+            /** @description Секрет уже сгенерирован (сам секрет и его ciphertext никогда не читаются повторно). Ротация — `POST .../secret`. */
+            has_signing_secret?: boolean;
+            /** Format: date-time */
+            signing_secret_created_at?: string | null;
+            /** @description #98 зарегистрированные slash-команды. Имя lowercase 1..32, уникально внутри бота; вызов — `POST /chats/{chatId}/commands`. */
+            commands?: components["schemas"]["BotCommand"][];
+            /** @description Одноразовый показ signing secret. Присутствует ТОЛЬКО в ответе PATCH, который сгенерировал секрет, либо в `POST .../secret`. В списках/чтении поля нет. */
+            signing_secret?: string | null;
         };
         BotCreateRequest: {
             name: string;
@@ -4668,6 +4785,19 @@ export interface components {
             clear_avatar: boolean;
             /** @enum {string} */
             status?: "ACTIVE" | "DISABLED";
+            /**
+             * Format: uri
+             * @description #98 https URL события. `null`/отсутствие — не менять; пустая строка — очистить и выключить доставку. При первой активации подписки сервер генерирует signing secret и возвращает его один раз в `Bot.signing_secret`.
+             */
+            events_url?: string | null;
+            /** @description `null` — не менять; `[]` — отписаться от всех. Допустимы только `message.created` и `app_mention`. */
+            events?: ("message.created" | "app_mention")[];
+            /** @description Включить/выключить webhook-доставку без удаления URL/подписок. Эффективно при заданном `events_url`; пустой `events` допустим для slash-command-only бота — события сообщений просто не отправляются. */
+            events_enabled?: boolean;
+            /** @description Алиас `events_enabled` (#98). Если заданы оба, приоритет у `events_enabled`. Не меняет `status` бота. */
+            enabled?: boolean;
+            /** @description Полная замена списка slash-команд. `null` — не менять. Имена lowercase 1..32, уникальны; описание 1..256. */
+            commands?: components["schemas"]["BotCommand"][];
         };
         /** @description Единственный ответ с токеном. `token` показывается один раз и не сохраняется в открытом виде; сервер хранит только его SHA-256 hash. */
         BotToken: {
@@ -4700,6 +4830,69 @@ export interface components {
         BotMessageCreate: {
             /** Format: uuid */
             chat_id: string;
+            text: string;
+        };
+        /** @description Зарегистрированная slash-команда. Хранится без ведущего `/`; имя lowercase 1..32 и уникально внутри одного бота. */
+        BotCommand: {
+            command: string;
+            description: string;
+        };
+        /** @description Одноразовый ответ ротации. `signing_secret` — HMAC-SHA256 ключ; в БД хранится только его AES-256-GCM ciphertext, повторно получить значение нельзя. */
+        BotSigningSecret: {
+            bot: components["schemas"]["Bot"];
+            /**
+             * Format: password
+             * @description `sova_whsec_<32 random bytes base64url>`; показывается один раз.
+             */
+            signing_secret: string;
+        };
+        /** @description Content-free статус доставки. Payload/URL/секрет не возвращаются; `last_error` — безопасная причина (`timeout`, `http_500`, `private_address`, ...). */
+        BotDelivery: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            event_type: "message.created" | "app_mention" | "slash_command" | "test";
+            /** Format: uuid */
+            event_id: string;
+            /** Format: uuid */
+            chat_id?: string | null;
+            /** @enum {string} */
+            status: "PENDING" | "DELIVERED" | "FAILED";
+            attempt_count: number;
+            /** Format: date-time */
+            next_attempt_at?: string;
+            last_status_code?: number | null;
+            last_error?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            delivered_at?: string | null;
+        };
+        BotDeliveryList: {
+            items: components["schemas"]["BotDelivery"][];
+        };
+        BotDeliveryAccepted: {
+            /** Format: uuid */
+            delivery_id: string;
+        };
+        BotCommandInvoke: {
+            /** @description Имя без ведущего `/`; сравнивается lowercase. */
+            command: string;
+            /**
+             * @description Свободный текст после команды; передаётся как есть (trim).
+             * @default
+             */
+            args: string;
+        };
+        BotCommandAccepted: {
+            /** Format: uuid */
+            delivery_id: string;
+            /** Format: uuid */
+            bot_id?: string;
+        };
+        BotResponseCreate: {
             text: string;
         };
     };
@@ -9966,6 +10159,162 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    rotateBotSigningSecret: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Секрет создан (показывается один раз) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotSigningSecret"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listBotDeliveries: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Доставки */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotDeliveryList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    testBotEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                botId: components["parameters"]["BotId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Тестовое событие поставлено в очередь */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotDeliveryAccepted"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    invokeBotCommand: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                chatId: components["parameters"]["ChatId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotCommandInvoke"];
+            };
+        };
+        responses: {
+            /** @description Команда поставлена в очередь */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotCommandAccepted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    sendBotResponse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotResponseCreate"];
+            };
+        };
+        responses: {
+            /** @description Сообщение бота создано */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            410: components["responses"]["Gone"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
         };
     };
     sendBotMessage: {

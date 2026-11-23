@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from 'react';
 import type { ApiMessage, MessageSearchHit, StickerRef } from '../api/types';
+import { buildBotCommandOptions } from '../bots/commands';
+import { botCommandErrorText } from '../bots/errors';
 import { describeError } from '../domain/errors';
 import { chatDisplayName } from '../domain/chatLabel';
 import { buildMentionPayload } from '../domain/mentions';
@@ -15,6 +17,8 @@ import { useCountdown } from '../hooks/useCountdown';
 import { getVoiceSupport, useVoiceRecorder, type RecordedVoice } from '../hooks/useVoiceRecorder';
 import { t, type MessageKey } from '../i18n/ru';
 import {
+  useBotsState,
+  useBotsStore,
   useChatStore,
   useChatState,
   useFilesState,
@@ -32,7 +36,7 @@ import { MAX_VOICE_DURATION_MS, planUploadMediaBatch } from '../files/media';
 import { RateLimitBanner, OfflineBanner, RealtimeBanner, SyncErrorBanner } from './Banners';
 import { ChatDetails } from './ChatDetails';
 import { ChatHeader } from './ChatHeader';
-import { Composer } from './Composer';
+import { Composer, type ComposerCommandStatus } from './Composer';
 import { E2eeBanner } from './E2eeBanner';
 import { GroupCallPicker } from './GroupCallPicker';
 import { RecordingBar } from './RecordingBar';
@@ -107,6 +111,8 @@ export function ChatScreen({
   const stickersState = useStickersState();
   const pluginsStore = usePluginsStore();
   const pluginActions = usePluginActionsStore();
+  const botsStore = useBotsStore();
+  const botsState = useBotsState();
   const activeChatId = state.activeChatId;
   const activeChatIdRef = useRef(activeChatId);
   activeChatIdRef.current = activeChatId;
@@ -189,6 +195,40 @@ export function ChatScreen({
 
   const readOnlyBlocked = activeChatId ? !store.canPostInChat(activeChatId) : false;
   const isE2eeChat = activeChatId ? store.isE2eeChat(activeChatId) : false;
+
+  // #98: the composer offers slash commands of bots installed/enabled in this
+  // managed chat. `GET /chats/{id}/bots` is readable by every active member;
+  // E2EE chats never load or offer commands (the server would answer 422).
+  const chatBotsForActive =
+    activeChatId !== null && botsState.chat.chatId === activeChatId ? botsState.chat : null;
+  useEffect(() => {
+    if (activeChatId === null || isE2eeChat) return;
+    void botsStore.loadChatBots(activeChatId);
+  }, [activeChatId, botsState.chat.chatId, botsStore, isE2eeChat]);
+  useEffect(() => {
+    botsStore.clearCommandState();
+  }, [activeChatId, botsStore]);
+  const botCommands = useMemo(
+    () => (isE2eeChat ? [] : buildBotCommandOptions(chatBotsForActive?.items ?? [])),
+    [chatBotsForActive?.items, isE2eeChat],
+  );
+  const commandAccepted = chatBotsForActive?.commandAccepted ?? null;
+  const commandError = chatBotsForActive?.commandError ?? null;
+  const commandStatus: ComposerCommandStatus = chatBotsForActive?.commandPending
+    ? 'sending'
+    : commandError !== null
+      ? 'error'
+      : commandAccepted !== null
+        ? 'accepted'
+        : 'idle';
+  const commandNotice =
+    commandAccepted === null
+      ? null
+      : t('composer.command.accepted', {
+          command: commandAccepted.command,
+          bot: commandAccepted.botName || t('chat.botAuthor'),
+        });
+  const commandErrorMessage = commandError === null ? null : botCommandErrorText(commandError);
   const pinsState = state.chatPins;
   const activePins =
     activeChatId && pinsState.chatId === activeChatId
@@ -462,6 +502,17 @@ export function ChatScreen({
     setDraft('');
     setReplyTo(null);
     void store.send(activeChatId, text, target?.id ?? null, attachments, mentionPayload);
+  };
+
+  const handleInvokeCommand = async (command: string, args: string) => {
+    if (!activeChatId || !ready || sendBlockedReason !== null) return;
+    const restore = draft;
+    setDraft('');
+    setReplyTo(null);
+    const accepted = await botsStore.invokeBotCommand(activeChatId, { command, args });
+    // No optimistic bubble: a failed invocation restores the draft instead of
+    // pretending a message/command exists in the feed.
+    if (!accepted) setDraft(restore);
   };
 
   const handleDraftChange = (value: string) => {
@@ -967,6 +1018,11 @@ export function ChatScreen({
                 allowMentionAll={mentionAllAllowed}
                 mentionDirectoryLoading={mentionDirectoryLoading}
                 onMentionDirectoryNeeded={ensureMentionDirectory}
+                botCommands={botCommands}
+                commandStatus={commandStatus}
+                commandNotice={commandNotice}
+                commandErrorMessage={commandErrorMessage}
+                onInvokeCommand={(command, args) => void handleInvokeCommand(command, args)}
               />
             </div>
           ) : null}

@@ -50,6 +50,36 @@ class InMemoryRateLimiterTest {
     }
 
     @Test
+    void botCommandAndResponseHaveIndependentOneTimeWindows() {
+        InMemoryRateLimiter limiter = new InMemoryRateLimiter(
+                TestProperties.withBotCommandRateLimit(2, Duration.ofSeconds(10), 2,
+                        Duration.ofSeconds(10)));
+        UUID chat = UUID.randomUUID();
+        UUID token = UUID.randomUUID();
+        UUID bot = UUID.randomUUID();
+
+        assertThatCode(() -> {
+            limiter.checkBotCommand(PRINCIPAL, chat);
+            limiter.checkBotCommand(PRINCIPAL, chat);
+        }).doesNotThrowAnyException();
+        assertThatThrownBy(() -> limiter.checkBotCommand(PRINCIPAL, chat))
+                .isInstanceOfSatisfying(DomainException.class, ex -> {
+                    assertThat(ex.code()).isEqualTo(ErrorCode.RATE_LIMITED);
+                    assertThat(ex.details().get("scope")).isEqualTo("user");
+                });
+
+        assertThatCode(() -> {
+            limiter.checkBotResponse(token, bot);
+            limiter.checkBotResponse(token, bot);
+        }).doesNotThrowAnyException();
+        assertThatThrownBy(() -> limiter.checkBotResponse(token, bot))
+                .isInstanceOfSatisfying(DomainException.class, ex -> {
+                    assertThat(ex.code()).isEqualTo(ErrorCode.RATE_LIMITED);
+                    assertThat(ex.details().get("scope")).isEqualTo("token");
+                });
+    }
+
+    @Test
     void botSendHasItsOwnPerBotWindow() {
         InMemoryRateLimiter limiter = new InMemoryRateLimiter(
                 TestProperties.withBotRateLimit(2, Duration.ofSeconds(10), 100));

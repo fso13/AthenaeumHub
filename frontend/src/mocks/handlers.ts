@@ -20,6 +20,8 @@ import type {
   AuthLoginRequest,
   BlockedUser,
   Bot,
+  BotCommand,
+  BotDelivery,
   ChatBot,
   AuthRegisterRequest,
   AuthSession,
@@ -90,6 +92,7 @@ import {
   insertMockBotMessage,
   insertMockPluginMessage,
   type ChatRecord,
+  type MockBotDeliveryRecord,
   type MockBotRecord,
   type MockChatBotRecord,
   type MockAuthUserRecord,
@@ -500,8 +503,71 @@ function workspaceManager(db: MockDb, workspaceId: string): boolean {
 
 /** Contract `Bot` has no credential field; the mock keeps one only server-side. */
 function botView(record: MockBotRecord): Bot {
-  const { token: _token, ...bot } = record;
+  const {
+    token: _token,
+    signingSecret: _signingSecret,
+    signing_secret: _oneTimeSecret,
+    ...bot
+  } = record;
   return bot;
+}
+
+/** Content-free delivery row: internal workspace/bot scoping stays server-side. */
+function deliveryView(record: MockBotDeliveryRecord): BotDelivery {
+  const { workspaceId: _workspaceId, botId: _botId, ...delivery } = record;
+  return delivery;
+}
+
+/** `sova_whsec_<64 hex>`: mock-only raw secret, returned exactly once. */
+function newSigningSecret(): string {
+  const random = `${newUuid().replace(/-/g, '')}${newUuid().replace(/-/g, '')}`;
+  return `sova_whsec_${random}`;
+}
+
+/**
+ * #98 mock validation mirroring `BotEventsUrl`/`BotCommand`: https-only, no
+ * userinfo/query/fragment, lowercase command names unique inside one bot.
+ */
+function isValidEventsUrl(value: string): boolean {
+  if (value.length < 9 || value.length > 2048 || value !== value.trim()) return false;
+  if (/\s/.test(value)) return false;
+  if (Array.from(value).some((char) => char.charCodeAt(0) < 0x20)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      url.hash === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parseCommandList(value: unknown): BotCommand[] | string {
+  if (!Array.isArray(value)) return 'commands must be an array';
+  if (value.length > 50) return 'a bot can register at most 50 commands';
+  const names = new Set<string>();
+  const result: BotCommand[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) return 'a command entry must be an object';
+    const row = entry as Record<string, unknown>;
+    const raw = typeof row.command === 'string' ? row.command.trim().toLowerCase() : '';
+    const command = raw.startsWith('/') ? raw.slice(1) : raw;
+    if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(command)) {
+      return 'command must match [a-z0-9][a-z0-9_-]{0,31}';
+    }
+    if (names.has(command)) return 'command names must be unique';
+    names.add(command);
+    const description = typeof row.description === 'string' ? row.description.trim() : '';
+    if (description.length < 1 || description.length > 256) {
+      return 'command description must be 1..256 characters';
+    }
+    result.push({ command, description });
+  }
+  return result;
 }
 
 /** Mock credential shape: `sova_bot_<workspace>_<bot>_<random>`. */
@@ -5423,7 +5489,14 @@ export function createHandlers(db: MockDb) {
         created_at: now,
         updated_at: now,
         token_rotated_at: null,
+        events_url: null,
+        events: [],
+        events_enabled: false,
+        has_signing_secret: false,
+        signing_secret_created_at: null,
+        commands: [],
         token: newBotToken(workspaceId, newUuid()),
+        signingSecret: null,
       };
       db.bots = [bot, ...db.bots];
       return HttpResponse.json({ bot: botView(bot), token: bot.token }, { status: 201 });
@@ -5482,8 +5555,81 @@ export function createHandlers(db: MockDb) {
         }
         bot.status = body.status;
       }
-      bot.updated_at = new Date().toISOString();
-      return HttpResponse.json(botView(bot));
+      if (body.events_url !== undefined && body.events_url !== null) {
+        if (typeof body.events_url !== 'string') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'events_url must be a string', {
+            details: { field: 'events_url' },
+          });
+        }
+        const url = body.events_url.trim();
+        if (url === '') {
+          // Contract: a blank value clears the endpoint and disables delivery.
+          bot.events_url = null;
+          bot.events_enabled = false;
+        } else {
+          if (!isValidEventsUrl(url)) {
+            return errorResponse(
+              422,
+              'BOT_EVENTS_URL_INVALID',
+              'events_url must be an absolute https URL without userinfo/query/fragment',
+              { details: { field: 'events_url' } },
+            );
+          }
+          bot.events_url = url;
+        }
+      }
+      if (body.events !== undefined && body.events !== null) {
+        const allowed = new Set(['message.created', 'app_mention']);
+        if (
+          !Array.isArray(body.events) ||
+          body.events.length > 2 ||
+          body.events.some((event) => typeof event !== 'string' || !allowed.has(event)) ||
+          new Set(body.events).size !== body.events.length
+        ) {
+          return errorResponse(
+            422,
+            'VALIDATION_FAILED',
+            'events must be a subset of the two types',
+            {
+              details: { field: 'events' },
+            },
+          );
+        }
+        bot.events = [...body.events] as Bot['events'];
+      }
+      const eventsEnabled = body.events_enabled ?? body.enabled;
+      if (eventsEnabled !== undefined) {
+        if (typeof eventsEnabled !== 'boolean') {
+          return errorResponse(422, 'VALIDATION_FAILED', 'events_enabled must be a boolean', {
+            details: { field: 'events_enabled' },
+          });
+        }
+        bot.events_enabled = eventsEnabled;
+      }
+      if (body.commands !== undefined && body.commands !== null) {
+        const parsed = parseCommandList(body.commands);
+        if (typeof parsed === 'string') {
+          return errorResponse(400, 'VALIDATION_FAILED', parsed, {
+            details: { field: 'commands' },
+          });
+        }
+        bot.commands = parsed;
+      }
+      const now = new Date().toISOString();
+      let revealedSecret: string | null = null;
+      if (bot.events_url && bot.events_enabled && bot.signingSecret === null) {
+        // Backend parity: the first active event configuration generates the
+        // secret atomically and reveals it exactly once in this response.
+        bot.signingSecret = newSigningSecret();
+        bot.has_signing_secret = true;
+        bot.signing_secret_created_at = now;
+        revealedSecret = bot.signingSecret;
+      }
+      bot.updated_at = now;
+      return HttpResponse.json({
+        ...botView(bot),
+        ...(revealedSecret !== null ? { signing_secret: revealedSecret } : {}),
+      });
     }),
 
     http.delete(`${API}/workspaces/:workspaceId/bots/:botId`, async ({ request, params }) => {
@@ -5549,6 +5695,136 @@ export function createHandlers(db: MockDb) {
       bot.updated_at = now;
       return HttpResponse.json({ bot: botView(bot), token: bot.token });
     }),
+
+    http.post(`${API}/workspaces/:workspaceId/bots/:botId/secret`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspaceId = String(params.workspaceId);
+      const botId = String(params.botId);
+      db.botRequests.push({
+        action: 'rotateSecret',
+        workspaceId,
+        chatId: null,
+        botId,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotSecretError) {
+        const forced = db.forceBotSecretError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (!workspaceManager(db, workspaceId)) {
+        return errorResponse(403, 'FORBIDDEN', 'OWNER or ADMIN role is required');
+      }
+      const bot = db.bots.find((item) => item.id === botId && item.workspace_id === workspaceId);
+      if (!bot) return errorResponse(404, 'BOT_NOT_FOUND', 'Bot not found');
+      const now = new Date().toISOString();
+      bot.signingSecret = newSigningSecret();
+      bot.has_signing_secret = true;
+      bot.signing_secret_created_at = now;
+      bot.updated_at = now;
+      return HttpResponse.json({ bot: botView(bot), signing_secret: bot.signingSecret });
+    }),
+
+    http.get(
+      `${API}/workspaces/:workspaceId/bots/:botId/deliveries`,
+      async ({ request, params }) => {
+        const unauthorized = requireAuth(request);
+        if (unauthorized) return unauthorized;
+        const workspaceId = String(params.workspaceId);
+        const botId = String(params.botId);
+        db.botRequests.push({
+          action: 'deliveries',
+          workspaceId,
+          chatId: null,
+          botId,
+          deviceId: request.headers.get('x-device-id'),
+        });
+        if (db.botDelayMs > 0) await delay(db.botDelayMs);
+        if (db.forceBotDeliveriesError) {
+          const forced = db.forceBotDeliveriesError;
+          return errorResponse(forced.status, forced.code, forced.message, {
+            details: forced.details,
+            retryAfterSeconds: forced.retryAfterSeconds,
+          });
+        }
+        if (!workspaceManager(db, workspaceId)) {
+          return errorResponse(403, 'FORBIDDEN', 'OWNER or ADMIN role is required');
+        }
+        const bot = db.bots.find((item) => item.id === botId && item.workspace_id === workspaceId);
+        if (!bot) return errorResponse(404, 'BOT_NOT_FOUND', 'Bot not found');
+        const rawLimit = Number(new URL(request.url).searchParams.get('limit') ?? 50);
+        if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 100) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'limit must be 1..100');
+        }
+        return HttpResponse.json({
+          items: db.botDeliveries
+            .filter((delivery) => delivery.workspaceId === workspaceId && delivery.botId === botId)
+            .sort((left, right) => right.created_at.localeCompare(left.created_at))
+            .slice(0, rawLimit)
+            .map(deliveryView),
+        });
+      },
+    ),
+
+    http.post(
+      `${API}/workspaces/:workspaceId/bots/:botId/test-event`,
+      async ({ request, params }) => {
+        const unauthorized = requireAuth(request);
+        if (unauthorized) return unauthorized;
+        const workspaceId = String(params.workspaceId);
+        const botId = String(params.botId);
+        db.botRequests.push({
+          action: 'testEvent',
+          workspaceId,
+          chatId: null,
+          botId,
+          deviceId: request.headers.get('x-device-id'),
+        });
+        if (db.botDelayMs > 0) await delay(db.botDelayMs);
+        if (db.forceBotTestEventError) {
+          const forced = db.forceBotTestEventError;
+          return errorResponse(forced.status, forced.code, forced.message, {
+            details: forced.details,
+            retryAfterSeconds: forced.retryAfterSeconds,
+          });
+        }
+        if (!workspaceManager(db, workspaceId)) {
+          return errorResponse(403, 'FORBIDDEN', 'OWNER or ADMIN role is required');
+        }
+        const bot = db.bots.find((item) => item.id === botId && item.workspace_id === workspaceId);
+        if (!bot) return errorResponse(404, 'BOT_NOT_FOUND', 'Bot not found');
+        if (!bot.events_url || bot.signingSecret === null) {
+          return errorResponse(
+            422,
+            'BOT_EVENTS_NOT_CONFIGURED',
+            'events_url and signing secret are required',
+          );
+        }
+        const now = new Date().toISOString();
+        const deliveryId = newUuid();
+        db.botDeliveries.push({
+          id: deliveryId,
+          workspaceId,
+          botId,
+          event_type: 'test',
+          event_id: newUuid(),
+          chat_id: null,
+          status: 'PENDING',
+          attempt_count: 0,
+          next_attempt_at: now,
+          last_status_code: null,
+          last_error: null,
+          created_at: now,
+          updated_at: now,
+          delivered_at: null,
+        });
+        return HttpResponse.json({ delivery_id: deliveryId }, { status: 202 });
+      },
+    ),
 
     http.get(`${API}/chats/:chatId/bots`, async ({ request, params }) => {
       const unauthorized = requireAuth(request);
@@ -5665,6 +5941,106 @@ export function createHandlers(db: MockDb) {
         (install) => !(install.chatId === chatId && install.botId === botId),
       );
       return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/chats/:chatId/commands`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const chatId = String(params.chatId);
+      if (db.botDelayMs > 0) await delay(db.botDelayMs);
+      if (db.forceBotCommandError) {
+        const forced = db.forceBotCommandError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const record = db.chats[chatId];
+      const member = record ? chatActorMember(db, chatId) : null;
+      if (!record || !member) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+      if (record.summary.security_mode === 'E2EE') {
+        return errorResponse(422, 'BOT_E2EE_UNSUPPORTED', 'Bots are not available in E2EE chats');
+      }
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const rawCommand = typeof body.command === 'string' ? body.command : '';
+      const normalized = rawCommand.trim().toLowerCase();
+      const command = normalized.startsWith('/') ? normalized.slice(1) : normalized;
+      if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(command)) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'command is invalid', {
+          details: { field: 'command' },
+        });
+      }
+      if (body.args !== undefined && typeof body.args !== 'string') {
+        return errorResponse(400, 'VALIDATION_FAILED', 'args must be a string', {
+          details: { field: 'args' },
+        });
+      }
+      const args = typeof body.args === 'string' ? body.args.trim() : '';
+      if (args.length > 2000) {
+        return errorResponse(422, 'VALIDATION_FAILED', 'args must be at most 2000 characters', {
+          details: { field: 'args', max_length: 2000 },
+        });
+      }
+      // Installed + enabled + ACTIVE bots that register this command.
+      const candidates = db.chatBots
+        .filter((install) => install.chatId === chatId && install.enabled)
+        .map((install) =>
+          db.bots.find((bot) => bot.id === install.botId && bot.status === 'ACTIVE'),
+        )
+        .filter((bot): bot is MockBotRecord => bot !== undefined)
+        .filter((bot) => (bot.commands ?? []).some((entry) => entry.command === command));
+      if (candidates.length === 0) {
+        return errorResponse(
+          404,
+          'BOT_COMMAND_NOT_FOUND',
+          'No installed bot registers this command',
+        );
+      }
+      if (candidates.length > 1) {
+        return errorResponse(
+          409,
+          'BOT_COMMAND_AMBIGUOUS',
+          'More than one installed bot registers this command',
+        );
+      }
+      const bot = candidates[0]!;
+      if (!bot.events_url || bot.signingSecret === null) {
+        return errorResponse(
+          422,
+          'BOT_EVENTS_NOT_CONFIGURED',
+          'events_url and signing secret are required',
+        );
+      }
+      db.botRequests.push({
+        action: 'command',
+        workspaceId: record.workspaceId,
+        chatId,
+        botId: bot.id,
+        deviceId: request.headers.get('x-device-id'),
+        command,
+        args,
+      });
+      const now = new Date().toISOString();
+      const deliveryId = newUuid();
+      db.botDeliveries.push({
+        id: deliveryId,
+        workspaceId: record.workspaceId,
+        botId: bot.id,
+        event_type: 'slash_command',
+        event_id: newUuid(),
+        chat_id: chatId,
+        status: 'PENDING',
+        attempt_count: 0,
+        next_attempt_at: now,
+        last_status_code: null,
+        last_error: null,
+        created_at: now,
+        updated_at: now,
+        delivered_at: null,
+      });
+      // No chat message: the bot answers later via its one-time response URL.
+      return HttpResponse.json({ delivery_id: deliveryId }, { status: 202 });
     }),
 
     http.post(`${API}/bots/:botId/messages`, async ({ request, params }) => {

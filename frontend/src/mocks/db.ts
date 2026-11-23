@@ -14,6 +14,7 @@ import type {
   AuthVerifyEmailRequest,
   BlockedUser,
   Bot,
+  BotDelivery,
   Chat,
   ChatInvite,
   ChatMember,
@@ -62,6 +63,7 @@ import {
   buildChatSummaries,
   buildDirectMessages,
   buildGroupMessages,
+  buildMockBotDeliveries,
   buildMockBots,
   buildMockMe,
   buildMemberUsers,
@@ -868,6 +870,14 @@ export interface MockWorkspaceInviteRecord extends WorkspaceInvite {
  */
 export interface MockBotRecord extends Bot {
   token: string;
+  /** Mock-only server-side secret; exposed only by the one-time rotate/save responses. */
+  signingSecret: string | null;
+}
+
+/** #98 internal delivery row: workspace/bot scoping is stripped from responses. */
+export interface MockBotDeliveryRecord extends BotDelivery {
+  workspaceId: string;
+  botId: string;
 }
 
 export interface MockChatBotRecord {
@@ -886,6 +896,10 @@ export type MockBotAction =
   | 'update'
   | 'disable'
   | 'rotate'
+  | 'rotateSecret'
+  | 'deliveries'
+  | 'testEvent'
+  | 'command'
   | 'listChat'
   | 'install'
   | 'uninstall'
@@ -897,6 +911,9 @@ export interface MockBotRequestRecord {
   chatId: string | null;
   botId: string | null;
   deviceId: string | null;
+  /** #98 slash-command invocation only (name without `/`, trimmed args). */
+  command?: string | null;
+  args?: string | null;
 }
 
 export interface MockDb {
@@ -959,13 +976,15 @@ export interface MockDb {
   chatAvatarRequests: MockChatAvatarRequestRecord[];
   chatPins: Record<string, ChatPin[]>;
   chatPinRequests: MockChatPinRequestRecord[];
-  /** #96: workspace bots, mock-only credentials and chat installations. */
+  /** #96/#98: workspace bots, mock-only credentials and chat installations. */
   bots: MockBotRecord[];
   chatBots: MockChatBotRecord[];
   botRequests: MockBotRequestRecord[];
   botDelayMs: number;
   /** Server-side idempotency for `POST /bots/{botId}/messages`. */
   botSendIdempotency: Map<string, { bodyHash: string; messageId: string }>;
+  /** #98 content-free outbox statuses; internal ids are stripped in responses. */
+  botDeliveries: MockBotDeliveryRecord[];
   forceBotListError: ForcedSendError | null;
   forceBotCreateError: ForcedSendError | null;
   forceBotUpdateError: ForcedSendError | null;
@@ -975,6 +994,10 @@ export interface MockDb {
   forceChatBotInstallError: ForcedSendError | null;
   forceChatBotUninstallError: ForcedSendError | null;
   forceBotSendError: ForcedSendError | null;
+  forceBotSecretError: ForcedSendError | null;
+  forceBotDeliveriesError: ForcedSendError | null;
+  forceBotTestEventError: ForcedSendError | null;
+  forceBotCommandError: ForcedSendError | null;
   chatArchiveRequests: MockChatArchiveRequestRecord[];
   chatDeleteRequests: Array<{ chatId: string; deviceId: string | null }>;
   forceChatCoverError: ForcedSendError | null;
@@ -1700,6 +1723,11 @@ export function createMockDb(): MockDb {
     botRequests: [],
     botDelayMs: 0,
     botSendIdempotency: new Map(),
+    botDeliveries: buildMockBotDeliveries().map((delivery) => ({
+      ...delivery,
+      workspaceId: IDS.workspace,
+      botId: IDS.botActive,
+    })),
     forceBotListError: null,
     forceBotCreateError: null,
     forceBotUpdateError: null,
@@ -1709,6 +1737,10 @@ export function createMockDb(): MockDb {
     forceChatBotInstallError: null,
     forceChatBotUninstallError: null,
     forceBotSendError: null,
+    forceBotSecretError: null,
+    forceBotDeliveriesError: null,
+    forceBotTestEventError: null,
+    forceBotCommandError: null,
     chatArchiveRequests: [],
     chatDeleteRequests: [],
     forceChatCoverError: null,
@@ -1968,6 +2000,7 @@ export function resetMockDb(db: MockDb): void {
   db.botRequests = [];
   db.botDelayMs = 0;
   db.botSendIdempotency.clear();
+  db.botDeliveries = fresh.botDeliveries;
   db.forceBotListError = null;
   db.forceBotCreateError = null;
   db.forceBotUpdateError = null;
@@ -1977,6 +2010,10 @@ export function resetMockDb(db: MockDb): void {
   db.forceChatBotInstallError = null;
   db.forceChatBotUninstallError = null;
   db.forceBotSendError = null;
+  db.forceBotSecretError = null;
+  db.forceBotDeliveriesError = null;
+  db.forceBotTestEventError = null;
+  db.forceBotCommandError = null;
   db.chatArchiveRequests = [];
   db.chatDeleteRequests = [];
   db.forceChatCoverError = null;

@@ -3233,7 +3233,7 @@ export const ru = {
   'settings.nav.bots': 'Боты',
   'bots.title': 'Боты пространства',
   'bots.hint':
-    'Боты пишут в каналы от своего имени. События, чтение истории, файлы и slash-команды в MVP недоступны.',
+    'Боты пишут в каналы от своего имени. Для бота можно настроить подписанный webhook, slash-команды и посмотреть статусы доставок.',
   'bots.readOnly':
     'Управлять ботами могут только владелец и администратор пространства. Список доступен для чтения.',
   'bots.loading': 'Загружаем ботов…',
@@ -3305,6 +3305,85 @@ export const ru = {
   'bots.tokenNotice': 'Токен не сохраняется в браузере (ни в localStorage, ни в sessionStorage).',
   'bots.close': 'Готово',
 
+  /* #98: bot events, signing secret, deliveries and slash commands. */
+  'bots.events.open': 'Настроить',
+  'bots.events.title': 'События и команды',
+  'bots.events.lead': 'Подписанный webhook и slash-команды бота «{name}».',
+  'bots.events.webhookTitle': 'Webhook',
+  'bots.events.urlLabel': 'HTTPS URL событий',
+  'bots.events.urlPlaceholder': 'https://example.com/sova/events',
+  'bots.events.urlHint':
+    'Только https, без логина, query и fragment. Пустое поле выключает webhook.',
+  'bots.events.urlRequired': 'Укажите https URL, чтобы включить доставку событий.',
+  'bots.events.urlInvalid':
+    'URL должен начинаться с https:// и не содержать логин, query или fragment.',
+  'bots.events.enabledLabel': 'Доставка событий включена',
+  'bots.events.enabledHint': 'Webhook отправляется только при включённой доставке и заданном URL.',
+  'bots.events.subscriptions': 'Подписки на события',
+  'bots.events.messageCreated': 'Новые сообщения (message.created)',
+  'bots.events.appMention': 'Упоминания бота (app_mention)',
+  'bots.events.eventsHint':
+    'Подписки можно оставить пустыми, если бот нужен только для slash-команд.',
+  'bots.events.commandsTitle': 'Slash-команды',
+  'bots.events.commandsHint':
+    'Имя без «/»: lowercase, 1..32, [a-z0-9_-], уникально внутри бота. Вызов — из композера канала.',
+  'bots.events.commandName': 'Команда',
+  'bots.events.commandDescription': 'Описание',
+  'bots.events.addCommand': 'Добавить команду',
+  'bots.events.removeCommand': 'Удалить команду /{command}',
+  'bots.events.commandsEmpty': 'Команды пока не зарегистрированы.',
+  'bots.events.commandInvalid': 'Имя: lowercase 1..32, начиная с буквы или цифры.',
+  'bots.events.commandDuplicate': 'Такая команда уже добавлена.',
+  'bots.events.commandDescriptionRequired': 'Добавьте описание (1..256 символов).',
+  'bots.events.commandLimit': 'Не больше 50 команд.',
+  'bots.events.save': 'Сохранить настройки',
+  'bots.events.saving': 'Сохраняем…',
+  'bots.events.saved': 'Настройки событий сохранены.',
+  'bots.events.secretTitle': 'Signing secret',
+  'bots.events.secretHeading': 'Ключ подписи',
+  'bots.events.secretHint':
+    'HMAC-SHA256 ключ для заголовка X-Sova-Signature. Сервер хранит только шифротекст; значение показывается один раз.',
+  'bots.events.secretMissing':
+    'Секрет ещё не создан. Включите доставку событий и сохраните настройки.',
+  'bots.events.secretSet': 'Секрет создан {date}.',
+  'bots.events.secretCreate': 'Создать секрет',
+  'bots.events.secretRotate': 'Ротировать секрет',
+  'bots.events.secretRotateConfirm':
+    'Старый секрет сразу перестанет проверять подписи. Продолжить?',
+  'bots.events.secretRotateYes': 'Ротировать',
+  'bots.events.secretOnceLead':
+    'Скопируйте новый signing secret сейчас — повторно он не показывается.',
+  'bots.events.secretLabel': 'Signing secret',
+  'bots.events.copySecret': 'Скопировать секрет',
+  'bots.events.secretCopied': 'Секрет скопирован',
+  'bots.events.secretHide': 'Скрыть',
+  'bots.events.deliveriesTitle': 'Доставки',
+  'bots.events.deliveriesHint': 'Последние статусы outbox: без payload, URL и секрета.',
+  'bots.events.deliveriesEmpty': 'Доставок пока нет.',
+  'bots.events.deliveriesLoading': 'Загружаем доставки…',
+  'bots.events.refresh': 'Обновить',
+  'bots.events.test': 'Отправить тестовое событие',
+  'bots.events.testPending': 'Ставим в очередь…',
+  'bots.events.testAccepted': 'Тестовое событие поставлено в очередь (delivery {id}).',
+  'bots.events.deliveryAttempts': 'Попыток: {count}',
+  'bots.events.deliveryDeliveredAt': 'Доставлено {date}',
+  'bots.events.deliveryNextAttempt': 'Следующая попытка {date}',
+  'bots.events.deliveryHttp': 'HTTP {code}',
+  'bots.events.deliveryError': 'Причина: {reason}',
+  'bots.events.status.PENDING': 'В очереди',
+  'bots.events.status.DELIVERED': 'Доставлено',
+  'bots.events.status.FAILED': 'Ошибка',
+  'bots.events.type.message.created': 'Сообщение',
+  'bots.events.type.app_mention': 'Упоминание',
+  'bots.events.type.slash_command': 'Команда',
+  'bots.events.type.test': 'Тест',
+  'bots.events.error.url': 'Проверьте https URL событий.',
+  'bots.events.error.notConfigured':
+    'Для этого действия нужен активный events URL и signing secret.',
+  'bots.events.error.validation': 'Проверьте URL, подписки и команды.',
+  'bots.events.error.generic': 'Не удалось выполнить действие с событиями бота.',
+  'bots.events.close': 'Готово',
+
   /* #96: chat settings bots tab. */
   'chatSettings.tab.bots': 'Боты',
   'chatSettings.bots.title': 'Боты в чате',
@@ -3356,6 +3435,26 @@ export const ru = {
   'chat.botBadge': 'БОТ',
   'chat.botAuthor': 'Бот',
   'chat.botMessageHint': 'Сообщение бота: редактирование и удаление недоступны.',
+
+  /* #98: slash-command composer palette and invocation feedback. */
+  'composer.command.listLabel': 'Slash-команды ботов',
+  'composer.command.optionAria': '/{command} — {description}. Бот: {bot}.',
+  'composer.command.empty': 'Нет подходящих команд.',
+  'composer.command.hint': '↑↓ — выбор, Enter — подставить, Esc — закрыть.',
+  'composer.command.sending': 'Отправляем команду…',
+  'composer.command.accepted':
+    'Команда /{command} отправлена боту «{bot}». Ответ появится сообщением.',
+  'composer.command.error.notFound':
+    'Бот не зарегистрировал такую команду. Текст можно отправить как обычное сообщение.',
+  'composer.command.error.ambiguous':
+    'Команду зарегистрировали несколько ботов — вызов отклонён. Уточните команду.',
+  'composer.command.error.notConfigured': 'У бота нет активного events URL и signing secret.',
+  'composer.command.error.e2ee': 'Slash-команды недоступны в E2EE-канале.',
+  'composer.command.error.forbidden': 'Нет прав на вызов команды в этом канале.',
+  'composer.command.error.rateLimited': 'Слишком много команд. Подождите и повторите.',
+  'composer.command.error.invalid': 'Проверьте команду и аргументы.',
+  'composer.command.error.unavailable': 'Сервис команд недоступен. Повторите позже.',
+  'composer.command.error.generic': 'Не удалось вызвать команду.',
 } as const;
 
 export type MessageKey = keyof typeof ru;

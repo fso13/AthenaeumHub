@@ -389,9 +389,11 @@ class MigrationsIT extends IntegrationTestBase {
     void createsBotSchemaRlsAndMessageSenderColumns() {
         assertThat(jdbc.queryForList("""
                 SELECT tablename FROM pg_tables WHERE schemaname = 'bot'
-                """, String.class)).containsExactlyInAnyOrder("bots", "chat_bots");
+                """, String.class)).containsExactlyInAnyOrder("bots", "chat_bots",
+                "event_deliveries", "command_tokens");
 
-        for (String table : List.of("bot.bots", "bot.chat_bots")) {
+        for (String table : List.of("bot.bots", "bot.chat_bots", "bot.event_deliveries",
+                "bot.command_tokens")) {
             Map<String, Object> flags = jdbc.queryForMap("""
                     SELECT relrowsecurity, relforcerowsecurity
                       FROM pg_class WHERE oid = ?::regclass
@@ -435,5 +437,87 @@ class MigrationsIT extends IntegrationTestBase {
                  WHERE tgrelid = 'bot.chat_bots'::regclass
                    AND tgname = 'trg_chat_bots_workspace' AND NOT tgisinternal
                 """, Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void createsBotEventOutboxAndOneTimeCommandTokens() {
+        // #98 event configuration is additive on bot.bots; the raw secret has no column.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'bot' AND table_name = 'bots'
+                   AND column_name IN ('events_url', 'event_types', 'events_enabled',
+                                       'signing_secret_encrypted', 'signing_secret_created_at',
+                                       'commands')
+                """, Integer.class)).isEqualTo(6);
+        for (String forbidden : List.of("signing_secret", "secret", "secret_plain",
+                "signing_secret_plain")) {
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM information_schema.columns
+                     WHERE table_schema = 'bot' AND table_name = 'bots' AND column_name = ?
+                    """, Integer.class, forbidden)).as(forbidden).isZero();
+        }
+        assertThat(jdbc.queryForObject("""
+                SELECT data_type FROM information_schema.columns
+                 WHERE table_schema = 'bot' AND table_name = 'bots' AND column_name = 'commands'
+                """, String.class)).isEqualTo("jsonb");
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_constraint
+                 WHERE conrelid = 'bot.bots'::regclass
+                   AND conname IN ('ck_bots_events_url', 'ck_bots_event_types',
+                                   'ck_bots_signing_secret', 'ck_bots_commands')
+                """, Integer.class)).isEqualTo(4);
+
+        // The delivery outbox is unique per (bot, event type, producer id): replay-safe.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'bot' AND tablename = 'event_deliveries'
+                   AND indexname = 'ux_bot_event_deliveries_event'
+                """, Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'bot' AND tablename = 'event_deliveries'
+                   AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%event_type%'
+                   AND indexdef LIKE '%event_id%'
+                """, Integer.class)).isEqualTo(1);
+
+        // One-time response capability stores only a SHA-256 hash and a unique index.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = 'bot' AND table_name = 'command_tokens'
+                   AND column_name IN ('token_hash', 'expires_at', 'consumed_at',
+                                       'response_message_id', 'chat_id', 'bot_id')
+                """, Integer.class)).isEqualTo(6);
+        for (String forbidden : List.of("token", "raw_token", "response_token")) {
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM information_schema.columns
+                     WHERE table_schema = 'bot' AND table_name = 'command_tokens'
+                       AND column_name = ?
+                    """, Integer.class, forbidden)).as(forbidden).isZero();
+        }
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'bot' AND tablename = 'command_tokens'
+                   AND indexname = 'ux_bot_command_tokens_hash'
+                """, Integer.class)).isEqualTo(1);
+
+        // The worker (bot-event-relay) can read bots/outbox without a tenant GUC; the
+        // tenant policies are still FORCE RLS.
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_policies
+                 WHERE schemaname = 'bot' AND tablename = 'bots'
+                   AND policyname = 'p_bots_worker'
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT count(*) FROM pg_policies
+                 WHERE schemaname = 'bot' AND tablename = 'event_deliveries'
+                   AND policyname = 'p_bot_event_deliveries_worker'
+                """, Integer.class)).isEqualTo(1);
+        for (String table : List.of("bot.event_deliveries", "bot.command_tokens")) {
+            for (String privilege : List.of("SELECT", "INSERT", "UPDATE", "DELETE")) {
+                assertThat(jdbc.queryForObject(
+                        "SELECT has_table_privilege('krug_app', ?, ?)", Boolean.class,
+                        table, privilege)).as(table + " " + privilege).isTrue();
+            }
+        }
     }
 }

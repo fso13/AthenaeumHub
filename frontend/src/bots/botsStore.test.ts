@@ -51,6 +51,17 @@ function deps(overrides: Partial<BotsStoreDeps['api']> = {}): BotsStoreDeps {
       listChatBots: vi.fn().mockResolvedValue({ items: [chatBot()] }),
       installChatBot: vi.fn().mockResolvedValue(chatBot()),
       uninstallChatBot: vi.fn().mockResolvedValue(undefined),
+      rotateBotSigningSecret: vi.fn().mockResolvedValue({
+        bot: bot({ has_signing_secret: true }),
+        signing_secret: `sova_whsec_${'c'.repeat(43)}`,
+      }),
+      listBotDeliveries: vi.fn().mockResolvedValue({ items: [] }),
+      testBotEvent: vi
+        .fn()
+        .mockResolvedValue({ delivery_id: 'd0000000-0000-4000-8000-000000000001' }),
+      invokeBotCommand: vi
+        .fn()
+        .mockResolvedValue({ delivery_id: 'd0000000-0000-4000-8000-000000000002' }),
       ...overrides,
     },
   };

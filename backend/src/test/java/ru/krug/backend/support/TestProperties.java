@@ -21,7 +21,8 @@ public final class TestProperties {
                         Duration.ofSeconds(1), 60, Duration.ofSeconds(60), 10,
                         Duration.ofSeconds(60), 10, Duration.ofSeconds(60), 30,
                         Duration.ofHours(1), 60, Duration.ofSeconds(60), 10,
-                        Duration.ofSeconds(1)),
+                        Duration.ofSeconds(1), 10000, Duration.ofSeconds(60), 10000,
+                        Duration.ofSeconds(60)),
                 new KrugProperties.Outbox(new KrugProperties.Outbox.Relay(false,
                         Duration.ofSeconds(1), 500)),
                 new KrugProperties.Oidc("", "", "krug-api", "krug-web", Duration.ofSeconds(30)),
@@ -36,7 +37,23 @@ public final class TestProperties {
                         Duration.ofSeconds(1), 60, Duration.ofSeconds(60), 10,
                         Duration.ofSeconds(60), 10, Duration.ofSeconds(60), 30,
                         Duration.ofHours(1), 60, Duration.ofSeconds(60), 10,
-                        Duration.ofSeconds(1)),
+                        Duration.ofSeconds(1), 10000, Duration.ofSeconds(60), 10000,
+                        Duration.ofSeconds(60)),
+                base.outbox(), base.oidc(), base.e2ee());
+    }
+
+    /** #98: command/response windows for the bot event and response limiter. */
+    public static KrugProperties withBotCommandRateLimit(int perUser, Duration commandWindow,
+                                                         int perToken,
+                                                         Duration responseWindow) {
+        KrugProperties base = defaults();
+        return new KrugProperties(base.auth(), base.content(), base.dev(),
+                new KrugProperties.RateLimit(true, 10000, Duration.ofSeconds(10), 10000,
+                        Duration.ofSeconds(1), 60, Duration.ofSeconds(60), 10,
+                        Duration.ofSeconds(60), 10, Duration.ofSeconds(60), 30,
+                        Duration.ofHours(1), 60, Duration.ofSeconds(60), 10,
+                        Duration.ofSeconds(1), perUser, commandWindow, perToken,
+                        responseWindow),
                 base.outbox(), base.oidc(), base.e2ee());
     }
 
@@ -48,7 +65,8 @@ public final class TestProperties {
                         Duration.ofSeconds(1), 60, Duration.ofSeconds(60), 10,
                         Duration.ofSeconds(60), 10, Duration.ofSeconds(60), 30,
                         Duration.ofHours(1), perBot, botWindow, perChat,
-                        Duration.ofSeconds(1)),
+                        Duration.ofSeconds(1), 10000, Duration.ofSeconds(60), 10000,
+                        Duration.ofSeconds(60)),
                 base.outbox(), base.oidc(), base.e2ee());
     }
 }

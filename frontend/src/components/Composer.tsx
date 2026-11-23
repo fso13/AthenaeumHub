@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { ApiMessage } from '../api/types';
+import {
+  findBotCommand,
+  matchBotCommands,
+  parseSlashCommand,
+  slashCommandQuery,
+  type BotCommandOption,
+} from '../bots/commands';
 import type { MentionMemberLike } from '../domain/mentions';
 import { replyPreview } from '../domain/messages';
 import { useMentionAutocomplete } from '../hooks/useMentionAutocomplete';
@@ -14,10 +21,12 @@ import {
   ShieldIcon,
   StickerIcon,
 } from './Icons';
+import { CommandPalette } from './bots/CommandPalette';
 import { MentionPopover } from './MentionPopover';
 import { MentionText } from './MentionText';
 
 export type SendBlockedReason = 'offline' | 'rate_limit' | 'read_only' | 'e2ee_blocked' | null;
+export type ComposerCommandStatus = 'idle' | 'sending' | 'accepted' | 'error';
 
 interface ComposerProps {
   value: string;
@@ -59,6 +68,17 @@ interface ComposerProps {
   allowMentionAll?: boolean;
   mentionDirectoryLoading?: boolean;
   onMentionDirectoryNeeded?: () => void;
+  /**
+   * #98: slash commands registered by installed/enabled bots of the active
+   * chat. Empty in E2EE/other chats, where a leading `/` stays ordinary text.
+   */
+  botCommands?: readonly BotCommandOption[];
+  commandStatus?: ComposerCommandStatus;
+  /** `202` acknowledgement text; no fake message is inserted anywhere. */
+  commandNotice?: string | null;
+  /** Honest failure copy (`404/409/422/429/...`). */
+  commandErrorMessage?: string | null;
+  onInvokeCommand?: (command: string, args: string) => void;
 }
 
 const MAX_LENGTH = 8000;
@@ -66,6 +86,7 @@ const COUNTER_VISIBLE_FROM = 1;
 const COUNTER_WARN_FROM = 7600;
 const EMOJI = ['🙂', '😄', '😍', '👍', '🙏', '🔥', '🎉', '❤️', '😢', '👀', '✅', '🚀'];
 const NO_MENTION_MEMBERS: readonly MentionMemberLike[] = [];
+const NO_BOT_COMMANDS: readonly BotCommandOption[] = [];
 
 export function Composer({
   value,
@@ -98,11 +119,19 @@ export function Composer({
   allowMentionAll = false,
   mentionDirectoryLoading = false,
   onMentionDirectoryNeeded,
+  botCommands = NO_BOT_COMMANDS,
+  commandStatus = 'idle',
+  commandNotice = null,
+  commandErrorMessage = null,
+  onInvokeCommand,
 }: ComposerProps) {
   const length = value.length;
   const [emojiOpen, setEmojiOpen] = useState(false);
   const emojiRef = useRef<HTMLDivElement>(null);
   const emojiButtonRef = useRef<HTMLButtonElement>(null);
+  const commandListboxId = useId();
+  const [commandActiveIndex, setCommandActiveIndex] = useState(0);
+  const [commandDismissed, setCommandDismissed] = useState(false);
   const mentionNames = useMemo(
     () => mentionMembers.map((member) => member.display_name),
     [mentionMembers],
@@ -119,8 +148,30 @@ export function Composer({
   const canSend =
     !disabled &&
     sendBlockedReason === null &&
+    commandStatus !== 'sending' &&
     (value.trim().length > 0 || attachmentCount > 0) &&
     length <= MAX_LENGTH;
+
+  const commandQuery = slashCommandQuery(value);
+  const commandMatches = useMemo(
+    () => (commandQuery === null ? [] : matchBotCommands(botCommands, commandQuery)),
+    [botCommands, commandQuery],
+  );
+  const commandPaletteOpen = commandQuery !== null && botCommands.length > 0 && !commandDismissed;
+  const safeCommandIndex =
+    commandMatches.length === 0 ? 0 : Math.min(commandActiveIndex, commandMatches.length - 1);
+  const commandOptionId =
+    commandPaletteOpen && commandMatches.length > 0
+      ? `${commandListboxId}-option-${safeCommandIndex}`
+      : null;
+
+  useEffect(() => {
+    setCommandActiveIndex(0);
+  }, [commandQuery]);
+
+  useEffect(() => {
+    setCommandDismissed(false);
+  }, [value]);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -158,7 +209,30 @@ export function Composer({
     if (mentions.open) setEmojiOpen(false);
   }, [mentions.open]);
 
+  const insertCommand = (option: BotCommandOption) => {
+    onChange(`/${option.command} `);
+    setCommandDismissed(true);
+    textareaRef.current?.focus();
+  };
+
   const submit = () => {
+    // A leading `/` invokes the command only when an installed bot registered
+    // it; unknown names remain ordinary messages (the server would 404 them).
+    if (
+      !disabled &&
+      sendBlockedReason === null &&
+      commandStatus !== 'sending' &&
+      attachmentCount === 0 &&
+      onInvokeCommand !== undefined
+    ) {
+      const parsed = parseSlashCommand(value);
+      if (parsed !== null && findBotCommand(botCommands, parsed.command) !== null) {
+        setCommandDismissed(true);
+        onInvokeCommand(parsed.command, parsed.args);
+        textareaRef.current?.focus();
+        return;
+      }
+    }
     if (!canSend) return;
     onSend();
     textareaRef.current?.focus();
@@ -182,6 +256,8 @@ export function Composer({
             ? t('composer.e2eeBlocked')
             : null;
   const contextNote = e2eeChat ? t('chat.e2eeNote') : t('chat.managedNote');
+  const autocompleteEnabled = mentionsEnabled || botCommands.length > 0;
+  const autocompleteOpen = mentions.open || commandPaletteOpen;
 
   return (
     <form
@@ -219,6 +295,20 @@ export function Composer({
       ) : null}
 
       {voiceBar}
+
+      {commandStatus === 'sending' ? (
+        <p className="composer__command-state" role="status" aria-live="polite">
+          {t('composer.command.sending')}
+        </p>
+      ) : commandStatus === 'error' && commandErrorMessage ? (
+        <p className="composer__command-state composer__command-state--error" role="alert">
+          {commandErrorMessage}
+        </p>
+      ) : commandStatus === 'accepted' && commandNotice ? (
+        <p className="composer__command-state" role="status" aria-live="polite">
+          {commandNotice}
+        </p>
+      ) : null}
 
       <div className="composer__row">
         <label className="visually-hidden" htmlFor="composer-input">
@@ -261,19 +351,64 @@ export function Composer({
                 : t('composer.placeholder')
             }
             aria-describedby="composer-hint composer-note"
-            aria-autocomplete={mentionsEnabled ? 'list' : undefined}
-            aria-expanded={mentionsEnabled ? mentions.open : undefined}
-            aria-controls={mentions.open ? mentions.listboxId : undefined}
-            aria-activedescendant={mentions.activeOptionId ?? undefined}
-            aria-haspopup={mentionsEnabled ? 'listbox' : undefined}
-            role={mentionsEnabled ? 'combobox' : undefined}
+            aria-autocomplete={autocompleteEnabled ? 'list' : undefined}
+            aria-expanded={autocompleteEnabled ? autocompleteOpen : undefined}
+            aria-controls={
+              mentions.open ? mentions.listboxId : commandPaletteOpen ? commandListboxId : undefined
+            }
+            aria-activedescendant={
+              mentions.open
+                ? (mentions.activeOptionId ?? undefined)
+                : commandPaletteOpen
+                  ? (commandOptionId ?? undefined)
+                  : undefined
+            }
+            aria-haspopup={autocompleteEnabled ? 'listbox' : undefined}
+            role={autocompleteEnabled ? 'combobox' : undefined}
             readOnly={disabled}
             value={value}
             onChange={mentions.handleChange}
             onClick={mentions.syncCaret}
-            onBlur={mentions.close}
+            onBlur={() => {
+              mentions.close();
+              setCommandDismissed(true);
+            }}
             onKeyDown={(event) => {
               if (mentions.handleKeyDown(event)) return;
+              if (commandPaletteOpen && !mentions.open) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  if (commandMatches.length > 0) {
+                    const delta = event.key === 'ArrowDown' ? 1 : -1;
+                    setCommandActiveIndex(
+                      (safeCommandIndex + delta + commandMatches.length) % commandMatches.length,
+                    );
+                  }
+                  return;
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setCommandDismissed(true);
+                  return;
+                }
+                if (
+                  (event.key === 'Enter' || event.key === 'Tab') &&
+                  !event.shiftKey &&
+                  !event.nativeEvent.isComposing &&
+                  commandMatches.length > 0
+                ) {
+                  event.preventDefault();
+                  const active = commandMatches[safeCommandIndex]!;
+                  // Enter on the fully typed name submits; Enter/Tab on a
+                  // partial name completes it (Slack-like, no double Enter).
+                  if (event.key === 'Enter' && active.command === value.slice(1).toLowerCase()) {
+                    submit();
+                    return;
+                  }
+                  insertCommand(active);
+                  return;
+                }
+              }
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
@@ -288,6 +423,15 @@ export function Composer({
               loading={mentionDirectoryLoading}
               onSelect={mentions.select}
               onActive={mentions.setActive}
+            />
+          ) : null}
+          {commandPaletteOpen && !mentions.open ? (
+            <CommandPalette
+              listboxId={commandListboxId}
+              options={commandMatches}
+              activeIndex={safeCommandIndex}
+              onSelect={insertCommand}
+              onActive={setCommandActiveIndex}
             />
           ) : null}
           <button

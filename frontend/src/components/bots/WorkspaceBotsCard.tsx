@@ -9,6 +9,7 @@ import { AdminConfirmDialog } from '../admin/AdminConfirmDialog';
 import type { AdminActionErrorInfo } from '../admin/actionErrors';
 import { Avatar } from '../Avatar';
 import { BotIcon, RefreshIcon } from '../Icons';
+import { BotEventsDialog } from './BotEventsDialog';
 import { BotTokenDialog } from './BotTokenDialog';
 
 const BOT_STATUS_LABEL: Record<BotStatus, MessageKey> = {
@@ -34,18 +35,19 @@ export interface WorkspaceBotsCardProps {
 }
 
 /**
- * #96 workspace bot management (Settings → Боты).
+ * #96/#98 workspace bot management (Settings → Боты).
  *
  * - `GET /workspaces/{id}/bots` is readable by any ACTIVE member; create,
- *   rotate, enable/disable and delete are OWNER/ADMIN-only (the server still
- *   enforces every guard).
+ *   rotate, enable/disable, delete and event settings are OWNER/ADMIN-only
+ *   (the server still enforces every guard).
  * - The raw token appears only in the one-time `BotToken` modal and is dropped
  *   from the store when the modal closes, the tab unmounts or the workspace
  *   changes. It is never written to storage or logged.
+ * - #98 event settings (https URL, subscriptions, slash commands, signing
+ *   secret, deliveries and the test ping) live in `BotEventsDialog`; the
+ *   signing secret is equally one-time and memory-only.
  * - Rows are replaced only by server responses; the soft-disable `204` triggers
  *   a re-read instead of an optimistic status flip.
- * - MVP scope is `chat.write` only: there are no event subscriptions, slash
- *   commands, history reads or file access to configure here.
  */
 export function WorkspaceBotsCard({ workspace, actorRole }: WorkspaceBotsCardProps) {
   const store = useBotsStore();
@@ -56,6 +58,7 @@ export function WorkspaceBotsCard({ workspace, actorRole }: WorkspaceBotsCardPro
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<BotConfirm | null>(null);
+  const [settingsBotId, setSettingsBotId] = useState<string | null>(null);
   const titleId = useId();
   const nameId = useId();
   const nameHintId = useId();
@@ -71,6 +74,9 @@ export function WorkspaceBotsCard({ workspace, actorRole }: WorkspaceBotsCardPro
   const updatePendingId = bots?.updatePendingId ?? null;
   const busy = rotatePendingId !== null || disablePendingId !== null || updatePendingId !== null;
   const items = bots?.items ?? [];
+  const settingsBot = settingsBotId
+    ? (items.find((item) => item.id === settingsBotId) ?? null)
+    : null;
 
   useEffect(() => {
     void store.loadWorkspaceBots(workspace.id);
@@ -239,6 +245,16 @@ export function WorkspaceBotsCard({ workspace, actorRole }: WorkspaceBotsCardPro
                     <button
                       type="button"
                       className="btn btn--sm"
+                      onClick={() => {
+                        setNotice(null);
+                        setSettingsBotId(bot.id);
+                      }}
+                    >
+                      {t('bots.events.open')}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--sm"
                       disabled={busy || rowBusy}
                       onClick={() => {
                         setNotice(null);
@@ -329,6 +345,14 @@ export function WorkspaceBotsCard({ workspace, actorRole }: WorkspaceBotsCardPro
             </button>
           </div>
         </form>
+      ) : null}
+
+      {settingsBot ? (
+        <BotEventsDialog
+          workspaceId={workspace.id}
+          bot={settingsBot}
+          onClose={() => setSettingsBotId(null)}
+        />
       ) : null}
 
       {bots?.token ? (

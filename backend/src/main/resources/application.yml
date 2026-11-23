@@ -181,6 +181,26 @@ krug:
     bot-send-window: ${KRUG_RATE_LIMIT_BOT_SEND_WINDOW:60s}
     bot-send-per-chat: ${KRUG_RATE_LIMIT_BOT_SEND_PER_CHAT:10}
     bot-send-chat-window: ${KRUG_RATE_LIMIT_BOT_SEND_CHAT_WINDOW:1s}
+    # #98: slash commands and one-time response-url capabilities.
+    bot-command-per-user: ${KRUG_RATE_LIMIT_BOT_COMMAND_PER_USER:10}
+    bot-command-window: ${KRUG_RATE_LIMIT_BOT_COMMAND_WINDOW:60s}
+    bot-response-per-token: ${KRUG_RATE_LIMIT_BOT_RESPONSE_PER_TOKEN:10}
+    bot-response-window: ${KRUG_RATE_LIMIT_BOT_RESPONSE_WINDOW:1m}
+  # #98: signed bot webhooks. The response-url base is the public API prefix; the token
+  # itself is appended by the slash-command service.
+  bots:
+    events:
+      response-url-base: ${KRUG_BOTS_RESPONSE_URL_BASE:http://localhost:8081/api/v1}
+      connect-timeout: ${KRUG_BOTS_EVENTS_CONNECT_TIMEOUT:5s}
+      request-timeout: ${KRUG_BOTS_EVENTS_REQUEST_TIMEOUT:5s}
+      max-payload-bytes: ${KRUG_BOTS_EVENTS_MAX_PAYLOAD_BYTES:65536}
+      max-attempts: ${KRUG_BOTS_EVENTS_MAX_ATTEMPTS:6}
+      retry-base-delay: ${KRUG_BOTS_EVENTS_RETRY_BASE_DELAY:1s}
+      retry-max-delay: ${KRUG_BOTS_EVENTS_RETRY_MAX_DELAY:1h}
+      worker-enabled: ${KRUG_BOTS_EVENTS_WORKER_ENABLED:true}
+      poll-interval: ${KRUG_BOTS_EVENTS_POLL_INTERVAL:1s}
+      batch-size: ${KRUG_BOTS_EVENTS_BATCH_SIZE:25}
+      response-token-ttl: ${KRUG_BOTS_RESPONSE_TOKEN_TTL:5m}
   outbox:
     relay:
       enabled: ${KRUG_OUTBOX_RELAY_ENABLED:true}

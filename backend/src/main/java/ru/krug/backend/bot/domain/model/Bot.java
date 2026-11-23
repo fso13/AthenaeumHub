@@ -10,8 +10,14 @@ import java.util.UUID;
 import ru.krug.backend.shared.error.DomainException;
 
 /**
- * Bot aggregate. The only credential stored is a SHA-256 hash of the one-time bearer token;
- * the aggregate can compare a candidate hash in constant time but cannot recover the token.
+ * Bot aggregate. The only credential stored in clear is the SHA-256 hash of the one-time
+ * bearer token; the aggregate can compare a candidate hash in constant time but cannot
+ * recover the token.
+ *
+ * <p>#98 adds the event surface: an https {@code eventsUrl}, an explicit subscription subset
+ * ({@code message.created}/{@code app_mention}), an {@code eventsEnabled} switch, the
+ * encrypted signing secret and the slash-command registry. The signing secret is stored as
+ * ciphertext only; the raw value is generated/revealed once by the application layer.</p>
  *
  * <p>MVP invariants: a name is 1..80 characters, {@code scopes} is a non-empty subset of
  * {@link BotScope} (only {@code chat.write}), and a bot never belongs to an E2EE chat or has
@@ -31,12 +37,20 @@ public final class Bot {
     private final List<String> scopes;
     private final UUID createdBy;
     private final BotStatus status;
+    private final String eventsUrl;
+    private final List<String> eventTypes;
+    private final boolean eventsEnabled;
+    private final byte[] signingSecretEncrypted;
+    private final Instant signingSecretCreatedAt;
+    private final List<BotCommand> commands;
     private final Instant createdAt;
     private final Instant updatedAt;
     private final Instant tokenRotatedAt;
 
     private Bot(UUID id, UUID workspaceId, String name, UUID avatarFileId, byte[] tokenHash,
-                List<String> scopes, UUID createdBy, BotStatus status, Instant createdAt,
+                List<String> scopes, UUID createdBy, BotStatus status, String eventsUrl,
+                List<String> eventTypes, boolean eventsEnabled, byte[] signingSecretEncrypted,
+                Instant signingSecretCreatedAt, List<BotCommand> commands, Instant createdAt,
                 Instant updatedAt, Instant tokenRotatedAt) {
         this.id = Objects.requireNonNull(id, "id");
         this.workspaceId = Objects.requireNonNull(workspaceId, "workspaceId");
@@ -49,6 +63,13 @@ public final class Bot {
         }
         this.createdBy = Objects.requireNonNull(createdBy, "createdBy");
         this.status = Objects.requireNonNull(status, "status");
+        this.eventsUrl = eventsUrl;
+        this.eventTypes = eventTypes == null ? List.of() : List.copyOf(eventTypes);
+        this.eventsEnabled = eventsEnabled;
+        this.signingSecretEncrypted = signingSecretEncrypted == null
+                ? null : signingSecretEncrypted.clone();
+        this.signingSecretCreatedAt = signingSecretCreatedAt;
+        this.commands = commands == null ? List.of() : List.copyOf(commands);
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt");
         this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt");
         this.tokenRotatedAt = tokenRotatedAt;
@@ -58,15 +79,20 @@ public final class Bot {
                              byte[] tokenHash, List<String> scopes, UUID createdBy,
                              Instant now) {
         return new Bot(id, workspaceId, name, avatarFileId, tokenHash,
-                BotScope.normalize(scopes), createdBy, BotStatus.ACTIVE, now, now, null);
+                BotScope.normalize(scopes), createdBy, BotStatus.ACTIVE, null, List.of(), false,
+                null, null, List.of(), now, now, null);
     }
 
     public static Bot reconstitute(UUID id, UUID workspaceId, String name, UUID avatarFileId,
                                    byte[] tokenHash, List<String> scopes, UUID createdBy,
-                                   BotStatus status, Instant createdAt, Instant updatedAt,
+                                   BotStatus status, String eventsUrl, List<String> eventTypes,
+                                   boolean eventsEnabled, byte[] signingSecretEncrypted,
+                                   Instant signingSecretCreatedAt, List<BotCommand> commands,
+                                   Instant createdAt, Instant updatedAt,
                                    Instant tokenRotatedAt) {
         return new Bot(id, workspaceId, name, avatarFileId, tokenHash, scopes, createdBy,
-                status, createdAt, updatedAt, tokenRotatedAt);
+                status, eventsUrl, eventTypes, eventsEnabled, signingSecretEncrypted,
+                signingSecretCreatedAt, commands, createdAt, updatedAt, tokenRotatedAt);
     }
 
     /** Constant-time comparison against the stored hash. A null/short candidate is false. */
@@ -85,33 +111,72 @@ public final class Bot {
 
     public Bot rename(String value, Instant now) {
         return new Bot(id, workspaceId, value, avatarFileId, tokenHash, scopes, createdBy,
-                status, createdAt, now, tokenRotatedAt);
+                status, eventsUrl, eventTypes, eventsEnabled, signingSecretEncrypted,
+                signingSecretCreatedAt, commands, createdAt, now, tokenRotatedAt);
     }
 
     public Bot changeScopes(List<String> values, Instant now) {
         return new Bot(id, workspaceId, name, avatarFileId, tokenHash,
-                BotScope.normalize(values), createdBy, status, createdAt, now, tokenRotatedAt);
+                BotScope.normalize(values), createdBy, status, eventsUrl, eventTypes,
+                eventsEnabled, signingSecretEncrypted, signingSecretCreatedAt, commands,
+                createdAt, now, tokenRotatedAt);
     }
 
     public Bot changeAvatar(UUID fileId, Instant now) {
         return new Bot(id, workspaceId, name, fileId, tokenHash, scopes, createdBy, status,
-                createdAt, now, tokenRotatedAt);
+                eventsUrl, eventTypes, eventsEnabled, signingSecretEncrypted,
+                signingSecretCreatedAt, commands, createdAt, now, tokenRotatedAt);
     }
 
     public Bot disable(Instant now) {
         return new Bot(id, workspaceId, name, avatarFileId, tokenHash, scopes, createdBy,
-                BotStatus.DISABLED, createdAt, now, tokenRotatedAt);
+                BotStatus.DISABLED, eventsUrl, eventTypes, eventsEnabled,
+                signingSecretEncrypted, signingSecretCreatedAt, commands, createdAt, now,
+                tokenRotatedAt);
     }
 
     public Bot enable(Instant now) {
         return new Bot(id, workspaceId, name, avatarFileId, tokenHash, scopes, createdBy,
-                BotStatus.ACTIVE, createdAt, now, tokenRotatedAt);
+                BotStatus.ACTIVE, eventsUrl, eventTypes, eventsEnabled, signingSecretEncrypted,
+                signingSecretCreatedAt, commands, createdAt, now, tokenRotatedAt);
     }
 
     /** Replaces the credential hash; the previous token stops working immediately. */
     public Bot rotateToken(byte[] newTokenHash, Instant now) {
         return new Bot(id, workspaceId, name, avatarFileId, newTokenHash, scopes, createdBy,
-                status, createdAt, now, now);
+                status, eventsUrl, eventTypes, eventsEnabled, signingSecretEncrypted,
+                signingSecretCreatedAt, commands, createdAt, now, now);
+    }
+
+    /**
+     * Replaces the whole event configuration. {@code url == null} clears it and disables
+     * delivery: a bot without an endpoint must not keep a "ready" event state.
+     */
+    public Bot changeEventSettings(String url, List<String> subscriptions, boolean enabled,
+                                   Instant now) {
+        String normalizedUrl = url == null || url.isBlank() ? null : url.strip();
+        List<String> normalizedTypes = BotEventType.normalizeSubscriptions(subscriptions);
+        boolean normalizedEnabled = enabled && normalizedUrl != null;
+        return new Bot(id, workspaceId, name, avatarFileId, tokenHash, scopes, createdBy, status,
+                normalizedUrl, normalizedTypes, normalizedEnabled, signingSecretEncrypted,
+                signingSecretCreatedAt, commands, createdAt, now, tokenRotatedAt);
+    }
+
+    /** Stores a new encrypted signing secret and its generation timestamp. */
+    public Bot rotateSigningSecret(byte[] encryptedSecret, Instant now) {
+        if (encryptedSecret == null || encryptedSecret.length == 0) {
+            throw new IllegalArgumentException("encrypted signing secret must not be empty");
+        }
+        return new Bot(id, workspaceId, name, avatarFileId, tokenHash, scopes, createdBy, status,
+                eventsUrl, eventTypes, eventsEnabled, encryptedSecret, now, commands,
+                createdAt, now, tokenRotatedAt);
+    }
+
+    public Bot changeCommands(List<BotCommand> values, Instant now) {
+        return new Bot(id, workspaceId, name, avatarFileId, tokenHash, scopes, createdBy, status,
+                eventsUrl, eventTypes, eventsEnabled, signingSecretEncrypted,
+                signingSecretCreatedAt, BotCommand.normalize(values), createdAt, now,
+                tokenRotatedAt);
     }
 
     public UUID id() {
@@ -144,6 +209,34 @@ public final class Bot {
 
     public BotStatus status() {
         return status;
+    }
+
+    public String eventsUrl() {
+        return eventsUrl;
+    }
+
+    public List<String> eventTypes() {
+        return eventTypes;
+    }
+
+    public boolean eventsEnabled() {
+        return eventsEnabled;
+    }
+
+    public boolean hasSigningSecret() {
+        return signingSecretEncrypted != null;
+    }
+
+    public byte[] signingSecretEncrypted() {
+        return signingSecretEncrypted == null ? null : signingSecretEncrypted.clone();
+    }
+
+    public Instant signingSecretCreatedAt() {
+        return signingSecretCreatedAt;
+    }
+
+    public List<BotCommand> commands() {
+        return commands;
     }
 
     public Instant createdAt() {

@@ -1,6 +1,7 @@
 import type {
   ApiMessage,
   Bot,
+  BotDelivery,
   ChatInvite,
   ChatMember,
   ChatPermissions,
@@ -59,6 +60,12 @@ export const MOCK_INVITE_TOKENS = {
 export const MOCK_BOT_TOKENS = {
   active: `sova_bot_${IDS.workspace}_${IDS.botActive}_${'a'.repeat(43)}`,
   disabled: `sova_bot_${IDS.workspace}_${IDS.botDisabled}_${'b'.repeat(43)}`,
+} as const;
+
+/** #98 mock-only signing secrets; never returned from list/read endpoints. */
+export const MOCK_BOT_SIGNING_SECRETS = {
+  active: `sova_whsec_${'c'.repeat(43)}`,
+  rotated: `sova_whsec_${'d'.repeat(43)}`,
 } as const;
 
 export const MOCK_ACCESS_TOKEN = 'mock-access-token';
@@ -198,7 +205,9 @@ export function buildMemberUsers(): MockMemberUser[] {
  * mock-only credential (the contract `Bot` has no token); handlers strip it
  * from every response.
  */
-export function buildMockBots(): Array<Bot & { token: string }> {
+type MockBotFixture = Bot & { token: string; signingSecret: string | null };
+
+export function buildMockBots(): MockBotFixture[] {
   return [
     {
       id: IDS.botActive,
@@ -209,9 +218,19 @@ export function buildMockBots(): Array<Bot & { token: string }> {
       status: 'ACTIVE',
       created_by: IDS.user,
       created_at: '2026-01-10T09:00:00.000Z',
-      updated_at: '2026-01-10T09:00:00.000Z',
+      updated_at: '2026-01-12T09:00:00.000Z',
       token_rotated_at: null,
+      events_url: 'https://hooks.example.test/sova/events',
+      events: ['message.created', 'app_mention'],
+      events_enabled: true,
+      has_signing_secret: true,
+      signing_secret_created_at: '2026-01-12T09:00:00.000Z',
+      commands: [
+        { command: 'echo', description: 'Повторить текст' },
+        { command: 'status', description: 'Показать статус бота' },
+      ],
       token: MOCK_BOT_TOKENS.active,
+      signingSecret: MOCK_BOT_SIGNING_SECRETS.active,
     },
     {
       id: IDS.botDisabled,
@@ -224,7 +243,62 @@ export function buildMockBots(): Array<Bot & { token: string }> {
       created_at: '2025-12-20T12:00:00.000Z',
       updated_at: '2026-01-05T12:00:00.000Z',
       token_rotated_at: '2026-01-05T12:00:00.000Z',
+      events_url: null,
+      events: [],
+      events_enabled: false,
+      has_signing_secret: false,
+      signing_secret_created_at: null,
+      commands: [],
       token: MOCK_BOT_TOKENS.disabled,
+      signingSecret: null,
+    },
+  ];
+}
+
+/** #98 content-free delivery fixtures (no payload/URL/secret). */
+export function buildMockBotDeliveries(): BotDelivery[] {
+  return [
+    {
+      id: 'd0000000-0000-4000-8000-000000000001',
+      event_type: 'message.created',
+      event_id: 'e0000000-0000-4000-8000-000000000001',
+      chat_id: IDS.groupChat,
+      status: 'DELIVERED',
+      attempt_count: 1,
+      next_attempt_at: '2026-01-12T10:00:00.000Z',
+      last_status_code: 200,
+      last_error: null,
+      created_at: '2026-01-12T10:00:00.000Z',
+      updated_at: '2026-01-12T10:00:00.000Z',
+      delivered_at: '2026-01-12T10:00:00.000Z',
+    },
+    {
+      id: 'd0000000-0000-4000-8000-000000000002',
+      event_type: 'app_mention',
+      event_id: 'e0000000-0000-4000-8000-000000000002',
+      chat_id: IDS.groupChat,
+      status: 'FAILED',
+      attempt_count: 6,
+      next_attempt_at: '2026-01-12T11:00:00.000Z',
+      last_status_code: null,
+      last_error: 'timeout',
+      created_at: '2026-01-12T09:30:00.000Z',
+      updated_at: '2026-01-12T10:30:00.000Z',
+      delivered_at: null,
+    },
+    {
+      id: 'd0000000-0000-4000-8000-000000000003',
+      event_type: 'test',
+      event_id: 'e0000000-0000-4000-8000-000000000003',
+      chat_id: null,
+      status: 'PENDING',
+      attempt_count: 0,
+      next_attempt_at: '2026-01-12T10:05:00.000Z',
+      last_status_code: null,
+      last_error: null,
+      created_at: '2026-01-12T10:04:58.000Z',
+      updated_at: '2026-01-12T10:04:58.000Z',
+      delivered_at: null,
     },
   ];
 }

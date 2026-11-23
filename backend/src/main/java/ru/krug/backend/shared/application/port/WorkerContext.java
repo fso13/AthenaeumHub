@@ -22,7 +22,9 @@ public interface WorkerContext {
         /** E4-B: tenant binding for upload/attachment ids without a workspace path. */
         FILE_RESOLVE("file-resolve"),
         /** E6-B: purges 90-day-old notification rows across users. */
-        NOTIFICATION_RETENTION("notification-retention");
+        NOTIFICATION_RETENTION("notification-retention"),
+        /** #98: sends the bot webhook outbox across tenants. */
+        BOT_EVENT_RELAY("bot-event-relay");
 
         private final String setting;
 

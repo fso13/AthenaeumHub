@@ -19,6 +19,12 @@ krug:
     # #96: the shared suite never throttles bot sends; BotRateLimitIT lowers these explicitly.
     bot-send-per-bot: 10000
     bot-send-per-chat: 10000
+  bots:
+    events:
+      # Tests call BotEventDeliveryService.deliverDue() directly; no background sends.
+      worker-enabled: false
+      # Never depend on external DNS in the suite.
+      response-url-base: http://localhost:8081/api/v1
   outbox:
     relay:
       enabled: false

@@ -50,7 +50,12 @@ public record KrugProperties(
             @DefaultValue("60") int botSendPerBot,
             @DefaultValue("60s") Duration botSendWindow,
             @DefaultValue("10") int botSendPerChat,
-            @DefaultValue("1s") Duration botSendChatWindow) {
+            @DefaultValue("1s") Duration botSendChatWindow,
+            // #98: slash commands and one-time response capabilities.
+            @DefaultValue("10") int botCommandPerUser,
+            @DefaultValue("60s") Duration botCommandWindow,
+            @DefaultValue("10") int botResponsePerToken,
+            @DefaultValue("1m") Duration botResponseWindow) {
     }
 
     public record Outbox(Relay relay) {

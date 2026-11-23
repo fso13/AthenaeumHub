@@ -5498,6 +5498,187 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /workspaces/{workspaceId}/bots/{botId}/secret:
+    post:
+      tags: [bots]
+      operationId: rotateBotSigningSecret
+      summary: Сгенерировать/ротировать signing secret бота (OWNER/ADMIN)
+      description: >
+        #98. Новый HMAC-секрет генерируется сервером, в БД хранится только AES-256-GCM
+        ciphertext, а открытое значение возвращается ровно один раз в этом ответе. Старый
+        секрет сразу перестаёт проверять подписи. Секрет не попадает в audit/лог/read API.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "200":
+          description: Секрет создан (показывается один раз)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotSigningSecret"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /workspaces/{workspaceId}/bots/{botId}/deliveries:
+    get:
+      tags: [bots]
+      operationId: listBotDeliveries
+      summary: Последние доставки событий бота (OWNER/ADMIN)
+      description: >
+        #98. Content-free статусы outbox: id, тип/идентификатор события, чат, статус,
+        число попыток, следующий retry, последний HTTP-код и безопасная причина ошибки.
+        Payload, events_url и signing secret не возвращаются. Новые — первыми.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/DeviceId"
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Доставки
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotDeliveryList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /workspaces/{workspaceId}/bots/{botId}/test-event:
+    post:
+      tags: [bots]
+      operationId: testBotEvent
+      summary: Поставить тестовый webhook в очередь (OWNER/ADMIN)
+      description: >
+        #98. Ставит подписанный `test` event в outbox и возвращает `202 {delivery_id}`.
+        Требуется настроенный `events_url` и существующий signing secret (`422
+        BOT_EVENTS_NOT_CONFIGURED`), иначе ping невозможен. Тест не зависит от
+        `events_enabled` и не создаёт сообщение в чате.
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/BotId"
+        - $ref: "#/components/parameters/DeviceId"
+      responses:
+        "202":
+          description: Тестовое событие поставлено в очередь
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotDeliveryAccepted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /chats/{chatId}/commands:
+    post:
+      tags: [bots]
+      operationId: invokeBotCommand
+      summary: Вызвать slash-команду установленного бота (участник чата)
+      description: >
+        #98. Доступно любому ACTIVE-участнику MANAGED-чата. Команда ищется среди
+        installed+enabled ботов чата: ноль совпадений — `404 BOT_COMMAND_NOT_FOUND`, два и
+        больше — `409 BOT_COMMAND_AMBIGUOUS`. У бота должен быть активный events_url и
+        signing secret (`422 BOT_EVENTS_NOT_CONFIGURED`), E2EE-чат — `422
+        BOT_E2EE_UNSUPPORTED`. Создаётся подписанная доставка `slash_command` с одноразовым
+        `response_url` (TTL 5 минут); сообщение в чат НЕ создаётся. Ответ — `202
+        {delivery_id}`. Действует rate limit по пользователю и чату (`429`).
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/DeviceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotCommandInvoke"
+      responses:
+        "202":
+          description: Команда поставлена в очередь
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotCommandAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /bot-responses/{token}:
+    post:
+      tags: [bots]
+      operationId: sendBotResponse
+      summary: Ответить на slash-команду по одноразовому response_url
+      description: >
+        #98. Токен из `response_url` сам авторизует ровно одно сообщение: bot JWT и
+        X-Device-Id не нужны, но и bot bearer не требуется. Токен одноразовый, живёт 5
+        минут, хранится только как SHA-256 hash и атомарно расходуется в одной транзакции с
+        сообщением. Создаётся обычное BOT-сообщение в исходном чате через общий pipeline
+        (scope/install/MANAGED/rate-limit проверки действуют). Повторное использование —
+        `409 BOT_RESPONSE_USED`, истёкший — `410 BOT_RESPONSE_EXPIRED`, битый/чужой —
+        `401 BOT_RESPONSE_INVALID`. Токен не логируется. Rate limit — по токену и боту.
+      security: []
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string, minLength: 100, maxLength: 140 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotResponseCreate"
+      responses:
+        "201":
+          description: Сообщение бота создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
   /bots/{botId}/messages:
     post:
       tags: [bots]
@@ -9037,6 +9218,50 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         token_rotated_at: { type: [string, "null"], format: date-time }
+        events_url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 2048
+          description: >
+            #98 https-only event endpoint. Пользовательские данные/query/fragment
+            запрещены; при каждой доставке хост резолвится заново и приватные/loopback/
+            link-local адреса отклоняются (SSRF). Пустая строка в PATCH очищает URL и
+            выключает доставку.
+        events:
+          type: array
+          maxItems: 2
+          description: Явная подписка; только `message.created` и/или `app_mention`.
+          items:
+            type: string
+            enum: [message.created, app_mention]
+        events_enabled:
+          type: boolean
+          description: >
+            Эффективный переключатель webhook-доставки. `false`/отсутствие URL — webhook не
+            отправляется; пустой `events` допустим для slash-command-only бота. В PATCH поле
+            называется `events_enabled` (алиас `enabled`).
+        has_signing_secret:
+          type: boolean
+          description: >
+            Секрет уже сгенерирован (сам секрет и его ciphertext никогда не читаются
+            повторно). Ротация — `POST .../secret`.
+        signing_secret_created_at:
+          type: [string, "null"]
+          format: date-time
+        commands:
+          type: array
+          maxItems: 50
+          description: >
+            #98 зарегистрированные slash-команды. Имя lowercase 1..32, уникально внутри
+            бота; вызов — `POST /chats/{chatId}/commands`.
+          items:
+            $ref: "#/components/schemas/BotCommand"
+        signing_secret:
+          type: [string, "null"]
+          description: >
+            Одноразовый показ signing secret. Присутствует ТОЛЬКО в ответе PATCH, который
+            сгенерировал секрет, либо в `POST .../secret`. В списках/чтении поля нет.
+          writeOnly: false
 
     BotCreateRequest:
       type: object
@@ -9064,6 +9289,42 @@ components:
         avatar_file_id: { type: [string, "null"], format: uuid }
         clear_avatar: { type: boolean, default: false }
         status: { type: string, enum: [ACTIVE, DISABLED] }
+        events_url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 2048
+          description: >
+            #98 https URL события. `null`/отсутствие — не менять; пустая строка — очистить
+            и выключить доставку. При первой активации подписки сервер генерирует signing
+            secret и возвращает его один раз в `Bot.signing_secret`.
+        events:
+          type: array
+          maxItems: 2
+          description: >
+            `null` — не менять; `[]` — отписаться от всех. Допустимы только
+            `message.created` и `app_mention`.
+          items:
+            type: string
+            enum: [message.created, app_mention]
+        events_enabled:
+          type: boolean
+          description: >
+            Включить/выключить webhook-доставку без удаления URL/подписок. Эффективно при
+            заданном `events_url`; пустой `events` допустим для slash-command-only бота —
+            события сообщений просто не отправляются.
+        enabled:
+          type: boolean
+          description: >
+            Алиас `events_enabled` (#98). Если заданы оба, приоритет у `events_enabled`.
+            Не меняет `status` бота.
+        commands:
+          type: array
+          maxItems: 50
+          description: >
+            Полная замена списка slash-команд. `null` — не менять. Имена lowercase 1..32,
+            уникальны; описание 1..256.
+          items:
+            $ref: "#/components/schemas/BotCommand"
 
     BotToken:
       type: object
@@ -9120,6 +9381,103 @@ components:
       required: [chat_id, text]
       properties:
         chat_id: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 8000 }
+
+    # ---------------------------------------------------------------------
+    # #98 bot events and slash commands
+    # ---------------------------------------------------------------------
+    BotCommand:
+      type: object
+      description: >
+        Зарегистрированная slash-команда. Хранится без ведущего `/`; имя lowercase 1..32 и
+        уникально внутри одного бота.
+      required: [command, description]
+      properties:
+        command:
+          type: string
+          minLength: 1
+          maxLength: 32
+          pattern: "^[a-z0-9][a-z0-9_-]{0,31}$"
+        description: { type: string, minLength: 1, maxLength: 256 }
+
+    BotSigningSecret:
+      type: object
+      description: >
+        Одноразовый ответ ротации. `signing_secret` — HMAC-SHA256 ключ; в БД хранится только
+        его AES-256-GCM ciphertext, повторно получить значение нельзя.
+      required: [bot, signing_secret]
+      properties:
+        bot: { $ref: "#/components/schemas/Bot" }
+        signing_secret:
+          type: string
+          minLength: 40
+          maxLength: 80
+          format: password
+          description: "`sova_whsec_<32 random bytes base64url>`; показывается один раз."
+
+    BotDelivery:
+      type: object
+      description: >
+        Content-free статус доставки. Payload/URL/секрет не возвращаются; `last_error` —
+        безопасная причина (`timeout`, `http_500`, `private_address`, ...).
+      required: [id, event_type, event_id, status, attempt_count, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_type:
+          type: string
+          enum: [message.created, app_mention, slash_command, test]
+        event_id: { type: string, format: uuid }
+        chat_id: { type: [string, "null"], format: uuid }
+        status: { type: string, enum: [PENDING, DELIVERED, FAILED] }
+        attempt_count: { type: integer, minimum: 0 }
+        next_attempt_at: { type: string, format: date-time }
+        last_status_code: { type: [integer, "null"], minimum: 0, maximum: 599 }
+        last_error: { type: [string, "null"], maxLength: 120 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        delivered_at: { type: [string, "null"], format: date-time }
+
+    BotDeliveryList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BotDelivery" }
+
+    BotDeliveryAccepted:
+      type: object
+      required: [delivery_id]
+      properties:
+        delivery_id: { type: string, format: uuid }
+
+    BotCommandInvoke:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: string
+          description: Имя без ведущего `/`; сравнивается lowercase.
+          minLength: 1
+          maxLength: 32
+          pattern: "^/?[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$"
+        args:
+          type: string
+          maxLength: 2000
+          default: ""
+          description: Свободный текст после команды; передаётся как есть (trim).
+
+    BotCommandAccepted:
+      type: object
+      required: [delivery_id]
+      properties:
+        delivery_id: { type: string, format: uuid }
+        bot_id: { type: string, format: uuid }
+
+    BotResponseCreate:
+      type: object
+      required: [text]
+      properties:
         text: { type: string, minLength: 1, maxLength: 8000 }
 
   responses:

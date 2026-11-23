@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import ru.krug.backend.auth.application.port.UserProfilePort;
+import ru.krug.backend.bot.application.model.BotMessageEvent;
+import ru.krug.backend.bot.application.port.BotEventPort;
 import ru.krug.backend.chat.application.port.ChatAccessPort;
 import ru.krug.backend.chat.application.port.ChatPermissionPort;
 import ru.krug.backend.chat.application.port.SeqAllocator;
@@ -89,6 +91,7 @@ public class MessageSubmissionHandler {
     private final E2eeEnvelopeValidator envelopeValidator;
     private final E2eeSettingsPort e2eeSettings;
     private final DlpGuardPort dlpGuard;
+    private final BotEventPort botEvents;
     private final ClockPort clock;
     private final ApplicationEventPublisher events;
 
@@ -106,7 +109,8 @@ public class MessageSubmissionHandler {
                                     MessageChatContextPort chatContext,
                                     E2eeEnvelopeValidator envelopeValidator,
                                     E2eeSettingsPort e2eeSettings, DlpGuardPort dlpGuard,
-                                    ClockPort clock, ApplicationEventPublisher events) {
+                                    BotEventPort botEvents, ClockPort clock,
+                                    ApplicationEventPublisher events) {
         this.tenantContext = tenantContext;
         this.chatAccess = chatAccess;
         this.chatPermissions = chatPermissions;
@@ -125,6 +129,7 @@ public class MessageSubmissionHandler {
         this.envelopeValidator = envelopeValidator;
         this.e2eeSettings = e2eeSettings;
         this.dlpGuard = dlpGuard;
+        this.botEvents = botEvents;
         this.clock = clock;
         this.events = events;
     }
@@ -234,6 +239,13 @@ public class MessageSubmissionHandler {
         // Mention inbox rows are written in the message transaction: a failed send cannot
         // leave a mention that points at a non-existent message.
         mentionPort.record(principal.workspaceId(), chatId, messageId, mentionPlan, now);
+        // #98: durable bot event rows are appended in this transaction. The HTTP delivery
+        // runs only after commit, and the unique (bot, type, message) key prevents a replay
+        // from creating a second webhook.
+        botEvents.onMessageCreated(new BotMessageEvent(principal.workspaceId(), chatId,
+                messageId, seq, principal.userId(), null, senderDisplayName,
+                message.type().name(), body == null ? null : body.value(), input.replyToId(),
+                input.threadRootId(), mentionPlan.all(), now));
 
         MessageView view = MessageView.from(message).withAttachments(attachments)
                 .withSticker(sticker);

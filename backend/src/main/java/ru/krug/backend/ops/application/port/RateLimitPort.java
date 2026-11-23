@@ -45,4 +45,16 @@ public interface RateLimitPort {
      *         {@code Retry-After} when a window is exhausted
      */
     void checkBotSend(UUID botId, UUID chatId);
+
+    /**
+     * #98: slash-command invocation guard. Independent from message sends; a chat cannot be
+     * used to hammer a bot's command endpoint.
+     */
+    void checkBotCommand(Principal principal, UUID chatId);
+
+    /**
+     * #98: one-time response-url guard. The capability token itself is a bearer secret, so
+     * guessing/retrying it is bounded per token and per bot.
+     */
+    void checkBotResponse(UUID tokenId, UUID botId);
 }
