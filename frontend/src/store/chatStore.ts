@@ -1450,7 +1450,7 @@ export class ChatStore {
       api: deps.api,
       getSelfId: () => this.viewerId(),
       calls: {
-        startConference: (chatId, peers) => this.startRoomConference(chatId, peers),
+        startConference: (chatId, peers, callId) => this.startRoomConference(chatId, peers, callId),
         activeCallChatId: () => this.calls.getState().chatId,
         endCallForChat: (chatId) => {
           if (this.calls.getState().chatId === chatId) this.calls.hangup();
@@ -8103,13 +8103,17 @@ export class ChatStore {
    * managed GROUP channel used by `call.signal`. Returns false when the engine
    * is already busy or the WebSocket is offline (the page shows an honest note).
    */
-  private startRoomConference(chatId: string, peerUserIds: readonly string[]): boolean {
+  private startRoomConference(
+    chatId: string,
+    peerUserIds: readonly string[],
+    callId?: string,
+  ): boolean {
     if (this.state.call.phase !== 'idle') return false;
     if (this.state.realtimeStatus !== 'online') return false;
     const selfId = this.viewerId();
     const peers = [...new Set(peerUserIds)].filter((id) => id.length > 0 && id !== selfId);
     if (peers.length === 0) return false;
-    this.calls.startConference(chatId, peers, true);
+    this.calls.startConference(chatId, peers, true, callId);
     return true;
   }
 

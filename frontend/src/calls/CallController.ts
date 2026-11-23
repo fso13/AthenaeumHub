@@ -142,11 +142,15 @@ export class CallController {
    * one RTCPeerConnection per selected peer; each peer receives its own offer
    * with `conference:true` and `recipients:[peerId]` under one `call_id`.
    */
-  startConference(chatId: string, peerUserIds: readonly string[], video: boolean): void {
+  startConference(
+    chatId: string,
+    peerUserIds: readonly string[],
+    video: boolean,
+    callId = this.options.createId(),
+  ): void {
     if (this.disposed || this.state.phase !== 'idle') return;
     const peers = uniqueIds(peerUserIds);
     if (peers.length === 0) return;
-    const callId = this.options.createId();
     this.resetResources();
     this.pendingCandidates = [];
     this.pendingOffer = null;

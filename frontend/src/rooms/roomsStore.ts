@@ -35,7 +35,7 @@ export interface RoomCallIssue {
  * engine directly, so the media lifecycle stays in one place.
  */
 export interface RoomCallBridge {
-  startConference(chatId: string, peerUserIds: readonly string[]): boolean;
+  startConference(chatId: string, peerUserIds: readonly string[], callId?: string): boolean;
   activeCallChatId(): string | null;
   endCallForChat(chatId: string): void;
 }
@@ -339,7 +339,7 @@ export class RoomsStore {
       .map((participant) => participant.user_id)
       .filter((userId) => userId.length > 0 && userId !== selfId);
     if (peers.length > 0 && this.state.presenceRoomId === roomId) {
-      const started = this.calls.startConference(fresh?.chat_id ?? room.chat_id, peers);
+      const started = this.calls.startConference(fresh?.chat_id ?? room.chat_id, peers, room.id);
       if (!started) {
         this.patch({
           callIssue: { roomId, reason: this.calls.activeCallChatId() ? 'busy' : 'offline' },
