@@ -30,7 +30,6 @@ describe('D1.1 plugins API', () => {
       'translate',
       'telegram',
       'dlp',
-      'music-room',
     ]);
     expect(catalog.items[0]).toMatchObject({
       name: 'Опросы',
@@ -47,7 +46,7 @@ describe('D1.1 plugins API', () => {
     const api = makeApi();
 
     const initial = await api.listChatPlugins(GROUP);
-    expect(initial.items).toHaveLength(6);
+    expect(initial.items).toHaveLength(5);
     expect(initial.items.every((item) => item.enabled === false)).toBe(true);
     expect(initial.items.every((item) => item.available === true)).toBe(true);
     expect(initial.items.every((item) => item.reason === undefined)).toBe(true);
@@ -57,7 +56,6 @@ describe('D1.1 plugins API', () => {
       'translate',
       'telegram',
       'dlp',
-      'music-room',
     ]);
 
     const enabled = await api.updateChatPlugin(GROUP, 'polls', { enabled: true });

@@ -12,7 +12,6 @@ import {
   useChatState,
   useChatStore,
   useFilesStore,
-  useMusicRoomState,
   usePluginActionsState,
   usePluginActionsStore,
   usePluginsState,
@@ -45,7 +44,6 @@ import {
   UserPlusIcon,
 } from './Icons';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
-import { MusicRoomPanel } from './music/MusicRoomPanel';
 import { embeddedPoll, embeddedTask } from '../plugins/messageCards';
 import { pluginActionErrorText } from '../plugins/errors';
 import { extensionOf, fileKind, pluralRu } from './pages/pageData';
@@ -74,8 +72,6 @@ interface ChatDetailsProps {
   callDisabledReason?: string | null;
   /** #95: scroll to a poll/task card in the feed (panel is an index only). */
   onJumpToMessage?: (messageId: string) => void;
-  /** #94: opens the composer file picker for an AUDIO upload into the room. */
-  onAttachAudio?: () => void;
 }
 
 interface MediaItem {
@@ -200,7 +196,6 @@ export function ChatDetails({
   onStartCall,
   callDisabledReason = null,
   onJumpToMessage,
-  onAttachAudio,
 }: ChatDetailsProps) {
   const store = useChatStore();
   const state = useChatState();
@@ -212,10 +207,9 @@ export function ChatDetails({
   const pluginsStore = usePluginsStore();
   const pluginsState = usePluginsState();
   const pluginActions = usePluginActionsState();
-  const musicState = useMusicRoomState();
   const pluginActionsStore = usePluginActionsStore();
   const [expanded, setExpanded] = useState<
-    'privacy' | 'members' | 'plugins' | 'pins' | 'media' | 'polls' | 'tasks' | 'music' | null
+    'privacy' | 'members' | 'plugins' | 'pins' | 'media' | 'polls' | 'tasks' | null
   >('media');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
@@ -288,13 +282,6 @@ export function ChatDetails({
   const pluginGate = usePluginGate(pluginChatId, isE2ee);
   const pollsEnabled = !isDirect && pluginGate.enabled('polls');
   const tasksEnabled = !isDirect && pluginGate.enabled('tasks');
-  // #94: MANAGED GROUP + server-confirmed `music-room` plugin only. The panel
-  // itself never appears for DIRECT channels, E2EE or a disabled toggle.
-  const musicEnabled = !isDirect && !isE2ee && pluginGate.enabled('music-room');
-  const musicCount =
-    musicEnabled && musicState.chatId === pluginChatId && musicState.status === 'ready'
-      ? musicState.tracks.length
-      : null;
   const pinsCurrent = state.chatPins.chatId === pluginChatId;
   const pins = pinsCurrent ? state.chatPins.items : [];
   const pinsStatus = pinsCurrent ? state.chatPins.status : 'idle';
@@ -396,7 +383,7 @@ export function ChatDetails({
   }, [isE2ee, open, pluginChatId, pluginChatIsDirect, store]);
 
   const toggle = (
-    panel: 'privacy' | 'members' | 'plugins' | 'pins' | 'media' | 'polls' | 'tasks' | 'music',
+    panel: 'privacy' | 'members' | 'plugins' | 'pins' | 'media' | 'polls' | 'tasks',
   ) => {
     setExpanded((current) => (current === panel ? null : panel));
     // The directory is read lazily: opening the panel must not spend a
@@ -776,31 +763,6 @@ export function ChatDetails({
                       ) : null}
                     </>
                   )}
-                </div>
-              ) : null}
-            </>
-          ) : null}
-
-          {musicEnabled ? (
-            <>
-              <button
-                type="button"
-                className={`panel-row${expanded === 'music' ? ' is-open' : ''}`}
-                aria-expanded={expanded === 'music'}
-                onClick={() => toggle('music')}
-              >
-                <MusicIcon aria-hidden="true" />
-                <span>{t('music.title')}</span>
-                <span className="count">{musicCount !== null ? musicCount : '—'}</span>
-                <ChevronDownIcon className="chev" aria-hidden="true" />
-              </button>
-              {expanded === 'music' && pluginChatId ? (
-                <div className="panel-expand panel-expand--music">
-                  <MusicRoomPanel
-                    chatId={pluginChatId}
-                    onAttachAudio={onAttachAudio}
-                    onOpenFiles={() => onNavigate('files')}
-                  />
                 </div>
               ) : null}
             </>

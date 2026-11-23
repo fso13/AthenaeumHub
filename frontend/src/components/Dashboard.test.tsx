@@ -291,7 +291,7 @@ describe('D1-FE1 shell, pages and routing', () => {
     await screen.findByRole('heading', { name: 'Плагины' });
     expect(await screen.findByRole('heading', { name: 'Опросы' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Задачи' })).toBeInTheDocument();
-    expect(screen.getAllByRole('switch')).toHaveLength(6);
+    expect(screen.getAllByRole('switch')).toHaveLength(5);
 
     await user.click(screen.getByRole('button', { name: 'Защита' }));
     await screen.findByRole('heading', { name: 'Защита' });

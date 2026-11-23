@@ -39,6 +39,10 @@ krug:
   notifications:
     # NotificationRetentionIT calls the service directly; no background scheduler.
     retention-enabled: false
+  rooms:
+    # RoomsIT calls RoomPresenceCleanupService directly; no background deletion during the
+    # shared-DB suite.
+    presence-cleanup-enabled: false
   e2ee:
     enabled: false
     # Retention is exercised directly; no background deletion during the shared-DB suite.

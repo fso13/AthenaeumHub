@@ -30,12 +30,14 @@ import {
   SettingsIcon,
   ShieldIcon,
   SunIcon,
+  VideoIcon,
 } from './Icons';
 import { NotificationBell } from './NotificationBell';
 import { readPinnedChatIds, togglePinnedChatId } from '../sidebar/pins';
 
 const NAV_ITEMS: ReadonlyArray<{ view: PageView; label: MessageKey; Icon: typeof OverviewIcon }> = [
   { view: 'overview', label: 'nav.overview', Icon: OverviewIcon },
+  { view: 'rooms', label: 'nav.rooms', Icon: VideoIcon },
   { view: 'files', label: 'nav.files', Icon: FolderIcon },
   { view: 'plugins', label: 'nav.plugins', Icon: PlugIcon },
   { view: 'security', label: 'nav.security', Icon: ShieldIcon },

@@ -248,6 +248,10 @@ public final class ErrorCode {
     /** #100: the invite is bound to a different email address (403, not consumed). */
     public static final String WORKSPACE_INVITE_EMAIL_MISMATCH =
             "WORKSPACE_INVITE_EMAIL_MISMATCH";
+    // #105: workspace video rooms. Rooms are MANAGED-only; presence is TTL-based.
+    public static final String ROOM_NOT_FOUND = "ROOM_NOT_FOUND";
+    public static final String ROOM_CLOSED = "ROOM_CLOSED";
+
     public static final String WORKSPACE_PERMISSION_DENIED = "WORKSPACE_PERMISSION_DENIED";
     public static final String OWNER_PERMISSIONS_IMMUTABLE = "OWNER_PERMISSIONS_IMMUTABLE";
     public static final String PERMISSION_CHANGE_FORBIDDEN = "PERMISSION_CHANGE_FORBIDDEN";

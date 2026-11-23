@@ -4,7 +4,6 @@ import type { FilesState, FilesStore } from './filesStore';
 import type { AdminDirectoryState, AdminDirectoryStore } from '../ops/adminDirectory';
 import type { OpsState, OpsStore } from '../ops/store';
 import type { PluginsState, PluginsStore } from '../plugins/store';
-import type { MusicRoomState, MusicRoomStore } from '../music/store';
 import type { PluginActionsState, PluginActionsStore } from '../plugins/actionsStore';
 import type { StickersState, StickersStore } from '../stickers/store';
 import type { SecurityState, SecurityStore } from '../security/securityStore';
@@ -15,6 +14,7 @@ import type {
 import type { WorkspaceOverviewState, WorkspaceOverviewStore } from '../workspace/overviewStore';
 import type { AvatarStore, AvatarsState } from '../avatars/avatarStore';
 import type { BotsState, BotsStore } from '../bots/botsStore';
+import type { RoomsState, RoomsStore } from '../rooms/roomsStore';
 
 const ChatStoreContext = createContext<ChatStore | null>(null);
 
@@ -64,16 +64,6 @@ export function usePluginsState(): PluginsState {
 /** D1.1 (#76): poll/task/translation actions for the active managed chat. */
 export function usePluginActionsStore(): PluginActionsStore {
   return useChatStore().pluginActions;
-}
-
-/** #94: music room track list, local player and call-relay state. */
-export function useMusicRoomStore(): MusicRoomStore {
-  return useChatStore().music;
-}
-
-export function useMusicRoomState(): MusicRoomState {
-  const store = useMusicRoomStore();
-  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 
 export function usePluginActionsState(): PluginActionsState {
@@ -147,5 +137,15 @@ export function useWorkspaceOverviewState(): WorkspaceOverviewState {
 /** E9-F: users/chats/storage slices have their own subscription surface. */
 export function useAdminDirectoryState(): AdminDirectoryState {
   const store = useAdminDirectoryStore();
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}
+
+/** #105 rooms: workspace room list, TTL presence and the mesh-call bridge. */
+export function useRoomsStore(): RoomsStore {
+  return useChatStore().rooms;
+}
+
+export function useRoomsState(): RoomsState {
+  const store = useRoomsStore();
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }

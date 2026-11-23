@@ -264,13 +264,13 @@ class ChatPluginsIT extends IntegrationTestBase {
                     OR (schemaname = 'chat' AND tablename = 'chat_plugins')
                 """, Long.class)).isEqualTo(2L);
         assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM plugin.catalog", Long.class)).isEqualTo(6L);
+                "SELECT count(*) FROM plugin.catalog", Long.class)).isEqualTo(5L);
         assertThat(jdbc.queryForObject("""
                 SELECT count(*) FROM plugin.catalog
                  WHERE state = 'ACTIVE'
                    AND modes = ARRAY['MANAGED']::text[]
                    AND cardinality(permissions) > 0
-                """, Long.class)).isEqualTo(6L);
+                """, Long.class)).isEqualTo(5L);
 
         Map<String, Object> catalogFlags = jdbc.queryForMap("""
                 SELECT relrowsecurity, relforcerowsecurity FROM pg_class

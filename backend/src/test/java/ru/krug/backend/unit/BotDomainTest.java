@@ -43,7 +43,8 @@ class BotDomainTest {
     void tokenFormatStringDoesNotLeakSecret() {
         String token = BotTokens.newRawToken(WORKSPACE, UUID.randomUUID());
         var parsed = BotTokens.parse(token).orElseThrow();
-        assertThat(parsed.toString()).doesNotContain(token.substring(token.lastIndexOf('_') + 1));
+        // The base64url secret itself may contain '_', so slice by its fixed 43-char length.
+        assertThat(parsed.toString()).doesNotContain(token.substring(token.length() - 43));
     }
 
     @Test

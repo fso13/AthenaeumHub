@@ -9,7 +9,6 @@ import {
   CloseIcon,
   MicIcon,
   MicOffIcon,
-  MusicIcon,
   PhoneIcon,
   PhoneOffIcon,
   VideoIcon,
@@ -390,14 +389,6 @@ export function CallLayer() {
             <p id={descriptionId} className="call-status" role="status" aria-live="polite">
               {statusLabel(call)}
             </p>
-            {call.musicActive ? (
-              <p className="call-music" role="status">
-                <MusicIcon aria-hidden="true" />
-                <span>
-                  {t('music.dj')} · {t('music.callMix')}
-                </span>
-              </p>
-            ) : null}
             {incoming ? (
               <p className="visually-hidden" role="alert">
                 {conference

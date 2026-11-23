@@ -22,6 +22,7 @@ import type { WorkspaceLifecycleAction } from '../workspace/lifecycle';
 import { FilesPage } from './pages/FilesPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PluginsPage } from './pages/PluginsPage';
+import { RoomsPage } from './pages/RoomsPage';
 import { SecurityPage } from './pages/SecurityPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { Sidebar } from './Sidebar';
@@ -272,6 +273,8 @@ export function AppShell({
             onNavigate={go}
             onOpenMembers={() => onOpenMembers?.()}
           />
+        ) : page === 'rooms' ? (
+          <RoomsPage onBack={() => go('chat')} />
         ) : page === 'files' ? (
           <FilesPage onBack={() => go('chat')} onOpenChat={openChat} />
         ) : page === 'settings' ? (

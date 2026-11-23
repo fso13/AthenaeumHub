@@ -1060,7 +1060,6 @@ export function ChatScreen({
               : undefined
           }
           callDisabledReason={callsDisabledReason}
-          onAttachAudio={canAttach ? () => fileInputRef.current?.click() : undefined}
         />
       ) : null}
 

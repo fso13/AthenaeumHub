@@ -11,7 +11,6 @@ import { createMockRealtimeSocketFactory } from '../mocks/realtime';
 import { createChatStore, type ChatStore } from '../store/chatStore';
 import type { E2eeBridge } from '../e2ee/app/chatBridge';
 import type { CallRingtone } from '../calls/ringtone';
-import type { MusicAudioElementFactory, MusicAudioGraphFactory } from '../music/store';
 import { mockDb } from './server';
 
 export const testConfig: AppConfig = {
@@ -55,9 +54,6 @@ export interface TestCallOptions {
   mediaDevices?: Pick<MediaDevices, 'getUserMedia'>;
   createPeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
   ringtone?: CallRingtone;
-  musicCreateElement?: MusicAudioElementFactory;
-  musicCreateGraph?: MusicAudioGraphFactory;
-  musicResolveUrl?: (attachmentId: string) => Promise<string>;
 }
 
 export function createTestStore(
@@ -83,9 +79,6 @@ export function createTestStore(
     callMediaDevices: calls.mediaDevices,
     callCreatePeerConnection: calls.createPeerConnection,
     callRingtone: calls.ringtone,
-    musicCreateElement: calls.musicCreateElement,
-    musicCreateGraph: calls.musicCreateGraph,
-    musicResolveUrl: calls.musicResolveUrl,
   });
 }
 

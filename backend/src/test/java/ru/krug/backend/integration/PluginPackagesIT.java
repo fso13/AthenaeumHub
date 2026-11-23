@@ -106,8 +106,8 @@ class PluginPackagesIT extends IntegrationTestBase {
         JsonNode catalogList = json(mockMvc.perform(authed(get("/api/v1/plugins"), admin))
                 .andExpect(status().isOk()).andReturn());
         CONTRACT.assertValid("PluginList", catalogList);
-        // Six built-ins (including music-room) plus the freshly installed external package.
-        assertThat(catalogList.get("items")).hasSize(7);
+        // Five built-ins plus the freshly installed external package.
+        assertThat(catalogList.get("items")).hasSize(6);
         JsonNode external = item(catalogList, PLUGIN_ID);
         CONTRACT.assertValid("Plugin", external);
         assertThat(external.get("kind").asText()).isEqualTo("EXTERNAL");
@@ -200,7 +200,7 @@ class PluginPackagesIT extends IntegrationTestBase {
                 .andExpect(status().isOk()).andReturn()).get("items")).isEmpty();
         JsonNode catalogList = json(mockMvc.perform(authed(get("/api/v1/plugins"), admin))
                 .andExpect(status().isOk()).andReturn());
-        assertThat(catalogList.get("items")).hasSize(6);
+        assertThat(catalogList.get("items")).hasSize(5);
         assertThat(ids(catalogList)).doesNotContain(PLUGIN_ID);
 
         mockMvc.perform(authed(get(

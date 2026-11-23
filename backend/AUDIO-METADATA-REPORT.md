@@ -16,8 +16,8 @@
 - серверный результат сохраняется как `media.kind=AUDIO`, `metadata_source=SERVER`;
 - fallback работает и на `POST /workspaces/{id}/files`, и на существующем resumable
   `/uploads` (после `complete`, когда байты уже доступны);
-- новые ответы проходят существующий OpenAPI-контракт; file-center, message attachment
-  и music-room read-path получают те же поля без отдельного маппинга.
+- новые ответы проходят существующий OpenAPI-контракт; file-center и message attachment read-path
+  получают те же поля без отдельного маппинга.
 
 Схема БД **не менялась**: новые колонки не нужны, `media` остаётся прежним jsonb,
 object key обложки выводится из серверных UUID. Миграций нет.
@@ -61,7 +61,7 @@ object key обложки выводится из серверных UUID. Ми�
 
 - `contracts/openapi.yaml`: новый path `/attachments/{attachmentId}/artwork` (бинарный
   ответ, `401/403/404/409/410/423`), обновлены описания `AttachmentRef.media`,
-  `UploadInitRequest.media` и `MusicRoomTrack.artwork_url`.
+  `UploadInitRequest.media` и `AttachmentRef.artwork_url`.
 - `frontend/src/api/schema.d.ts`: добавлены path/operation `attachmentArtwork`
   (файл генерируется из OpenAPI; добавление точечное).
 
@@ -169,7 +169,7 @@ UTF-8), unsynchronisation, extended header, syncsafe-размеры v2.4. Сжа
 | `AudioMetadataIT` | 10 | глобальная загрузка MP3/M4A (теги/длительность/обложка), file-center, `GET artwork` 200/404/401, fallback на `/uploads`, сохранение client media, пустой `NONE`, no-tags, malformed, oversized artwork, E2EE не инспектируется. |
 
 Существующие `MediaMetadataTest`, `MediaMetadataIT`, `File*IT`, `WorkspaceFilesIT`,
-`MusicRoomIT`, `ContractValidationIT`, `ArchitectureTest` переиспользуются без ослабления
+`ContractValidationIT`, `ArchitectureTest` переиспользуются без ослабления
 контракта.
 
 ### Результаты
@@ -229,7 +229,7 @@ bot/rate-limit тесты).
 | Прогон | Результат |
 |---|---|
 | `-Dtest='ru.krug.backend.unit.*Test'` | **440/440**, BUILD SUCCESS |
-| `AudioMetadataParserTest`, `AudioMetadataExtractorTest`, `MediaMetadataTest`, `ArchitectureTest`, `AudioMetadataIT`, `MediaMetadataIT`, `FileContractIT`, `FileUploadIT`, `FileMessageIT`, `WorkspaceFilesIT`, `FileCenterIT`, `FileCenterContractIT`, `MusicRoomIT`, `ContractValidationIT` | **107/107**, BUILD SUCCESS |
+| `AudioMetadataParserTest`, `AudioMetadataExtractorTest`, `MediaMetadataTest`, `ArchitectureTest`, `AudioMetadataIT`, `MediaMetadataIT`, `FileContractIT`, `FileUploadIT`, `FileMessageIT`, `WorkspaceFilesIT`, `FileCenterIT`, `FileCenterContractIT`, `ContractValidationIT` | **107/107**, BUILD SUCCESS |
 | Полный `mvn test` (JDK 21) | **963/963**, FAILURES 0, ERRORS 0, BUILD SUCCESS; ArchUnit 10/10. В общем дереве сюда входят и параллельно добавленные bot/rate-limit тесты; тестов #97 — 30. |
 
 Команда целевого прогона:
@@ -237,7 +237,7 @@ bot/rate-limit тесты).
 ```bash
 cd backend
 JAVA_HOME=<jdk-21> mvn -o -Dmaven.repo.local=.m2repo \
-  -Dtest='AudioMetadataParserTest,AudioMetadataExtractorTest,MediaMetadataTest,ArchitectureTest,AudioMetadataIT,MediaMetadataIT,FileContractIT,FileUploadIT,FileMessageIT,WorkspaceFilesIT,FileCenterIT,FileCenterContractIT,MusicRoomIT,ContractValidationIT' test
+  -Dtest='AudioMetadataParserTest,AudioMetadataExtractorTest,MediaMetadataTest,ArchitectureTest,AudioMetadataIT,MediaMetadataIT,FileContractIT,FileUploadIT,FileMessageIT,WorkspaceFilesIT,FileCenterIT,FileCenterContractIT,ContractValidationIT' test
 ```
 
 > Замечание по окружению: Maven по умолчанию запускался на JDK 26, где Byte Buddy 1.15.11

@@ -150,10 +150,6 @@ const operations = {
   'DELETE /admin/plugins/{pluginId}': spec.paths?.['/admin/plugins/{pluginId}']?.delete,
   'GET /plugins/{pluginId}/assets/{assetPath}':
     spec.paths?.['/plugins/{pluginId}/assets/{assetPath}']?.get,
-  // #94 music room: idempotent workspace room + AUDIO attachment listing.
-  'POST /workspaces/{workspaceId}/music-room':
-    spec.paths?.['/workspaces/{workspaceId}/music-room']?.post,
-  'GET /chats/{chatId}/music-room': spec.paths?.['/chats/{chatId}/music-room']?.get,
   // #96 bots: management (JWT) + the only bot-token operation.
   'POST /workspaces/{workspaceId}/bots': spec.paths?.['/workspaces/{workspaceId}/bots']?.post,
   'GET /workspaces/{workspaceId}/bots': spec.paths?.['/workspaces/{workspaceId}/bots']?.get,
@@ -188,6 +184,16 @@ const operations = {
   'PUT /chats/{chatId}/keys/verification': spec.paths?.['/chats/{chatId}/keys/verification']?.put,
   'POST /workspaces': spec.paths?.['/workspaces']?.post,
   'GET /workspaces/{workspaceId}/chats': spec.paths?.['/workspaces/{workspaceId}/chats']?.get,
+  // #105 rooms: workspace list/create, detail, rename/close and TTL presence heartbeat.
+  'GET /workspaces/{workspaceId}/rooms': spec.paths?.['/workspaces/{workspaceId}/rooms']?.get,
+  'POST /workspaces/{workspaceId}/rooms': spec.paths?.['/workspaces/{workspaceId}/rooms']?.post,
+  'PATCH /workspaces/{workspaceId}/rooms/{roomId}':
+    spec.paths?.['/workspaces/{workspaceId}/rooms/{roomId}']?.patch,
+  'DELETE /workspaces/{workspaceId}/rooms/{roomId}':
+    spec.paths?.['/workspaces/{workspaceId}/rooms/{roomId}']?.delete,
+  'GET /rooms/{roomId}': spec.paths?.['/rooms/{roomId}']?.get,
+  'POST /rooms/{roomId}/presence': spec.paths?.['/rooms/{roomId}/presence']?.post,
+  'DELETE /rooms/{roomId}/presence': spec.paths?.['/rooms/{roomId}/presence']?.delete,
   'GET /workspaces/{workspaceId}/limits': spec.paths?.['/workspaces/{workspaceId}/limits']?.get,
   // P0-3 (#81): workspace DLP, audit/export, sessions and security settings.
   'GET /workspaces/{workspaceId}/dlp/policies':
@@ -385,6 +391,24 @@ const requiredFields = {
   RealtimeTicket: ['ticket', 'expires_at', 'ws_url'],
   ChatSummary: ['id', 'name', 'type', 'security_mode', 'unread_count', 'last_seq'],
   ChatList: ['items'],
+  // #105 rooms: the list carries live (TTL-filtered) participants and a caller flag.
+  RoomParticipant: ['user_id', 'display_name', 'joined_at', 'last_seen_at'],
+  Room: [
+    'id',
+    'workspace_id',
+    'chat_id',
+    'name',
+    'created_by',
+    'created_at',
+    'updated_at',
+    'status',
+    'participants',
+    'participant_count',
+    'my_present',
+  ],
+  RoomList: ['items'],
+  RoomCreateRequest: ['name'],
+  RoomUpdateRequest: ['name'],
   Message: ['id', 'chat_id', 'seq', 'type', 'created_at', 'version'],
   // E4: text is optional; text or attachment_ids must be present.
   MessageCreate: ['client_message_id', 'type'],
@@ -919,18 +943,18 @@ check(
 
 // --- 5. E5 sticker invariants --------------------------------------------
 check(
-  Object.keys(spec.paths ?? {}).length === 133,
-  'Contract must expose exactly 133 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #99 workspace lifecycle + #100 email invitations)',
+  Object.keys(spec.paths ?? {}).length === 135,
+  'Contract must expose exactly 135 paths (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #99 workspace lifecycle + #100 email invitations + #105 rooms)',
 );
 // Strict equality: a regression to `=` made this guard a tautology (P2-09). The operation
 // list is fixed; a new path must be added here deliberately, together with its checks.
 check(
-  Object.keys(operations).length === 162,
-  'Contract check must cover exactly 162 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #99 workspace lifecycle)',
+  Object.keys(operations).length === 167,
+  'Contract check must cover exactly 167 operations (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #99 workspace lifecycle + #105 rooms)',
 );
 check(
-  Object.keys(schemas).length === 213,
-  'Contract must expose exactly 213 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #100 email invitations)',
+  Object.keys(schemas).length === 214,
+  'Contract must expose exactly 214 schemas (E6 + I-01 + auth BFF + E8 + E9 + E10 + E11 + E12 + D1 + message-actions + profile/plugins/files/plugin-actions + channel-members + channel-settings + channel-avatar + plugin-packages + P0-3 security + 2FA policy + #84 overview/admin sessions/translation + #83 files/search/mentions + #96 bots + #98 bot events/commands + #100 email invitations + #105 rooms)',
 );
 
 check(
@@ -965,18 +989,6 @@ check(
   'The bot message endpoint must use the dedicated botTokenAuth scheme',
 );
 
-// --- #94 music room ------------------------------------------------------
-check(
-  schemas.MusicRoomOpen?.properties?.chat !== undefined &&
-    schemas.MusicRoomOpen?.properties?.plugin !== undefined &&
-    schemas.MusicRoomTracks?.properties?.chat_id !== undefined &&
-    schemas.MusicRoomTracks?.properties?.items?.items?.$ref ===
-      '#/components/schemas/MusicRoomTrack' &&
-    schemas.MusicRoomTrack?.properties?.duration_ms !== undefined &&
-    schemas.MusicRoomTrack?.properties?.artwork_url !== undefined &&
-    schemas.MusicRoomPlugin?.properties?.version?.enum?.includes('1.0.0'),
-  'Music room must expose open (chat+plugin) and AUDIO track list with version 1.0.0',
-);
 check(
   ['TEXT', 'STICKER'].every((type) =>
     schemas.MessageCreate?.properties?.type?.enum?.includes(type),

@@ -148,6 +148,22 @@ export type TranslationProviderTest = components['schemas']['TranslationProvider
 export type TranslationProviderTestStatus = TranslationProviderTest['status'];
 
 /* ------------------------------------------------------------------------- */
+/* #105 rooms: workspace rooms + TTL presence (no call/SFU state on server)  */
+/* ------------------------------------------------------------------------- */
+
+/** One participant whose heartbeat is inside the 30 s TTL; `display_name` only. */
+export type RoomParticipant = components['schemas']['RoomParticipant'];
+/**
+ * A workspace room. `chat_id` is the existing managed GROUP channel used by
+ * call signaling; the server keeps no call/media state (#105).
+ */
+export type Room = components['schemas']['Room'];
+export type RoomStatus = Room['status'];
+export type RoomList = components['schemas']['RoomList'];
+export type RoomCreateRequest = components['schemas']['RoomCreateRequest'];
+export type RoomUpdateRequest = components['schemas']['RoomUpdateRequest'];
+
+/* ------------------------------------------------------------------------- */
 /* Auth BFF (docs/TASKS-AUTH-BFF.md)                                         */
 /* ------------------------------------------------------------------------- */
 
@@ -398,20 +414,6 @@ export type ChatPluginState = components['schemas']['ChatPluginState'];
 export type ChatPluginStateList = components['schemas']['ChatPluginStateList'];
 export type ChatPluginUnavailableReason = NonNullable<ChatPluginState['reason']>;
 export type ChatPluginUpdateRequest = components['schemas']['ChatPluginUpdateRequest'];
-
-/* ------------------------------------------------------------------------- */
-/* #94: Music Room (built-in `music-room` plugin)                            */
-/* ------------------------------------------------------------------------- */
-
-/**
- * Server projection of the built-in `music-room` plugin. The room itself is a
- * regular MANAGED GROUP channel; the server never stores audio, playback state
- * or an SFU session. Tracks are metadata-only AUDIO attachments of that chat.
- */
-export type MusicRoomPlugin = components['schemas']['MusicRoomPlugin'];
-export type MusicRoomOpen = components['schemas']['MusicRoomOpen'];
-export type MusicRoomTrack = components['schemas']['MusicRoomTrack'];
-export type MusicRoomTracks = components['schemas']['MusicRoomTracks'];
 
 /* ------------------------------------------------------------------------- */
 /* D1.2 (#86): external plugin packages (admin ZIP install)                  */

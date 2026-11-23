@@ -62,12 +62,6 @@ import type {
 import { createFilesStore, type FilesStore } from './filesStore';
 import { createPluginsStore, type PluginsStore } from '../plugins/store';
 import { createPluginActionsStore, type PluginActionsStore } from '../plugins/actionsStore';
-import {
-  createMusicRoomStore,
-  type MusicAudioElementFactory,
-  type MusicAudioGraphFactory,
-  type MusicRoomStore,
-} from '../music/store';
 import { createStickersStore, type StickersStore } from '../stickers/store';
 import { createOpsStore, type OpsStore } from '../ops/store';
 import { createSecurityStore, type SecurityStore } from '../security/securityStore';
@@ -81,6 +75,7 @@ import {
   type WorkspaceOverviewStore,
 } from '../workspace/overviewStore';
 import { createBotsStore, type BotsStore } from '../bots/botsStore';
+import { createRoomsStore, type RoomsStore } from '../rooms/roomsStore';
 import {
   clearDeviceWorkspaceId,
   readDeviceWorkspaceId,
@@ -919,12 +914,6 @@ export interface ChatStoreDeps {
   callCreatePeerConnection?: (config: RTCConfiguration) => RTCPeerConnection;
   /** #77: test seam for ringback/ringtone (defaults to a WebAudio loop). */
   callRingtone?: CallRingtone;
-  /** #94: test seam for the local audio element used by Music Room playback. */
-  musicCreateElement?: MusicAudioElementFactory;
-  /** #94: test seam for the Web Audio element→stream graph. */
-  musicCreateGraph?: MusicAudioGraphFactory;
-  /** #94: test seam for presigned AUDIO download URLs. */
-  musicResolveUrl?: (attachmentId: string) => Promise<string>;
 }
 
 const MAX_TEXT_LENGTH = 8000;
@@ -1217,8 +1206,6 @@ export class ChatStore {
   readonly plugins: PluginsStore;
   /** D1.1 (#76): real poll/task/translation actions on managed chats. */
   readonly pluginActions: PluginActionsStore;
-  /** #94: music room metadata + local player + host-relay call bridge. */
-  readonly music: MusicRoomStore;
   /** E8: setup status and platform-admin settings/overview. */
   readonly ops: OpsStore;
   /** P0-3 (#81): workspace DLP, audit, sessions and security settings. */
@@ -1231,6 +1218,8 @@ export class ChatStore {
   readonly bots: BotsStore;
   /** Per-id chat/workspace avatar bytes (object URLs, cleared on change). */
   readonly avatars: AvatarStore;
+  /** #105: workspace rooms list + TTL presence + mesh-call bridge. */
+  readonly rooms: RoomsStore;
 
   private state: AppState;
   private listeners = new Set<() => void>();
@@ -1446,9 +1435,6 @@ export class ChatStore {
       sendSignal: (chatId, payload) => this.realtime?.sendCallSignal(chatId, payload) ?? false,
       onChange: (call) => {
         this.patch({ call });
-        // #94: call end stops music and restores the microphone; a live call
-        // re-arms the mixed track for every peer.
-        if (this.music) this.music.handleCallState(call);
       },
       createId: () => this.createId(),
       iceServers: this.config.webrtcIceServers,
@@ -1458,15 +1444,18 @@ export class ChatStore {
       ringtone: deps.callRingtone,
     });
 
-    this.music = createMusicRoomStore({
+    // #105: rooms reuse the same mesh call engine; the bridge keeps the media
+    // lifecycle inside this store (no second CallController).
+    this.rooms = createRoomsStore({
       api: deps.api,
-      resolveUrl:
-        deps.musicResolveUrl ??
-        ((attachmentId) => this.files.getDownloadUrl(attachmentId).then((item) => item.url)),
-      setCallMusic: (stream) => this.calls.setIncomingMusicStream(stream),
-      isCallActive: () => this.state.call.phase !== 'idle',
-      createElement: deps.musicCreateElement,
-      createGraph: deps.musicCreateGraph,
+      getSelfId: () => this.viewerId(),
+      calls: {
+        startConference: (chatId, peers) => this.startRoomConference(chatId, peers),
+        activeCallChatId: () => this.calls.getState().chatId,
+        endCallForChat: (chatId) => {
+          if (this.calls.getState().chatId === chatId) this.calls.hangup();
+        },
+      },
     });
   }
 
@@ -1487,13 +1476,13 @@ export class ChatStore {
     this.stickers.dispose();
     this.plugins.dispose();
     this.pluginActions.dispose();
-    this.music.dispose();
     this.ops.dispose();
     this.security.dispose();
     this.profile.dispose();
     this.avatars.dispose();
     this.workspaceOverview.dispose();
     this.bots.dispose();
+    this.rooms.dispose();
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.listeners.clear();
@@ -1795,6 +1784,8 @@ export class ChatStore {
     writeDeviceWorkspaceId(workspace.id);
     this.files.setWorkspace(workspace.id, workspace.role ?? null);
     this.workspaceOverview.setWorkspace(workspace.id);
+    // #105: room rows and any local presence belong to the outgoing workspace.
+    this.rooms.setWorkspace(workspace.id);
     this.security.reset();
     this.profile.reset();
     this.avatars.reset();
@@ -4621,6 +4612,7 @@ export class ChatStore {
     this.avatars.reset();
     this.workspaceOverview.reset();
     this.bots.reset();
+    this.rooms.reset();
     this.chatLimitsPromise = null;
     this.unreadWorkspaceRequests.clear();
     this.membersToken += 1;
@@ -8105,6 +8097,22 @@ export class ChatStore {
     return true;
   }
 
+  /**
+   * #105: start the room mesh towards the peers that are already present.
+   * The server keeps no call state; `chat_id` of the room is the existing
+   * managed GROUP channel used by `call.signal`. Returns false when the engine
+   * is already busy or the WebSocket is offline (the page shows an honest note).
+   */
+  private startRoomConference(chatId: string, peerUserIds: readonly string[]): boolean {
+    if (this.state.call.phase !== 'idle') return false;
+    if (this.state.realtimeStatus !== 'online') return false;
+    const selfId = this.viewerId();
+    const peers = [...new Set(peerUserIds)].filter((id) => id.length > 0 && id !== selfId);
+    if (peers.length === 0) return false;
+    this.calls.startConference(chatId, peers, true);
+    return true;
+  }
+
   acceptIncomingCall(): void {
     this.calls.accept();
   }
@@ -8151,16 +8159,6 @@ export class ChatStore {
 
   private handleCallUnavailable(frame: CallUnavailableFrame): void {
     this.calls.handleUnavailable(frame.payload.call_id, frame.from_user_id ?? null);
-  }
-
-  /**
-   * #94: re-read the chat list after the music room was created so the new
-   * GROUP channel appears in the sidebar before `setActiveChat` is called.
-   */
-  async reloadChats(): Promise<void> {
-    const workspaceId = this.currentWorkspaceId();
-    if (!workspaceId) return;
-    await this.reloadChatsForWorkspace(workspaceId);
   }
 
   async sync(): Promise<void> {

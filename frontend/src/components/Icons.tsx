@@ -479,35 +479,6 @@ export function MicOffIcon(props: IconProps) {
   );
 }
 
-/** #94 music room: previous / next track and volume. */
-export function SkipBackIcon(props: IconProps) {
-  return (
-    <IconBase {...props}>
-      <path d="M19 20 9 12l10-8Z" />
-      <path d="M5 4v16" />
-    </IconBase>
-  );
-}
-
-export function SkipForwardIcon(props: IconProps) {
-  return (
-    <IconBase {...props}>
-      <path d="m5 4 10 8-10 8Z" />
-      <path d="M19 4v16" />
-    </IconBase>
-  );
-}
-
-export function VolumeIcon(props: IconProps) {
-  return (
-    <IconBase {...props}>
-      <path d="M11 5 6 9H3v6h3l5 4Z" />
-      <path d="M16 9a4 4 0 0 1 0 6" />
-      <path d="M19 6a8 8 0 0 1 0 12" />
-    </IconBase>
-  );
-}
-
 export function MusicIcon(props: IconProps) {
   return (
     <IconBase {...props}>

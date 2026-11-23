@@ -30,7 +30,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 class ArchitectureTest {
 
     private static final String[] CONTEXTS = {"auth", "workspace", "chat", "message", "ops",
-            "audit", "realtime", "file", "sticker", "notification", "plugin", "bot"};
+            "audit", "realtime", "file", "sticker", "notification", "plugin", "bot", "room"};
 
     @ArchTest
     static void domainIsPureJava(JavaClasses classes) {

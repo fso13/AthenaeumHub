@@ -112,12 +112,6 @@ export interface CallState {
   muted: boolean;
   /** Local camera enabled. Always false for audio-only calls. */
   cameraOn: boolean;
-  /**
-   * #94: the outgoing audio sender currently carries microphone + Music Room
-   * audio. `false` means peers hear only the microphone (or nothing is being
-   * mixed); the UI must never claim otherwise.
-   */
-  musicActive: boolean;
   /** True while getUserMedia is pending, so the UI can say "asking for access". */
   mediaPending: boolean;
   /** Epoch ms when the peer connection reached `connected`; drives the timer. */
@@ -147,7 +141,6 @@ export function idleCallState(): CallState {
     peerUserId: null,
     muted: false,
     cameraOn: false,
-    musicActive: false,
     mediaPending: false,
     startedAt: null,
     localStream: null,

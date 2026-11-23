@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CallController } from './CallController';
-import type { CallMusicMixer } from './musicMix';
 import type { CallSignalPayload } from './types';
 import {
   createFakeCallMedia,
@@ -13,7 +12,7 @@ const CHAT = '55555555-5555-4555-8555-555555555555';
 const CALL = '00000000-0000-4000-8000-000000000001';
 const PEER = '66666666-6666-4666-8666-666666666666';
 
-function setup(media: FakeCallMedia = createFakeCallMedia(), musicMixer?: CallMusicMixer) {
+function setup(media: FakeCallMedia = createFakeCallMedia()) {
   const sent: { chatId: string; payload: CallSignalPayload }[] = [];
   const states: ReturnType<CallController['getState']>[] = [];
   const controller = new CallController({
@@ -27,7 +26,6 @@ function setup(media: FakeCallMedia = createFakeCallMedia(), musicMixer?: CallMu
     now: () => 1_000,
     mediaDevices: media.mediaDevices,
     createPeerConnection: media.createPeerConnection,
-    musicMixer,
   });
   return { controller, sent, states, media };
 }
@@ -235,82 +233,3 @@ describe('CallController', () => {
     expect(controller.getState().phase).toBe('idle');
   });
 });
-
-describe('CallController #94 host-relay music', () => {
-  it('mixes music into the outgoing audio sender and restores the microphone on stop', async () => {
-    const media = createFakeCallMedia();
-    const mixedStream = new FakeMediaStream(['audio']);
-    const mixedTrack = mixedStream.getAudioTracks()[0];
-    const dispose = vi.fn();
-    const musicMixer: CallMusicMixer = {
-      mix: vi.fn(() => ({ track: mixedTrack as MediaStreamTrack, dispose })),
-    };
-    const { controller } = setup(media, musicMixer);
-    controller.start(CHAT, PEER, false);
-    await vi.waitFor(() => expect(media.peers).toHaveLength(1));
-
-    const music = new FakeMediaStream(['audio']);
-    expect(controller.setIncomingMusicStream(music as unknown as MediaStream)).toBe(true);
-    expect(musicMixer.mix).toHaveBeenCalledWith(media.streams[0], music);
-    const sender = media.peers[0]?.senders.find((item) => item.track.kind === 'audio');
-    expect(sender?.track).toBe(mixedTrack);
-    expect(controller.getState().musicActive).toBe(true);
-
-    expect(controller.setIncomingMusicStream(null)).toBe(true);
-    expect(sender?.track).toBe(media.streams[0]?.getAudioTracks()[0]);
-    expect(dispose).toHaveBeenCalledTimes(1);
-    expect(controller.getState().musicActive).toBe(false);
-  });
-
-  it('routes the same mixed track into every GROUP peer', async () => {
-    const media = createFakeCallMedia();
-    const mixedTrack = new FakeMediaStream(['audio']).getAudioTracks()[0];
-    const musicMixer: CallMusicMixer = {
-      mix: vi.fn(() => ({ track: mixedTrack as MediaStreamTrack, dispose: vi.fn() })),
-    };
-    const { controller } = setup(media, musicMixer);
-    controller.startConference(CHAT, [PEER, IDS_SECOND_PEER], false);
-    await vi.waitFor(() => expect(media.peers).toHaveLength(2));
-
-    controller.setIncomingMusicStream(new FakeMediaStream(['audio']) as unknown as MediaStream);
-    for (const peer of media.peers) {
-      const sender = peer.senders.find((item) => item.track.kind === 'audio');
-      expect(sender?.track).toBe(mixedTrack);
-    }
-    expect(controller.getState().musicActive).toBe(true);
-  });
-
-  it('keeps playback local-only when no call is active and clears the mix on hangup', async () => {
-    const media = createFakeCallMedia();
-    const dispose = vi.fn();
-    const musicMixer: CallMusicMixer = {
-      mix: vi.fn(() => ({
-        track: new FakeMediaStream(['audio']).getAudioTracks()[0] as MediaStreamTrack,
-        dispose,
-      })),
-    };
-    const { controller } = setup(media, musicMixer);
-
-    expect(
-      controller.setIncomingMusicStream(new FakeMediaStream(['audio']) as unknown as MediaStream),
-    ).toBe(false);
-    expect(musicMixer.mix).not.toHaveBeenCalled();
-    expect(controller.getState().musicActive).toBe(false);
-
-    controller.start(CHAT, PEER, false);
-    await vi.waitFor(() => expect(media.peers).toHaveLength(1));
-    controller.setIncomingMusicStream(new FakeMediaStream(['audio']) as unknown as MediaStream);
-    expect(controller.getState().musicActive).toBe(true);
-    const sender = media.peers[0]?.senders.find((item) => item.track.kind === 'audio');
-    expect(sender?.track).not.toBe(media.streams[0]?.getAudioTracks()[0]);
-
-    controller.hangup();
-    expect(controller.getState().phase).toBe('idle');
-    expect(controller.getState().musicActive).toBe(false);
-    expect(dispose).toHaveBeenCalledTimes(1);
-    // The microphone is restored before the peer connection is closed.
-    expect(sender?.track).toBe(media.streams[0]?.getAudioTracks()[0]);
-  });
-});
-
-const IDS_SECOND_PEER = '88888888-8888-4888-8888-888888888888';

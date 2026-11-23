@@ -35,7 +35,7 @@ async function openPlugins(user: TestUser): Promise<void> {
   await user.click(screen.getByRole('button', { name: 'Плагины' }));
   await screen.findByRole('heading', { level: 1, name: 'Плагины' });
   await screen.findByRole('heading', { name: 'Опросы' });
-  await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(6));
+  await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(5));
 }
 
 async function waitForReady(): Promise<HTMLElement> {
@@ -69,22 +69,15 @@ function card(name: string): HTMLElement {
 }
 
 describe('D1.1 plugin catalog and per-chat state', () => {
-  it('renders the six server plugins with descriptions, permissions and modes', async () => {
+  it('renders the five server plugins with descriptions, permissions and modes', async () => {
     const { user } = renderApp();
     await openPlugins(user);
 
-    const names = [
-      'Опросы',
-      'Задачи',
-      'Перевод',
-      'Мост в Telegram',
-      'DLP-подсказки',
-      'Музыкальная комната',
-    ];
+    const names = ['Опросы', 'Задачи', 'Перевод', 'Мост в Telegram', 'DLP-подсказки'];
     for (const name of names) {
       expect(screen.getByRole('heading', { name })).toBeInTheDocument();
     }
-    expect(screen.getAllByRole('switch')).toHaveLength(6);
+    expect(screen.getAllByRole('switch')).toHaveLength(5);
 
     const polls = card('Опросы');
     expect(
@@ -128,7 +121,7 @@ describe('D1.1 plugin catalog and per-chat state', () => {
       'aria-checked',
       'true',
     );
-    expect(screen.getByText('Включено 1 из 6')).toBeInTheDocument();
+    expect(screen.getByText('Включено 1 из 5')).toBeInTheDocument();
 
     const polls = screen.getByRole('switch', { name: 'Включить плагин «Опросы»' });
     await user.click(polls);
@@ -234,7 +227,7 @@ describe('D1.1 plugin catalog and per-chat state', () => {
       screen.getByRole('heading', { name: 'Серверные плагины недоступны в E2EE' }),
     ).toBeVisible();
     const switches = screen.getAllByRole('switch');
-    expect(switches).toHaveLength(6);
+    expect(switches).toHaveLength(5);
     for (const element of switches) expect(element).toBeDisabled();
     expect(within(card('Опросы')).getByText('Недоступен в E2EE')).toBeVisible();
     expect(card('Опросы')).toHaveAttribute('aria-labelledby', 'plugin-title-polls');
@@ -318,7 +311,7 @@ describe('D1.1 details row', () => {
     await waitFor(() => expect(row).toHaveTextContent('2'));
 
     await user.click(row);
-    expect(await screen.findByText('2 из 6 включено')).toBeVisible();
+    expect(await screen.findByText('2 из 5 включено')).toBeVisible();
     expect(screen.getByText(/Переключать плагины может владелец/)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: 'Открыть плагины' }));

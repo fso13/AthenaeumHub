@@ -6,7 +6,14 @@
  * stays in the store (the URL never contains private conversation data), so a
  * round-trip to a page and back does not reset it.
  */
-export const PAGE_VIEWS = ['overview', 'files', 'plugins', 'security', 'settings'] as const;
+export const PAGE_VIEWS = [
+  'overview',
+  'rooms',
+  'files',
+  'plugins',
+  'security',
+  'settings',
+] as const;
 
 export type PageView = (typeof PAGE_VIEWS)[number];
 export type AppView = 'chat' | PageView;

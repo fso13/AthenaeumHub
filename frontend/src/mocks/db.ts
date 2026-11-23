@@ -27,7 +27,6 @@ import type {
   FileItem,
   MeResponse,
   Mention,
-  MusicRoomTrack,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
@@ -35,6 +34,7 @@ import type {
   PreflightFile,
   ProfileSession,
   ReadNotificationsRequest,
+  RoomParticipant,
   Session,
   StickerPack,
   StickerRef,
@@ -114,6 +114,23 @@ export interface ChatRecord {
   clientMessageIds: Map<string, string>;
   /** #63 `scope=me`: per-user markers hide rows only from this caller. */
   hiddenMessageIds: Set<string>;
+}
+
+/**
+ * #105 mock room. `participants` is the ephemeral presence table: handlers
+ * filter it by the same 30 s TTL the backend uses, so the UI can never render a
+ * participant the contract would not return.
+ */
+export interface MockRoomRecord {
+  id: string;
+  workspaceId: string;
+  chatId: string;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  status: 'ACTIVE' | 'CLOSED';
+  participants: RoomParticipant[];
 }
 
 export interface DeviceRequestRecord {
@@ -1050,14 +1067,6 @@ export interface MockDb {
   chatPluginPatchDelayMs: number;
   forceChatPluginsError: ForcedSendError | null;
   forceChatPluginPatchError: ForcedSendError | null;
-  /** #94: idempotent workspace music room + AUDIO-attachment track metadata. */
-  musicRoomChats: Map<string, string>;
-  musicRoomTracks: Map<string, MusicRoomTrack[]>;
-  musicRoomOpenRequests: Array<{ workspaceId: string; deviceId: string | null }>;
-  musicRoomTrackRequests: Array<{ chatId: string; deviceId: string | null }>;
-  musicRoomDelayMs: number;
-  forceMusicRoomOpenError: ForcedSendError | null;
-  forceMusicRoomTracksError: ForcedSendError | null;
   /** D1.2 (#86): installed external ZIP packages and their static assets. */
   pluginPackages: AdminPluginPackage[];
   pluginPackageAssets: Map<string, Map<string, MockPluginAssetRecord>>;
@@ -1100,6 +1109,27 @@ export interface MockDb {
   forceTaskCreateError: ForcedSendError | null;
   forceTaskUpdateError: ForcedSendError | null;
   forceTranslationError: ForcedSendError | null;
+  /** #105 rooms: metadata + TTL presence, no server-side call state. */
+  rooms: MockRoomRecord[];
+  roomListRequests: Array<{ workspaceId: string; deviceId: string | null }>;
+  roomRequests: Array<{
+    action: 'create' | 'rename' | 'close';
+    workspaceId: string;
+    roomId: string | null;
+    body: Record<string, unknown> | null;
+    deviceId: string | null;
+  }>;
+  roomPresenceRequests: Array<{
+    roomId: string;
+    action: 'join' | 'leave';
+    deviceId: string | null;
+  }>;
+  roomDelayMs: number;
+  forceRoomListError: ForcedSendError | null;
+  forceRoomCreateError: ForcedSendError | null;
+  forceRoomUpdateError: ForcedSendError | null;
+  forceRoomCloseError: ForcedSendError | null;
+  forceRoomPresenceError: ForcedSendError | null;
   chats: Record<string, ChatRecord>;
   idempotency: Map<string, IdempotencyRecord>;
   readReceipts: Record<string, number>;
@@ -1327,6 +1357,57 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/** #105 demo rooms. Presence timestamps are fresh so the seeded peers pass TTL. */
+function buildRooms(): MockRoomRecord[] {
+  const now = Date.now();
+  const seen = new Date(now - 4_000).toISOString();
+  const created = new Date(now - 90_000).toISOString();
+  return [
+    {
+      id: IDS.roomStandup,
+      workspaceId: IDS.workspace,
+      chatId: IDS.roomStandupChat,
+      name: 'Планёрка',
+      createdBy: IDS.user,
+      createdAt: created,
+      updatedAt: created,
+      status: 'ACTIVE',
+      participants: [
+        {
+          user_id: IDS.anna,
+          display_name: 'Анна Петрова',
+          joined_at: created,
+          last_seen_at: seen,
+        },
+        {
+          user_id: IDS.mark,
+          display_name: 'Марк Соколов',
+          joined_at: created,
+          last_seen_at: seen,
+        },
+      ],
+    },
+    {
+      id: IDS.roomDesign,
+      workspaceId: IDS.workspace,
+      chatId: IDS.roomDesignChat,
+      name: 'Дизайн-ревью',
+      createdBy: IDS.anna,
+      createdAt: created,
+      updatedAt: created,
+      status: 'ACTIVE',
+      participants: [
+        {
+          user_id: IDS.lena,
+          display_name: 'Лена Волкова',
+          joined_at: created,
+          last_seen_at: seen,
+        },
+      ],
+    },
+  ];
+}
+
 function buildChats(): Record<string, ChatRecord> {
   const summaries = buildChatSummaries();
   const group = summaries.find((summary) => summary.id === IDS.groupChat);
@@ -1420,55 +1501,7 @@ export function createMockPluginCatalog(): Plugin[] {
       modes: ['MANAGED'],
       state: 'ACTIVE',
     },
-    {
-      id: 'music-room',
-      kind: 'BUILTIN',
-      name: 'Музыкальная комната',
-      description: 'Совместное прослушивание музыки: аудиофайлы канала и общий плеер.',
-      icon: 'music',
-      permissions: ['FILES', 'MESSAGES'],
-      modes: ['MANAGED'],
-      state: 'ACTIVE',
-    },
   ];
-}
-
-/**
- * #94 seeded AUDIO attachments of the group channel. The mock does not model
- * real bytes: the track list is metadata-only, exactly like the server response.
- */
-export function buildMusicRoomTracks(): Map<string, MusicRoomTrack[]> {
-  return new Map([
-    [
-      IDS.groupChat,
-      [
-        {
-          id: 'c1000000-0000-4000-8000-000000000001',
-          message_id: 'd1000000-0000-4000-8000-000000000001',
-          filename: 'sova-night.mp3',
-          mime_type: 'audio/mpeg',
-          duration_ms: 214_000,
-          artwork_url: null,
-          title: 'Ночная сова',
-          artist: 'Сова',
-          size_bytes: 5_242_880,
-          created_at: '2026-11-19T21:10:00.000Z',
-        },
-        {
-          id: 'c1000000-0000-4000-8000-000000000002',
-          message_id: 'd1000000-0000-4000-8000-000000000002',
-          filename: 'forest-walk.flac',
-          mime_type: 'audio/flac',
-          duration_ms: 187_500,
-          artwork_url: 'https://cdn.example.test/art/forest.jpg',
-          title: 'Прогулка по лесу',
-          artist: 'Анна Петрова',
-          size_bytes: 31_457_280,
-          created_at: '2026-11-18T09:30:00.000Z',
-        },
-      ],
-    ],
-  ]);
 }
 
 /** D1.2 (#86): project an installed package into the public catalog shape. */
@@ -1791,13 +1824,6 @@ export function createMockDb(): MockDb {
     chatPluginPatchDelayMs: 0,
     forceChatPluginsError: null,
     forceChatPluginPatchError: null,
-    musicRoomChats: new Map(),
-    musicRoomTracks: buildMusicRoomTracks(),
-    musicRoomOpenRequests: [],
-    musicRoomTrackRequests: [],
-    musicRoomDelayMs: 0,
-    forceMusicRoomOpenError: null,
-    forceMusicRoomTracksError: null,
     pluginPackages: [],
     pluginPackageAssets: new Map(),
     adminPluginListRequests: 0,
@@ -1822,6 +1848,16 @@ export function createMockDb(): MockDb {
     forceTaskCreateError: null,
     forceTaskUpdateError: null,
     forceTranslationError: null,
+    rooms: buildRooms(),
+    roomListRequests: [],
+    roomRequests: [],
+    roomPresenceRequests: [],
+    roomDelayMs: 0,
+    forceRoomListError: null,
+    forceRoomCreateError: null,
+    forceRoomUpdateError: null,
+    forceRoomCloseError: null,
+    forceRoomPresenceError: null,
     chats: buildChats(),
     idempotency: new Map(),
     readReceipts: {},
@@ -2068,13 +2104,6 @@ export function resetMockDb(db: MockDb): void {
   db.chatPluginPatchDelayMs = 0;
   db.forceChatPluginsError = null;
   db.forceChatPluginPatchError = null;
-  db.musicRoomChats = fresh.musicRoomChats;
-  db.musicRoomTracks = fresh.musicRoomTracks;
-  db.musicRoomOpenRequests = [];
-  db.musicRoomTrackRequests = [];
-  db.musicRoomDelayMs = 0;
-  db.forceMusicRoomOpenError = null;
-  db.forceMusicRoomTracksError = null;
   db.pluginPackages = fresh.pluginPackages;
   db.pluginPackageAssets.clear();
   db.adminPluginListRequests = 0;
@@ -2097,6 +2126,16 @@ export function resetMockDb(db: MockDb): void {
   db.forceTaskCreateError = null;
   db.forceTaskUpdateError = null;
   db.forceTranslationError = null;
+  db.rooms = fresh.rooms;
+  db.roomListRequests = [];
+  db.roomRequests = [];
+  db.roomPresenceRequests = [];
+  db.roomDelayMs = 0;
+  db.forceRoomListError = null;
+  db.forceRoomCreateError = null;
+  db.forceRoomUpdateError = null;
+  db.forceRoomCloseError = null;
+  db.forceRoomPresenceError = null;
   db.chats = fresh.chats;
   db.idempotency.clear();
   db.readReceipts = {};

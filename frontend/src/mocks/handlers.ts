@@ -41,8 +41,6 @@ import type {
   FileItem,
   Mention,
   MessageCreateBody,
-  MusicRoomOpen,
-  MusicRoomTracks,
   Notification,
   NotificationPreference,
   NotificationPreferencePatch,
@@ -53,6 +51,7 @@ import type {
   ReadNotificationsRequest,
   ReactionSummary,
   RealtimeTicket,
+  Room,
   StickerRef,
   SyncResponse,
   Task,
@@ -100,6 +99,7 @@ import {
   type MockAuthUserRecord,
   type MockDb,
   type MockPluginAssetRecord,
+  type MockRoomRecord,
   type MockUpload,
   type MockWorkspaceInviteRecord,
 } from './db';
@@ -349,6 +349,44 @@ function requireAuth(request: Request): Response | null {
     return errorResponse(401, 'UNAUTHENTICATED', 'Device id is missing');
   }
   return null;
+}
+
+/* ------------------------------------------------------------------------- */
+/* #105 rooms: ACTIVE list, metadata mutations and 30 s TTL presence.         */
+/* ------------------------------------------------------------------------- */
+
+/** Mirrors `RoomPresencePolicy.TTL` in the backend. */
+const ROOM_PRESENCE_TTL_MS = 30_000;
+
+function roomParticipants(record: MockRoomRecord) {
+  if (record.status !== 'ACTIVE') return [];
+  const now = Date.now();
+  return record.participants.filter((participant) => {
+    const seen = Date.parse(participant.last_seen_at);
+    return Number.isFinite(seen) && now - seen <= ROOM_PRESENCE_TTL_MS;
+  });
+}
+
+/** The contract projection: TTL-filtered peers, server-computed count/flags. */
+function presentRoom(db: MockDb, record: MockRoomRecord): Room {
+  const participants = roomParticipants(record);
+  return {
+    id: record.id,
+    workspace_id: record.workspaceId,
+    chat_id: record.chatId,
+    name: record.name,
+    created_by: record.createdBy,
+    created_at: record.createdAt,
+    updated_at: record.updatedAt,
+    status: record.status,
+    participants,
+    participant_count: participants.length,
+    my_present: participants.some((participant) => participant.user_id === db.me.user.id),
+  };
+}
+
+function findMockRoom(db: MockDb, roomId: string): MockRoomRecord | null {
+  return db.rooms.find((room) => room.id === roomId) ?? null;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -4431,144 +4469,6 @@ export function createHandlers(db: MockDb) {
     }),
 
     /* ------------------------------------------------------------------ */
-    /* #94: music room                                                    */
-    /* ------------------------------------------------------------------ */
-
-    /**
-     * Idempotent find-or-create of the workspace room. The room is a regular
-     * MANAGED GROUP channel; the mock mirrors the server invariants (one room
-     * per workspace, plugin enabled, `created` only for the first call).
-     */
-    http.post(`${API}/workspaces/:workspaceId/music-room`, async ({ request, params }) => {
-      const unauthorized = requireAuth(request);
-      if (unauthorized) return unauthorized;
-      const workspaceId = String(params.workspaceId);
-      db.musicRoomOpenRequests.push({
-        workspaceId,
-        deviceId: request.headers.get('x-device-id'),
-      });
-      if (db.musicRoomDelayMs > 0) await delay(db.musicRoomDelayMs);
-      if (db.forceMusicRoomOpenError) {
-        const forced = db.forceMusicRoomOpenError;
-        return errorResponse(forced.status, forced.code, forced.message, {
-          details: forced.details,
-          retryAfterSeconds: forced.retryAfterSeconds,
-        });
-      }
-
-      const workspace = db.me.workspaces.find((item) => item.id === workspaceId);
-      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
-      const plugin = db.pluginCatalog.find((item) => item.id === 'music-room');
-      if (!plugin) return errorResponse(404, 'PLUGIN_NOT_FOUND', 'Plugin not found');
-      if (plugin.state === 'DISABLED') {
-        return errorResponse(422, 'PLUGIN_DISABLED', 'Plugin is disabled in the catalog');
-      }
-      if (workspace.security_mode === 'E2EE') {
-        return errorResponse(422, 'PLUGIN_NOT_AVAILABLE', 'Plugin is not available in E2EE');
-      }
-
-      const existingId = db.musicRoomChats.get(workspaceId);
-      const existing = existingId ? db.chats[existingId] : undefined;
-      if (existing) {
-        const chat: Chat = {
-          id: existing.summary.id,
-          type: 'GROUP',
-          security_mode: existing.summary.security_mode,
-          visibility: existing.summary.visibility ?? 'PUBLIC',
-          peer_id: null,
-          peer_has_e2ee_capable_devices: false,
-          name: existing.summary.name,
-          last_seq: existing.summary.last_seq,
-          unread_count: existing.summary.unread_count,
-          created_at: new Date().toISOString(),
-          join_policy: existing.summary.join_policy ?? 'OPEN',
-        };
-        const payload: MusicRoomOpen = {
-          chat,
-          plugin: { plugin_id: 'music-room', enabled: true, available: true, version: '1.0.0' },
-          created: false,
-        };
-        return HttpResponse.json(payload, { status: 200 });
-      }
-
-      const chatId = newUuid();
-      const now = new Date().toISOString();
-      const chat: Chat = {
-        id: chatId,
-        type: 'GROUP',
-        security_mode: 'MANAGED',
-        visibility: 'PUBLIC',
-        peer_id: null,
-        peer_has_e2ee_capable_devices: false,
-        name: 'Музыкальная комната',
-        last_seq: 0,
-        unread_count: 0,
-        created_at: now,
-        join_policy: 'OPEN',
-      };
-      db.chats[chatId] = {
-        summary: {
-          id: chatId,
-          name: chat.name ?? null,
-          type: 'GROUP',
-          security_mode: 'MANAGED',
-          visibility: 'PUBLIC',
-          peer_id: null,
-          peer_has_e2ee_capable_devices: false,
-          last_message_at: null,
-          unread_count: 0,
-          last_seq: 0,
-          join_policy: 'OPEN',
-          read_only: false,
-        },
-        workspaceId,
-        memberIds: [],
-        messages: [],
-        clientMessageIds: new Map(),
-        hiddenMessageIds: new Set(),
-      };
-      db.musicRoomChats.set(workspaceId, chatId);
-      db.chatPlugins.set(chatId, new Map([['music-room', true]]));
-      const payload: MusicRoomOpen = {
-        chat,
-        plugin: { plugin_id: 'music-room', enabled: true, available: true, version: '1.0.0' },
-        created: true,
-      };
-      return HttpResponse.json(payload, { status: 201 });
-    }),
-
-    /** Metadata-only AUDIO list of a managed chat with the plugin enabled. */
-    http.get(`${API}/chats/:chatId/music-room`, async ({ request, params }) => {
-      const unauthorized = requireAuth(request);
-      if (unauthorized) return unauthorized;
-      const chatId = String(params.chatId);
-      db.musicRoomTrackRequests.push({
-        chatId,
-        deviceId: request.headers.get('x-device-id'),
-      });
-      if (db.musicRoomDelayMs > 0) await delay(db.musicRoomDelayMs);
-      if (db.forceMusicRoomTracksError) {
-        const forced = db.forceMusicRoomTracksError;
-        return errorResponse(forced.status, forced.code, forced.message, {
-          details: forced.details,
-          retryAfterSeconds: forced.retryAfterSeconds,
-        });
-      }
-
-      const found = accessibleChat(db, chatId);
-      if (!found) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
-      const gate = pluginActionGate(db, found.chat, 'music-room');
-      if (gate) return gate;
-      const payload: MusicRoomTracks = {
-        chat_id: chatId,
-        plugin: { plugin_id: 'music-room', enabled: true, available: true, version: '1.0.0' },
-        items: db.musicRoomTracks.get(chatId) ?? [],
-        has_more: false,
-      };
-      return HttpResponse.json(payload);
-    }),
-
-    /* ------------------------------------------------------------------ */
     /* D1.1 (#76): poll actions                                           */
     /* ------------------------------------------------------------------ */
 
@@ -7516,6 +7416,301 @@ export function createHandlers(db: MockDb) {
       db.chatRequests.set(idempotencyKey, { bodyHash, chat });
       db.chatCreateRequests.push({ idempotencyKey, body });
       return HttpResponse.json(chat, { status: 201 });
+    }),
+
+    /*
+     * #105 rooms. The mock mirrors the backend: ACTIVE rooms only, 30 s TTL
+     * presence, creator/OWNER(ADMIN) permissions and an honest 409 ROOM_CLOSED.
+     * It never fabricates a participant: every row comes from `db.rooms`.
+     */
+    http.get(`${API}/workspaces/:workspaceId/rooms`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspace = findMockWorkspace(db, String(params.workspaceId));
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      db.roomListRequests.push({
+        workspaceId: workspace.id,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.roomDelayMs > 0) await delay(db.roomDelayMs);
+      if (db.forceRoomListError) {
+        const forced = db.forceRoomListError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const items = db.rooms
+        .filter((room) => room.workspaceId === workspace.id && room.status === 'ACTIVE')
+        .slice()
+        .sort(
+          (left, right) =>
+            Date.parse(right.createdAt) - Date.parse(left.createdAt) ||
+            right.id.localeCompare(left.id),
+        )
+        .map((room) => presentRoom(db, room));
+      return HttpResponse.json({ items });
+    }),
+
+    http.post(`${API}/workspaces/:workspaceId/rooms`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspace = findMockWorkspace(db, String(params.workspaceId));
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      db.roomRequests.push({
+        action: 'create',
+        workspaceId: workspace.id,
+        roomId: null,
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceRoomCreateError) {
+        const forced = db.forceRoomCreateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (workspace.security_mode === 'E2EE') {
+        return errorResponse(
+          409,
+          'E2EE_GROUP_NOT_SUPPORTED',
+          'Rooms are not available in an E2EE workspace',
+        );
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (name.length === 0 || [...name].length > 120) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'name must be 1..120 characters', {
+          details: { field: 'name', max_length: 120 },
+        });
+      }
+      const usedByUser = countActiveChatsForUser(db, workspace.id, db.me.user.id);
+      if (usedByUser >= db.admin.maxChatsPerUser) {
+        return errorResponse(409, 'CHAT_LIMIT_REACHED', 'Chat limit reached', {
+          details: { scope: 'USER', limit: db.admin.maxChatsPerUser, used: usedByUser },
+        });
+      }
+      const now = new Date().toISOString();
+      const chatId = newUuid();
+      const roomId = newUuid();
+      // Backing managed GROUP channel: the existing call signaling needs a
+      // chat id, so the mock creates the same PUBLIC/OPEN channel the backend does.
+      const systemMessage: ApiMessage = {
+        id: newUuid(),
+        chat_id: chatId,
+        seq: 1,
+        type: 'SYSTEM',
+        sender_type: 'USER',
+        sender_id: null,
+        sender_display_name: null,
+        text: 'Чат создан',
+        reply_to_id: null,
+        created_at: now,
+        edited_at: null,
+        deleted_at: null,
+        version: 1,
+        reactions: [],
+      };
+      db.chats[chatId] = {
+        summary: {
+          id: chatId,
+          name,
+          type: 'GROUP',
+          security_mode: workspace.security_mode,
+          visibility: 'PUBLIC',
+          peer_id: null,
+          peer_has_e2ee_capable_devices: false,
+          last_message_at: now,
+          unread_count: 0,
+          last_seq: 1,
+        },
+        workspaceId: workspace.id,
+        memberIds: [],
+        messages: [systemMessage],
+        clientMessageIds: new Map(),
+        hiddenMessageIds: new Set(),
+      };
+      const record: MockRoomRecord = {
+        id: roomId,
+        workspaceId: workspace.id,
+        chatId,
+        name,
+        createdBy: db.me.user.id,
+        createdAt: now,
+        updatedAt: now,
+        status: 'ACTIVE',
+        participants: [],
+      };
+      db.rooms.push(record);
+      return HttpResponse.json(presentRoom(db, record), { status: 201 });
+    }),
+
+    http.get(`${API}/rooms/:roomId`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const record = findMockRoom(db, String(params.roomId));
+      if (!record || !findMockWorkspace(db, record.workspaceId)) {
+        return errorResponse(404, 'ROOM_NOT_FOUND', 'Room not found');
+      }
+      return HttpResponse.json(presentRoom(db, record));
+    }),
+
+    http.patch(`${API}/workspaces/:workspaceId/rooms/:roomId`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspace = findMockWorkspace(db, String(params.workspaceId));
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      const record = findMockRoom(db, String(params.roomId));
+      if (!record || record.workspaceId !== workspace.id) {
+        return errorResponse(404, 'ROOM_NOT_FOUND', 'Room not found');
+      }
+      const body = asRecord(await readJson(request));
+      if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      db.roomRequests.push({
+        action: 'rename',
+        workspaceId: workspace.id,
+        roomId: record.id,
+        body,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceRoomUpdateError) {
+        const forced = db.forceRoomUpdateError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      const workspaceManager = workspace.role === 'OWNER' || workspace.role === 'ADMIN';
+      if (record.createdBy !== db.me.user.id && !workspaceManager) {
+        return errorResponse(403, 'FORBIDDEN', 'Not a room creator or workspace admin');
+      }
+      if (record.status === 'CLOSED') {
+        return errorResponse(409, 'ROOM_CLOSED', 'Room is closed');
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (name.length === 0 || [...name].length > 120) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'name must be 1..120 characters', {
+          details: { field: 'name', max_length: 120 },
+        });
+      }
+      record.name = name;
+      record.updatedAt = new Date().toISOString();
+      const chat = db.chats[record.chatId];
+      if (chat) chat.summary = { ...chat.summary, name };
+      return HttpResponse.json(presentRoom(db, record));
+    }),
+
+    http.delete(`${API}/workspaces/:workspaceId/rooms/:roomId`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const workspace = findMockWorkspace(db, String(params.workspaceId));
+      if (!workspace) return errorResponse(403, 'FORBIDDEN', 'Not a workspace member');
+      const record = findMockRoom(db, String(params.roomId));
+      if (!record || record.workspaceId !== workspace.id) {
+        return errorResponse(404, 'ROOM_NOT_FOUND', 'Room not found');
+      }
+      db.roomRequests.push({
+        action: 'close',
+        workspaceId: workspace.id,
+        roomId: record.id,
+        body: null,
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceRoomCloseError) {
+        const forced = db.forceRoomCloseError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      // Soft close: only the creator or a workspace OWNER (ADMIN alone cannot).
+      if (record.createdBy !== db.me.user.id && workspace.role !== 'OWNER') {
+        return errorResponse(
+          403,
+          'FORBIDDEN',
+          'Only the room creator or workspace OWNER can close',
+        );
+      }
+      record.status = 'CLOSED';
+      record.updatedAt = new Date().toISOString();
+      record.participants = [];
+      // The backing channel is soft-deleted, so it leaves the chat list.
+      delete db.chats[record.chatId];
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.post(`${API}/rooms/:roomId/presence`, async ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const record = findMockRoom(db, String(params.roomId));
+      if (!record || !findMockWorkspace(db, record.workspaceId)) {
+        return errorResponse(404, 'ROOM_NOT_FOUND', 'Room not found');
+      }
+      db.roomPresenceRequests.push({
+        roomId: record.id,
+        action: 'join',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceRoomPresenceError) {
+        const forced = db.forceRoomPresenceError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      if (record.status !== 'ACTIVE') {
+        return errorResponse(409, 'ROOM_CLOSED', 'Room is closed');
+      }
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      const existing = record.participants.find(
+        (participant) => participant.user_id === db.me.user.id,
+      );
+      if (existing) {
+        const seen = Date.parse(existing.last_seen_at);
+        // A heartbeat inside the TTL keeps `joined_at`; an expired session restarts it.
+        if (!Number.isFinite(seen) || now - seen > ROOM_PRESENCE_TTL_MS) {
+          existing.joined_at = nowIso;
+        }
+        existing.display_name = db.me.user.display_name;
+        existing.last_seen_at = nowIso;
+      } else {
+        record.participants.push({
+          user_id: db.me.user.id,
+          display_name: db.me.user.display_name,
+          joined_at: nowIso,
+          last_seen_at: nowIso,
+        });
+      }
+      return new HttpResponse(null, { status: 204 });
+    }),
+
+    http.delete(`${API}/rooms/:roomId/presence`, ({ request, params }) => {
+      const unauthorized = requireAuth(request);
+      if (unauthorized) return unauthorized;
+      const record = findMockRoom(db, String(params.roomId));
+      if (!record || !findMockWorkspace(db, record.workspaceId)) {
+        return errorResponse(404, 'ROOM_NOT_FOUND', 'Room not found');
+      }
+      db.roomPresenceRequests.push({
+        roomId: record.id,
+        action: 'leave',
+        deviceId: request.headers.get('x-device-id'),
+      });
+      if (db.forceRoomPresenceError) {
+        const forced = db.forceRoomPresenceError;
+        return errorResponse(forced.status, forced.code, forced.message, {
+          details: forced.details,
+          retryAfterSeconds: forced.retryAfterSeconds,
+        });
+      }
+      // Idempotent and allowed for a closed room (ephemeral cleanup only).
+      record.participants = record.participants.filter(
+        (participant) => participant.user_id !== db.me.user.id,
+      );
+      return new HttpResponse(null, { status: 204 });
     }),
 
     /* #73: metadata-only file center with filters, cursor and quota. */

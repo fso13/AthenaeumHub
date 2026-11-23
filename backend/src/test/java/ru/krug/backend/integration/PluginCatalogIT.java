@@ -29,7 +29,7 @@ class PluginCatalogIT extends IntegrationTestBase {
 
     private static final OpenApiContract CONTRACT = OpenApiContract.load();
     private static final List<String> PLUGIN_IDS =
-            List.of("polls", "tasks", "translate", "telegram", "dlp", "music-room");
+            List.of("polls", "tasks", "translate", "telegram", "dlp");
 
     @Autowired
     private TokenIssuer tokenIssuer;

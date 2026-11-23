@@ -58,7 +58,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/workspaces/{workspaceId}/music-room": {
+    "/workspaces/{workspaceId}/rooms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Активные комнаты воркспейса с текущими участниками
+         * @description #105. Только ACTIVE-участник активного воркспейса (иначе `403` без раскрытия существования). Возвращаются только комнаты со `status=ACTIVE`, новые сверху; список ограничен 200 комнатами (пагинации в этом срезе нет). Для каждой комнаты `participants` содержит участников, у которых `last_seen_at` не старше 30 секунд, `participant_count` — их число, `my_present` — присутствует ли вызывающий. Присутствие — это REST heartbeat: фронтенд опрашивает список каждые 5 секунд; websocket-presence и серверное состояние звонка не используются. `chat_id` — managed GROUP-канал, через который работает существующий call signaling.
+         */
+        get: operations["listRooms"];
+        put?: never;
+        /**
+         * Создать комнату и её managed GROUP-канал
+         * @description #105. Любой ACTIVE-участник воркспейса. Имя — 1..120 символов после trim. В одной транзакции создаётся managed GROUP-канал `PUBLIC`/`OPEN` с тем же именем: создатель — `OWNER`, все ACTIVE-участники воркспейса добавлены, дефолтная матрица прав и счётчик сообщений созданы. `chat_id` в ответе используется существующим call signaling; сервер не хранит состояние звонка, SDP/ICE, SFU или медиа. Действуют установочные лимиты чатов (`409 CHAT_LIMIT_REACHED`, `details.scope` `USER`|`WORKSPACE`) — комната занимает один слот чата. Комнаты MANAGED-only: в E2EE-воркспейсе создание запрещено (`409 E2EE_GROUP_NOT_SUPPORTED`).
+         */
+        post: operations["createRoom"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{workspaceId}/rooms/{roomId}": {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                roomId: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Мягко закрыть комнату (creator/OWNER)
+         * @description #105. Создатель комнаты или workspace OWNER (ADMIN без создания комнаты закрыть её не может). Комната получает `status=CLOSED`, backing-канал мягко удаляется (`deleted_at`), поэтому комната исчезает из списка комнат и из списка чатов; сообщения, вложения и байты сохраняются. Повторный вызов авторизованным участником идемпотентен (`204`). Чужая/неизвестная комната — `404`.
+         */
+        delete: operations["closeRoom"];
+        options?: never;
+        head?: never;
+        /**
+         * Переименовать комнату и её канал
+         * @description #105. Создатель комнаты или workspace OWNER/ADMIN. Имя — 1..120 символов после trim; оно же становится именем backing-канала. Закрытую комнату переименовать нельзя (`409 ROOM_CLOSED`). Чужая/неизвестная комната — `404` без раскрытия существования. Аудит `room.renamed` содержит только `chat_id`.
+         */
+        patch: operations["updateRoom"];
+        trace?: never;
+    };
+    "/rooms/{roomId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Детали комнаты
+         * @description #105. ACTIVE-участник воркспейса комнаты; workspace определяется сервером по `room_id`, поэтому workspace claim в токене не требуется. Закрытая комната тоже возвращается (`status=CLOSED`, пустой список присутствующих), чтобы клиент мог показать состояние. Чужая/неизвестная комната — `404`.
+         */
+        get: operations["getRoom"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{roomId}/presence": {
         parameters: {
             query?: never;
             header?: never;
@@ -68,11 +141,15 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Открыть музыкальную комнату воркспейса (идемпотентно)
-         * @description Идемпотентный find-or-create единственной музыкальной комнаты воркспейса. Комнатой считается GROUP-канал, помеченный в `chat.plugin_rooms` для плагина `music-room`: имя канала не используется для поиска, поэтому переименование безопасно. Если комнаты нет, создаётся managed GROUP-канал `PUBLIC`/`OPEN` с именем «Музыкальная комната»: создатель — `OWNER`, все ACTIVE-участники воркспейса добавляются, плагин включается в канале. Повторный вызов возвращает существующий канал с `200` и не расходует лимит чатов; создание — `201`. Только ACTIVE-участник воркспейса, иначе `403`. Лимиты установки (`CHAT_LIMIT_REACHED`, `details.scope`) проверяются только при фактическом создании. Выключенный каталог — `422 PLUGIN_DISABLED`; E2EE-воркспейс — `422 PLUGIN_NOT_AVAILABLE` (плагин `MANAGED`, E2EE GROUP не поддерживается). Конкурентные вызовы сериализуются advisory-локом и PK `(workspace_id, plugin_id)`, поэтому дубликат канала невозможен. Сервер не хранит аудио и состояние воспроизведения и не создаёт SFU-сессию: фронтенд перечисляет AUDIO-вложения канала и микширует звук в звонок локально.
+         * Войти в комнату или обновить heartbeat (30 с TTL)
+         * @description #105. ACTIVE-участник воркспейса и только комната со `status=ACTIVE` (закрытая — `409 ROOM_CLOSED`). Идемпотентный upsert `room.presence`: первый вызов фиксирует `joined_at`, повторные обновляют `last_seen_at` и сохраняют `joined_at`. Если предыдущая строка истекла по TTL, `joined_at` сбрасывается. Сервер не хранит состояние звонка; запись означает только присутствие. Фронтенд повторяет вызов каждые 5 секунд; отсутствие heartbeat 30 секунд удаляет участника из выдачи.
          */
-        post: operations["openMusicRoom"];
-        delete?: never;
+        post: operations["joinRoomPresence"];
+        /**
+         * Покинуть комнату (идемпотентно)
+         * @description #105. Удаляет строку присутствия вызывающего; отсутствие строки — тоже `204`. Выход разрешён и из закрытой комнаты (это только очистка эфемерного presence). Чужая/неизвестная комната — `404`.
+         */
+        delete: operations["leaveRoomPresence"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1733,26 +1810,6 @@ export interface paths {
          * @description Меняет только per-chat переключатель. Вызывающий должен быть ACTIVE-участником чата с ролью `OWNER` или `ADMIN`; `MODERATOR`/`MEMBER`/`GUEST` получают `403 FORBIDDEN`, неизвестный/удалённый/чужой чат — `404` без раскрытия существования, не-участник воркспейса — `403`. Плагин обязан существовать во встроенном каталоге: неизвестный `pluginId` — `404 PLUGIN_NOT_FOUND`. Плагин должен быть доступен в режиме чата: серверный (`MANAGED`-only) плагин в E2EE-чате — `422 PLUGIN_NOT_AVAILABLE`, `state=DISABLED` — `422 PLUGIN_DISABLED`; частичного применения нет. Операция идемпотентна: повтор с тем же `enabled` возвращает `200`, не меняет `updated_by`/`updated_at` и не пишет второй audit. Успешное изменение пишет audit `chat.plugin.changed` с metadata только `plugin_id` и `enabled`; имена, описания, права, сообщения и секреты не пишутся. Плагин не исполняется и внешних вызовов не делает.
          */
         patch: operations["updateChatPlugin"];
-        trace?: never;
-    };
-    "/chats/{chatId}/music-room": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * AUDIO-вложения музыкальной комнаты (плагин `music-room` включён)
-         * @description Список AUDIO-вложений канала, доступный любому ACTIVE-участнику чата при включённом плагине `music-room`. Неизвестный/удалённый/чужой чат — `404` без раскрытия существования, не-участник воркспейса — `403`, выключенный плагин — `422 PLUGIN_NOT_ENABLED`, kill switch каталога — `422 PLUGIN_DISABLED`, серверный плагин в E2EE-чате — `422 PLUGIN_NOT_AVAILABLE`. Данные берутся из file center: только `CLEAN`-вложения и только метаданные (`id`, `filename`, `mime_type`, `duration_ms`, `artwork_url`, `title`/`artist`, `size_bytes`, `message_id`, `created_at`); object key, `sha256`, presigned URL и байты не возвращаются. Список отсортирован по `created_at DESC` и ограничен 100 элементами: `has_more=true` означает, что более старые треки не вошли в срез (курсора в этом срезе нет). Сервер не воспроизводит аудио и не открывает SFU: фронтенд микширует звук в звонок локально.
-         */
-        get: operations["getMusicRoom"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
     "/chats/{chatId}/polls": {
@@ -3648,57 +3705,6 @@ export interface components {
         ChatPluginUpdateRequest: {
             enabled: boolean;
         };
-        MusicRoomPlugin: {
-            /** @enum {string} */
-            plugin_id: "music-room";
-            /** @description Per-chat toggle; the open endpoint always enables the room. */
-            enabled: boolean;
-            /** @description Effective availability for the chat/workspace mode and catalog state. */
-            available: boolean;
-            /**
-             * @description Версия встроенного плагина. Built-in строки `plugin.catalog` не хранят package version (V44), поэтому версия 1.0.0 отдаётся API и документируется в `backend/MUSIC-ROOM-REPORT.md`.
-             * @enum {string}
-             */
-            version: "1.0.0";
-            /**
-             * @description Присутствует только при `available=false`.
-             * @enum {string}
-             */
-            reason?: "PLUGIN_NOT_AVAILABLE" | "PLUGIN_DISABLED";
-        };
-        MusicRoomOpen: {
-            chat: components["schemas"]["Chat"];
-            plugin: components["schemas"]["MusicRoomPlugin"];
-            /** @description `true` только когда этот запрос создал канал (HTTP 201); повторное открытие существующей комнаты — `false` (HTTP 200). */
-            created: boolean;
-        };
-        /** @description Метаданные AUDIO-вложения. Никогда не содержит object key, sha256, presigned URL или байты; скачивание идёт обычным путём `attachmentDownloadUrl`. */
-        MusicRoomTrack: {
-            /** Format: uuid */
-            id: string;
-            /** Format: uuid */
-            message_id?: string | null;
-            filename: string;
-            mime_type?: string | null;
-            /** Format: int64 */
-            duration_ms?: number | null;
-            /** @description artwork URL из метаданных (#97): клиентский абсолютный http(s) URL, который сервер не загружает и не проверяет, либо серверный URL аутентифицированного `GET /attachments/{attachmentId}/artwork` для извлечённой обложки. Байты обложки в JSON никогда не попадают. */
-            artwork_url?: string | null;
-            title?: string | null;
-            artist?: string | null;
-            /** Format: int64 */
-            size_bytes: number;
-            /** Format: date-time */
-            created_at: string;
-        };
-        MusicRoomTracks: {
-            /** Format: uuid */
-            chat_id: string;
-            plugin: components["schemas"]["MusicRoomPlugin"];
-            items: components["schemas"]["MusicRoomTrack"][];
-            /** @description `true` когда в канале больше 100 AUDIO-вложений и более старые не вошли в срез (курсора в этом срезе нет). */
-            has_more: boolean;
-        };
         PollOption: {
             /** Format: uuid */
             id: string;
@@ -3886,6 +3892,48 @@ export interface components {
              * @description Текущее число активных чатов пользователя в воркспейсе
              */
             chats_used: number;
+        };
+        /** @description #105 участник, чей heartbeat уложился в 30-секундный TTL. Только display_name; email, устройства и ключи не раскрываются. */
+        RoomParticipant: {
+            /** Format: uuid */
+            user_id: string;
+            display_name: string;
+            /** Format: date-time */
+            joined_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+        };
+        /** @description #105 комната воркспейса. `chat_id` указывает на managed GROUP-канал, который используется существующим call signaling; серверного состояния звонка/SFU/медиа нет. `participants` отфильтрованы по TTL 30 секунд, `my_present` — присутствие вызывающего. `status=CLOSED` после мягкого закрытия (backing-канал soft-deleted). */
+        Room: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            workspace_id: string;
+            /** Format: uuid */
+            chat_id: string;
+            name: string;
+            /** Format: uuid */
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** @enum {string} */
+            status: "ACTIVE" | "CLOSED";
+            participants: components["schemas"]["RoomParticipant"][];
+            participant_count: number;
+            my_present: boolean;
+        };
+        RoomList: {
+            items: components["schemas"]["Room"][];
+        };
+        RoomCreateRequest: {
+            /** @description Имя комнаты и backing-канала; пробелы по краям срезаются, 1..120 символов после trim. */
+            name: string;
+        };
+        RoomUpdateRequest: {
+            /** @description Новое имя комнаты и backing-канала (после trim 1..120 символов). */
+            name: string;
         };
         PreflightFile: {
             name: string;
@@ -5147,6 +5195,7 @@ export interface components {
         /** @description Одна emoji-последовательность в percent-encoding, без HTML/пробелов/control. */
         Emoji: string;
         WorkspaceId: string;
+        RoomId: string;
         WorkspaceIdQuery: string;
         StickerId: string;
         /** @description Slug плагина из `plugin.catalog` (built-in или установленного external). */
@@ -5294,7 +5343,7 @@ export interface operations {
             422: components["responses"]["Unprocessable"];
         };
     };
-    openMusicRoom: {
+    listRooms: {
         parameters: {
             query?: never;
             header: {
@@ -5307,27 +5356,49 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Комната уже существует — возвращается тот же канал */
+            /** @description Активные комнаты и присутствующие участники */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MusicRoomOpen"];
+                    "application/json": components["schemas"]["RoomList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createRoom: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomCreateRequest"];
+            };
+        };
+        responses: {
             /** @description Комната создана */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MusicRoomOpen"];
+                    "application/json": components["schemas"]["Room"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            /** @description `409 CHAT_LIMIT_REACHED` при фактическом создании, если достигнут лимит установки; `details.scope` — `USER`|`WORKSPACE`, `details.limit`, `details.used`. */
+            /** @description `409 CHAT_LIMIT_REACHED` (`details.scope/limit/used`) при достижении лимита чатов или `409 E2EE_GROUP_NOT_SUPPORTED` в E2EE-воркспейсе. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5336,7 +5407,157 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            422: components["responses"]["Unprocessable"];
+        };
+    };
+    closeRoom: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                roomId: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Комната закрыта (или уже была закрыта) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateRoom: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                workspaceId: components["parameters"]["WorkspaceId"];
+                roomId: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Комната переименована */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Комната уже закрыта (`ROOM_CLOSED`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getRoom: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                roomId: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Комната с текущими участниками */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    joinRoomPresence: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                roomId: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Присутствие подтверждено/обновлено */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            /** @description Комната закрыта (`ROOM_CLOSED`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    leaveRoomPresence: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Device-Id": components["parameters"]["DeviceId"];
+            };
+            path: {
+                roomId: components["parameters"]["RoomId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Присутствие удалено (или уже отсутствовало) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
         };
     };
     listWorkspaceMembers: {
@@ -8354,34 +8575,6 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["Unprocessable"];
-        };
-    };
-    getMusicRoom: {
-        parameters: {
-            query?: never;
-            header: {
-                "X-Device-Id": components["parameters"]["DeviceId"];
-            };
-            path: {
-                chatId: components["parameters"]["ChatId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description AUDIO-вложения комнаты */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MusicRoomTracks"];
-                };
-            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
