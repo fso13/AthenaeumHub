@@ -8142,6 +8142,23 @@ export class ChatStore {
     this.calls.toggleCamera();
   }
 
+  /** #107: live device switches and display capture for the active call. */
+  switchCallMicrophone(deviceId: string): Promise<boolean> {
+    return this.calls.switchMicrophone(deviceId);
+  }
+
+  switchCallCamera(deviceId: string): Promise<boolean> {
+    return this.calls.switchCamera(deviceId);
+  }
+
+  startCallScreenShare(): Promise<boolean> {
+    return this.calls.startScreenShare();
+  }
+
+  stopCallScreenShare(): Promise<boolean> {
+    return this.calls.stopScreenShare();
+  }
+
   dismissCallNotice(): void {
     this.calls.dismissNotice();
   }

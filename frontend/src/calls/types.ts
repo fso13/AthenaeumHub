@@ -112,6 +112,8 @@ export interface CallState {
   muted: boolean;
   /** Local camera enabled. Always false for audio-only calls. */
   cameraOn: boolean;
+  /** Local display capture is replacing the camera track. */
+  screenSharing?: boolean;
   /** True while getUserMedia is pending, so the UI can say "asking for access". */
   mediaPending: boolean;
   /** Epoch ms when the peer connection reached `connected`; drives the timer. */
@@ -141,6 +143,7 @@ export function idleCallState(): CallState {
     peerUserId: null,
     muted: false,
     cameraOn: false,
+    screenSharing: false,
     mediaPending: false,
     startedAt: null,
     localStream: null,

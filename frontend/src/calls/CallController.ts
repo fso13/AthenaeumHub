@@ -773,6 +773,101 @@ export class CallController {
     this.update({ cameraOn });
   }
 
+  /** Enumerate all peer connections for a live call (1:1 + mesh legs). */
+  private allPeerConnections(): RTCPeerConnection[] {
+    const connections: RTCPeerConnection[] = [];
+    if (this.pc) connections.push(this.pc);
+    for (const peer of this.conferencePeers.values()) {
+      if (peer.pc) connections.push(peer.pc);
+    }
+    return connections;
+  }
+
+  private replaceOutgoingTrack(kind: 'audio' | 'video', next: MediaStreamTrack): void {
+    for (const pc of this.allPeerConnections()) {
+      const sender = pc.getSenders().find((item) => item.track?.kind === kind);
+      if (sender) void sender.replaceTrack(next);
+    }
+  }
+
+  private replaceLocalStreamTrack(next: MediaStreamTrack): void {
+    const current = this.localStream;
+    if (!current) return;
+    const tracks = current.getTracks().filter((track) => track.kind !== next.kind);
+    const previous = current.getTracks().find((track) => track.kind === next.kind);
+    this.localStream = new MediaStream([...tracks, next]);
+    previous?.stop();
+    this.update({ localStream: this.localStream });
+  }
+
+  /** #107: switch microphone while the call keeps running. */
+  async switchMicrophone(deviceId: string): Promise<boolean> {
+    if (this.state.phase === 'idle' || !this.localStream) return false;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: { exact: deviceId } },
+      video: false,
+    });
+    const track = stream.getAudioTracks()[0];
+    if (!track) return false;
+    track.enabled = !this.state.muted;
+    this.replaceOutgoingTrack('audio', track);
+    this.replaceLocalStreamTrack(track);
+    return true;
+  }
+
+  /** #107: switch camera while the call keeps running. */
+  async switchCamera(deviceId: string): Promise<boolean> {
+    if (this.state.phase === 'idle' || !this.state.video || !this.localStream) return false;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: { exact: deviceId } },
+      audio: false,
+    });
+    const track = stream.getVideoTracks()[0];
+    if (!track) return false;
+    track.enabled = this.state.cameraOn;
+    this.replaceOutgoingTrack('video', track);
+    this.replaceLocalStreamTrack(track);
+    this.update({ screenSharing: false });
+    return true;
+  }
+
+  /** #107: replace the camera with a display-capture track (mesh-safe). */
+  async startScreenShare(): Promise<boolean> {
+    if (this.state.phase === 'idle' || !this.state.video || !this.localStream) return false;
+    const display = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: false,
+    });
+    const track = display.getVideoTracks()[0];
+    if (!track) {
+      display.getTracks().forEach((item) => item.stop());
+      return false;
+    }
+    track.addEventListener('ended', () => {
+      void this.stopScreenShare().catch(() => undefined);
+    });
+    this.replaceOutgoingTrack('video', track);
+    this.replaceLocalStreamTrack(track);
+    this.update({ screenSharing: true, cameraOn: true });
+    return true;
+  }
+
+  /** #107: return to the camera (or a disabled camera) after screen sharing. */
+  async stopScreenShare(): Promise<boolean> {
+    if (this.state.phase === 'idle' || !this.state.screenSharing) return false;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false,
+    });
+    const track = stream.getVideoTracks()[0];
+    if (!track) return false;
+    track.enabled = this.state.cameraOn;
+    this.replaceOutgoingTrack('video', track);
+    this.replaceLocalStreamTrack(track);
+    this.update({ screenSharing: false });
+    return true;
+  }
+
   dismissNotice(): void {
     if (!this.state.notice) return;
     this.update({ notice: null });

@@ -21013,3 +21013,53 @@ html[data-theme='dark'] .recent-thumb--video {
     height: 150px;
   }
 }
+
+/* #107/#173: expandable call window, device settings and screen sharing. */
+.call-dialog--maximized {
+  width: min(1180px, calc(100vw - 32px)) !important;
+  height: min(880px, calc(100dvh - 32px)) !important;
+  max-height: calc(100dvh - 32px);
+}
+.call-dialog--maximized .call-stage {
+  flex: 1;
+  height: auto;
+}
+.call-devices {
+  margin: 0 12px;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #eef5f6;
+}
+.call-devices__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.call-devices__field {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.95;
+}
+.call-devices__field select {
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: #18211e;
+  color: inherit;
+}
+.call-devices__error {
+  margin: 8px 0 0;
+  color: #fca5a5;
+  font-size: 12px;
+}
+.call-control-error {
+  margin: 0 12px 8px;
+  color: #fca5a5;
+  font-size: 12px;
+}

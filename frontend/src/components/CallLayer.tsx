@@ -24,6 +24,8 @@ import {
   VideoOffIcon,
   ExpandIcon,
   MinimizeIcon,
+  MonitorIcon,
+  SettingsIcon,
 } from './Icons';
 
 const FOCUSABLE =
@@ -203,6 +205,12 @@ export function CallLayer() {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [cameraId, setCameraId] = useState('');
+  const [microphoneId, setMicrophoneId] = useState('');
+  const [controlError, setControlError] = useState<MessageKey | null>(null);
   const [outputVolume, setOutputVolume] = useState(readCallOutputVolume);
   const [outputMuted, setOutputMuted] = useState(false);
   const [outputDeviceId, setOutputDeviceId] = useState<string | null>(null);
@@ -246,6 +254,9 @@ export function CallLayer() {
     if (active) return;
     setConfirmEnd(false);
     setCollapsed(false);
+    setMaximized(false);
+    setSettingsOpen(false);
+    setControlError(null);
     setOutputMuted(false);
     setMicTest(false);
     setOutputError(null);
@@ -483,7 +494,7 @@ export function CallLayer() {
       className={`call-overlay call-overlay--${call.phase}${connected ? ' call-overlay--floating' : ''}`}
     >
       <div
-        className={`call-dialog${connected ? ' call-dialog--floating' : ''}`}
+        className={`call-dialog${connected ? ' call-dialog--floating' : ''}${maximized ? ' call-dialog--maximized' : ''}`}
         role="dialog"
         aria-modal={connected ? undefined : true}
         aria-labelledby={titleId}
@@ -597,6 +608,76 @@ export function CallLayer() {
           ) : null}
         </div>
 
+        {connected && settingsOpen ? (
+          <section className="call-devices" aria-label={t('calls.deviceSettings')}>
+            <div className="call-devices__head">
+              <strong>{t('calls.deviceSettings')}</strong>
+              <button
+                type="button"
+                className="icon-button icon-button--small"
+                onClick={() => setSettingsOpen(false)}
+                aria-label={t('calls.deviceClose')}
+                title={t('calls.deviceClose')}
+              >
+                <CloseIcon aria-hidden="true" />
+              </button>
+            </div>
+            {call.video ? (
+              <label className="call-devices__field">
+                <span>{t('calls.camera')}</span>
+                <select
+                  value={cameraId}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setCameraId(next);
+                    setControlError(null);
+                    void store.switchCallCamera(next).catch(() => {
+                      setControlError('calls.deviceSwitchError');
+                    });
+                  }}
+                >
+                  <option value="">{t('calls.deviceDefault')}</option>
+                  {devices
+                    .filter((device) => device.kind === 'videoinput')
+                    .map((device, index) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label || `${t('calls.camera')} ${index + 1}`}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
+            <label className="call-devices__field">
+              <span>{t('calls.microphone')}</span>
+              <select
+                value={microphoneId}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setMicrophoneId(next);
+                  setControlError(null);
+                  void store.switchCallMicrophone(next).catch(() => {
+                    setControlError('calls.deviceSwitchError');
+                  });
+                }}
+              >
+                <option value="">{t('calls.deviceDefault')}</option>
+                {devices
+                  .filter((device) => device.kind === 'audioinput')
+                  .map((device, index) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `${t('calls.microphone')} ${index + 1}`}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            {controlError ? (
+              <p className="call-devices__error" role="alert">
+                {t(controlError)}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
+
         <div className="call-controls">
           {connected ? (
             <div className="call-audio" role="group" aria-label={t('calls.audioControls')}>
@@ -700,6 +781,12 @@ export function CallLayer() {
             </div>
           ) : null}
 
+          {controlError && !settingsOpen ? (
+            <p className="call-control-error" role="alert">
+              {t(controlError)}
+            </p>
+          ) : null}
+
           <div className="call-controls__buttons">
             {incoming ? (
               <>
@@ -749,6 +836,63 @@ export function CallLayer() {
                         {call.cameraOn ? <VideoIcon /> : <VideoOffIcon />}
                       </button>
                     ) : null}
+                    {call.video ? (
+                      <button
+                        type="button"
+                        className={`call-button call-button--round${
+                          call.screenSharing ? ' is-active' : ''
+                        }`}
+                        onClick={() => {
+                          setControlError(null);
+                          const action = call.screenSharing
+                            ? store.stopCallScreenShare()
+                            : store.startCallScreenShare();
+                          void action
+                            .then((ok) => {
+                              if (!ok) setControlError('calls.screenShareError');
+                            })
+                            .catch(() => setControlError('calls.screenShareError'));
+                        }}
+                        aria-pressed={Boolean(call.screenSharing)}
+                        aria-label={
+                          call.screenSharing ? t('calls.screenShareStop') : t('calls.screenShare')
+                        }
+                        title={
+                          call.screenSharing ? t('calls.screenShareStop') : t('calls.screenShare')
+                        }
+                      >
+                        <MonitorIcon />
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`call-button call-button--round${settingsOpen ? ' is-active' : ''}`}
+                      onClick={() => {
+                        setControlError(null);
+                        setSettingsOpen((open) => !open);
+                        if (!settingsOpen) {
+                          void navigator.mediaDevices
+                            ?.enumerateDevices()
+                            .then((list) => setDevices(list))
+                            .catch(() => setDevices([]));
+                        }
+                      }}
+                      aria-pressed={settingsOpen}
+                      aria-label={t('calls.deviceSettings')}
+                      title={t('calls.deviceSettings')}
+                    >
+                      <SettingsIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="call-button call-button--round"
+                      onClick={() => setMaximized((value) => !value)}
+                      aria-pressed={maximized}
+                      aria-label={maximized ? t('calls.restore') : t('calls.maximize')}
+                      title={maximized ? t('calls.restore') : t('calls.maximize')}
+                    >
+                      <ExpandIcon />
+                    </button>
                   </>
                 ) : null}
                 <button
