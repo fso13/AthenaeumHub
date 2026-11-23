@@ -44,6 +44,7 @@ class KeycloakServiceAccountTokenTest {
     private static final String ADMIN_USERS = "/admin/realms/krug/users";
 
     private WireMockServer server;
+    private MutableClock clock;
     private KeycloakHttp http;
     private KeycloakAdminAdapter adapter;
 
@@ -51,6 +52,7 @@ class KeycloakServiceAccountTokenTest {
     void start() {
         server = new WireMockServer(WireMockConfiguration.options().dynamicPort());
         server.start();
+        clock = new MutableClock(Instant.parse("2026-01-01T00:00:00Z"));
         http = client("svc-krug-bff", SERVICE_SECRET);
         adapter = new KeycloakAdminAdapter(http);
     }
@@ -75,6 +77,21 @@ class KeycloakServiceAccountTokenTest {
                 .contains("grant_type=client_credentials")
                 .contains("client_id=svc-krug-bff")
                 .doesNotContain("password=");
+    }
+
+    @Test
+    void expiredCachedTokenIsReacquiredBeforeTheNextAdminCall() {
+        server.stubFor(post(urlEqualTo(REALM_TOKEN))
+                .willReturn(okJson("{\"access_token\":\"svc-1\",\"expires_in\":300}")));
+        server.stubFor(get(urlPathEqualTo(ADMIN_USERS)).willReturn(okJson("[]")));
+
+        assertThat(adapter.findByEmail("before@krug.test")).isEmpty();
+        assertThat(realmTokenRequests()).isEqualTo(1);
+
+        // expires_in=300 minus the 30 s skew: the cache is stale after 400 s.
+        clock.advanceSeconds(400);
+        assertThat(adapter.findByEmail("after@krug.test")).isEmpty();
+        assertThat(realmTokenRequests()).isEqualTo(2);
     }
 
     @Test
@@ -140,8 +157,7 @@ class KeycloakServiceAccountTokenTest {
                 new KrugProperties.Oidc("", "", "krug-api", "krug-web", null), null);
         AuthBffProperties properties = properties(serviceClientId, serviceClientSecret);
         KeycloakEndpoints endpoints = new KeycloakEndpoints(properties, krug);
-        return new KeycloakHttp(new ObjectMapper(), endpoints, properties,
-                new MutableClock(Instant.parse("2026-01-01T00:00:00Z")));
+        return new KeycloakHttp(new ObjectMapper(), endpoints, properties, clock);
     }
 
     private AuthBffProperties properties(String serviceClientId, String serviceClientSecret) {

@@ -169,61 +169,55 @@ docker compose --env-file deploy/production/.env.prod \
   '
 ```
 
-Проверьте клиент и получите id его service-account пользователя:
+Проверьте клиент, получите его UUID и id service-account пользователя (секрет
+не печатается):
 
 ```bash
 docker compose --env-file deploy/production/.env.prod \
   -f deploy/production/docker-compose.prod.yml \
   exec -T keycloak bash -lc '
-    /opt/keycloak/bin/kcadm.sh get clients -r krug \
-      -q clientId=svc-krug-bff \
+    set -eu
+    KCADM=/opt/keycloak/bin/kcadm.sh
+    $KCADM get clients -r krug -q clientId=svc-krug-bff \
       --fields id,clientId,enabled,serviceAccountsEnabled,publicClient
-    /opt/keycloak/bin/kcadm.sh get clients/svc-krug-bff/service-account-user \
-      --fields id,username
+    CLIENT_UUID=$($KCADM get clients -r krug -q clientId=svc-krug-bff \
+      --fields id --format csv --noquotes | tail -n1)
+    test -n "$CLIENT_UUID"
+    SA_UUID=$($KCADM get clients/$CLIENT_UUID/service-account-user \
+      --fields id --format csv --noquotes | tail -n1)
+    test -n "$SA_UUID"
+    echo "client_uuid=$CLIENT_UUID service_account_uuid=$SA_UUID"
   '
 ```
 
-`kcadm` принимает clientId прямо вместо UUID. Если команда с
-`clients/svc-krug-bff/...` не сработала в вашей версии Keycloak, возьмите
-`id` из первой команды и передайте его: `clients/<uuid>/service-account-user`.
+Если `--format csv --noquotes` в вашей версии `kcadm` недоступен, возьмите
+`id` из JSON-вывода первой команды вручную.
 
-Выдайте минимальные роли (команда идемпотентна для уже выданных ролей):
+Выдайте минимальные роли (идемпотентно; используйте `SA_UUID` из вывода выше):
 
 ```bash
 docker compose --env-file deploy/production/.env.prod \
   -f deploy/production/docker-compose.prod.yml \
   exec -T keycloak bash -lc '
+    set -eu
+    KCADM=/opt/keycloak/bin/kcadm.sh
+    CLIENT_UUID=$($KCADM get clients -r krug -q clientId=svc-krug-bff \
+      --fields id --format csv --noquotes | tail -n1)
+    SA_UUID=$($KCADM get clients/$CLIENT_UUID/service-account-user \
+      --fields id --format csv --noquotes | tail -n1)
     for role in manage-users view-users query-users; do
-      /opt/keycloak/bin/kcadm.sh add-roles -r krug \
-        --uusername service-account-svc-krug-bff \
-        --cclientid realm-management \
-        --rolename "$role"
+      $KCADM add-roles -r krug --uid "$SA_UUID" \
+        --cclientid realm-management --rolename "$role"
     done
   '
 ```
 
-`service-account-svc-krug-bff` — стандартное имя service-account
-пользователя Keycloak для клиента `svc-krug-bff`; если в вашей версии оно
-другое, используйте `--uid <id>` из команды выше.
 
-Проверить, что клиент реально получает токен (не печатая его):
+Проверка получения токена выполняется после старта backend (§3.4): секрет уже
+находится в окружении backend-контейнера и не печатается в командной строке.
 
-```bash
-docker compose --env-file deploy/production/.env.prod \
-  -f deploy/production/docker-compose.prod.yml \
-  exec -T keycloak bash -lc '
-    test -n "$KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET"
-    curl -s -o /dev/null -w "%{http_code}\n" \
-      -X POST http://127.0.0.1:8080/realms/krug/protocol/openid-connect/token \
-      -d grant_type=client_credentials \
-      -d client_id=svc-krug-bff \
-      --data-urlencode client_secret="$KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET"
-  '
-```
-
-Ожидаемо `200`; `401` — секрет в `.env.prod` не совпадает с импортированным
-или клиент отключён. `kcadm` внутри контейнера использует bootstrap-пароль
-только для ops-профиля; backend его не получает.
+`kcadm` внутри контейнера использует bootstrap-пароль только для ops-профиля;
+backend его не получает.
 
 Если клиент создавался вручную (realm уже был импортирован раньше), создайте
 его один раз:
@@ -270,6 +264,24 @@ openssl s_client -connect chat.example.com:443 -servername chat.example.com </de
 Проверить, что `https://FILES_DOMAIN` отдаёт `405` на `POST /` и не отдаёт
 listing без подписи. Прямые `http://host:9000`, `:8180`, `:5432` не должны
 открываться.
+
+Проверить service-account Keycloak из backend-контейнера (секрет не печатается):
+
+```bash
+docker compose --env-file deploy/production/.env.prod \
+  -f deploy/production/docker-compose.prod.yml \
+  exec -T backend sh -lc '
+    test -n "$KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET"
+    curl -s -o /dev/null -w "%{http_code}\n" \
+      -X POST http://keycloak:8080/realms/krug/protocol/openid-connect/token \
+      -d grant_type=client_credentials \
+      -d client_id=svc-krug-bff \
+      --data-urlencode client_secret="$KRUG_KEYCLOAK_SERVICE_CLIENT_SECRET"
+  '
+```
+
+Ожидаемо `200`; `401` — секрет в `.env.prod` не совпадает с импортированным
+или клиент отключён, `503` на auth-эндпоинтах — не выданы роли (см. §3.3).
 
 ### 3.5. Первый вход и SMTP
 

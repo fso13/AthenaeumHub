@@ -67,6 +67,9 @@ Access token остаётся в теле и в памяти SPA.
 `SameSite=None` без `Secure` отклоняется на старте. `application-prod.yml` задаёт
 `secure=true`; `ProdGuard` дополнительно падает, если в prod выставлено `false`.
 
+Миграция БД не требуется: BFF не хранит refresh-токены, авторитетом остаётся
+Keycloak; cookie содержит непрозрачный refresh-токен и заменяется при каждой ротации.
+
 ### 2.3. CSRF и CORS
 
 `backend/src/main/java/ru/krug/backend/auth/infrastructure/security/AuthCsrfFilter.java`:
@@ -217,7 +220,7 @@ cd backend
 mvn -o -Dmaven.repo.local=.m2repo test
 ```
 
-Результат полного прогона: **1090 tests, 0 failures, 0 errors, 0 skipped**;
+Результат полного прогона: **1091 tests, 0 failures, 0 errors, 0 skipped**;
 `BUILD SUCCESS`, ArchUnit 11/11. Прогон выполнялся на Java 21: в этом окружении
 Maven по умолчанию стартует на Java 26, где inline-mock Mockito падает на нескольких
 pre-existing unit-тестах (не связано с #103).
