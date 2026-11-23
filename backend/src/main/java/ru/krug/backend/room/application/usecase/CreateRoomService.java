@@ -48,13 +48,15 @@ public class CreateRoomService {
     }
 
     @Transactional
-    public RoomView create(Principal principal, UUID workspaceId, String name) {
+    public RoomView create(Principal principal, UUID workspaceId, String name,
+                           String mediaMode) {
         tenantContext.activate(principal.withWorkspace(workspaceId));
         workspaceAccess.requireActiveMember(workspaceId, principal.userId());
 
         String normalized = Room.normalizeName(name);
+        Room.MediaMode mode = Room.MediaMode.defaulted(mediaMode);
         UUID chatId = channels.createBackingChannel(principal, workspaceId, normalized);
-        Room room = Room.create(UUID.randomUUID(), workspaceId, chatId, normalized,
+        Room room = Room.create(UUID.randomUUID(), workspaceId, chatId, normalized, mode,
                 principal.userId(), clock.now());
         rooms.save(room);
 

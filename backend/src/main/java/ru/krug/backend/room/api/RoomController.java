@@ -24,8 +24,8 @@ import ru.krug.backend.room.application.usecase.CloseRoomService;
 import ru.krug.backend.room.application.usecase.CreateRoomService;
 import ru.krug.backend.room.application.usecase.GetRoomService;
 import ru.krug.backend.room.application.usecase.ListRoomsService;
-import ru.krug.backend.room.application.usecase.RenameRoomService;
 import ru.krug.backend.room.application.usecase.RoomPresenceService;
+import ru.krug.backend.room.application.usecase.UpdateRoomService;
 import ru.krug.backend.shared.application.model.Principal;
 
 /**
@@ -35,7 +35,7 @@ import ru.krug.backend.shared.application.model.Principal;
  * GET    /workspaces/{workspaceId}/rooms              — ACTIVE rooms + live participants
  * POST   /workspaces/{workspaceId}/rooms              — room + managed GROUP channel
  * GET    /rooms/{roomId}                              — room detail (optional)
- * PATCH  /workspaces/{workspaceId}/rooms/{roomId}     — rename (creator/OWNER/ADMIN)
+ * PATCH  /workspaces/{workspaceId}/rooms/{roomId}     — rename/media mode (creator/OWNER/ADMIN)
  * DELETE /workspaces/{workspaceId}/rooms/{roomId}     — soft-close (creator/OWNER)
  * POST   /rooms/{roomId}/presence                     — join/heartbeat (30 s TTL)
  * DELETE /rooms/{roomId}/presence                     — leave (idempotent)
@@ -52,17 +52,17 @@ public class RoomController {
     private final CreateRoomService createRoom;
     private final ListRoomsService listRooms;
     private final GetRoomService getRoom;
-    private final RenameRoomService renameRoom;
+    private final UpdateRoomService updateRoom;
     private final CloseRoomService closeRoom;
     private final RoomPresenceService presence;
 
     public RoomController(CreateRoomService createRoom, ListRoomsService listRooms,
-                          GetRoomService getRoom, RenameRoomService renameRoom,
+                          GetRoomService getRoom, UpdateRoomService updateRoom,
                           CloseRoomService closeRoom, RoomPresenceService presence) {
         this.createRoom = createRoom;
         this.listRooms = listRooms;
         this.getRoom = getRoom;
-        this.renameRoom = renameRoom;
+        this.updateRoom = updateRoom;
         this.closeRoom = closeRoom;
         this.presence = presence;
     }
@@ -77,7 +77,8 @@ public class RoomController {
                                                @Valid @RequestBody CreateRoomRequest request,
                                                Principal principal) {
         RoomResponse response = RoomApiMapper.toResponse(
-                createRoom.create(principal, workspaceId, request.name()));
+                createRoom.create(principal, workspaceId, request.name(),
+                        request.mediaMode()));
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -87,11 +88,11 @@ public class RoomController {
     }
 
     @PatchMapping("/workspaces/{workspaceId}/rooms/{roomId}")
-    public RoomResponse rename(@PathVariable UUID workspaceId, @PathVariable UUID roomId,
+    public RoomResponse update(@PathVariable UUID workspaceId, @PathVariable UUID roomId,
                                @Valid @RequestBody UpdateRoomRequest request,
                                Principal principal) {
-        return RoomApiMapper.toResponse(
-                renameRoom.rename(principal, workspaceId, roomId, request.name()));
+        return RoomApiMapper.toResponse(updateRoom.update(principal, workspaceId, roomId,
+                request.name(), request.mediaMode()));
     }
 
     @DeleteMapping("/workspaces/{workspaceId}/rooms/{roomId}")

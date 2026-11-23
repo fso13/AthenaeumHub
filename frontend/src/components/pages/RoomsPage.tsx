@@ -4,7 +4,9 @@ import type { Room } from '../../api/types';
 import { describeError } from '../../domain/errors';
 import { t, type MessageKey } from '../../i18n/ru';
 import {
+  roomMediaMode,
   ROOMS_POLL_INTERVAL_MS,
+  type RoomMediaMode,
   type RoomsActionKind,
   type RoomsState,
 } from '../../rooms/roomsStore';
@@ -18,7 +20,7 @@ import {
 } from '../../store/ChatProvider';
 import { Avatar } from '../Avatar';
 import { DeviceImageUpload } from '../DeviceImageUpload';
-import { CloseIcon, PlusIcon, VideoIcon } from '../Icons';
+import { CloseIcon, PhoneIcon, PlusIcon, VideoIcon } from '../Icons';
 import { PageShell } from './PageShell';
 
 interface RoomsPageProps {
@@ -63,6 +65,8 @@ function roomErrorText(error: ApiError, kind: RoomsActionKind): string {
       return t('rooms.create.error');
     case 'rename':
       return t('rooms.rename.error');
+    case 'media_mode':
+      return t('rooms.media.error');
     case 'close':
       return t('rooms.close.error');
     case 'join':
@@ -126,6 +130,7 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
+  const [createMode, setCreateMode] = useState<RoomMediaMode>('VIDEO');
   const [createError, setCreateError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{
     roomId: string;
@@ -172,11 +177,14 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
     }
   }, [avatarsStore, rooms.items]);
 
-  // A conference with no peers has no WebRTC leg yet. Show the local camera so
-  // entering a room feels connected; the moment a second participant appears
-  // the room store starts the mesh and CallLayer takes over.
+  // A conference with no peers has no WebRTC leg yet. A VIDEO room shows the
+  // local camera so entering feels connected; an AUDIO room never asks for a
+  // camera and keeps the avatar placeholder. The moment a second participant
+  // appears the room store starts the mesh and CallLayer takes over.
+  const presenceRoom = rooms.items.find((room) => room.id === rooms.presenceRoomId) ?? null;
+  const previewMode: RoomMediaMode = presenceRoom ? roomMediaMode(presenceRoom) : 'VIDEO';
   useEffect(() => {
-    if (!rooms.presenceRoomId || state.call.phase !== 'idle') {
+    if (!rooms.presenceRoomId || state.call.phase !== 'idle' || previewMode !== 'VIDEO') {
       setPreviewStream(null);
       return;
     }
@@ -200,7 +208,7 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
       stream?.getTracks().forEach((track) => track.stop());
       setPreviewStream(null);
     };
-  }, [rooms.presenceRoomId, state.call.phase]);
+  }, [previewMode, rooms.presenceRoomId, state.call.phase]);
 
   useEffect(() => {
     const video = previewRef.current;
@@ -245,10 +253,11 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
     const error = validateName(createName);
     setCreateError(error);
     if (error) return;
-    const ok = await store.createRoom(createName);
+    const ok = await store.createRoom(createName, createMode);
     if (!ok) return;
     setCreateOpen(false);
     setCreateName('');
+    setCreateMode('VIDEO');
     setCreateError(null);
   };
 
@@ -353,6 +362,30 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
               {createError}
             </p>
           ) : null}
+          <fieldset className="room-create__mode">
+            <legend className="field__label">{t('rooms.create.mode')}</legend>
+            <div className="room-create__mode-options">
+              <button
+                type="button"
+                className={`room-create__mode-button${createMode === 'AUDIO' ? ' is-active' : ''}`}
+                aria-pressed={createMode === 'AUDIO'}
+                onClick={() => setCreateMode('AUDIO')}
+              >
+                <PhoneIcon aria-hidden="true" />
+                {t('rooms.media.audio')}
+              </button>
+              <button
+                type="button"
+                className={`room-create__mode-button${createMode === 'VIDEO' ? ' is-active' : ''}`}
+                aria-pressed={createMode === 'VIDEO'}
+                onClick={() => setCreateMode('VIDEO')}
+              >
+                <VideoIcon aria-hidden="true" />
+                {t('rooms.media.video')}
+              </button>
+            </div>
+            <p className="room-create__hint">{t('rooms.create.modeHint')}</p>
+          </fieldset>
           <div className="room-create__actions">
             <button
               type="button"
@@ -360,6 +393,7 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
               onClick={() => {
                 setCreateOpen(false);
                 setCreateName('');
+                setCreateMode('VIDEO');
                 setCreateError(null);
                 store.clearActionError();
               }}
@@ -462,9 +496,11 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
           {rooms.items.map((room) => {
             const present = isPresent(room);
             const inCall = callForRoom(room);
+            const mode = roomMediaMode(room);
             const joining = pending?.kind === 'join' && pending.roomId === room.id;
             const leaving = pending?.kind === 'leave' && pending.roomId === room.id;
             const renamingThis = pending?.kind === 'rename' && pending.roomId === room.id;
+            const modeChangingThis = pending?.kind === 'media_mode' && pending.roomId === room.id;
             const closingThis = pending?.kind === 'close' && pending.roomId === room.id;
             const issue = rooms.callIssue?.roomId === room.id ? rooms.callIssue.reason : null;
             const errorHere =
@@ -485,12 +521,26 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                         {room.name}
                       </h2>
                       <div className="room-card__chips">
+                        <span
+                          className={`chip room-media-chip room-media-chip--${mode.toLowerCase()}`}
+                        >
+                          {mode === 'AUDIO' ? (
+                            <PhoneIcon aria-hidden="true" />
+                          ) : (
+                            <VideoIcon aria-hidden="true" />
+                          )}
+                          {mode === 'AUDIO' ? t('rooms.media.audio') : t('rooms.media.video')}
+                        </span>
                         {present ? (
                           <span className="chip chip--accent">{t('rooms.present')}</span>
                         ) : null}
                         {inCall ? (
                           <span className="chip room-call-chip">
-                            <VideoIcon aria-hidden="true" />
+                            {call.video ? (
+                              <VideoIcon aria-hidden="true" />
+                            ) : (
+                              <PhoneIcon aria-hidden="true" />
+                            )}
                             {call.phase === 'incoming'
                               ? t('rooms.call.incoming')
                               : call.mediaPending || call.phase !== 'connected'
@@ -548,13 +598,21 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                       />
                     ) : (
                       <div className="room-preview__placeholder">
-                        <VideoIcon aria-hidden="true" />
+                        {mode === 'AUDIO' ? (
+                          <PhoneIcon aria-hidden="true" />
+                        ) : (
+                          <VideoIcon aria-hidden="true" />
+                        )}
                       </div>
                     )}
                     <p className="room-preview__hint">
-                      {room.participant_count > 1
-                        ? t('rooms.preview.connecting')
-                        : t('rooms.preview.waiting')}
+                      {mode === 'AUDIO'
+                        ? room.participant_count > 1
+                          ? t('rooms.preview.audioConnecting')
+                          : t('rooms.preview.audioWaiting')
+                        : room.participant_count > 1
+                          ? t('rooms.preview.connecting')
+                          : t('rooms.preview.waiting')}
                     </p>
                   </div>
                 ) : null}
@@ -691,6 +749,36 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                       {joining ? t('rooms.joining') : t('rooms.join')}
                     </button>
                   )}
+                  {canRename(room) ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={busy || closingId === room.id}
+                      aria-label={t(
+                        mode === 'AUDIO'
+                          ? 'rooms.media.makeVideoAction'
+                          : 'rooms.media.makeAudioAction',
+                        { name: room.name },
+                      )}
+                      aria-busy={modeChangingThis}
+                      onClick={() => {
+                        store.clearActionError();
+                        setRenaming(null);
+                        setClosingId(null);
+                        setAvatarEditorRoomId(null);
+                        void store.updateRoomMediaMode(
+                          room.id,
+                          mode === 'AUDIO' ? 'VIDEO' : 'AUDIO',
+                        );
+                      }}
+                    >
+                      {modeChangingThis
+                        ? t('rooms.media.switching')
+                        : mode === 'AUDIO'
+                          ? t('rooms.media.makeVideo')
+                          : t('rooms.media.makeAudio')}
+                    </button>
+                  ) : null}
                   {canRename(room) ? (
                     <button
                       type="button"

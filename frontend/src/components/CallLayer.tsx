@@ -1,9 +1,16 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import {
+  applyMediaOutput,
+  canSelectAudioOutput,
+  chooseAudioOutputDevice,
+} from '../calls/mediaOutput';
+import type { CallErrorCode, CallParticipant, CallState } from '../calls/types';
 import { chatDisplayName } from '../domain/chatLabel';
 import { formatDuration } from '../files/format';
+import { useMicLevel } from '../hooks/useMicLevel';
 import { t, type MessageKey } from '../i18n/ru';
+import { readCallOutputVolume, writeCallOutputVolume } from '../prefs/devicePreferences';
 import { useChatState, useChatStore } from '../store/ChatProvider';
-import type { CallErrorCode, CallParticipant, CallState } from '../calls/types';
 import { Avatar } from './Avatar';
 import {
   CloseIcon,
@@ -11,6 +18,8 @@ import {
   MicOffIcon,
   PhoneIcon,
   PhoneOffIcon,
+  SpeakerIcon,
+  SpeakerOffIcon,
   VideoIcon,
   VideoOffIcon,
 } from './Icons';
@@ -68,6 +77,10 @@ function ConferenceTile({
   local = false,
   cameraOn = true,
   ringing = false,
+  outputVolume,
+  outputMuted,
+  outputDeviceId,
+  onOutputError,
 }: {
   participant?: CallParticipant;
   name: string;
@@ -76,6 +89,10 @@ function ConferenceTile({
   local?: boolean;
   cameraOn?: boolean;
   ringing?: boolean;
+  outputVolume: number;
+  outputMuted: boolean;
+  outputDeviceId: string | null;
+  onOutputError?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hasVideo = Boolean(video && stream && stream.getVideoTracks().length > 0);
@@ -85,6 +102,23 @@ function ConferenceTile({
     if (videoRef.current) videoRef.current.srcObject = stream;
   }, [stream]);
 
+  // #107: every remote tile is a real media element even for audio-only calls,
+  // so the speaker is audible while the tile keeps showing the avatar.
+  useEffect(() => {
+    if (local) return;
+    let active = true;
+    void applyMediaOutput(videoRef.current, {
+      volume: outputVolume,
+      muted: outputMuted,
+      deviceId: outputDeviceId,
+    }).then((ok) => {
+      if (!ok && active) onOutputError?.();
+    });
+    return () => {
+      active = false;
+    };
+  }, [local, onOutputError, outputDeviceId, outputMuted, outputVolume, stream]);
+
   const state = participant?.connectionState;
   const showConnecting =
     !local && !ringing && state !== undefined && state !== 'connected' && state !== 'failed';
@@ -92,14 +126,21 @@ function ConferenceTile({
 
   return (
     <div className={`call-tile${showVideo ? ' is-video' : ''}${local ? ' call-tile--local' : ''}`}>
-      {video ? (
+      {video || !local ? (
         <video
           ref={videoRef}
           className="call-tile__video"
           autoPlay
           playsInline
-          muted={local}
-          aria-label={local ? t('calls.localPreview') : t('calls.groupVideoAnnounce', { name })}
+          muted={local ? true : outputMuted}
+          aria-hidden={!local && !video ? true : undefined}
+          aria-label={
+            local
+              ? t('calls.localPreview')
+              : video
+                ? t('calls.groupVideoAnnounce', { name })
+                : undefined
+          }
         />
       ) : null}
       <div className="call-tile__identity">
@@ -159,8 +200,19 @@ export function CallLayer() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [outputVolume, setOutputVolume] = useState(readCallOutputVolume);
+  const [outputMuted, setOutputMuted] = useState(false);
+  const [outputDeviceId, setOutputDeviceId] = useState<string | null>(null);
+  const [outputDeviceLabel, setOutputDeviceLabel] = useState<string | null>(null);
+  const [outputError, setOutputError] = useState<MessageKey | null>(null);
+  const [micTest, setMicTest] = useState(false);
   const titleId = useId();
   const descriptionId = useId();
+  const canChooseOutput = canSelectAudioOutput();
+  const micLevel = useMicLevel(call.localStream, call.phase === 'connected' && micTest, call.muted);
+  const reportOutputError = useCallback(() => {
+    setOutputError('calls.outputDeviceError');
+  }, []);
 
   const chat = call.chatId ? (state.chats.find((item) => item.id === call.chatId) ?? null) : null;
   const peer = call.peerUserId
@@ -185,9 +237,14 @@ export function CallLayer() {
   const gridSize = Math.min(3, Math.max(1, call.participants.length));
   const announceName = conference ? conferenceNames.join(', ') || t('calls.groupCall') : peerName;
 
-  // Reset the confirmation whenever the call goes away.
+  // Reset the confirmation whenever the call goes away. Output mute and the
+  // optional mic test are session-local; the volume itself is persisted.
   useEffect(() => {
-    if (!active) setConfirmEnd(false);
+    if (active) return;
+    setConfirmEnd(false);
+    setOutputMuted(false);
+    setMicTest(false);
+    setOutputError(null);
   }, [active]);
 
   // The call surface owns the viewport (full-screen on mobile): no background
@@ -285,6 +342,54 @@ export function CallLayer() {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = call.remoteStream;
   }, [call.remoteStream]);
 
+  // #107: apply the saved volume/mute/sink to the 1:1 remote media element.
+  // Mesh tiles do the same in `ConferenceTile`; local preview is always muted.
+  useEffect(() => {
+    let current = true;
+    void applyMediaOutput(remoteVideoRef.current, {
+      volume: outputVolume,
+      muted: outputMuted,
+      deviceId: outputDeviceId,
+    }).then((ok) => {
+      if (!ok && current) reportOutputError();
+    });
+    return () => {
+      current = false;
+    };
+  }, [call.remoteStream, outputDeviceId, outputMuted, outputVolume, reportOutputError]);
+
+  const changeOutputVolume = (value: number) => {
+    setOutputError(null);
+    setOutputVolume(writeCallOutputVolume(value));
+  };
+
+  const chooseOutput = async () => {
+    setOutputError(null);
+    try {
+      const device = await chooseAudioOutputDevice();
+      if (!device) {
+        setOutputError('calls.outputDeviceUnsupported');
+        return;
+      }
+      setOutputDeviceId(device.deviceId);
+      setOutputDeviceLabel(device.label.trim() || null);
+    } catch (error) {
+      const name =
+        typeof error === 'object' && error !== null && 'name' in error
+          ? String((error as { name?: unknown }).name ?? '')
+          : '';
+      // A closed browser picker is not a failure.
+      if (name === 'AbortError') return;
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        setOutputError('calls.outputDeviceDenied');
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        setOutputError('calls.outputDeviceMissing');
+      } else {
+        setOutputError('calls.outputDeviceError');
+      }
+    }
+  };
+
   // Unmount cleanup: navigating away (or logout) must stop tracks and close the
   // peer connection. `endCall` is a no-op when idle, so StrictMode's double
   // mount cannot break a later call.
@@ -340,6 +445,10 @@ export function CallLayer() {
                   video={call.video}
                   stream={participant.stream}
                   ringing={incoming}
+                  outputVolume={outputVolume}
+                  outputMuted={outputMuted}
+                  outputDeviceId={outputDeviceId}
+                  onOutputError={reportOutputError}
                 />
               ))}
               {call.localStream ? (
@@ -349,6 +458,10 @@ export function CallLayer() {
                   stream={call.localStream}
                   local
                   cameraOn={call.cameraOn}
+                  outputVolume={outputVolume}
+                  outputMuted={outputMuted}
+                  outputDeviceId={outputDeviceId}
+                  onOutputError={reportOutputError}
                 />
               ) : null}
             </div>
@@ -359,6 +472,7 @@ export function CallLayer() {
                 className={`call-stage__remote${hasRemoteVideo ? ' is-video' : ''}`}
                 autoPlay
                 playsInline
+                muted={outputMuted}
                 aria-label={hasRemoteVideo ? t('calls.remoteVideo') : undefined}
               />
 
@@ -416,68 +530,172 @@ export function CallLayer() {
         </div>
 
         <div className="call-controls">
-          {incoming ? (
-            <>
-              <button
-                type="button"
-                ref={acceptRef}
-                className="call-button call-button--accept"
-                onClick={() => store.acceptIncomingCall()}
-              >
-                <PhoneIcon aria-hidden="true" />
-                {t('calls.accept')}
-              </button>
-              <button
-                type="button"
-                className="call-button call-button--danger"
-                onClick={() => store.rejectIncomingCall()}
-              >
-                <PhoneOffIcon aria-hidden="true" />
-                {t('calls.reject')}
-              </button>
-            </>
-          ) : (
-            <>
-              {connected ? (
-                <>
+          {connected ? (
+            <div className="call-audio" role="group" aria-label={t('calls.audioControls')}>
+              <div className="call-audio__row">
+                <button
+                  type="button"
+                  className={`call-audio__button${outputMuted ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setOutputError(null);
+                    setOutputMuted((current) => !current);
+                  }}
+                  aria-pressed={outputMuted}
+                  aria-label={outputMuted ? t('calls.outputUnmute') : t('calls.outputMute')}
+                  title={outputMuted ? t('calls.outputUnmute') : t('calls.outputMute')}
+                >
+                  {outputMuted ? <SpeakerOffIcon /> : <SpeakerIcon />}
+                  <span>{outputMuted ? t('calls.outputUnmute') : t('calls.outputMute')}</span>
+                </button>
+
+                <label className="call-audio__volume">
+                  <span className="call-audio__volume-label">{t('calls.volume')}</span>
+                  <input
+                    className="call-audio__range"
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={outputVolume}
+                    aria-valuetext={t('calls.volumeValue', { value: outputVolume })}
+                    onChange={(event) => changeOutputVolume(Number(event.target.value))}
+                  />
+                  <span className="call-audio__volume-value" aria-hidden="true">
+                    {t('calls.volumeValue', { value: outputVolume })}
+                  </span>
+                </label>
+
+                {canChooseOutput ? (
                   <button
                     type="button"
-                    className={`call-button call-button--round${call.muted ? ' is-active' : ''}`}
-                    onClick={() => store.toggleCallMute()}
-                    aria-pressed={call.muted}
-                    aria-label={call.muted ? t('calls.unmute') : t('calls.mute')}
-                    title={call.muted ? t('calls.unmute') : t('calls.mute')}
+                    className="call-audio__button"
+                    onClick={() => void chooseOutput()}
+                    aria-label={t('calls.outputDeviceChooseAria')}
+                    title={t('calls.outputDeviceChooseAria')}
                   >
-                    {call.muted ? <MicOffIcon /> : <MicIcon />}
+                    <SpeakerIcon />
+                    <span>
+                      {outputDeviceLabel
+                        ? t('calls.outputDeviceSelected', { name: outputDeviceLabel })
+                        : t('calls.outputDeviceChoose')}
+                    </span>
                   </button>
-                  {call.video ? (
+                ) : (
+                  <span className="call-audio__note" title={t('calls.outputDeviceUnsupported')}>
+                    <SpeakerIcon />
+                    {t('calls.outputDeviceSystem')}
+                  </span>
+                )}
+
+                {micLevel.supported ? (
+                  <button
+                    type="button"
+                    className={`call-audio__button${micTest ? ' is-active' : ''}`}
+                    onClick={() => setMicTest((current) => !current)}
+                    aria-pressed={micTest}
+                    title={micTest ? t('calls.micTestStop') : t('calls.micTestStart')}
+                  >
+                    <MicIcon />
+                    <span>{micTest ? t('calls.micTestStop') : t('calls.micTestStart')}</span>
+                  </button>
+                ) : null}
+              </div>
+
+              {micTest && micLevel.supported ? (
+                <div className="call-audio__meter-row">
+                  <span className="call-audio__meter-label">{t('calls.micLevel')}</span>
+                  <div
+                    className="call-meter"
+                    role="meter"
+                    aria-label={t('calls.micLevel')}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={micLevel.level}
+                    aria-valuetext={t('calls.volumeValue', { value: micLevel.level })}
+                  >
+                    <span className="call-meter__fill" style={{ width: `${micLevel.level}%` }} />
+                  </div>
+                  <span className="call-audio__volume-value" aria-hidden="true">
+                    {t('calls.volumeValue', { value: micLevel.level })}
+                  </span>
+                  <span className="call-audio__hint">
+                    {call.muted ? t('calls.micLevelMuted') : t('calls.micLevelHint')}
+                  </span>
+                </div>
+              ) : null}
+
+              {outputError ? (
+                <p className="call-audio__error" role="alert">
+                  {t(outputError)}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="call-controls__buttons">
+            {incoming ? (
+              <>
+                <button
+                  type="button"
+                  ref={acceptRef}
+                  className="call-button call-button--accept"
+                  onClick={() => store.acceptIncomingCall()}
+                >
+                  <PhoneIcon aria-hidden="true" />
+                  {t('calls.accept')}
+                </button>
+                <button
+                  type="button"
+                  className="call-button call-button--danger"
+                  onClick={() => store.rejectIncomingCall()}
+                >
+                  <PhoneOffIcon aria-hidden="true" />
+                  {t('calls.reject')}
+                </button>
+              </>
+            ) : (
+              <>
+                {connected ? (
+                  <>
                     <button
                       type="button"
-                      className={`call-button call-button--round${
-                        call.cameraOn ? '' : ' is-active'
-                      }`}
-                      onClick={() => store.toggleCallCamera()}
-                      aria-pressed={call.cameraOn}
-                      aria-label={call.cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
-                      title={call.cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
+                      className={`call-button call-button--round${call.muted ? ' is-active' : ''}`}
+                      onClick={() => store.toggleCallMute()}
+                      aria-pressed={call.muted}
+                      aria-label={call.muted ? t('calls.unmute') : t('calls.mute')}
+                      title={call.muted ? t('calls.unmute') : t('calls.mute')}
                     >
-                      {call.cameraOn ? <VideoIcon /> : <VideoOffIcon />}
+                      {call.muted ? <MicOffIcon /> : <MicIcon />}
                     </button>
-                  ) : null}
-                </>
-              ) : null}
-              <button
-                type="button"
-                ref={hangupRef}
-                className="call-button call-button--danger call-button--round"
-                onClick={() => (connected ? setConfirmEnd(true) : store.endCall())}
-                aria-label={connected ? t('calls.hangup') : t('calls.cancel')}
-                title={connected ? t('calls.hangup') : t('calls.cancel')}
-              >
-                <PhoneOffIcon />
-              </button>
-            </>
-          )}
+                    {call.video ? (
+                      <button
+                        type="button"
+                        className={`call-button call-button--round${
+                          call.cameraOn ? '' : ' is-active'
+                        }`}
+                        onClick={() => store.toggleCallCamera()}
+                        aria-pressed={call.cameraOn}
+                        aria-label={call.cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
+                        title={call.cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
+                      >
+                        {call.cameraOn ? <VideoIcon /> : <VideoOffIcon />}
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  ref={hangupRef}
+                  className="call-button call-button--danger call-button--round"
+                  onClick={() => (connected ? setConfirmEnd(true) : store.endCall())}
+                  aria-label={connected ? t('calls.hangup') : t('calls.cancel')}
+                  title={connected ? t('calls.hangup') : t('calls.cancel')}
+                >
+                  <PhoneOffIcon />
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         {confirmEnd ? (

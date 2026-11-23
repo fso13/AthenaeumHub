@@ -15,14 +15,17 @@ const STORAGE_MODULE = 'src/auth/storage.ts';
  * R-02 explicitly requires a per-device workspace selection that survives a
  * reload. localStorage is limited to the workspace id
  * (`workspace/deviceWorkspace.ts`), the explicit theme choice
- * (`theme/themePreference.ts`) and per-user chat pins
- * (`sidebar/pins.ts`); auth tokens/passwords stay in sessionStorage/memory.
+ * (`theme/themePreference.ts`), per-user chat pins (`sidebar/pins.ts`) and the
+ * non-secret call output volume (#107, `prefs/devicePreferences.ts`); auth
+ * tokens/passwords stay in sessionStorage/memory.
  */
 const WORKSPACE_PREF_MODULE = 'src/workspace/deviceWorkspace.ts';
 /** D1-FE1: the explicit light/dark choice is the only other device preference. */
 const THEME_PREF_MODULE = 'src/theme/themePreference.ts';
 /** Chat pins are a per-user, non-secret sidebar preference (chat ids only). */
 const SIDEBAR_PINS_MODULE = 'src/sidebar/pins.ts';
+/** #107: the output volume is a non-secret per-device UI preference (0..100). */
+const DEVICE_PREF_MODULE = 'src/prefs/devicePreferences.ts';
 
 const forbidden = [
   {
@@ -31,8 +34,8 @@ const forbidden = [
   },
   {
     pattern: /\blocalStorage\s*[.[]/g,
-    message: `localStorage is allowed only in ${WORKSPACE_PREF_MODULE} (workspace id), ${THEME_PREF_MODULE} (theme) and ${SIDEBAR_PINS_MODULE} (chat pins); auth material uses sessionStorage/in-memory`,
-    allow: [WORKSPACE_PREF_MODULE, THEME_PREF_MODULE, SIDEBAR_PINS_MODULE],
+    message: `localStorage is allowed only in ${WORKSPACE_PREF_MODULE} (workspace id), ${THEME_PREF_MODULE} (theme), ${SIDEBAR_PINS_MODULE} (chat pins) and ${DEVICE_PREF_MODULE} (call output volume); auth material uses sessionStorage/in-memory`,
+    allow: [WORKSPACE_PREF_MODULE, THEME_PREF_MODULE, SIDEBAR_PINS_MODULE, DEVICE_PREF_MODULE],
   },
   {
     pattern: /\bsessionStorage\s*[.[]/g,
@@ -124,5 +127,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `Security check passed: ${files.length} files, no XSS sinks, localStorage only for the workspace id/theme/chat pins, no token logs, no E2EE console/Math.random/network.`,
+  `Security check passed: ${files.length} files, no XSS sinks, localStorage only for workspace id/theme/chat pins/call output volume, no token logs, no E2EE console/Math.random/network.`,
 );

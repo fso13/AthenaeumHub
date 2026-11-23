@@ -4,12 +4,13 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-/** A room with the currently present participants (#105). */
+/** A room with its AUDIO|VIDEO media mode and the currently present participants (#105/#107). */
 public record RoomResponse(
         UUID id,
         UUID workspaceId,
         UUID chatId,
         String name,
+        String mediaMode,
         UUID createdBy,
         Instant createdAt,
         Instant updatedAt,

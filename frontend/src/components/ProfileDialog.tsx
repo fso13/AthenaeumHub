@@ -18,6 +18,7 @@ import { BlockedUsersCard } from './BlockedUsersCard';
 import { BellIcon, CloseIcon, LogoutIcon, MoonIcon, RefreshIcon, SunIcon } from './Icons';
 import { ImageFilePicker } from './ImageFilePicker';
 import { NotificationPreferencesDialog } from './NotificationPreferencesDialog';
+import { ProfileAccordionSection } from './profile/ProfileAccordionSection';
 import { TwoFactorCard } from './profile/TwoFactorCard';
 import { roleLabel } from './pages/pageData';
 
@@ -32,6 +33,9 @@ const DEVICE_STATUS_LABEL: Record<NonNullable<Device['status']>, MessageKey> = {
 
 type ProfileField = 'display_name' | 'bio' | 'phone';
 type ProfileFieldErrors = Partial<Record<ProfileField, string>>;
+type ProfileSectionKey =
+  'avatar' | 'two-factor' | 'devices' | 'sessions' | 'notifications' | 'blocked';
+const DEFAULT_PROFILE_SECTIONS: readonly ProfileSectionKey[] = ['avatar'];
 
 interface ProfileFormState {
   display_name: string;
@@ -150,6 +154,9 @@ export function ProfileDialog({
   const nameId = useId();
   const bioId = useId();
   const phoneId = useId();
+  const [openSections, setOpenSections] = useState<ReadonlySet<ProfileSectionKey>>(
+    () => new Set<ProfileSectionKey>(DEFAULT_PROFILE_SECTIONS),
+  );
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [avatarNotice, setAvatarNotice] = useState<string | null>(null);
@@ -182,10 +189,22 @@ export function ProfileDialog({
   const role = workspace?.role ?? null;
   const isPlatformAdmin = state.me?.user.is_platform_admin === true;
   const currentDeviceId = state.device?.id ?? null;
-  const e2eeDevices = devices.items.filter((device) => device.e2ee_capable !== false).length;
   const handle = email ? `@${email.split('@')[0]}` : t('profile.title');
   const bio = profileUser?.bio?.trim() ?? '';
   const phone = profileUser?.phone?.trim() ?? '';
+  const twoFactor = profileState.twoFactor;
+  const twoFactorEnabled = twoFactor.value?.enabled === true;
+  const blocked = state.blockedUsers;
+
+  const isSectionOpen = (key: ProfileSectionKey): boolean => openSections.has(key);
+  const toggleSection = (key: ProfileSectionKey): void => {
+    setOpenSections((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   function startEditing() {
     setForm({
@@ -237,6 +256,7 @@ export function ProfileDialog({
 
   useEffect(() => {
     if (!open) {
+      setOpenSections(new Set<ProfileSectionKey>(DEFAULT_PROFILE_SECTIONS));
       setNotificationsOpen(false);
       setAvatarPickerOpen(false);
       setAvatarNotice(null);
@@ -482,16 +502,6 @@ export function ProfileDialog({
             {!editing ? (
               <div className="profile-hero__actions">
                 <button
-                  type="button"
-                  className="btn btn--sm"
-                  onClick={() => {
-                    startEditing();
-                    setAvatarPickerOpen(true);
-                  }}
-                >
-                  {t('profile.avatar.hero')}
-                </button>
-                <button
                   ref={editButtonRef}
                   type="button"
                   className="btn btn--sm"
@@ -617,256 +627,328 @@ export function ProfileDialog({
               </div>
             </form>
           ) : (
-            <div className="profile-cards">
-              <section className="mini-card" aria-labelledby="profile-about">
-                <h4 id="profile-about">{t('profile.about')}</h4>
-                <p className="mini-card__text">{bio || t('profile.aboutEmpty')}</p>
-              </section>
+            <>
+              <div className="profile-cards">
+                <section className="mini-card" aria-labelledby="profile-about">
+                  <h4 id="profile-about">{t('profile.about')}</h4>
+                  <p className="mini-card__text">{bio || t('profile.aboutEmpty')}</p>
+                </section>
 
-              <section className="mini-card" aria-labelledby="profile-contacts">
-                <h4 id="profile-contacts">{t('profile.contacts')}</h4>
-                <div className="mini-row">
-                  <span>{t('profile.email')}</span>
-                  <span>{email ?? '—'}</span>
-                </div>
-                <div className="mini-row">
-                  <span>{t('profile.phone')}</span>
-                  <span>{phone || t('profile.phoneEmpty')}</span>
-                </div>
-                <div className="mini-row">
-                  <span>{t('profile.contactWorkspace')}</span>
-                  <span>{workspaceName}</span>
-                </div>
-                <div className="mini-row">
-                  <span>{t('profile.contactAdmin')}</span>
-                  <span>{isPlatformAdmin ? t('common.yes') : '—'}</span>
-                </div>
-              </section>
-
-              <section className="mini-card" aria-labelledby="profile-devices">
-                <h4 id="profile-devices">{t('profile.devices')}</h4>
-                {devices.status === 'loading' && devices.items.length === 0 ? (
-                  <p className="mini-card__text" role="status">
-                    {t('profile.devicesLoading')}
-                  </p>
-                ) : null}
-                {devices.status === 'error' ? (
-                  <div className="mini-card__error" role="alert">
-                    <p>
-                      {devices.error
-                        ? describeError(devices.error).message
-                        : t('profile.devicesError')}
-                    </p>
-                    <button
-                      type="button"
-                      className="btn btn--sm"
-                      onClick={() => void store.loadDevices(true)}
-                    >
-                      <RefreshIcon aria-hidden="true" />
-                      {t('common.retry')}
-                    </button>
+                <section className="mini-card" aria-labelledby="profile-contacts">
+                  <h4 id="profile-contacts">{t('profile.contacts')}</h4>
+                  <div className="mini-row">
+                    <span>{t('profile.email')}</span>
+                    <span>{email ?? '—'}</span>
                   </div>
-                ) : null}
-                {devices.status === 'ready' && devices.items.length === 0 ? (
-                  <p className="mini-card__text">{t('profile.devicesEmpty')}</p>
-                ) : null}
-                {devices.items.map((device) => (
-                  <div className="mini-device" key={device.id}>
-                    <div className="mini-row">
-                      <span>{device.name?.trim() || t('profile.deviceNoName')}</span>
-                      <span>
-                        {device.id === currentDeviceId
-                          ? t('profile.deviceCurrent')
-                          : deviceStatus(device)}
+                  <div className="mini-row">
+                    <span>{t('profile.phone')}</span>
+                    <span>{phone || t('profile.phoneEmpty')}</span>
+                  </div>
+                  <div className="mini-row">
+                    <span>{t('profile.contactWorkspace')}</span>
+                    <span>{workspaceName}</span>
+                  </div>
+                  <div className="mini-row">
+                    <span>{t('profile.contactAdmin')}</span>
+                    <span>{isPlatformAdmin ? t('common.yes') : '—'}</span>
+                  </div>
+                </section>
+              </div>
+
+              <div className="profile-accordion-list">
+                {/* Avatar is first and open by default. */}
+                <ProfileAccordionSection
+                  id="avatar"
+                  title={t('profile.avatarSection')}
+                  open={isSectionOpen('avatar')}
+                  onToggle={() => toggleSection('avatar')}
+                >
+                  <div className="profile-section-body">
+                    <div className="profile-avatar-row">
+                      <Avatar
+                        name={user?.display_name}
+                        seed={user?.id ?? 'me'}
+                        size="profile"
+                        src={avatar.previewUrl}
+                      />
+                      <div className="profile-avatar-body">
+                        <p className="mini-card__text">
+                          {profileUser?.avatar_url
+                            ? t('profile.avatar.current')
+                            : t('profile.avatar.none')}
+                        </p>
+                        <p className="mini-card__note">{t('profile.avatar.hint')}</p>
+                        <div className="profile-avatar-actions">
+                          <button
+                            type="button"
+                            className="btn btn--sm"
+                            disabled={avatar.actionStatus !== 'idle'}
+                            aria-expanded={avatarPickerOpen}
+                            onClick={() => {
+                              setAvatarNotice(null);
+                              setAvatarPickerOpen((current) => !current);
+                            }}
+                          >
+                            {t('profile.avatar.change')}
+                          </button>
+                          {profileUser?.avatar_url ? (
+                            <button
+                              type="button"
+                              className="btn btn--sm"
+                              disabled={avatar.actionStatus !== 'idle'}
+                              onClick={() => {
+                                setAvatarNotice(null);
+                                void profileStore.removeAvatar('PROFILE').then((ok) => {
+                                  if (ok) setAvatarNotice(t('profile.avatar.removed'));
+                                });
+                              }}
+                            >
+                              {avatar.actionStatus === 'removing'
+                                ? t('profile.avatar.removing')
+                                : t('profile.avatar.remove')}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    {avatar.actionError ? (
+                      <p className="profile-form__error" role="alert">
+                        {avatarErrorText(avatar.actionError)}
+                      </p>
+                    ) : null}
+                    {avatarNotice ? (
+                      <p className="mini-card__note" role="status">
+                        {avatarNotice}
+                      </p>
+                    ) : null}
+                    {avatarPickerOpen ? (
+                      <ImageFilePicker
+                        target="PROFILE"
+                        workspaceId={state.activeWorkspaceId ?? state.session?.workspace.id ?? null}
+                        aspect={1}
+                        pending={avatar.actionStatus !== 'idle'}
+                        onSelect={(fileId) => {
+                          void profileStore.setAvatar('PROFILE', fileId).then((ok) => {
+                            if (!ok) return;
+                            setAvatarPickerOpen(false);
+                            setAvatarNotice(t('profile.avatar.updated'));
+                          });
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                </ProfileAccordionSection>
+
+                <ProfileAccordionSection
+                  id="two-factor"
+                  title={t('profile.twoFactor.title')}
+                  open={isSectionOpen('two-factor')}
+                  onToggle={() => toggleSection('two-factor')}
+                  badge={
+                    twoFactor.status === 'ready' ? (
+                      <span
+                        className={`mode-chip ${
+                          twoFactorEnabled ? 'mode-chip--ok' : 'mode-chip--mock'
+                        }`}
+                      >
+                        {twoFactorEnabled
+                          ? t('profile.twoFactor.enabled')
+                          : t('profile.twoFactor.disabled')}
                       </span>
-                    </div>
-                    <div className="mini-row mini-row--muted">
-                      <span>{device.platform}</span>
-                      <span>{device.last_seen_at ? formatDateTime(device.last_seen_at) : '—'}</span>
-                    </div>
-                    <span className="mini-card__mono">{device.id}</span>
-                  </div>
-                ))}
-              </section>
-
-              <section className="mini-card" aria-labelledby="profile-security">
-                <h4 id="profile-security">{t('profile.security')}</h4>
-                <div className="mini-row">
-                  <span>{t('profile.securityKeys')}</span>
-                  <span>
-                    {devices.status === 'ready'
-                      ? t('profile.keysDevices', { count: e2eeDevices })
-                      : t('profile.keysEmpty')}
-                  </span>
-                </div>
-                <div className="mini-row">
-                  <span>{t('profile.sessions')}</span>
-                  <span>{t('profile.sessionsHint')}</span>
-                </div>
-              </section>
-
-              <BlockedUsersCard />
-            </div>
-          )}
-
-          {!editing ? (
-            <section className="mini-card" aria-labelledby="profile-avatar-card">
-              <div className="profile-sessions__head">
-                <h4 id="profile-avatar-card">{t('profile.avatarSection')}</h4>
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  disabled={avatar.actionStatus !== 'idle'}
-                  aria-expanded={avatarPickerOpen}
-                  onClick={() => {
-                    setAvatarNotice(null);
-                    setAvatarPickerOpen((current) => !current);
-                  }}
+                    ) : undefined
+                  }
                 >
-                  {t('profile.avatar.change')}
-                </button>
-              </div>
-              <div className="profile-avatar-row">
-                <Avatar
-                  name={user?.display_name}
-                  seed={user?.id ?? 'me'}
-                  size="profile"
-                  src={avatar.previewUrl}
-                />
-                <div>
-                  <p className="mini-card__text">
-                    {profileUser?.avatar_url
-                      ? t('profile.avatar.current')
-                      : t('profile.avatar.none')}
-                  </p>
-                  <p className="mini-card__note">{t('profile.avatar.hint')}</p>
-                  {profileUser?.avatar_url ? (
+                  <TwoFactorCard embedded />
+                </ProfileAccordionSection>
+
+                <ProfileAccordionSection
+                  id="devices"
+                  title={t('profile.devices')}
+                  open={isSectionOpen('devices')}
+                  onToggle={() => toggleSection('devices')}
+                  badge={
+                    devices.status === 'ready' ? (
+                      <span className="profile-accordion__count">{devices.items.length}</span>
+                    ) : undefined
+                  }
+                >
+                  <div className="profile-section-body">
+                    {devices.status === 'loading' && devices.items.length === 0 ? (
+                      <p className="mini-card__text" role="status">
+                        {t('profile.devicesLoading')}
+                      </p>
+                    ) : null}
+                    {devices.status === 'error' ? (
+                      <div className="mini-card__error" role="alert">
+                        <p>
+                          {devices.error
+                            ? describeError(devices.error).message
+                            : t('profile.devicesError')}
+                        </p>
+                        <button
+                          type="button"
+                          className="btn btn--sm"
+                          onClick={() => void store.loadDevices(true)}
+                        >
+                          <RefreshIcon aria-hidden="true" />
+                          {t('common.retry')}
+                        </button>
+                      </div>
+                    ) : null}
+                    {devices.status === 'ready' && devices.items.length === 0 ? (
+                      <p className="mini-card__text">{t('profile.devicesEmpty')}</p>
+                    ) : null}
+                    {devices.items.map((device) => (
+                      <div className="mini-device" key={device.id}>
+                        <div className="mini-row">
+                          <span>{device.name?.trim() || t('profile.deviceNoName')}</span>
+                          <span>
+                            {device.id === currentDeviceId
+                              ? t('profile.deviceCurrent')
+                              : deviceStatus(device)}
+                          </span>
+                        </div>
+                        <div className="mini-row mini-row--muted">
+                          <span>{device.platform}</span>
+                          <span>
+                            {device.last_seen_at ? formatDateTime(device.last_seen_at) : '—'}
+                          </span>
+                        </div>
+                        <span className="mini-card__mono">{device.id}</span>
+                      </div>
+                    ))}
+                  </div>
+                </ProfileAccordionSection>
+
+                <ProfileAccordionSection
+                  id="sessions"
+                  title={t('profile.sessions')}
+                  open={isSectionOpen('sessions')}
+                  onToggle={() => toggleSection('sessions')}
+                  badge={
+                    sessionsStatus === 'ready' ? (
+                      <span className="profile-accordion__count">{sessions.length}</span>
+                    ) : undefined
+                  }
+                >
+                  <div className="profile-section-body">
+                    <div className="profile-section-toolbar">
+                      <p className="mini-card__note">{t('profile.sessionsHint')}</p>
+                      <button
+                        type="button"
+                        className="btn btn--sm"
+                        onClick={() => setSessionsReload((value) => value + 1)}
+                        disabled={sessionsStatus === 'loading'}
+                      >
+                        <RefreshIcon aria-hidden="true" />
+                        {t('profile.sessionsRefresh')}
+                      </button>
+                    </div>
+
+                    {sessionsNotice ? (
+                      <p className="mini-card__note" role="status">
+                        {t(sessionsNotice)}
+                      </p>
+                    ) : null}
+
+                    {sessionsStatus === 'loading' ? (
+                      <p className="mini-card__text" role="status">
+                        {t('profile.sessionsLoading')}
+                      </p>
+                    ) : null}
+
+                    {sessionsStatus === 'error' ? (
+                      <div className="mini-card__error" role="alert">
+                        <p>{sessionsMessage ?? t('profile.sessionsLoadError')}</p>
+                        <button
+                          type="button"
+                          className="btn btn--sm"
+                          onClick={() => setSessionsReload((value) => value + 1)}
+                        >
+                          <RefreshIcon aria-hidden="true" />
+                          {t('common.retry')}
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {sessionsStatus === 'ready' && sessions.length === 0 ? (
+                      <p className="mini-card__text">{t('profile.sessionsEmpty')}</p>
+                    ) : null}
+
+                    {sessions.map((session) => (
+                      <div className="mini-session" key={session.id}>
+                        <div className="mini-row">
+                          <span>{sessionName(session)}</span>
+                          {session.current ? (
+                            <span className="mode-chip mode-chip--mock">
+                              {t('profile.sessionCurrent')}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mini-row mini-row--muted">
+                          <span>{t('profile.sessionLastAccess')}</span>
+                          <span>{formatDateTime(session.last_access_at)}</span>
+                        </div>
+                        <div className="mini-row mini-row--muted">
+                          <span>{t('profile.sessionCreated')}</span>
+                          <span>{formatDateTime(session.created_at)}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn--sm"
+                          aria-label={t('profile.sessionRevokeAria', {
+                            name: sessionName(session),
+                          })}
+                          onClick={() => {
+                            setRevokeError(null);
+                            setRevokeTarget(session);
+                          }}
+                        >
+                          {t('profile.sessionRevoke')}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </ProfileAccordionSection>
+
+                <ProfileAccordionSection
+                  id="notifications"
+                  title={t('profile.notificationsSection')}
+                  open={isSectionOpen('notifications')}
+                  onToggle={() => toggleSection('notifications')}
+                >
+                  <div className="profile-section-body">
+                    <p className="mini-card__note">{t('profile.notificationsHint')}</p>
                     <button
                       type="button"
                       className="btn btn--sm"
-                      disabled={avatar.actionStatus !== 'idle'}
-                      onClick={() => {
-                        setAvatarNotice(null);
-                        void profileStore.removeAvatar('PROFILE').then((ok) => {
-                          if (ok) setAvatarNotice(t('profile.avatar.removed'));
-                        });
-                      }}
+                      onClick={() => setNotificationsOpen(true)}
                     >
-                      {avatar.actionStatus === 'removing'
-                        ? t('profile.avatar.removing')
-                        : t('profile.avatar.remove')}
+                      <BellIcon aria-hidden="true" />
+                      {t('profile.openNotifications')}
                     </button>
-                  ) : null}
-                </div>
+                  </div>
+                </ProfileAccordionSection>
+
+                <ProfileAccordionSection
+                  id="blocked"
+                  title={t('profile.blockedSection')}
+                  open={isSectionOpen('blocked')}
+                  onToggle={() => toggleSection('blocked')}
+                  badge={
+                    blocked.status === 'ready' && blocked.items.length > 0 ? (
+                      <span className="profile-accordion__count">{blocked.items.length}</span>
+                    ) : undefined
+                  }
+                >
+                  <BlockedUsersCard embedded />
+                </ProfileAccordionSection>
               </div>
-              {avatar.actionError ? (
-                <p className="profile-form__error" role="alert">
-                  {avatarErrorText(avatar.actionError)}
-                </p>
-              ) : null}
-              {avatarNotice ? (
-                <p className="mini-card__note" role="status">
-                  {avatarNotice}
-                </p>
-              ) : null}
-              {avatarPickerOpen ? (
-                <ImageFilePicker
-                  target="PROFILE"
-                  workspaceId={state.activeWorkspaceId ?? state.session?.workspace.id ?? null}
-                  aspect={1}
-                  pending={avatar.actionStatus !== 'idle'}
-                  onSelect={(fileId) => {
-                    void profileStore.setAvatar('PROFILE', fileId).then((ok) => {
-                      if (!ok) return;
-                      setAvatarPickerOpen(false);
-                      setAvatarNotice(t('profile.avatar.updated'));
-                    });
-                  }}
-                />
-              ) : null}
-            </section>
-          ) : null}
 
-          <TwoFactorCard />
-
-          <section className="mini-card profile-sessions" aria-labelledby="profile-sessions-card">
-            <div className="profile-sessions__head">
-              <h4 id="profile-sessions-card">{t('profile.sessions')}</h4>
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={() => setSessionsReload((value) => value + 1)}
-                disabled={sessionsStatus === 'loading'}
+              <section
+                className="mini-card profile-appearance-card"
+                aria-labelledby="profile-appearance"
               >
-                <RefreshIcon aria-hidden="true" />
-                {t('profile.sessionsRefresh')}
-              </button>
-            </div>
-
-            {sessionsNotice ? (
-              <p className="mini-card__note" role="status">
-                {t(sessionsNotice)}
-              </p>
-            ) : null}
-
-            {sessionsStatus === 'loading' ? (
-              <p className="mini-card__text" role="status">
-                {t('profile.sessionsLoading')}
-              </p>
-            ) : null}
-
-            {sessionsStatus === 'error' ? (
-              <div className="mini-card__error" role="alert">
-                <p>{sessionsMessage ?? t('profile.sessionsLoadError')}</p>
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  onClick={() => setSessionsReload((value) => value + 1)}
-                >
-                  <RefreshIcon aria-hidden="true" />
-                  {t('common.retry')}
-                </button>
-              </div>
-            ) : null}
-
-            {sessionsStatus === 'ready' && sessions.length === 0 ? (
-              <p className="mini-card__text">{t('profile.sessionsEmpty')}</p>
-            ) : null}
-
-            {sessions.map((session) => (
-              <div className="mini-session" key={session.id}>
-                <div className="mini-row">
-                  <span>{sessionName(session)}</span>
-                  {session.current ? (
-                    <span className="mode-chip mode-chip--mock">{t('profile.sessionCurrent')}</span>
-                  ) : null}
-                </div>
-                <div className="mini-row mini-row--muted">
-                  <span>{t('profile.sessionLastAccess')}</span>
-                  <span>{formatDateTime(session.last_access_at)}</span>
-                </div>
-                <div className="mini-row mini-row--muted">
-                  <span>{t('profile.sessionCreated')}</span>
-                  <span>{formatDateTime(session.created_at)}</span>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  aria-label={t('profile.sessionRevokeAria', { name: sessionName(session) })}
-                  onClick={() => {
-                    setRevokeError(null);
-                    setRevokeTarget(session);
-                  }}
-                >
-                  {t('profile.sessionRevoke')}
-                </button>
-              </div>
-            ))}
-          </section>
-
-          {!editing ? (
-            <div className="profile-cards profile-cards--secondary">
-              <section className="mini-card" aria-labelledby="profile-appearance">
                 <h4 id="profile-appearance">{t('profile.appearanceSection')}</h4>
                 <div className="seg" role="group" aria-label={t('profile.theme')}>
                   <button
@@ -889,20 +971,8 @@ export function ProfileDialog({
                   </button>
                 </div>
               </section>
-              <section className="mini-card" aria-labelledby="profile-notifications">
-                <h4 id="profile-notifications">{t('profile.notificationsSection')}</h4>
-                <p className="mini-card__note">{t('profile.notificationsHint')}</p>
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  onClick={() => setNotificationsOpen(true)}
-                >
-                  <BellIcon aria-hidden="true" />
-                  {t('profile.openNotifications')}
-                </button>
-              </section>
-            </div>
-          ) : null}
+            </>
+          )}
         </div>
 
         <div className="modal-foot">

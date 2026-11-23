@@ -375,6 +375,8 @@ function presentRoom(db: MockDb, record: MockRoomRecord): Room {
     workspace_id: record.workspaceId,
     chat_id: record.chatId,
     name: record.name,
+    // #107: server-side room metadata; joins use it for the call `video` flag.
+    media_mode: record.mediaMode,
     created_by: record.createdBy,
     created_at: record.createdAt,
     updated_at: record.updatedAt,
@@ -7557,6 +7559,17 @@ export function createHandlers(db: MockDb) {
           details: { field: 'name', max_length: 120 },
         });
       }
+      const requestedMediaMode = body.media_mode;
+      if (
+        requestedMediaMode !== undefined &&
+        requestedMediaMode !== 'AUDIO' &&
+        requestedMediaMode !== 'VIDEO'
+      ) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'media_mode must be AUDIO|VIDEO', {
+          details: { field: 'media_mode' },
+        });
+      }
+      const mediaMode: 'AUDIO' | 'VIDEO' = requestedMediaMode === 'AUDIO' ? 'AUDIO' : 'VIDEO';
       const usedByUser = countActiveChatsForUser(db, workspace.id, db.me.user.id);
       if (usedByUser >= db.admin.maxChatsPerUser) {
         return errorResponse(409, 'CHAT_LIMIT_REACHED', 'Chat limit reached', {
@@ -7608,6 +7621,7 @@ export function createHandlers(db: MockDb) {
         workspaceId: workspace.id,
         chatId,
         name,
+        mediaMode,
         createdBy: db.me.user.id,
         createdAt: now,
         updatedAt: now,
@@ -7639,8 +7653,10 @@ export function createHandlers(db: MockDb) {
       }
       const body = asRecord(await readJson(request));
       if (!body) return errorResponse(400, 'VALIDATION_FAILED', 'Body must be a JSON object');
+      const hasName = body.name !== undefined;
+      const hasMediaMode = body.media_mode !== undefined;
       db.roomRequests.push({
-        action: 'rename',
+        action: hasMediaMode && !hasName ? 'media_mode' : 'rename',
         workspaceId: workspace.id,
         roomId: record.id,
         body,
@@ -7660,16 +7676,34 @@ export function createHandlers(db: MockDb) {
       if (record.status === 'CLOSED') {
         return errorResponse(409, 'ROOM_CLOSED', 'Room is closed');
       }
-      const name = typeof body.name === 'string' ? body.name.trim() : '';
-      if (name.length === 0 || [...name].length > 120) {
-        return errorResponse(400, 'VALIDATION_FAILED', 'name must be 1..120 characters', {
-          details: { field: 'name', max_length: 120 },
+      if (!hasName && !hasMediaMode) {
+        return errorResponse(400, 'VALIDATION_FAILED', 'name or media_mode is required', {
+          details: { fields: ['name', 'media_mode'] },
         });
       }
-      record.name = name;
+      let name: string | null = null;
+      if (hasName) {
+        name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (name.length === 0 || [...name].length > 120) {
+          return errorResponse(400, 'VALIDATION_FAILED', 'name must be 1..120 characters', {
+            details: { field: 'name', max_length: 120 },
+          });
+        }
+      }
+      let mediaMode: 'AUDIO' | 'VIDEO' | null = null;
+      if (hasMediaMode) {
+        if (body.media_mode !== 'AUDIO' && body.media_mode !== 'VIDEO') {
+          return errorResponse(400, 'VALIDATION_FAILED', 'media_mode must be AUDIO|VIDEO', {
+            details: { field: 'media_mode' },
+          });
+        }
+        mediaMode = body.media_mode;
+      }
+      if (name !== null) record.name = name;
+      if (mediaMode !== null) record.mediaMode = mediaMode;
       record.updatedAt = new Date().toISOString();
       const chat = db.chats[record.chatId];
-      if (chat) chat.summary = { ...chat.summary, name };
+      if (chat && name !== null) chat.summary = { ...chat.summary, name };
       return HttpResponse.json(presentRoom(db, record));
     }),
 

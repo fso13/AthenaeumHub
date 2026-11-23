@@ -126,6 +126,8 @@ export interface MockRoomRecord {
   workspaceId: string;
   chatId: string;
   name: string;
+  /** #107 server metadata: AUDIO joins the mesh with video=false. */
+  mediaMode: 'AUDIO' | 'VIDEO';
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -1119,7 +1121,7 @@ export interface MockDb {
   roomChatAvatars: Map<string, string | null>;
   roomListRequests: Array<{ workspaceId: string; deviceId: string | null }>;
   roomRequests: Array<{
-    action: 'create' | 'rename' | 'close';
+    action: 'create' | 'rename' | 'media_mode' | 'close';
     workspaceId: string;
     roomId: string | null;
     body: Record<string, unknown> | null;
@@ -1374,6 +1376,7 @@ function buildRooms(): MockRoomRecord[] {
       workspaceId: IDS.workspace,
       chatId: IDS.roomStandupChat,
       name: 'Планёрка',
+      mediaMode: 'VIDEO',
       createdBy: IDS.user,
       createdAt: created,
       updatedAt: created,
@@ -1398,6 +1401,7 @@ function buildRooms(): MockRoomRecord[] {
       workspaceId: IDS.workspace,
       chatId: IDS.roomDesignChat,
       name: 'Дизайн-ревью',
+      mediaMode: 'AUDIO',
       createdBy: IDS.anna,
       createdAt: created,
       updatedAt: created,

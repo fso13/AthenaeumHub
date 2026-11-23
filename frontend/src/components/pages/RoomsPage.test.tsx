@@ -7,7 +7,11 @@ import { IDS, MOCK_DISPLAY_NAME } from '../../mocks/fixtures';
 import { mockDb } from '../../test/server';
 import { createFakeCallMedia, createFakeRingtone } from '../../test/callFakes';
 import { renderApp } from '../../test/renderApp';
-import { isRoomParticipantFresh, ROOMS_POLL_INTERVAL_MS } from '../../rooms/roomsStore';
+import {
+  isRoomParticipantFresh,
+  roomMediaMode,
+  ROOMS_POLL_INTERVAL_MS,
+} from '../../rooms/roomsStore';
 
 const STANDUP = IDS.roomStandup;
 const DESIGN = IDS.roomDesign;
@@ -131,13 +135,85 @@ describe('#105 комнаты: список, присутствие и звон�
     expect(mockDb.roomRequests.at(-1)).toMatchObject({
       action: 'create',
       workspaceId: IDS.workspace,
-      body: { name: 'Утренний стендап' },
+      body: { name: 'Утренний стендап', media_mode: 'VIDEO' },
     });
     expect(mockDb.rooms.some((room) => room.name === 'Утренний стендап')).toBe(true);
     const items = within(screen.getByRole('list', { name: 'Комнаты' })).getAllByRole('listitem');
     expect(
       within(items[0]!).getByRole('heading', { name: 'Утренний стендап' }),
     ).toBeInTheDocument();
+  });
+
+  it('creates an AUDIO room with the contract media_mode and shows the audio chip', async () => {
+    const { user } = renderRooms();
+    await openRooms(user);
+
+    await user.click(screen.getByRole('button', { name: 'Создать комнату' }));
+    await user.type(screen.getByLabelText('Название комнаты'), 'Аудио-брифинг');
+    await user.click(screen.getByRole('button', { name: 'Аудио' }));
+    await user.click(screen.getByRole('button', { name: 'Создать' }));
+
+    await screen.findByRole('heading', { name: 'Аудио-брифинг' });
+    expect(mockDb.roomRequests.at(-1)).toMatchObject({
+      action: 'create',
+      workspaceId: IDS.workspace,
+      body: { name: 'Аудио-брифинг', media_mode: 'AUDIO' },
+    });
+    const created = mockDb.rooms.find((room) => room.name === 'Аудио-брифинг');
+    expect(created?.mediaMode).toBe('AUDIO');
+    expect(within(roomCard('Аудио-брифинг')).getByText('Аудио')).toBeInTheDocument();
+  });
+
+  it('renders the server media mode chip on every room card', async () => {
+    const { user } = renderRooms();
+    await openRooms(user);
+
+    expect(within(roomCard('Планёрка')).getByText('Видео')).toBeInTheDocument();
+    expect(within(roomCard('Дизайн-ревью')).getByText('Аудио')).toBeInTheDocument();
+  });
+
+  it('changes the media mode through a partial PATCH and updates the card', async () => {
+    const { user } = renderRooms();
+    await openRooms(user);
+
+    await user.click(
+      within(roomCard('Планёрка')).getByRole('button', {
+        name: 'Сделать комнату «Планёрка» аудиокомнатой',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mockDb.roomRequests.at(-1)).toMatchObject({
+        action: 'media_mode',
+        roomId: STANDUP,
+        workspaceId: IDS.workspace,
+        body: { media_mode: 'AUDIO' },
+      }),
+    );
+    await waitFor(() =>
+      expect(within(roomCard('Планёрка')).getByText('Аудио')).toBeInTheDocument(),
+    );
+    expect(mockDb.rooms.find((room) => room.id === STANDUP)?.mediaMode).toBe('AUDIO');
+    expect(
+      within(roomCard('Планёрка')).getByRole('button', {
+        name: 'Сделать комнату «Планёрка» видеокомнатой',
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it('surfaces a forbidden media-mode change without an optimistic flip', async () => {
+    mockDb.forceRoomUpdateError = { status: 403, code: 'FORBIDDEN', message: 'Forbidden' };
+    const { user } = renderRooms();
+    await openRooms(user);
+
+    await user.click(
+      within(roomCard('Планёрка')).getByRole('button', {
+        name: 'Сделать комнату «Планёрка» аудиокомнатой',
+      }),
+    );
+    expect(await screen.findByText('Недостаточно прав для этой комнаты.')).toBeInTheDocument();
+    expect(within(roomCard('Планёрка')).getByText('Видео')).toBeInTheDocument();
+    expect(mockDb.rooms.find((room) => room.id === STANDUP)?.mediaMode).toBe('VIDEO');
   });
 
   it('validates the name and surfaces the chat-limit error honestly', async () => {
@@ -278,6 +354,35 @@ describe('#105 комнаты: список, присутствие и звон�
     expect(media.streams[0]?.fakeTracks.every((track) => track.stopped)).toBe(true);
   });
 
+  it('joins an AUDIO room with video=false and never requests a camera', async () => {
+    const { user, store, media } = renderCallingRooms();
+    await waitForOnline(store);
+    await openRooms(user);
+
+    await user.click(
+      within(roomCard('Дизайн-ревью')).getByRole('button', {
+        name: 'Войти в комнату «Дизайн-ревью»',
+      }),
+    );
+    await vi.waitFor(() => expect(media.constraints).toHaveLength(1));
+    expect(media.constraints[0]?.audio).toBeTruthy();
+    expect(media.constraints[0]?.video).toBe(false);
+    await vi.waitFor(() =>
+      expect(mockSentCallSignals().filter((item) => item.payload.kind === 'offer')).toHaveLength(1),
+    );
+    const offer = mockSentCallSignals().find((item) => item.payload.kind === 'offer');
+    expect(offer?.payload).toMatchObject({ video: false, conference: true });
+    expect(store.getSnapshot().call.video).toBe(false);
+    expect(offer?.chat_id).toBe(IDS.roomDesignChat);
+
+    await user.click(
+      within(roomCard('Дизайн-ревью')).getByRole('button', {
+        name: 'Выйти из комнаты «Дизайн-ревью»',
+      }),
+    );
+    await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('idle'));
+  });
+
   it('lets an already-present participant accept an incoming room conference', async () => {
     const { user, store, media } = renderCallingRooms();
     await waitForOnline(store);
@@ -330,6 +435,11 @@ describe('#105 комнаты: список, присутствие и звон�
     expect(
       within(foreign).queryByRole('button', { name: 'Закрыть комнату «Дизайн-ревью»' }),
     ).toBeNull();
+    expect(
+      within(foreign).queryByRole('button', {
+        name: 'Сделать комнату «Дизайн-ревью» видеокомнатой',
+      }),
+    ).toBeNull();
   });
 
   it('gives ADMIN rename but not close on a room they did not create', async () => {
@@ -344,6 +454,11 @@ describe('#105 комнаты: список, присутствие и звон�
     expect(
       within(foreign).queryByRole('button', { name: 'Закрыть комнату «Дизайн-ревью»' }),
     ).toBeNull();
+    expect(
+      within(foreign).getByRole('button', {
+        name: 'Сделать комнату «Дизайн-ревью» видеокомнатой',
+      }),
+    ).toBeInTheDocument();
   });
 
   it('renames through PATCH and keeps the card in sync with the response', async () => {
@@ -575,5 +690,13 @@ describe('#105 rooms: presence TTL helper', () => {
     const now = Date.parse('2026-11-23T10:00:00.000Z');
     expect(isRoomParticipantFresh('2026-11-23T09:59:29.999Z', now)).toBe(false);
     expect(isRoomParticipantFresh('not-a-date', now)).toBe(false);
+  });
+});
+
+describe('#107 room media mode fallback', () => {
+  it('uses AUDIO/VIDEO when present and falls back to VIDEO for a legacy row', () => {
+    expect(roomMediaMode({ media_mode: 'AUDIO' })).toBe('AUDIO');
+    expect(roomMediaMode({ media_mode: 'VIDEO' })).toBe('VIDEO');
+    expect(roomMediaMode({})).toBe('VIDEO');
   });
 });

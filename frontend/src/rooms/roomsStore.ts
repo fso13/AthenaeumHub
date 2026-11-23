@@ -15,6 +15,9 @@ import type { Room } from '../api/types';
  *  - starts the existing mesh `CallController.startConference` through an
  *    injected bridge when other participants are already present. Nothing here
  *    claims an SFU: the conference is a full mesh over `call.signal`.
+ *  - #107: `media_mode` (AUDIO|VIDEO) is server metadata; joining starts the
+ *    mesh with `video=false` for AUDIO and `true` for VIDEO. The mode can only
+ *    be changed through the contract's partial PATCH.
  */
 
 /** Poll interval for the workspace room list (contract §3.1/§4). */
@@ -35,14 +38,27 @@ export interface RoomCallIssue {
  * engine directly, so the media lifecycle stays in one place.
  */
 export interface RoomCallBridge {
-  startConference(chatId: string, peerUserIds: readonly string[], callId?: string): boolean;
+  startConference(
+    chatId: string,
+    peerUserIds: readonly string[],
+    video: boolean,
+    callId?: string,
+  ): boolean;
   activeCallChatId(): string | null;
   endCallForChat(chatId: string): void;
 }
 
+/** #107 room media mode; a missing/invalid contract value falls back to VIDEO. */
+export type RoomMediaMode = NonNullable<Room['media_mode']>;
+export const DEFAULT_ROOM_MEDIA_MODE: RoomMediaMode = 'VIDEO';
+
+export function roomMediaMode(room: { media_mode?: Room['media_mode'] }): RoomMediaMode {
+  return room.media_mode === 'AUDIO' ? 'AUDIO' : DEFAULT_ROOM_MEDIA_MODE;
+}
+
 export type RoomsStatus = 'idle' | 'loading' | 'ready' | 'error';
 export type RoomPresenceStatus = 'idle' | 'joining' | 'present' | 'leaving' | 'error';
-export type RoomsActionKind = 'create' | 'rename' | 'close' | 'join' | 'leave';
+export type RoomsActionKind = 'create' | 'rename' | 'media_mode' | 'close' | 'join' | 'leave';
 
 export interface RoomsActionError {
   kind: RoomsActionKind;
@@ -212,12 +228,18 @@ export class RoomsStore {
     this.patch({ callIssue: null });
   }
 
-  async createRoom(name: string): Promise<boolean> {
+  async createRoom(
+    name: string,
+    mediaMode: RoomMediaMode = DEFAULT_ROOM_MEDIA_MODE,
+  ): Promise<boolean> {
     const workspaceId = this.state.workspaceId;
     if (!workspaceId || this.state.pending !== null) return false;
     this.patch({ pending: { kind: 'create', roomId: null }, actionError: null });
     try {
-      const room = await this.api.createRoom(workspaceId, { name: name.trim() });
+      const room = await this.api.createRoom(workspaceId, {
+        name: name.trim(),
+        media_mode: roomMediaMode({ media_mode: mediaMode }),
+      });
       this.patch({
         items: [room, ...this.state.items],
         status: 'ready',
@@ -249,6 +271,33 @@ export class RoomsStore {
       this.patch({
         pending: null,
         actionError: { kind: 'rename', roomId, error: toApiError(error) },
+      });
+      return false;
+    }
+  }
+
+  /**
+   * #107: creator/OWNER/ADMIN changes only the room metadata. The server
+   * returns the updated projection; nothing is patched optimistically.
+   */
+  async updateRoomMediaMode(roomId: string, mediaMode: RoomMediaMode): Promise<boolean> {
+    const workspaceId = this.state.workspaceId;
+    if (!workspaceId || this.state.pending !== null) return false;
+    if (!this.findRoom(roomId)) return false;
+    this.patch({ pending: { kind: 'media_mode', roomId }, actionError: null });
+    try {
+      const room = await this.api.updateRoom(workspaceId, roomId, {
+        media_mode: roomMediaMode({ media_mode: mediaMode }),
+      });
+      this.patch({
+        items: this.state.items.map((item) => (item.id === roomId ? room : item)),
+        pending: null,
+      });
+      return true;
+    } catch (error) {
+      this.patch({
+        pending: null,
+        actionError: { kind: 'media_mode', roomId, error: toApiError(error) },
       });
       return false;
     }
@@ -339,7 +388,13 @@ export class RoomsStore {
       .map((participant) => participant.user_id)
       .filter((userId) => userId.length > 0 && userId !== selfId);
     if (peers.length > 0 && this.state.presenceRoomId === roomId) {
-      const started = this.calls.startConference(fresh?.chat_id ?? room.chat_id, peers, room.id);
+      const mode = roomMediaMode(fresh ?? room);
+      const started = this.calls.startConference(
+        fresh?.chat_id ?? room.chat_id,
+        peers,
+        mode === 'VIDEO',
+        room.id,
+      );
       if (!started) {
         this.patch({
           callIssue: { roomId, reason: this.calls.activeCallChatId() ? 'busy' : 'offline' },

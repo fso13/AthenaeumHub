@@ -105,8 +105,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Переименовать комнату и её канал
-         * @description #105. Создатель комнаты или workspace OWNER/ADMIN. Имя — 1..120 символов после trim; оно же становится именем backing-канала. Закрытую комнату переименовать нельзя (`409 ROOM_CLOSED`). Чужая/неизвестная комната — `404` без раскрытия существования. Аудит `room.renamed` содержит только `chat_id`.
+         * Обновить имя и/или медиарежим комнаты
+         * @description #105/#107. Создатель комнаты или workspace OWNER/ADMIN. Частичное обновление: `name` и/или `media_mode`, хотя бы одно поле. Имя — 1..120 символов после trim; при переименовании оно же становится именем backing-канала. `media_mode` (`AUDIO`|`VIDEO`) — только метаданные: backing-канал, история, вложения, presence и существующий call signaling не меняются, фронтенд сам выбирает аудио/видео при следующем звонке. Закрытую комнату обновить нельзя (`409 ROOM_CLOSED`). Чужая/неизвестная комната — `404` без раскрытия существования. Аудиты `room.renamed` (только `chat_id`) и `room.media_mode_changed` (только `media_mode`) не содержат персональных данных.
          */
         patch: operations["updateRoom"];
         trace?: never;
@@ -3903,7 +3903,7 @@ export interface components {
             /** Format: date-time */
             last_seen_at: string;
         };
-        /** @description #105 комната воркспейса. `chat_id` указывает на managed GROUP-канал, который используется существующим call signaling; серверного состояния звонка/SFU/медиа нет. `participants` отфильтрованы по TTL 30 секунд, `my_present` — присутствие вызывающего. `status=CLOSED` после мягкого закрытия (backing-канал soft-deleted). */
+        /** @description #105/#107 комната воркспейса. `chat_id` указывает на managed GROUP-канал, который используется существующим call signaling; серверного состояния звонка/SFU/медиа нет. `media_mode` — аудио/видео режим комнаты, который фронтенд передаёт в существующий call signaling; бэкенд медиа не запускает. `participants` отфильтрованы по TTL 30 секунд, `my_present` — присутствие вызывающего. `status=CLOSED` после мягкого закрытия (backing-канал soft-deleted). */
         Room: {
             /** Format: uuid */
             id: string;
@@ -3912,6 +3912,11 @@ export interface components {
             /** Format: uuid */
             chat_id: string;
             name: string;
+            /**
+             * @description #107 `AUDIO` или `VIDEO`; по умолчанию `VIDEO`. Только метаданные комнаты: сервер не хранит состояние звонка и не запускает медиа.
+             * @enum {string}
+             */
+            media_mode: "AUDIO" | "VIDEO";
             /** Format: uuid */
             created_by: string;
             /** Format: date-time */
@@ -3930,10 +3935,21 @@ export interface components {
         RoomCreateRequest: {
             /** @description Имя комнаты и backing-канала; пробелы по краям срезаются, 1..120 символов после trim. */
             name: string;
+            /**
+             * @description #107 режим комнаты; необязательное поле. Не передан — `VIDEO` (серверный default). Влияет только на то, какой `video`-флаг фронтенд использует в существующем call signaling.
+             * @enum {string}
+             */
+            media_mode?: "AUDIO" | "VIDEO";
         };
+        /** @description #105/#107 частичное обновление: `name` и/или `media_mode`, хотя бы одно поле. */
         RoomUpdateRequest: {
             /** @description Новое имя комнаты и backing-канала (после trim 1..120 символов). */
-            name: string;
+            name?: string;
+            /**
+             * @description #107 новый медиарежим комнаты; меняется только метаданные, backing-канал и история не затрагиваются.
+             * @enum {string}
+             */
+            media_mode?: "AUDIO" | "VIDEO";
         };
         PreflightFile: {
             name: string;

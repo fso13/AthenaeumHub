@@ -22,6 +22,17 @@ async function openProfile(user: TestUser): Promise<{ dialog: HTMLElement; trigg
   return { dialog, trigger };
 }
 
+async function openSection(
+  dialog: HTMLElement,
+  user: TestUser,
+  name: RegExp,
+): Promise<HTMLElement> {
+  const trigger = within(dialog).getByRole('button', { name });
+  if (trigger.getAttribute('aria-expanded') !== 'true') await user.click(trigger);
+  expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  return trigger;
+}
+
 describe('D1-FE5 profile modal', () => {
   it('shows /me identity, workspace role and the existing device list', async () => {
     const { user } = renderPasswordApp();
@@ -33,6 +44,7 @@ describe('D1-FE5 profile modal', () => {
     expect(within(dialog).getByText('Владелец')).toBeInTheDocument();
     expect(within(dialog).getByText('Да')).toBeInTheDocument();
 
+    await openSection(dialog, user, /^Устройства/);
     const device = mockDb.devices[0];
     expect(device).toBeDefined();
     expect(await within(dialog).findByText(device!.id)).toBeInTheDocument();
@@ -53,6 +65,7 @@ describe('D1-FE5 profile modal', () => {
     expect(within(dialog).getAllByText('Активные сессии').length).toBeGreaterThan(0);
     expect(within(dialog).queryByRole('checkbox')).toBeNull();
 
+    await openSection(dialog, user, /^Активные сессии/);
     // Contract fields only: client label, timestamps, current flag. No IP,
     // username or session tokens are rendered.
     expect(await within(dialog).findByText('krug-web · Chrome')).toBeInTheDocument();
@@ -76,6 +89,7 @@ describe('D1-FE5 profile modal', () => {
       'true',
     );
 
+    await openSection(dialog, user, /^Уведомления/);
     await user.click(within(dialog).getByRole('button', { name: 'Настроить уведомления' }));
     const notifications = await screen.findByRole('dialog', {
       name: 'Настройки уведомлений',
@@ -225,6 +239,7 @@ describe('D1-FE5/#72 profile edit and sessions', () => {
   it('revokes a session only after confirmation and re-reads the server list', async () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openProfile(user);
+    await openSection(dialog, user, /^Активные сессии/);
     await within(dialog).findByText('krug-web · Safari');
 
     const target = mockDb.profileSessions.find((session) => !session.current);
@@ -249,6 +264,7 @@ describe('D1-FE5/#72 profile edit and sessions', () => {
   it('shows a 503 sessions error, retries, and surfaces a revoke failure honestly', async () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openProfile(user);
+    await openSection(dialog, user, /^Активные сессии/);
     await within(dialog).findByText('krug-web · Chrome');
 
     mockDb.forceProfileSessionsError = {
@@ -293,7 +309,119 @@ describe('D1-FE5/#72 profile edit and sessions', () => {
     const { user } = renderPasswordApp();
     const { dialog } = await openProfile(user);
     await user.click(within(dialog).getByRole('button', { name: 'Редактировать' }));
-    await within(dialog).findByText('krug-web · Chrome');
+
+    const results = await axe.run(dialog, {
+      rules: { 'color-contrast': { enabled: false } },
+    });
+    const serious = results.violations.filter(
+      (violation) => violation.impact === 'serious' || violation.impact === 'critical',
+    );
+    expect(serious).toEqual([]);
+  });
+});
+
+describe('#107 profile accordion', () => {
+  it('opens the avatar section first by default and keeps devices/sessions collapsed', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+
+    const triggers = [...dialog.querySelectorAll<HTMLButtonElement>('.profile-accordion__trigger')];
+    expect(
+      triggers.map((trigger) => trigger.querySelector('.profile-accordion__title')?.textContent),
+    ).toEqual([
+      'Аватар',
+      'Двухфакторная аутентификация',
+      'Устройства',
+      'Активные сессии',
+      'Уведомления',
+      'Блокировки',
+    ]);
+
+    const avatar = within(dialog).getByRole('button', { name: /^Аватар/ });
+    const devices = within(dialog).getByRole('button', { name: /^Устройства/ });
+    const sessions = within(dialog).getByRole('button', { name: /^Активные сессии/ });
+    expect(avatar).toHaveAttribute('aria-expanded', 'true');
+    expect(devices).toHaveAttribute('aria-expanded', 'false');
+    expect(sessions).toHaveAttribute('aria-expanded', 'false');
+
+    // Every trigger owns exactly one labelled region.
+    for (const trigger of [avatar, devices, sessions]) {
+      const panelId = trigger.getAttribute('aria-controls');
+      expect(panelId).toBeTruthy();
+      const panel = dialog.querySelector(`[id="${panelId}"]`);
+      expect(panel).not.toBeNull();
+      if (trigger.getAttribute('aria-expanded') === 'false') {
+        expect(panel).toHaveAttribute('hidden');
+      } else {
+        expect(panel).not.toHaveAttribute('hidden');
+        expect(panel).toHaveAttribute('role', 'region');
+        expect(panel).toHaveAttribute('aria-labelledby', trigger.id);
+      }
+    }
+    expect(within(dialog).queryByRole('region', { name: /^Устройства/ })).toBeNull();
+    expect(within(dialog).queryByRole('region', { name: /^Активные сессии/ })).toBeNull();
+  });
+
+  it('expands and collapses a section from its keyboard-reachable header', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+
+    const devices = within(dialog).getByRole('button', { name: /^Устройства/ });
+    await user.click(devices);
+    expect(devices).toHaveAttribute('aria-expanded', 'true');
+    const panel = within(dialog).getByRole('region', { name: /^Устройства/ });
+    const device = mockDb.devices[0];
+    expect(device).toBeDefined();
+    expect(await within(panel).findByText(device!.id)).toBeInTheDocument();
+
+    await user.click(devices);
+    expect(devices).toHaveAttribute('aria-expanded', 'false');
+    expect(within(dialog).queryByRole('region', { name: /^Устройства/ })).toBeNull();
+  });
+
+  it('keeps an expanded section during theme changes and resets defaults on close', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+
+    await openSection(dialog, user, /^Активные сессии/);
+    await user.click(within(dialog).getByRole('button', { name: 'Тёмная' }));
+    expect(within(dialog).getByRole('button', { name: /^Активные сессии/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(await within(dialog).findByText('krug-web · Chrome')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Готово' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Профиль' })).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Профиль' }));
+    const reopened = await screen.findByRole('dialog', { name: 'Профиль' });
+    expect(within(reopened).getByRole('button', { name: /^Аватар/ })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(within(reopened).getByRole('button', { name: /^Активные сессии/ })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('does not duplicate avatar or notification controls', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+
+    expect(within(dialog).getAllByRole('button', { name: 'Сменить аватар' })).toHaveLength(1);
+    expect(within(dialog).queryByRole('button', { name: 'Настроить уведомления' })).toBeNull();
+
+    await openSection(dialog, user, /^Уведомления/);
+    expect(within(dialog).getAllByRole('button', { name: 'Настроить уведомления' })).toHaveLength(
+      1,
+    );
+  });
+
+  it('passes an axe audit with the accordion and an expanded sessions panel', async () => {
+    const { user } = renderPasswordApp();
+    const { dialog } = await openProfile(user);
+    await openSection(dialog, user, /^Активные сессии/);
 
     const results = await axe.run(dialog, {
       rules: { 'color-contrast': { enabled: false } },

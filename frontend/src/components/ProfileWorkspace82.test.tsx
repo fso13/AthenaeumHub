@@ -100,6 +100,7 @@ describe('P0-4 TOTP authenticator', () => {
   it('sets up 2FA once, shows recovery codes, then disables it with password + code', async () => {
     const { user } = renderPasswordApp();
     const dialog = await openProfile(user);
+    await user.click(within(dialog).getByRole('button', { name: /^Двухфакторная/ }));
 
     await user.click(await within(dialog).findByRole('button', { name: 'Включить 2FA' }));
     await user.type(within(dialog).getByLabelText('Пароль аккаунта'), MOCK_DEMO_PASSWORD);
@@ -135,6 +136,7 @@ describe('P0-4 TOTP authenticator', () => {
   it('rejects a wrong password for setup without exposing a secret', async () => {
     const { user } = renderPasswordApp();
     const dialog = await openProfile(user);
+    await user.click(within(dialog).getByRole('button', { name: /^Двухфакторная/ }));
     await user.click(await within(dialog).findByRole('button', { name: 'Включить 2FA' }));
     await user.type(within(dialog).getByLabelText('Пароль аккаунта'), 'wrong-password');
     await user.click(within(dialog).getByRole('button', { name: 'Продолжить' }));
@@ -145,7 +147,8 @@ describe('P0-4 TOTP authenticator', () => {
 
   it('passes an axe audit while the 2FA card is rendered', async () => {
     const { user } = renderPasswordApp();
-    await openProfile(user);
+    const dialog = await openProfile(user);
+    await user.click(within(dialog).getByRole('button', { name: /^Двухфакторная/ }));
     const canvas = HTMLCanvasElement.prototype as unknown as {
       getContext: (...args: unknown[]) => unknown;
     };

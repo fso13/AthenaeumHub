@@ -1450,7 +1450,8 @@ export class ChatStore {
       api: deps.api,
       getSelfId: () => this.viewerId(),
       calls: {
-        startConference: (chatId, peers, callId) => this.startRoomConference(chatId, peers, callId),
+        startConference: (chatId, peers, video, callId) =>
+          this.startRoomConference(chatId, peers, video, callId),
         activeCallChatId: () => this.calls.getState().chatId,
         endCallForChat: (chatId) => {
           if (this.calls.getState().chatId === chatId) this.calls.hangup();
@@ -8098,14 +8099,17 @@ export class ChatStore {
   }
 
   /**
-   * #105: start the room mesh towards the peers that are already present.
+   * #105/#107: start the room mesh towards the peers that are already present.
    * The server keeps no call state; `chat_id` of the room is the existing
-   * managed GROUP channel used by `call.signal`. Returns false when the engine
-   * is already busy or the WebSocket is offline (the page shows an honest note).
+   * managed GROUP channel used by `call.signal`. `video` follows the room's
+   * server-side `media_mode`, so an AUDIO room never requests a camera.
+   * Returns false when the engine is already busy or the WebSocket is offline
+   * (the page shows an honest note).
    */
   private startRoomConference(
     chatId: string,
     peerUserIds: readonly string[],
+    video: boolean,
     callId?: string,
   ): boolean {
     if (this.state.call.phase !== 'idle') return false;
@@ -8113,7 +8117,7 @@ export class ChatStore {
     const selfId = this.viewerId();
     const peers = [...new Set(peerUserIds)].filter((id) => id.length > 0 && id !== selfId);
     if (peers.length === 0) return false;
-    this.calls.startConference(chatId, peers, true, callId);
+    this.calls.startConference(chatId, peers, video, callId);
     return true;
   }
 

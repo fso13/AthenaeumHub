@@ -122,6 +122,7 @@ describe('#93 local QR', () => {
   it('shows the QR and the one-time secret in the profile setup step', async () => {
     const { user } = renderPasswordApp();
     const dialog = await openProfile(user);
+    await user.click(within(dialog).getByRole('button', { name: /^Двухфакторная/ }));
 
     await user.click(await within(dialog).findByRole('button', { name: 'Включить 2FA' }));
     await user.type(within(dialog).getByLabelText('Пароль аккаунта'), MOCK_DEMO_PASSWORD);

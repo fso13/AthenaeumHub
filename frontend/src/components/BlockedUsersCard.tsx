@@ -12,7 +12,12 @@ import { RefreshIcon } from './Icons';
  * is no display name or email to render. Unblock is a real `DELETE` and the
  * row disappears only after `204`; server failures stay visible.
  */
-export function BlockedUsersCard() {
+export interface BlockedUsersCardProps {
+  /** #107: render content only; the profile accordion owns the heading. */
+  embedded?: boolean;
+}
+
+export function BlockedUsersCard({ embedded = false }: BlockedUsersCardProps = {}) {
   const store = useChatStore();
   const state = useChatState();
   const blocked = state.blockedUsers;
@@ -32,9 +37,12 @@ export function BlockedUsersCard() {
   const actionError = blocked.actionError?.error ?? null;
 
   return (
-    <section className="mini-card blocked-card" aria-labelledby={titleId}>
+    <section
+      className={embedded ? 'profile-section-body blocked-card' : 'mini-card blocked-card'}
+      aria-labelledby={embedded ? undefined : titleId}
+    >
       <div className="blocked-card__head">
-        <h4 id={titleId}>{t('blocked.title')}</h4>
+        {embedded ? null : <h4 id={titleId}>{t('blocked.title')}</h4>}
         <button
           type="button"
           className="btn btn--sm"

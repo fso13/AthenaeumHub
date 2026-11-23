@@ -9,6 +9,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -76,6 +78,7 @@ class RoomsIT extends IntegrationTestBase {
         assertThat(body.get("name").asText()).isEqualTo("Team Room");
         assertThat(body.get("created_by").asText()).isEqualTo(creator.user().id().toString());
         assertThat(body.get("status").asText()).isEqualTo("ACTIVE");
+        assertThat(body.get("media_mode").asText()).isEqualTo("VIDEO");
         assertThat(body.get("participant_count").asInt()).isZero();
         assertThat(body.get("my_present").asBoolean()).isFalse();
         assertThat(body.get("participants")).isEmpty();
@@ -86,6 +89,7 @@ class RoomsIT extends IntegrationTestBase {
         assertThat(room.get("name")).isEqualTo("Team Room");
         assertThat(room.get("created_by")).isEqualTo(creator.user().id());
         assertThat(room.get("status")).isEqualTo("ACTIVE");
+        assertThat(room.get("media_mode")).isEqualTo("VIDEO");
 
         Map<String, Object> chat = migrator().queryForMap("""
                 SELECT workspace_id, type, security_mode, name, created_by, deleted_at
@@ -145,6 +149,7 @@ class RoomsIT extends IntegrationTestBase {
         CONTRACT.assertValid("Room", detail);
         assertThat(detail.get("id").asText()).isEqualTo(roomId.toString());
         assertThat(detail.get("chat_id").asText()).isEqualTo(chatId.toString());
+        assertThat(detail.get("media_mode").asText()).isEqualTo("VIDEO");
     }
 
     @Test
@@ -491,20 +496,245 @@ class RoomsIT extends IntegrationTestBase {
                 """, Long.class, roomA, roomB)).isZero();
     }
 
+    @Test
+    void createsRoomsWithDefaultAndExplicitMediaMode() throws Exception {
+        SessionResponse owner = devSession(uniqueDisplayName("room-mode-create"));
+        UUID workspaceId = owner.workspace().id();
+
+        // No media_mode in the request -> server default VIDEO.
+        JsonNode defaultRoom = createRoomOk(owner, workspaceId, "Default Mode");
+        CONTRACT.assertValid("Room", defaultRoom);
+        UUID defaultId = UUID.fromString(defaultRoom.get("id").asText());
+        assertThat(defaultRoom.get("media_mode").asText()).isEqualTo("VIDEO");
+        assertThat(roomRow(defaultId).get("media_mode")).isEqualTo("VIDEO");
+
+        JsonNode audio = createRoomOk(owner, workspaceId, "Audio Room", "AUDIO");
+        CONTRACT.assertValid("Room", audio);
+        UUID audioId = UUID.fromString(audio.get("id").asText());
+        assertThat(audio.get("name").asText()).isEqualTo("Audio Room");
+        assertThat(audio.get("media_mode").asText()).isEqualTo("AUDIO");
+        assertThat(roomRow(audioId).get("media_mode")).isEqualTo("AUDIO");
+
+        JsonNode video = createRoomOk(owner, workspaceId, "Video Room", "VIDEO");
+        CONTRACT.assertValid("Room", video);
+        UUID videoId = UUID.fromString(video.get("id").asText());
+        assertThat(video.get("media_mode").asText()).isEqualTo("VIDEO");
+        assertThat(roomRow(videoId).get("media_mode")).isEqualTo("VIDEO");
+
+        JsonNode list = listRooms(owner, workspaceId);
+        CONTRACT.assertValid("RoomList", list);
+        assertThat(list.get("items")).hasSize(3);
+        Map<String, String> modes = new HashMap<>();
+        list.get("items").forEach(item -> modes.put(item.get("id").asText(),
+                item.get("media_mode").asText()));
+        assertThat(modes)
+                .containsEntry(defaultId.toString(), "VIDEO")
+                .containsEntry(audioId.toString(), "AUDIO")
+                .containsEntry(videoId.toString(), "VIDEO");
+
+        JsonNode detail = json(getRoom(owner, audioId).andExpect(status().isOk()).andReturn());
+        CONTRACT.assertValid("Room", detail);
+        assertThat(detail.get("media_mode").asText()).isEqualTo("AUDIO");
+
+        // An explicit JSON null is treated like an omitted field (VIDEO default).
+        Map<String, Object> explicitNull = new LinkedHashMap<>();
+        explicitNull.put("name", "Null Mode");
+        explicitNull.put("media_mode", null);
+        JsonNode nullRoom = json(createRoomBody(owner, workspaceId, explicitNull)
+                .andExpect(status().isCreated()).andReturn());
+        CONTRACT.assertValid("Room", nullRoom);
+        assertThat(nullRoom.get("media_mode").asText()).isEqualTo("VIDEO");
+    }
+
+    @Test
+    void updatesMediaModeWithCreatorOwnerAdminPermissionsAndValidation() throws Exception {
+        SessionResponse owner = devSession(uniqueDisplayName("room-mode-owner"));
+        SessionResponse creator = devSession(uniqueDisplayName("room-mode-creator"));
+        SessionResponse admin = devSession(uniqueDisplayName("room-mode-admin"));
+        SessionResponse member = devSession(uniqueDisplayName("room-mode-member"));
+        UUID workspaceId = owner.workspace().id();
+        addMember(owner, workspaceId, emailOf(creator.user().id()), "MEMBER")
+                .andExpect(status().isCreated());
+        addMember(owner, workspaceId, emailOf(admin.user().id()), "ADMIN")
+                .andExpect(status().isCreated());
+        addMember(owner, workspaceId, emailOf(member.user().id()), "MEMBER")
+                .andExpect(status().isCreated());
+        SessionResponse creatorScoped = scoped(creator, workspaceId);
+        SessionResponse adminScoped = scoped(admin, workspaceId);
+        SessionResponse memberScoped = scoped(member, workspaceId);
+
+        JsonNode created = createRoomOk(creatorScoped, workspaceId, "Audio Sync", "AUDIO");
+        UUID roomId = UUID.fromString(created.get("id").asText());
+        UUID chatId = UUID.fromString(created.get("chat_id").asText());
+
+        // A plain member who is not the creator cannot change the mode.
+        patchMediaMode(memberScoped, workspaceId, roomId, "VIDEO")
+                .andExpect(status().isForbidden());
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("AUDIO");
+
+        // The creator changes only the mode: the name and the backing channel are untouched.
+        JsonNode byCreator = json(patchMediaMode(creatorScoped, workspaceId, roomId, "VIDEO")
+                .andExpect(status().isOk()).andReturn());
+        CONTRACT.assertValid("Room", byCreator);
+        assertThat(byCreator.get("name").asText()).isEqualTo("Audio Sync");
+        assertThat(byCreator.get("media_mode").asText()).isEqualTo("VIDEO");
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("VIDEO");
+        assertThat(chatName(chatId)).isEqualTo("Audio Sync");
+        List<Map<String, Object>> modeAudits = mediaModeAudits(roomId);
+        assertThat(modeAudits).hasSize(1);
+        assertMediaModeAudit(modeAudits.get(0), creator.user().id(), "VIDEO");
+
+        // Repeating the same value is an idempotent 200 with no extra audit row.
+        patchMediaMode(creatorScoped, workspaceId, roomId, "VIDEO")
+                .andExpect(status().isOk());
+        assertThat(mediaModeAudits(roomId)).hasSize(1);
+
+        // Workspace ADMIN may change the mode too.
+        JsonNode byAdmin = json(patchMediaMode(adminScoped, workspaceId, roomId, "AUDIO")
+                .andExpect(status().isOk()).andReturn());
+        CONTRACT.assertValid("Room", byAdmin);
+        assertThat(byAdmin.get("media_mode").asText()).isEqualTo("AUDIO");
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("AUDIO");
+        assertThat(mediaModeAudits(roomId)).hasSize(2);
+
+        // Workspace OWNER may rename and change the mode in one partial PATCH.
+        Map<String, Object> both = new LinkedHashMap<>();
+        both.put("name", "Owner Video");
+        both.put("media_mode", "VIDEO");
+        JsonNode byOwner = json(patchRoom(owner, workspaceId, roomId, both)
+                .andExpect(status().isOk()).andReturn());
+        CONTRACT.assertValid("Room", byOwner);
+        assertThat(byOwner.get("name").asText()).isEqualTo("Owner Video");
+        assertThat(byOwner.get("media_mode").asText()).isEqualTo("VIDEO");
+        assertThat(roomRow(roomId).get("name")).isEqualTo("Owner Video");
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("VIDEO");
+        assertThat(chatName(chatId)).isEqualTo("Owner Video");
+        assertThat(mediaModeAudits(roomId)).hasSize(3);
+
+        Map<String, Object> renamedAudit = migrator().queryForMap("""
+                SELECT actor_id, metadata::text AS metadata
+                  FROM audit.audit_events
+                 WHERE action = 'room.renamed' AND target_id = ?
+                 ORDER BY seq DESC LIMIT 1
+                """, roomId);
+        assertThat(renamedAudit.get("actor_id")).isEqualTo(owner.user().id());
+        JsonNode renamedMeta = objectMapper.readTree(
+                String.valueOf(renamedAudit.get("metadata")));
+        assertThat(renamedMeta.fieldNames()).toIterable().containsExactly("chat_id");
+        assertThat(renamedMeta.get("chat_id").asText()).isEqualTo(chatId.toString());
+
+        // A name-only PATCH keeps the current media mode.
+        JsonNode renamedOnly = json(renameRoom(creatorScoped, workspaceId, roomId,
+                "Creator Rename").andExpect(status().isOk()).andReturn());
+        CONTRACT.assertValid("Room", renamedOnly);
+        assertThat(renamedOnly.get("name").asText()).isEqualTo("Creator Rename");
+        assertThat(renamedOnly.get("media_mode").asText()).isEqualTo("VIDEO");
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("VIDEO");
+
+        // Unknown, lowercase and empty PATCHes are rejected without any state change.
+        patchMediaMode(owner, workspaceId, roomId, "MUSIC")
+                .andExpect(status().isBadRequest());
+        patchMediaMode(owner, workspaceId, roomId, "audio")
+                .andExpect(status().isBadRequest());
+        patchRoom(owner, workspaceId, roomId, Map.of()).andExpect(status().isBadRequest());
+        createRoom(owner, workspaceId, "Bad Mode", "MUSIC")
+                .andExpect(status().isBadRequest());
+        createRoom(owner, workspaceId, "Bad Lowercase", "audio")
+                .andExpect(status().isBadRequest());
+        assertThat(roomCount(workspaceId)).isEqualTo(1);
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("VIDEO");
+        assertThat(chatName(chatId)).isEqualTo("Creator Rename");
+
+        // A CLOSED room cannot change its media mode.
+        closeRoom(owner, workspaceId, roomId).andExpect(status().isNoContent());
+        patchMediaMode(creatorScoped, workspaceId, roomId, "AUDIO")
+                .andExpect(status().isConflict());
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("VIDEO");
+    }
+
+    @Test
+    void mediaModeMigrationIsNotNullDefaultedAndConstrained() throws Exception {
+        Map<String, Object> column = migrator().queryForMap("""
+                SELECT data_type, is_nullable, column_default
+                  FROM information_schema.columns
+                 WHERE table_schema = 'room'
+                   AND table_name = 'rooms'
+                   AND column_name = 'media_mode'
+                """);
+        assertThat(column.get("data_type")).isEqualTo("text");
+        assertThat(column.get("is_nullable")).isEqualTo("NO");
+        assertThat(String.valueOf(column.get("column_default"))).contains("'VIDEO'");
+
+        String check = migrator().queryForObject("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                 WHERE conrelid = 'room.rooms'::regclass
+                   AND conname = 'ck_rooms_media_mode'
+                """, String.class);
+        assertThat(check).contains("AUDIO").contains("VIDEO");
+
+        SessionResponse owner = devSession(uniqueDisplayName("room-mode-migration"));
+        UUID workspaceId = owner.workspace().id();
+        UUID chatId = owner.chat().id();
+        UUID roomId = UUID.randomUUID();
+        // Legacy/direct writer omitting the column gets the VIDEO default.
+        migrator().update("""
+                INSERT INTO room.rooms (id, workspace_id, chat_id, name, created_by)
+                VALUES (?, ?, ?, 'Legacy', ?)
+                """, roomId, workspaceId, chatId, owner.user().id());
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("VIDEO");
+
+        migrator().update("UPDATE room.rooms SET media_mode = 'AUDIO' WHERE id = ?", roomId);
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("AUDIO");
+
+        // The DB backstop rejects both an unknown value and an explicit NULL.
+        assertThatThrownBy(() -> migrator().update(
+                "UPDATE room.rooms SET media_mode = 'MUSIC' WHERE id = ?", roomId))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("ck_rooms_media_mode");
+        assertThatThrownBy(() -> migrator().update(
+                "UPDATE room.rooms SET media_mode = NULL WHERE id = ?", roomId))
+                .isInstanceOf(DataAccessException.class)
+                .hasMessageContaining("media_mode");
+        assertThat(roomRow(roomId).get("media_mode")).isEqualTo("AUDIO");
+    }
+
     // ------------------------------------------------------------------
 
     private ResultActions createRoom(SessionResponse actor, UUID workspaceId, String name)
             throws Exception {
+        return createRoom(actor, workspaceId, name, null);
+    }
+
+    private ResultActions createRoom(SessionResponse actor, UUID workspaceId, String name,
+                                     String mediaMode) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("name", name);
+        if (mediaMode != null) {
+            body.put("media_mode", mediaMode);
+        }
         return mockMvc.perform(authed(
                         post("/api/v1/workspaces/{workspaceId}/rooms", workspaceId), actor)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("name", name))));
+                .content(objectMapper.writeValueAsString(body)));
     }
 
     private JsonNode createRoomOk(SessionResponse actor, UUID workspaceId, String name)
             throws Exception {
-        return json(createRoom(actor, workspaceId, name)
+        return createRoomOk(actor, workspaceId, name, null);
+    }
+
+    private JsonNode createRoomOk(SessionResponse actor, UUID workspaceId, String name,
+                                  String mediaMode) throws Exception {
+        return json(createRoom(actor, workspaceId, name, mediaMode)
                 .andExpect(status().isCreated()).andReturn());
+    }
+
+    private ResultActions createRoomBody(SessionResponse actor, UUID workspaceId,
+                                         Map<String, Object> body) throws Exception {
+        return mockMvc.perform(authed(
+                        post("/api/v1/workspaces/{workspaceId}/rooms", workspaceId), actor)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(body)));
     }
 
     private JsonNode listRooms(SessionResponse actor, UUID workspaceId) throws Exception {
@@ -525,11 +755,21 @@ class RoomsIT extends IntegrationTestBase {
 
     private ResultActions renameRoom(SessionResponse actor, UUID workspaceId, UUID roomId,
                                      String name) throws Exception {
+        return patchRoom(actor, workspaceId, roomId, Map.of("name", name));
+    }
+
+    private ResultActions patchMediaMode(SessionResponse actor, UUID workspaceId, UUID roomId,
+                                         String mediaMode) throws Exception {
+        return patchRoom(actor, workspaceId, roomId, Map.of("media_mode", mediaMode));
+    }
+
+    private ResultActions patchRoom(SessionResponse actor, UUID workspaceId, UUID roomId,
+                                    Map<String, Object> body) throws Exception {
         return mockMvc.perform(authed(patch(
                         "/api/v1/workspaces/{workspaceId}/rooms/{roomId}", workspaceId, roomId),
                         actor)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("name", name))));
+                .content(objectMapper.writeValueAsString(body)));
     }
 
     private ResultActions closeRoom(SessionResponse actor, UUID workspaceId, UUID roomId)
@@ -573,7 +813,7 @@ class RoomsIT extends IntegrationTestBase {
 
     private Map<String, Object> roomRow(UUID roomId) {
         return migrator().queryForMap("""
-                SELECT workspace_id, chat_id, name, created_by, status
+                SELECT workspace_id, chat_id, name, created_by, status, media_mode
                   FROM room.rooms WHERE id = ?
                 """, roomId);
     }
@@ -643,5 +883,22 @@ class RoomsIT extends IntegrationTestBase {
     private String emailOf(UUID userId) {
         return migrator().queryForObject(
                 "SELECT email::text FROM auth.users WHERE id = ?", String.class, userId);
+    }
+
+    private List<Map<String, Object>> mediaModeAudits(UUID roomId) {
+        return migrator().queryForList("""
+                SELECT actor_id, metadata::text AS metadata
+                  FROM audit.audit_events
+                 WHERE action = 'room.media_mode_changed' AND target_id = ?
+                 ORDER BY seq
+                """, roomId);
+    }
+
+    private void assertMediaModeAudit(Map<String, Object> audit, UUID actorId, String mode)
+            throws Exception {
+        assertThat(audit.get("actor_id")).isEqualTo(actorId);
+        JsonNode metadata = objectMapper.readTree(String.valueOf(audit.get("metadata")));
+        assertThat(metadata.fieldNames()).toIterable().containsExactly("media_mode");
+        assertThat(metadata.get("media_mode").asText()).isEqualTo(mode);
     }
 }

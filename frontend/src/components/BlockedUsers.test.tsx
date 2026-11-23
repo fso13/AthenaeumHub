@@ -83,6 +83,7 @@ describe('#79 DIRECT block and the blocked list', () => {
     mockDb.blockedUsers = [{ user_id: IDS.anna, blocked_at: '2026-11-18T10:00:00.000Z' }];
     const { user } = renderPasswordApp();
     const dialog = await openProfile(user);
+    await user.click(within(dialog).getByRole('button', { name: /^Блокировки/ }));
 
     expect(await within(dialog).findByText(IDS.anna)).toBeInTheDocument();
     expect(within(dialog).getByText(/^Заблокирован /)).toBeInTheDocument();
@@ -111,6 +112,7 @@ describe('#79 DIRECT block and the blocked list', () => {
     };
     const { user } = renderPasswordApp();
     const dialog = await openProfile(user);
+    await user.click(within(dialog).getByRole('button', { name: /^Блокировки/ }));
 
     expect(
       await within(dialog).findByText('Недостаточно прав для блокировки.'),

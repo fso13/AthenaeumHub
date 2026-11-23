@@ -28,6 +28,14 @@ public interface RoomRepository {
     /** @return {@code false} when the ACTIVE room disappeared concurrently */
     boolean rename(UUID workspaceId, UUID roomId, String name, Instant at);
 
+    /**
+     * #107 media-mode change; touches only {@code room.rooms.media_mode}/{@code updated_at}.
+     *
+     * @return {@code false} when the ACTIVE room disappeared concurrently
+     */
+    boolean changeMediaMode(UUID workspaceId, UUID roomId, Room.MediaMode mediaMode,
+                            Instant at);
+
     /** Soft-close: status becomes CLOSED; the row and its history are retained. */
     boolean close(UUID workspaceId, UUID roomId, Instant at);
 

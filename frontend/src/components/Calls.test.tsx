@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import axe from 'axe-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -16,6 +16,7 @@ import {
   fakeMediaError,
 } from '../test/callFakes';
 import { renderApp } from '../test/renderApp';
+import { readCallOutputVolume, writeCallOutputVolume } from '../prefs/devicePreferences';
 
 const CALL = '00000000-0000-4000-8000-000000000001';
 const OTHER_CALL = '00000000-0000-4000-8000-000000000002';
@@ -802,5 +803,219 @@ describe('GROUP mesh calls (#77)', () => {
       (violation) => violation.impact === 'serious' || violation.impact === 'critical',
     );
     expect(serious).toEqual([]);
+  });
+});
+
+describe('#107 call output controls', () => {
+  async function connectedVideoCall() {
+    const result = renderCalls();
+    await waitForOnline(result.store);
+    await openDirect(result.user);
+    const { callId } = await startOutgoing(result.user, result.container, result.media, true);
+    await answerAndConnect(result.media, callId, true);
+    act(() =>
+      result.media.peers[0]?.fireTrack(
+        new FakeMediaStream(['audio', 'video']) as unknown as MediaStream,
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(screen.getByLabelText('Видео собеседника')).toHaveClass('is-video'),
+    );
+    const remote = result.container.querySelector('.call-stage__remote');
+    if (!(remote instanceof HTMLVideoElement)) throw new Error('remote video not rendered');
+    return { ...result, remote };
+  }
+
+  it('applies the 0..100 output volume to the remote element and persists it per device', async () => {
+    const { user, remote, store } = await connectedVideoCall();
+
+    const slider = screen.getByRole('slider', { name: 'Громкость звука' });
+    expect(slider).toHaveValue('100');
+    fireEvent.change(slider, { target: { value: '35' } });
+
+    await vi.waitFor(() => expect(remote.volume).toBeCloseTo(0.35, 2));
+    expect(readCallOutputVolume()).toBe(35);
+    expect(screen.getByText('35%')).toBeInTheDocument();
+
+    // The output mute is separate from the microphone mute and never leaks
+    // into signalling.
+    await user.click(screen.getByRole('button', { name: 'Выключить звук' }));
+    expect(remote.muted).toBe(true);
+    expect(screen.getByRole('button', { name: 'Включить звук' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await user.click(screen.getByRole('button', { name: 'Выключить микрофон' }));
+    expect(remote.muted).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Включить звук' }));
+    expect(remote.muted).toBe(false);
+    expect(store.getSnapshot().call.phase).toBe('connected');
+  });
+
+  it('restores the device-persisted volume on the next mount', async () => {
+    writeCallOutputVolume(42);
+    const { remote } = await connectedVideoCall();
+
+    expect(screen.getByRole('slider', { name: 'Громкость звука' })).toHaveValue('42');
+    expect(screen.getByText('42%')).toBeInTheDocument();
+    await vi.waitFor(() => expect(remote.volume).toBeCloseTo(0.42, 2));
+  });
+
+  it('applies volume and output mute to every remote mesh tile', async () => {
+    const { user, container, store, media } = renderCalls();
+    await waitForOnline(store);
+    const { callId } = await startGroupConference(user, container, media, true);
+    await answerGroup(media, callId, true);
+
+    const remoteTiles = [
+      ...container.querySelectorAll('.call-tile:not(.call-tile--local) video'),
+    ].filter((element): element is HTMLVideoElement => element instanceof HTMLVideoElement);
+    expect(remoteTiles).toHaveLength(3);
+
+    fireEvent.change(screen.getByRole('slider', { name: 'Громкость звука' }), {
+      target: { value: '20' },
+    });
+    await vi.waitFor(() => {
+      for (const tile of remoteTiles) expect(tile.volume).toBeCloseTo(0.2, 2);
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Выключить звук' }));
+    expect(remoteTiles.every((tile) => tile.muted)).toBe(true);
+    const local = container.querySelector('.call-tile--local video');
+    expect(local).toHaveProperty('muted', true);
+  });
+
+  it('keeps a real media element for audio-only mesh tiles and shows avatars', async () => {
+    const { user, container, store, media } = renderCalls();
+    await waitForOnline(store);
+    const { callId } = await startGroupConference(user, container, media, false);
+    await answerGroup(media, callId, false);
+
+    const tiles = [...container.querySelectorAll('.call-tile')];
+    expect(tiles).toHaveLength(4);
+    expect(container.querySelectorAll('.call-tile.is-video')).toHaveLength(0);
+    expect(tiles.every((tile) => tile.querySelector('.call-tile__identity') !== null)).toBe(true);
+    // Each remote tile still has a media element so remote audio is audible.
+    const remoteVideos = container.querySelectorAll('.call-tile:not(.call-tile--local) video');
+    expect(remoteVideos).toHaveLength(3);
+    expect(media.constraints[0]?.video).toBe(false);
+
+    await user.click(screen.getByRole('button', { name: 'Завершить звонок' }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Завершить' }),
+    );
+    await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('idle'));
+  });
+
+  it('uses the browser output picker and setSinkId, then shows the selected label', async () => {
+    const selectAudioOutput = vi.fn(async () => ({
+      deviceId: 'speaker-2',
+      kind: 'audiooutput' as MediaDeviceKind,
+      label: 'Наушники',
+      groupId: 'group-1',
+    }));
+    const originalMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
+    const setSinkId = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { ...(originalMediaDevices?.value ?? {}), selectAudioOutput },
+    });
+    Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', {
+      configurable: true,
+      value: setSinkId,
+    });
+
+    try {
+      const { user, remote } = await connectedVideoCall();
+      const button = screen.getByRole('button', { name: 'Выбрать устройство вывода звука' });
+      await user.click(button);
+
+      await vi.waitFor(() => expect(selectAudioOutput).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(setSinkId).toHaveBeenCalledWith('speaker-2'));
+      expect(remote.volume).toBeGreaterThan(0);
+      expect(
+        screen.getByRole('button', { name: 'Выбрать устройство вывода звука' }),
+      ).toHaveTextContent('Наушники');
+    } finally {
+      if (originalMediaDevices) {
+        Object.defineProperty(navigator, 'mediaDevices', originalMediaDevices);
+      } else {
+        Reflect.deleteProperty(navigator, 'mediaDevices');
+      }
+      if (originalSink) {
+        Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', originalSink);
+      } else {
+        Reflect.deleteProperty(HTMLMediaElement.prototype, 'setSinkId');
+      }
+    }
+  });
+
+  it('renders an honest system-output fallback when selectAudioOutput is unavailable', async () => {
+    const { store } = await connectedVideoCall();
+    expect(screen.queryByRole('button', { name: 'Выбрать устройство вывода звука' })).toBeNull();
+    const fallback = screen.getByText('Системный звук');
+    expect(fallback).toHaveAttribute(
+      'title',
+      'Браузер не поддерживает выбор устройства вывода — используется системное.',
+    );
+    expect(store.getSnapshot().call.phase).toBe('connected');
+  });
+
+  it('measures the microphone through a real AnalyserNode and never fakes a level', async () => {
+    const originalAudioContext = Object.getOwnPropertyDescriptor(window, 'AudioContext');
+    const analyser = {
+      fftSize: 512,
+      smoothingTimeConstant: 0.6,
+      getFloatTimeDomainData(target: Float32Array) {
+        target.fill(0.1);
+      },
+      getByteTimeDomainData(target: Uint8Array) {
+        target.fill(128 + 13);
+      },
+    };
+    const context = {
+      createMediaStreamSource: () => ({ connect: () => undefined, disconnect: () => undefined }),
+      createAnalyser: () => analyser,
+      resume: async () => undefined,
+      close: async () => undefined,
+    };
+    Object.defineProperty(window, 'AudioContext', {
+      configurable: true,
+      value: class {
+        constructor() {
+          return context;
+        }
+      },
+    });
+
+    try {
+      const { user } = await connectedVideoCall();
+      const control = screen.getByRole('button', { name: 'Проверить микрофон' });
+      expect(control).toHaveAttribute('aria-pressed', 'false');
+      await user.click(control);
+
+      const meter = await screen.findByRole('meter', { name: 'Уровень микрофона' });
+      await vi.waitFor(() =>
+        expect(Number(meter.getAttribute('aria-valuenow'))).toBeGreaterThan(0),
+      );
+      expect(screen.getByRole('button', { name: 'Остановить проверку микрофона' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      await user.click(screen.getByRole('button', { name: 'Выключить микрофон' }));
+      await vi.waitFor(() =>
+        expect(screen.getByRole('meter', { name: 'Уровень микрофона' })).toHaveAttribute(
+          'aria-valuenow',
+          '0',
+        ),
+      );
+    } finally {
+      if (originalAudioContext) {
+        Object.defineProperty(window, 'AudioContext', originalAudioContext);
+      } else {
+        Reflect.deleteProperty(window, 'AudioContext');
+      }
+    }
   });
 });

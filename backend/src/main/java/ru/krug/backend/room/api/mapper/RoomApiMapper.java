@@ -26,8 +26,8 @@ public final class RoomApiMapper {
                 .map(RoomApiMapper::toResponse)
                 .toList();
         return new RoomResponse(view.id(), view.workspaceId(), view.chatId(), view.name(),
-                view.createdBy(), view.createdAt(), view.updatedAt(), view.status(),
-                participants, view.participantCount(), view.myPresent());
+                view.mediaMode(), view.createdBy(), view.createdAt(), view.updatedAt(),
+                view.status(), participants, view.participantCount(), view.myPresent());
     }
 
     public static RoomParticipantResponse toResponse(RoomParticipantView view) {

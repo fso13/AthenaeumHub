@@ -27,7 +27,12 @@ async function writeClipboard(value: string): Promise<void> {
  *   open flow; closing the profile drops them (`clearTwoFactorDraft`). Nothing
  *   is written to storage or logs.
  */
-export function TwoFactorCard() {
+export interface TwoFactorCardProps {
+  /** #107: render content only; the profile accordion owns the heading. */
+  embedded?: boolean;
+}
+
+export function TwoFactorCard({ embedded = false }: TwoFactorCardProps = {}) {
   const store = useProfileWorkspaceStore();
   const state = useProfileWorkspaceState();
   const twoFactor = state.twoFactor;
@@ -173,17 +178,22 @@ export function TwoFactorCard() {
   const recoveryText = recoveryCodes?.codes.join('\n') ?? '';
 
   return (
-    <section className="mini-card" aria-labelledby={titleId}>
-      <div className="profile-sessions__head">
-        <h4 id={titleId}>
-          <ShieldIcon aria-hidden="true" /> {t('profile.twoFactor.title')}
-        </h4>
-        {twoFactor.status === 'ready' ? (
-          <span className={`mode-chip ${enabled ? 'mode-chip--ok' : 'mode-chip--mock'}`}>
-            {enabled ? t('profile.twoFactor.enabled') : t('profile.twoFactor.disabled')}
-          </span>
-        ) : null}
-      </div>
+    <section
+      className={embedded ? 'profile-section-body twofactor-card' : 'mini-card'}
+      aria-labelledby={embedded ? undefined : titleId}
+    >
+      {embedded ? null : (
+        <div className="profile-sessions__head">
+          <h4 id={titleId}>
+            <ShieldIcon aria-hidden="true" /> {t('profile.twoFactor.title')}
+          </h4>
+          {twoFactor.status === 'ready' ? (
+            <span className={`mode-chip ${enabled ? 'mode-chip--ok' : 'mode-chip--mock'}`}>
+              {enabled ? t('profile.twoFactor.enabled') : t('profile.twoFactor.disabled')}
+            </span>
+          ) : null}
+        </div>
+      )}
 
       {twoFactor.status === 'loading' || twoFactor.status === 'idle' ? (
         <p className="mini-card__text" role="status">

@@ -37,7 +37,7 @@ public class RoomRepositoryAdapter implements RoomRepository {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT id, workspace_id, chat_id, name, created_by, created_at,
-                               updated_at, status
+                               updated_at, status, media_mode
                           FROM room.rooms
                          WHERE workspace_id = ?1
                            AND status = 'ACTIVE'
@@ -55,7 +55,7 @@ public class RoomRepositoryAdapter implements RoomRepository {
         @SuppressWarnings("unchecked")
         List<Object[]> rows = entityManager.createNativeQuery("""
                         SELECT id, workspace_id, chat_id, name, created_by, created_at,
-                               updated_at, status
+                               updated_at, status, media_mode
                           FROM room.rooms
                          WHERE id = ?1 AND workspace_id = ?2
                         """)
@@ -85,8 +85,8 @@ public class RoomRepositoryAdapter implements RoomRepository {
         entityManager.createNativeQuery("""
                         INSERT INTO room.rooms
                                (id, workspace_id, chat_id, name, created_by, created_at,
-                                updated_at, status)
-                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                                updated_at, status, media_mode)
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                         """)
                 .setParameter(1, room.id())
                 .setParameter(2, room.workspaceId())
@@ -96,6 +96,7 @@ public class RoomRepositoryAdapter implements RoomRepository {
                 .setParameter(6, Timestamp.from(room.createdAt()))
                 .setParameter(7, Timestamp.from(room.updatedAt()))
                 .setParameter(8, room.status().name())
+                .setParameter(9, room.mediaMode().name())
                 .executeUpdate();
     }
 
@@ -109,6 +110,22 @@ public class RoomRepositoryAdapter implements RoomRepository {
                 .setParameter(1, roomId)
                 .setParameter(2, workspaceId)
                 .setParameter(3, name)
+                .setParameter(4, Timestamp.from(at))
+                .executeUpdate();
+        return updated > 0;
+    }
+
+    @Override
+    public boolean changeMediaMode(UUID workspaceId, UUID roomId, Room.MediaMode mediaMode,
+                                   Instant at) {
+        int updated = entityManager.createNativeQuery("""
+                        UPDATE room.rooms
+                           SET media_mode = ?3, updated_at = ?4
+                         WHERE id = ?1 AND workspace_id = ?2 AND status = 'ACTIVE'
+                        """)
+                .setParameter(1, roomId)
+                .setParameter(2, workspaceId)
+                .setParameter(3, mediaMode.name())
                 .setParameter(4, Timestamp.from(at))
                 .executeUpdate();
         return updated > 0;
@@ -212,6 +229,7 @@ public class RoomRepositoryAdapter implements RoomRepository {
                 (UUID) row[1],
                 (UUID) row[2],
                 (String) row[3],
+                Room.MediaMode.valueOf((String) row[8]),
                 (UUID) row[4],
                 instant(row[5]),
                 instant(row[6]),

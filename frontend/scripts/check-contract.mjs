@@ -398,6 +398,7 @@ const requiredFields = {
     'workspace_id',
     'chat_id',
     'name',
+    'media_mode',
     'created_by',
     'created_at',
     'updated_at',
@@ -408,7 +409,9 @@ const requiredFields = {
   ],
   RoomList: ['items'],
   RoomCreateRequest: ['name'],
-  RoomUpdateRequest: ['name'],
+  // #107 PATCH is a partial update: name and media_mode are both optional, but at least
+  // one of them must be present (minProperties: 1).
+  RoomUpdateRequest: [],
   Message: ['id', 'chat_id', 'seq', 'type', 'created_at', 'version'],
   // E4: text is optional; text or attachment_ids must be present.
   MessageCreate: ['client_message_id', 'type'],
@@ -514,6 +517,20 @@ for (const [schemaName, fields] of Object.entries(requiredFields)) {
     );
   }
 }
+
+// --- #107 room media mode ------------------------------------------------
+check(
+  ['AUDIO', 'VIDEO'].every((mode) => schemas.Room?.properties?.media_mode?.enum?.includes(mode)) &&
+    schemas.Room?.required?.includes('media_mode') &&
+    ['AUDIO', 'VIDEO'].every(
+      (mode) =>
+        schemas.RoomCreateRequest?.properties?.media_mode?.enum?.includes(mode) &&
+        schemas.RoomUpdateRequest?.properties?.media_mode?.enum?.includes(mode),
+    ) &&
+    !(schemas.RoomCreateRequest?.required ?? []).includes('media_mode') &&
+    schemas.RoomUpdateRequest?.minProperties === 1,
+  '#107 Room.media_mode must be required (AUDIO|VIDEO); create may omit it (VIDEO default) and PATCH must be partial',
+);
 
 const meUserProperty = schemas.MeResponse?.properties?.user;
 // `GET /me` now reuses `AuthUser`; resolve the local $ref instead of silently
