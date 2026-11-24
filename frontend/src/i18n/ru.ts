@@ -25,6 +25,13 @@ export const ru = {
   'sidebar.unarchive': 'Вернуть',
   'sidebar.unarchiving': 'Возвращаем…',
   'sidebar.unarchiveError': 'Не удалось вернуть чат из архива.',
+  'userPanel.open': 'Открыть профиль {name}',
+  'userPanel.title': 'Профиль',
+  'userPanel.write': 'Написать',
+  'userPanel.call': 'Позвонить',
+  'userPanel.role': 'Роль',
+  'userPanel.joined': 'В пространстве с',
+  'userPanel.member': 'Участник пространства',
   'sidebar.user': 'Вы',
   'sidebar.device': 'Веб-устройство',
 

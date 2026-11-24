@@ -172,6 +172,7 @@ function ForwardedMessage({ text }: { text: string }) {
 
 interface MessageMetaProps {
   author: string;
+  onOpenUser?: () => void;
   mine: boolean;
   isBot: boolean;
   message: ApiMessage;
@@ -180,10 +181,24 @@ interface MessageMetaProps {
 }
 
 /** Flat author/time header shared by every message kind. */
-function MessageMeta({ author, mine, isBot, message, readByOthers, e2eeChat }: MessageMetaProps) {
+function MessageMeta({
+  author,
+  onOpenUser,
+  mine,
+  isBot,
+  message,
+  readByOthers,
+  e2eeChat,
+}: MessageMetaProps) {
   return (
     <div className="msg-head">
-      <span className="msg-author">{author}</span>
+      {onOpenUser ? (
+        <button type="button" className="msg-author msg-author--button" onClick={onOpenUser}>
+          {author}
+        </button>
+      ) : (
+        <span className="msg-author">{author}</span>
+      )}
       {/*
         #96: bot identity is derived from `sender_type`, never from the display
         name: a renamed bot or a user called "Bot" must not gain the badge.
@@ -275,6 +290,14 @@ export function MessageRow({
   }
 
   const avatarSrc = mine ? profile.avatar.previewUrl : null;
+  const openUserProfile = () => {
+    if (!message.sender_id || isBot) return;
+    window.dispatchEvent(
+      new CustomEvent('sova:open-user-profile', {
+        detail: { userId: message.sender_id, name: author },
+      }),
+    );
+  };
   const author = message.sender_display_name?.trim() || UNKNOWN_AUTHOR();
   const deleted = Boolean(message.deleted_at);
   // #95: E2EE chats never render server plugin projections (the server cannot
@@ -355,6 +378,7 @@ export function MessageRow({
   const meta = (
     <MessageMeta
       author={author}
+      onOpenUser={message.sender_id && !isBot ? openUserProfile : undefined}
       mine={mine}
       isBot={isBot}
       message={message}
@@ -372,12 +396,20 @@ export function MessageRow({
         id={`message-${message.id}`}
         tabIndex={-1}
       >
-        <Avatar
-          name={author}
-          seed={message.bot_id ?? message.sender_id}
-          size="lg"
-          src={avatarSrc}
-        />
+        <button
+          type="button"
+          className="msg-avatar-button"
+          onClick={openUserProfile}
+          disabled={!message.sender_id || isBot}
+          aria-label={t('userPanel.open', { name: author })}
+        >
+          <Avatar
+            name={author}
+            seed={message.bot_id ?? message.sender_id}
+            size="lg"
+            src={avatarSrc}
+          />
+        </button>
         <div className="msg-body">
           {meta}
           {quote}
@@ -432,12 +464,20 @@ export function MessageRow({
         data-message-type={message.type}
         tabIndex={-1}
       >
-        <Avatar
-          name={author}
-          seed={message.bot_id ?? message.sender_id}
-          size="lg"
-          src={avatarSrc}
-        />
+        <button
+          type="button"
+          className="msg-avatar-button"
+          onClick={openUserProfile}
+          disabled={!message.sender_id || isBot}
+          aria-label={t('userPanel.open', { name: author })}
+        >
+          <Avatar
+            name={author}
+            seed={message.bot_id ?? message.sender_id}
+            size="lg"
+            src={avatarSrc}
+          />
+        </button>
         <div className="msg-body">
           {meta}
           {quote}
