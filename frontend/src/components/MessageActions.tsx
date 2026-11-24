@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
 import { chatDisplayName } from '../domain/chatLabel';
+import { formatDateTime } from './admin/format';
 import { t } from '../i18n/ru';
 import { usePluginGate } from '../plugins/gate';
 import { useChatState, useChatStore, usePluginActionsStore } from '../store/ChatProvider';
@@ -808,7 +809,13 @@ export function MessageActions({
               setForwardBusy(true);
               setForwardError(null);
               try {
-                await store.send(forwardTarget, message.text ?? '');
+                const author =
+                  message.sender_display_name?.trim() || t('message.forwardUnknownAuthor');
+                const forwarded = `↪ ${t('message.forwardedFrom', {
+                  author,
+                  date: formatDateTime(message.created_at),
+                })}\n\n${message.text ?? ''}`;
+                await store.send(forwardTarget, forwarded);
                 setForwardOpen(false);
               } catch {
                 setForwardError(t('message.forwardError'));

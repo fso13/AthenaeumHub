@@ -13,6 +13,7 @@ import { resetDeviceWorkspaceForTests } from '../workspace/deviceWorkspace';
 import { resetMockDb } from '../mocks/db';
 import { resetMockRealtime } from '../mocks/realtime';
 import { resetCallOutputPreferencesForTests } from '../prefs/devicePreferences';
+import { resetLastChatForTests } from '../sidebar/lastChat';
 import { mockDb, server } from './server';
 
 let originalFetch: typeof fetch;
@@ -41,6 +42,7 @@ beforeEach(() => {
   resetThemeForTests();
   resetPinnedChatsForTests();
   resetCallOutputPreferencesForTests();
+  resetLastChatForTests();
 });
 
 afterEach(() => {

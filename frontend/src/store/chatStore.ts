@@ -96,6 +96,7 @@ import { maxSeq, mergeMessages, minSeq } from '../domain/messages';
 import { sumUnread } from '../domain/unread';
 import { newUuid } from '../lib/ids';
 import { readCallPreferences } from '../prefs/callPreferences';
+import { readLastChat, writeLastChat } from '../sidebar/lastChat';
 import { isE2eeEnabled } from '../e2ee/app/flag';
 import { readChatModePin } from '../e2ee/device/modePin';
 import {
@@ -1373,7 +1374,7 @@ export class ChatStore {
         // A new logo id means new bytes: drop the old URL and resolve once.
         this.avatars.invalidateWorkspace(workspace.id);
         if (workspace.logo_file_id) {
-          void this.avatars.ensureWorkspace(workspace.id, workspace.logo_file_id);
+          void this.avatars.ensureWorkspace(workspace.id, workspace.logo_file_id, true);
         }
       },
       onProfileUpdated: (user) => this.applyProfileUser(user),
@@ -1617,8 +1618,12 @@ export class ChatStore {
       this.workspaceOverview.setWorkspace(session.workspace.id);
       const chatList = await this.api.listChats(session.workspace.id);
       const chats = chatList.items;
+      const remembered = readLastChat(session.user.id, session.workspace.id);
       const activeChatId =
-        chats.find((chat) => chat.id === session.chat.id)?.id ?? chats[0]?.id ?? null;
+        chats.find((chat) => chat.id === remembered)?.id ??
+        chats.find((chat) => chat.id === session.chat.id)?.id ??
+        chats[0]?.id ??
+        null;
 
       const slices = { ...this.state.slices };
       for (const chat of chats) {
@@ -1884,7 +1889,8 @@ export class ChatStore {
       for (const chat of chats) {
         slices[chat.id] = createEmptySlice(chat.id, chat.unread_count);
       }
-      const activeChatId = chats[0]?.id ?? null;
+      const remembered = readLastChat(this.viewerId(), workspace.id);
+      const activeChatId = chats.find((chat) => chat.id === remembered)?.id ?? chats[0]?.id ?? null;
 
       this.patch({
         sessionStatus: 'ready',
@@ -4721,6 +4727,11 @@ export class ChatStore {
 
   async setActiveChat(chatId: string): Promise<void> {
     if (!this.state.slices[chatId]) return;
+    writeLastChat(
+      this.viewerId(),
+      this.state.activeWorkspaceId ?? this.state.session?.workspace.id ?? null,
+      chatId,
+    );
     // D1-FE3: a thread belongs to one chat; switching chats closes the panel.
     this.patch({
       activeChatId: chatId,

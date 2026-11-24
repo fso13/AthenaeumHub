@@ -441,6 +441,8 @@ export const ru = {
   'message.pin': 'Закрепить сообщение',
   'message.unpin': 'Открепить сообщение',
   'message.pinLimit': 'Достигнут лимит: в канале можно закрепить не более 50 сообщений.',
+  'message.forwardedFrom': 'Переслано от {author} · {date}',
+  'message.forwardUnknownAuthor': 'Неизвестный автор',
   'message.forward': 'Переслать',
   'message.forwardTitle': 'Переслать сообщение',
   'message.forwardTo': 'Куда переслать',
