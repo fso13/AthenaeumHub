@@ -21320,3 +21320,63 @@ html[data-theme='dark'] .recent-thumb--video {
   bottom: 2px;
   right: 4px;
 }
+/* #185: denser sidebar navigation and chat list. */
+.sidebar__nav {
+  padding: 2px 8px 6px;
+}
+.sidebar__nav-items {
+  gap: 1px;
+}
+.sidebar__nav-item {
+  min-height: 30px;
+  padding: 4px 8px;
+  gap: 8px;
+  border-radius: 7px;
+  font-size: 12.5px;
+}
+.sidebar__nav-item .icon {
+  width: 15px;
+  height: 15px;
+}
+.chat-list__section + .chat-list__section {
+  margin-top: 4px;
+}
+.chat-list__section-title {
+  margin: 4px 8px 2px;
+  font-size: 9.5px;
+}
+.chat-item {
+  min-height: 36px;
+  padding: 5px 8px;
+  gap: 8px;
+  border-radius: 8px;
+}
+.chat-item .avatar,
+.chat-item__avatar {
+  width: 28px;
+  height: 28px;
+}
+.emoji-pop__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+.emoji-pop__tab {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 16px;
+  cursor: pointer;
+}
+.emoji-pop__tab.is-active {
+  background: var(--surface-2);
+}
+.emoji-pop__grid {
+  max-height: 220px;
+  overflow-y: auto;
+}
