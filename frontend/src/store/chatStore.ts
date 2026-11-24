@@ -8090,7 +8090,9 @@ export class ChatStore {
   private labelSelfChats(chats: AppState['chats'], viewerId: string | null): AppState['chats'] {
     if (!viewerId) return chats;
     return chats.map((chat) =>
-      chat.type === 'DIRECT' && chat.peer_id === viewerId ? { ...chat, name: 'Избранное' } : chat,
+      chat.type === 'DIRECT' && (chat.peer_id === viewerId || chat.peer_id === null)
+        ? { ...chat, name: 'Избранное' }
+        : chat,
     );
   }
 
@@ -8099,7 +8101,11 @@ export class ChatStore {
     const workspaceId = this.currentWorkspaceId();
     const viewerId = this.viewerId();
     if (!workspaceId || !viewerId) return;
-    if (this.state.chats.some((chat) => chat.type === 'DIRECT' && chat.peer_id === viewerId)) {
+    if (
+      this.state.chats.some(
+        (chat) => chat.type === 'DIRECT' && (chat.peer_id === viewerId || chat.peer_id === null),
+      )
+    ) {
       return;
     }
     try {
