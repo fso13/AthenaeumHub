@@ -24,6 +24,7 @@ import {
   VideoOffIcon,
   ExpandIcon,
   MonitorIcon,
+  MinimizeIcon,
   SettingsIcon,
 } from './Icons';
 
@@ -277,21 +278,21 @@ export function CallLayer() {
   // The call surface owns the viewport (full-screen on mobile): no background
   // scrolling while ringing or connected.
   useEffect(() => {
-    // Connected calls are non-modal: never lock the app behind the call.
-    if (!active) return;
+    // A minimized call is non-modal; the expanded call owns the viewport.
+    if (!active || collapsed) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [active]);
+  }, [active, collapsed]);
 
   // Focus trap + Escape for the whole call dialog. `call.phase` is deliberately
   // read through a ref so a phase transition does not steal focus mid-typing.
   const liveRef = useRef({ phase: call.phase, confirmEnd });
   liveRef.current = { phase: call.phase, confirmEnd };
   useEffect(() => {
-    if (!active) return;
+    if (!active || collapsed) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusTimer = window.setTimeout(() => {
       if (liveRef.current.phase === 'incoming') acceptRef.current?.focus();
@@ -339,12 +340,12 @@ export function CallLayer() {
       document.removeEventListener('keydown', handleKey);
       if (previous?.isConnected) previous.focus();
     };
-  }, [active, store]);
+  }, [active, collapsed, store]);
 
   // The call is non-modal after ringing, but Escape still asks for
   // confirmation while focus is inside the call widget.
   useEffect(() => {
-    if (!active || incoming) return;
+    if (!active || incoming || collapsed) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       const dialog = dialogRef.current;
@@ -355,7 +356,7 @@ export function CallLayer() {
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [active, incoming, confirmEnd]);
+  }, [active, incoming, collapsed, confirmEnd]);
 
   useEffect(() => {
     if (confirmEnd) stayRef.current?.focus();
@@ -364,7 +365,7 @@ export function CallLayer() {
   // Accepting or connecting unmounts the focused control. Keep keyboard users
   // inside the dialog instead of dropping focus onto <body>.
   useEffect(() => {
-    if (!active) return;
+    if (!active || collapsed) return;
     const element = document.activeElement;
     if (!(element instanceof HTMLElement) || !element.isConnected || element === document.body) {
       dialogRef.current?.focus();
@@ -467,14 +468,19 @@ export function CallLayer() {
     );
   }
 
-  if (connected && collapsed) {
+  if (!incoming && collapsed) {
     return (
       <div className="call-mini" role="region" aria-label={t('calls.miniLabel')}>
         <span className="call-mini__dot" aria-hidden="true" />
         <span className="call-mini__title">{infoTitle}</span>
-        {call.startedAt !== null ? <CallTimer startedAt={call.startedAt} /> : null}
+        {call.startedAt !== null ? (
+          <CallTimer startedAt={call.startedAt} />
+        ) : (
+          <span className="call-mini__status">{statusLabel(call)}</span>
+        )}
         <button
           type="button"
+          disabled={!call.localStream}
           className={`call-mini__button${call.muted ? ' is-active' : ''}`}
           onClick={() => store.toggleCallMute()}
           aria-pressed={call.muted}
@@ -486,6 +492,7 @@ export function CallLayer() {
         {call.video ? (
           <button
             type="button"
+            disabled={!call.localStream}
             className={`call-mini__button${call.cameraOn ? '' : ' is-active'}`}
             onClick={() => store.toggleCallCamera()}
             aria-pressed={call.cameraOn}
@@ -620,6 +627,17 @@ export function CallLayer() {
                   : t('calls.audio')}
             </span>
             {connected && call.startedAt !== null ? <CallTimer startedAt={call.startedAt} /> : null}
+            {!incoming ? (
+              <button
+                type="button"
+                className="call-minimize"
+                onClick={() => setCollapsed(true)}
+                aria-label={t('calls.minimize')}
+                title={t('calls.minimize')}
+              >
+                <MinimizeIcon />
+              </button>
+            ) : null}
           </div>
 
           <div className="call-stage__info">
