@@ -1017,6 +1017,16 @@ export function ProfileDialog({
                       <BellIcon aria-hidden="true" />
                       {t('profile.openNotifications')}
                     </button>
+                    <button
+                      type="button"
+                      className="btn btn--sm"
+                      onClick={() => {
+                        if (typeof Notification === 'undefined') return;
+                        void Notification.requestPermission();
+                      }}
+                    >
+                      {t('profile.browserNotifications')}
+                    </button>
                   </div>
                 </ProfileAccordionSection>
 

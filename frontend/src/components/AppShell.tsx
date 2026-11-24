@@ -16,6 +16,7 @@ import type { AppState } from '../store/chatStore';
 import { useTheme } from '../hooks/useTheme';
 import { ChatScreen } from './ChatScreen';
 import { CallLayer } from './CallLayer';
+import { NotificationToaster } from './NotificationToaster';
 import { WorkspaceCreateDialog } from './WorkspaceCreateDialog';
 import { WorkspaceLifecycleDialogs } from './WorkspaceLifecycleDialogs';
 import type { WorkspaceLifecycleAction } from '../workspace/lifecycle';
@@ -309,6 +310,7 @@ export function AppShell({
         onLogout={onLogout}
       />
       <CallLayer />
+      <NotificationToaster />
       <WorkspaceLifecycleDialogs
         workspace={workspaceAction?.workspace ?? null}
         action={workspaceAction?.action ?? null}

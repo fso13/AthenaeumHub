@@ -8477,12 +8477,29 @@ export class ChatStore {
     // chat.member.changed / chat.pin.changed are outside the E3-F slice.
   }
 
+  /** #183: in-app toast + optional desktop notification/sound for incoming rows. */
+  private emitIncomingToast(message: ReturnType<typeof readApiMessage>): void {
+    if (!message) return;
+    if (message.sender_id === this.viewerId()) return;
+    if (message.chat_id === this.state.activeChatId) return;
+    const chat = this.state.chats.find((item) => item.id === message.chat_id) ?? null;
+    const detail = {
+      chatId: message.chat_id,
+      chatName: chat?.name ?? 'Чаты',
+      author: message.sender_display_name ?? '',
+      text: message.text ?? (message.sticker ? 'Стикер' : 'Новое сообщение'),
+    };
+    window.dispatchEvent(new CustomEvent('sova:incoming-message', { detail }));
+  }
+
   private applyMessageCreated(frame: EventFrame): void {
     // ws-protocol §3 documents payload = Message object. Backend E3-B currently
     // serialises the Message fields directly in payload; accept both shapes so
     // live delivery does not depend on that envelope detail.
     const message = readApiMessage(frame.payload.message) ?? readApiMessage(frame.payload);
     if (!message || message.chat_id !== frame.chat_id) return;
+
+    this.emitIncomingToast(message);
 
     const slice = this.state.slices[message.chat_id];
     const summary = this.state.chats.find((chat) => chat.id === message.chat_id) ?? null;

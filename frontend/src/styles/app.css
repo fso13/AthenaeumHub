@@ -21163,3 +21163,102 @@ html[data-theme='dark'] .recent-thumb--video {
   text-overflow: ellipsis;
   text-align: center;
 }
+/* #182: detached call window is large but never blocks the app. */
+.call-overlay--floating {
+  inset: auto 18px 18px auto;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+.call-dialog--floating {
+  width: min(760px, calc(100vw - 36px));
+  height: min(620px, calc(100dvh - 36px));
+  pointer-events: auto;
+}
+.call-dialog--floating .call-stage {
+  flex: 1;
+  height: auto;
+}
+@media (max-width: 720px) {
+  .call-overlay--floating {
+    inset: auto 8px 8px;
+  }
+  .call-dialog--floating {
+    width: 100%;
+    height: min(80dvh, 620px);
+  }
+}
+.notification-toasts {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1600;
+  display: grid;
+  gap: 8px;
+  width: min(340px, calc(100vw - 32px));
+}
+.notification-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  text-align: left;
+  cursor: pointer;
+}
+.notification-toast__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+}
+.notification-toast__body strong {
+  font-size: 13px;
+}
+.notification-toast__body span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.notification-toast__close {
+  margin-left: auto;
+  flex: none;
+  opacity: 0.6;
+}
+.composer-format {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.composer-format__button {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.composer-format__button:hover {
+  background: var(--surface-2);
+}
+.composer-format__button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

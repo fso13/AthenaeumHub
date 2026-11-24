@@ -355,8 +355,8 @@ export function CallLayer() {
   const connected = call.phase === 'connected';
   // Only a ringing incoming call owns the screen. Outgoing, connecting and
   // connected calls are non-modal so the app remains usable.
-  // A call is a modal, resizable window (latest UX decision).
-  const floating = false;
+  // The call is a separate non-modal window; only an incoming ring is modal.
+  const floating = !incoming;
   const activeSpeakerId = useActiveSpeaker(call.participants, connected);
   const participantName = (userId: string): string =>
     state.workspaceMembers.items.find((item) => item.user_id === userId)?.display_name ??
@@ -387,7 +387,7 @@ export function CallLayer() {
   // scrolling while ringing or connected.
   useEffect(() => {
     // A minimized call is non-modal; the expanded call owns the viewport.
-    if (!active || collapsed) return;
+    if (!active || collapsed || floating) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -400,7 +400,7 @@ export function CallLayer() {
   const liveRef = useRef({ phase: call.phase, confirmEnd });
   liveRef.current = { phase: call.phase, confirmEnd };
   useEffect(() => {
-    if (!active || collapsed) return;
+    if (!active || collapsed || floating) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusTimer = window.setTimeout(() => {
       if (liveRef.current.phase === 'incoming') acceptRef.current?.focus();
@@ -473,7 +473,7 @@ export function CallLayer() {
   // Accepting or connecting unmounts the focused control. Keep keyboard users
   // inside the dialog instead of dropping focus onto <body>.
   useEffect(() => {
-    if (!active || collapsed) return;
+    if (!active || collapsed || floating) return;
     const element = document.activeElement;
     if (!(element instanceof HTMLElement) || !element.isConnected || element === document.body) {
       dialogRef.current?.focus();
@@ -659,7 +659,7 @@ export function CallLayer() {
       <div
         className={`call-dialog${floating ? ' call-dialog--floating' : ''}${maximized ? ' call-dialog--maximized' : ''}`}
         role="dialog"
-        aria-modal="true"
+        aria-modal={floating ? undefined : true}
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         ref={dialogRef}
@@ -1132,7 +1132,7 @@ export function CallLayer() {
           <div
             className="call-confirm"
             role="alertdialog"
-            aria-modal="true"
+            aria-modal={floating ? undefined : true}
             aria-labelledby={`${titleId}-confirm`}
             aria-describedby={`${titleId}-confirm-text`}
           >

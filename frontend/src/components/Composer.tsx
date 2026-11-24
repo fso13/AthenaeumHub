@@ -238,6 +238,20 @@ export function Composer({
     textareaRef.current?.focus();
   };
 
+  const wrapSelection = (before: string, after: string, placeholder: string) => {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? value.length;
+    const end = textarea?.selectionEnd ?? value.length;
+    const selected = value.slice(start, end) || placeholder;
+    const next = `${value.slice(0, start)}${before}${selected}${after}${value.slice(end)}`;
+    onChange(next);
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      const caret = start + before.length + selected.length;
+      textarea?.setSelectionRange(caret, caret);
+    });
+  };
+
   const insertEmoji = (emoji: string) => {
     onChange(`${value}${emoji}`);
     setEmojiOpen(false);
@@ -339,6 +353,52 @@ export function Composer({
         </button>
 
         <div className="field composer__field">
+          <div className="composer-format" role="toolbar" aria-label={t('composer.formatting')}>
+            {[
+              { label: 'B', before: '**', after: '**', title: t('composer.bold') },
+              { label: 'I', before: '*', after: '*', title: t('composer.italic') },
+              { label: 'U', before: '<u>', after: '</u>', title: t('composer.underline') },
+              { label: 'S', before: '~~', after: '~~', title: t('composer.strike') },
+              { label: '`', before: '`', after: '`', title: t('composer.code') },
+              { label: '•', before: '- ', after: '', title: t('composer.list') },
+              { label: '❝', before: '> ', after: '', title: t('composer.quote') },
+            ].map((item) => (
+              <button
+                key={item.title}
+                type="button"
+                className="composer-format__button"
+                disabled={disabled}
+                aria-label={item.title}
+                title={item.title}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => wrapSelection(item.before, item.after, t('composer.text'))}
+              >
+                {item.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="composer-format__button"
+              disabled={disabled}
+              aria-label={t('composer.link')}
+              title={t('composer.link')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => wrapSelection('[', '](https://)', t('composer.linkText'))}
+            >
+              🔗
+            </button>
+            <button
+              type="button"
+              className="composer-format__button"
+              disabled={disabled}
+              aria-label={t('composer.mention')}
+              title={t('composer.mention')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onChange(`${value}@`)}
+            >
+              @
+            </button>
+          </div>
           <textarea
             id="composer-input"
             ref={textareaRef}

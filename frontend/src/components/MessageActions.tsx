@@ -9,6 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
+import { chatDisplayName } from '../domain/chatLabel';
 import { t } from '../i18n/ru';
 import { usePluginGate } from '../plugins/gate';
 import { useChatState, useChatStore, usePluginActionsStore } from '../store/ChatProvider';
@@ -16,6 +17,7 @@ import {
   CloseIcon,
   EditIcon,
   EmojiIcon,
+  ForwardIcon,
   MoreIcon,
   PinIcon,
   ReplyIcon,
@@ -291,6 +293,10 @@ export function MessageActions({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleteMenuOpen, setDeleteMenuOpen] = useState(false);
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const [forwardTarget, setForwardTarget] = useState('');
+  const [forwardError, setForwardError] = useState<string | null>(null);
+  const [forwardBusy, setForwardBusy] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -665,6 +671,25 @@ export function MessageActions({
           <span className="msg-menu__hint">{threadDisabledReason}</span>
         </button>
       ) : null}
+      {!e2eeChat &&
+      message.type === 'TEXT' &&
+      (message.text ?? '').trim() &&
+      !message.deleted_at ? (
+        <button
+          type="button"
+          className="msg-menu__item"
+          onClick={() => {
+            setMenuOpen(false);
+            setDeleteMenuOpen(false);
+            setForwardTarget('');
+            setForwardError(null);
+            setForwardOpen(true);
+          }}
+        >
+          <ForwardIcon aria-hidden="true" />
+          <span className="msg-menu__text">{t('message.forward')}</span>
+        </button>
+      ) : null}
       {deleteAvailable ? (
         <>
           <span className="msg-menu__sep" aria-hidden="true" />
@@ -719,6 +744,83 @@ export function MessageActions({
         </button>
       ) : null}
       {structured ? <p className="delete-menu__hint">{t('message.deleteStructuredHint')}</p> : null}
+    </div>
+  ) : null;
+
+  const forwardDialog = forwardOpen ? (
+    <div
+      className="modal-layer"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) setForwardOpen(false);
+      }}
+    >
+      <div
+        className="modal modal--sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('message.forwardTitle')}
+      >
+        <div className="modal-head">
+          <h2 className="modal-title">{t('message.forwardTitle')}</h2>
+          <button
+            type="button"
+            className="modal-x"
+            onClick={() => setForwardOpen(false)}
+            aria-label={t('common.close')}
+          >
+            <CloseIcon aria-hidden="true" />
+          </button>
+        </div>
+        <div className="modal-body">
+          <label className="field">
+            <span className="field__label">{t('message.forwardTo')}</span>
+            <select
+              className="input"
+              value={forwardTarget}
+              onChange={(event) => setForwardTarget(event.target.value)}
+            >
+              <option value="">{t('message.forwardChoose')}</option>
+              {state.chats
+                .filter((chat) => chat.id !== message.chat_id)
+                .map((chat) => (
+                  <option key={chat.id} value={chat.id}>
+                    {chat.name ?? chatDisplayName(chat, state.workspaceMembers.items)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          {forwardError ? (
+            <p className="msg-edit-error" role="alert">
+              {forwardError}
+            </p>
+          ) : null}
+        </div>
+        <div className="modal-foot">
+          <button type="button" className="button" onClick={() => setForwardOpen(false)}>
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            className="button button--primary"
+            disabled={!forwardTarget || forwardBusy}
+            onClick={async () => {
+              if (!forwardTarget) return;
+              setForwardBusy(true);
+              setForwardError(null);
+              try {
+                await store.send(forwardTarget, message.text ?? '');
+                setForwardOpen(false);
+              } catch {
+                setForwardError(t('message.forwardError'));
+              } finally {
+                setForwardBusy(false);
+              }
+            }}
+          >
+            {t('message.forwardAction')}
+          </button>
+        </div>
+      </div>
     </div>
   ) : null;
 
@@ -935,6 +1037,7 @@ export function MessageActions({
           {actionFailure}
         </p>
       ) : null}
+      {forwardDialog ? createPortal(forwardDialog, document.body) : null}
       {editDialog ? createPortal(editDialog, document.body) : null}
       {confirmDialog ? createPortal(confirmDialog, document.body) : null}
     </>

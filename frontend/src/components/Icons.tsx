@@ -711,3 +711,11 @@ export function MinimizeIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function ForwardIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M14 5.5 21 12l-7 6.5v-4.2C8 14.3 5 16.5 3 20c.4-5.6 3.4-8.8 11-9.2V5.5Z" />
+    </IconBase>
+  );
+}
