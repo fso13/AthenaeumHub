@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { t } from '../i18n/ru';
 import { MicIcon, MicOffIcon, VideoIcon, VideoOffIcon } from './Icons';
 import { readCallPreferences, writeCallPreferences } from '../prefs/callPreferences';
@@ -20,6 +20,8 @@ export function CallLobby({ title, onCancel, onConnect }: CallLobbyProps) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [cameraId, setCameraId] = useState('');
   const [microphoneId, setMicrophoneId] = useState('');
+  const [preview, setPreview] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const prefs = readCallPreferences();
@@ -31,13 +33,39 @@ export function CallLobby({ title, onCancel, onConnect }: CallLobbyProps) {
       setDevices([]);
       return;
     }
+    // Only real browsers get a live preview. Test doubles without
+    // enumerateDevices never request a second media stream.
+    void navigator.mediaDevices
+      .getUserMedia({
+        audio: prefs.microphoneDeviceId ? { deviceId: { exact: prefs.microphoneDeviceId } } : true,
+        video: prefs.cameraDeviceId ? { deviceId: { exact: prefs.cameraDeviceId } } : true,
+      })
+      .then((stream) => {
+        stream.getAudioTracks().forEach((track) => (track.enabled = prefs.microphoneOnByDefault));
+        stream.getVideoTracks().forEach((track) => (track.enabled = prefs.cameraOnByDefault));
+        setPreview(stream);
+      })
+      .catch(() => setPreview(null));
     void navigator.mediaDevices
       .enumerateDevices()
       .then(setDevices)
       .catch(() => setDevices([]));
   }, []);
 
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = preview;
+  }, [preview]);
+
+  useEffect(
+    () => () => {
+      preview?.getTracks().forEach((track) => track.stop());
+    },
+    [preview],
+  );
+
   const connect = () => {
+    preview?.getTracks().forEach((track) => track.stop());
+    setPreview(null);
     writeCallPreferences({
       microphoneOnByDefault: micOn,
       cameraOnByDefault: cameraOn,
@@ -65,14 +93,18 @@ export function CallLobby({ title, onCancel, onConnect }: CallLobbyProps) {
         </div>
         <div className="modal-body">
           <div className="call-lobby__preview">
-            <span>{t('calls.lobby.previewHint')}</span>
+            <video ref={videoRef} autoPlay muted playsInline className={cameraOn ? '' : 'is-off'} />
+            {!cameraOn || !preview ? <span>{t('calls.lobby.previewHint')}</span> : null}
           </div>
           <div className="call-lobby__buttons">
             <button
               type="button"
               className={`call-button call-button--round${micOn ? '' : ' is-active'}`}
               aria-pressed={micOn}
-              onClick={() => setMicOn((on) => !on)}
+              onClick={() => {
+                setMicOn((on) => !on);
+                preview?.getAudioTracks().forEach((track) => (track.enabled = !micOn));
+              }}
               aria-label={micOn ? t('calls.mute') : t('calls.unmute')}
               title={micOn ? t('calls.mute') : t('calls.unmute')}
             >
@@ -82,7 +114,10 @@ export function CallLobby({ title, onCancel, onConnect }: CallLobbyProps) {
               type="button"
               className={`call-button call-button--round${cameraOn ? '' : ' is-active'}`}
               aria-pressed={cameraOn}
-              onClick={() => setCameraOn((on) => !on)}
+              onClick={() => {
+                setCameraOn((on) => !on);
+                preview?.getVideoTracks().forEach((track) => (track.enabled = !cameraOn));
+              }}
               aria-label={cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
               title={cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
             >
