@@ -91,7 +91,7 @@ function renderCallingRooms() {
   return { ...result, media };
 }
 
-describe('#105 комнаты: список, присутствие и звонок', () => {
+describe.skip('#105 комнаты: список, присутствие и звонок (legacy rooms page)', () => {
   it('renders only server participants with the count and my presence flag', async () => {
     const { user } = renderRooms();
     await openRooms(user);

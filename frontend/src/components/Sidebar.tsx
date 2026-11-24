@@ -32,6 +32,7 @@ import {
 } from './Icons';
 import { useRoomsState, useRoomsStore } from '../store/ChatProvider';
 import { NotificationBell } from './NotificationBell';
+import { RoomCreateDialog, RoomEditDialog } from './RoomDialogs';
 import { readPinnedChatIds, togglePinnedChatId } from '../sidebar/pins';
 import {
   readSidebarSections,
@@ -66,8 +67,6 @@ interface SidebarProps {
   onOpenProfile?: () => void;
   /** #193: open the pre-join lobby instead of joining immediately. */
   onOpenRoom?: (room: import('../api/types').Room) => void;
-  /** Opens the room manager modal (creation/edit). */
-  onOpenRooms?: () => void;
   /** #65: collapse the sidebar to an icon rail. */
   navCollapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -88,7 +87,6 @@ export function Sidebar({
   onOpenMembers,
   onOpenProfile,
   onOpenRoom,
-  onOpenRooms,
   navCollapsed = false,
   onToggleCollapsed,
 }: SidebarProps) {
@@ -125,6 +123,9 @@ export function Sidebar({
   const [collapsed, setCollapsed] = useState<SidebarSectionsState>(() =>
     readSidebarSections(userId),
   );
+  const [createRoomOpen, setCreateRoomOpen] = useState(false);
+  const [editRoom, setEditRoom] = useState<import('../api/types').Room | null>(null);
+  const [roomMenuId, setRoomMenuId] = useState<string | null>(null);
   useEffect(() => {
     setCollapsed(readSidebarSections(userId));
   }, [userId]);
@@ -397,7 +398,7 @@ export function Sidebar({
                 <button
                   type="button"
                   className="section-add"
-                  onClick={() => onOpenRooms?.()}
+                  onClick={() => setCreateRoomOpen(true)}
                   aria-label={t('rooms.open')}
                   title={t('rooms.open')}
                 >
@@ -409,7 +410,7 @@ export function Sidebar({
               ) : (
                 <ul className="chat-list__items">
                   {rooms.items.map((room) => (
-                    <li key={room.id}>
+                    <li key={room.id} className="rooms-nav-row">
                       <button
                         type="button"
                         className={`chat-item rooms-nav-item${rooms.presenceRoomId === room.id ? ' chat-item--active' : ''}`}
@@ -428,6 +429,42 @@ export function Sidebar({
                           </span>
                         </span>
                       </button>
+                      <button
+                        type="button"
+                        className="rooms-nav-more"
+                        aria-label={t('rooms.actions.open', { name: room.name })}
+                        aria-expanded={roomMenuId === room.id}
+                        onClick={() =>
+                          setRoomMenuId((current) => (current === room.id ? null : room.id))
+                        }
+                      >
+                        ⋯
+                      </button>
+                      {roomMenuId === room.id ? (
+                        <div className="rooms-nav-menu" role="menu">
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setRoomMenuId(null);
+                              setEditRoom(room);
+                            }}
+                          >
+                            {t('rooms.rename')}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="is-danger"
+                            onClick={() => {
+                              setRoomMenuId(null);
+                              setEditRoom(room);
+                            }}
+                          >
+                            {t('rooms.close')}
+                          </button>
+                        </div>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -576,6 +613,8 @@ export function Sidebar({
           </>
         ) : null}
       </div>
+      {createRoomOpen ? <RoomCreateDialog onClose={() => setCreateRoomOpen(false)} /> : null}
+      {editRoom ? <RoomEditDialog room={editRoom} onClose={() => setEditRoom(null)} /> : null}
     </aside>
   );
 }

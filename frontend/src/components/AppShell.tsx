@@ -27,7 +27,6 @@ import type { WorkspaceLifecycleAction } from '../workspace/lifecycle';
 import { FilesPage } from './pages/FilesPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PluginsPage } from './pages/PluginsPage';
-import { RoomsPage } from './pages/RoomsPage';
 import { SecurityPage } from './pages/SecurityPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { Sidebar } from './Sidebar';
@@ -77,8 +76,6 @@ export function AppShell({
   const store = useChatStore();
   const roomsStore = useRoomsStore();
   const [roomLobby, setRoomLobby] = useState<Room | null>(null);
-  const [roomsOpen, setRoomsOpen] = useState(false);
-  const [roomsCreate, setRoomsCreate] = useState(false);
   const currentState = useChatState();
   const avatars = useAvatarsState();
   const avatarsStore = useAvatarsStore();
@@ -162,7 +159,6 @@ export function AppShell({
   const go = useCallback(
     (next: AppView) => {
       setNavOpen(false);
-      setRoomsOpen(false);
       setRoomLobby(null);
       if (next === view) return;
       navigate(withView(location, next));
@@ -273,10 +269,6 @@ export function AppShell({
           onOpenMembers={onOpenMembers}
           onOpenProfile={() => setProfileOpen(true)}
           onOpenRoom={setRoomLobby}
-          onOpenRooms={() => {
-            setRoomsCreate(true);
-            setRoomsOpen(true);
-          }}
           navCollapsed={navCollapsed}
           onToggleCollapsed={() => setNavCollapsed((value) => !value)}
         />
@@ -352,17 +344,6 @@ export function AppShell({
         onLogout={onLogout}
       />
       <CallLayer />
-      {roomsOpen ? (
-        <div className="rooms-modal" role="dialog" aria-modal="true" aria-label={t('nav.rooms')}>
-          <RoomsPage
-            initialCreate={roomsCreate}
-            onBack={() => {
-              setRoomsOpen(false);
-              setRoomsCreate(false);
-            }}
-          />
-        </div>
-      ) : null}
       {roomLobby ? (
         <CallLobby
           title={roomLobby.name}
