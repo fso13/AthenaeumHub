@@ -1436,6 +1436,15 @@ export class ChatStore {
       sendSignal: (chatId, payload) => this.realtime?.sendCallSignal(chatId, payload) ?? false,
       onChange: (call) => {
         this.patch({ call });
+        // #189: ending a room call also ends presence immediately, otherwise
+        // the sidebar keeps showing "Участников: 1" until the 30 s TTL.
+        if (call.phase !== 'idle' || !call.chatId) return;
+        const rooms = this.rooms?.getSnapshot();
+        const roomId = rooms?.presenceRoomId ?? null;
+        if (!roomId) return;
+        const room = rooms?.items.find((item) => item.id === roomId) ?? null;
+        if (room?.chat_id !== call.chatId) return;
+        void this.rooms.leaveRoom();
       },
       createId: () => this.createId(),
       iceServers: this.config.webrtcIceServers,
