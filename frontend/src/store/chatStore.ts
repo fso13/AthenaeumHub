@@ -8120,9 +8120,10 @@ export class ChatStore {
     if (this.state.call.phase !== 'idle') return false;
     if (this.state.realtimeStatus !== 'online') return false;
     const selfId = this.viewerId();
+    // Rooms are always-on conferences: a solo participant still gets a local
+    // call (controls/preview) and later joins are added to the same call id.
     const peers = [...new Set(peerUserIds)].filter((id) => id.length > 0 && id !== selfId);
-    if (peers.length === 0) return false;
-    this.calls.startConference(chatId, peers, video, callId);
+    this.calls.startConference(chatId, peers, video, callId, true);
     return true;
   }
 

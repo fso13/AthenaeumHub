@@ -114,6 +114,8 @@ export interface CallState {
   cameraOn: boolean;
   /** Local display capture is replacing the camera track. */
   screenSharing?: boolean;
+  /** #180: a room stays connected with zero remote peers. */
+  roomMode?: boolean;
   /** True while getUserMedia is pending, so the UI can say "asking for access". */
   mediaPending: boolean;
   /** Epoch ms when the peer connection reached `connected`; drives the timer. */
@@ -144,6 +146,7 @@ export function idleCallState(): CallState {
     muted: false,
     cameraOn: false,
     screenSharing: false,
+    roomMode: false,
     mediaPending: false,
     startedAt: null,
     localStream: null,

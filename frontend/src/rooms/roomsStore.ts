@@ -387,7 +387,7 @@ export class RoomsStore {
     const peers = (fresh?.participants ?? [])
       .map((participant) => participant.user_id)
       .filter((userId) => userId.length > 0 && userId !== selfId);
-    if (peers.length > 0 && this.state.presenceRoomId === roomId) {
+    if (this.state.presenceRoomId === roomId) {
       const mode = roomMediaMode(fresh ?? room);
       const started = this.calls.startConference(
         fresh?.chat_id ?? room.chat_id,

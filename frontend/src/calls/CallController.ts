@@ -150,10 +150,11 @@ export class CallController {
     peerUserIds: readonly string[],
     video: boolean,
     callId = this.options.createId(),
+    roomMode = false,
   ): void {
     if (this.disposed || this.state.phase !== 'idle') return;
     const peers = uniqueIds(peerUserIds);
-    if (peers.length === 0) return;
+    if (peers.length === 0 && !roomMode) return;
     this.resetResources();
     this.pendingCandidates = [];
     this.pendingOffer = null;
@@ -173,6 +174,7 @@ export class CallController {
       mediaPending: true,
       cameraOn: video,
       conference: true,
+      roomMode,
       selectedPeerIds: peers,
       participants: peers.map((userId) => ({
         userId,
@@ -239,7 +241,16 @@ export class CallController {
     }
 
     if (this.conferencePeers.size === 0) {
-      this.fail('connection_failed', callId, true);
+      if (this.state.roomMode) {
+        this.ringtone.stop();
+        this.update({
+          phase: 'connected',
+          startedAt: this.now(),
+          participants: [],
+        });
+      } else {
+        this.fail('connection_failed', callId, true);
+      }
     } else {
       this.syncParticipants();
     }
@@ -288,7 +299,9 @@ export class CallController {
     if (!this.state.conference) return;
     this.sendConferenceSignal('hangup', peerUserId, this.state.video);
     this.removeConferencePeer(peerUserId);
-    if (this.conferencePeers.size === 0) this.finish({ code: 'ended' });
+    if (this.conferencePeers.size === 0 && !this.state.roomMode) {
+      this.finish({ code: 'ended' });
+    }
   }
 
   private async beginOutgoing(callId: string, video: boolean): Promise<void> {
