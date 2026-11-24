@@ -30,6 +30,11 @@ import { BlockedUsersCard } from '../BlockedUsersCard';
 import { WorkspaceBotsCard } from '../bots/WorkspaceBotsCard';
 import { NotificationPreferencesDialog } from '../NotificationPreferencesDialog';
 import { WorkspaceSettingsPanel } from '../workspace/WorkspaceSettingsPanel';
+import {
+  readAppearancePreferences,
+  writeAppearancePreferences,
+  type AppearancePreferences,
+} from '../../prefs/appearancePreferences';
 import { PluginsPage } from './PluginsPage';
 import { SecurityPage } from './SecurityPage';
 import type { WorkspaceLifecycleAction } from '../../workspace/lifecycle';
@@ -124,7 +129,24 @@ export function SettingsPage({
   const profileStore = useProfileWorkspaceStore();
   const profileState = useProfileWorkspaceState();
   const state = useChatState();
-  const [tab, setTab] = useState<SettingsTab>('profile');
+  const initialTab = (): SettingsTab => {
+    const requested = new URLSearchParams(window.location.search).get('tab');
+    return TABS.some((entry) => entry.id === requested) ? (requested as SettingsTab) : 'profile';
+  };
+  const [tab, setTabState] = useState<SettingsTab>(initialTab);
+  const setTab = (next: SettingsTab) => {
+    setTabState(next);
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', next);
+    window.history.replaceState(window.history.state, '', url);
+  };
+  const [appearance, setAppearance] = useState<AppearancePreferences>(() =>
+    readAppearancePreferences(),
+  );
+  const changeAppearance = (patch: Partial<AppearancePreferences>) => {
+    setAppearance(writeAppearancePreferences(patch));
+    window.dispatchEvent(new Event('sova:appearance'));
+  };
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const user = state.user ?? state.session?.user ?? null;
   const email = state.user?.email ?? null;
@@ -387,12 +409,46 @@ export function SettingsPage({
                   <b>{t('settings.density')}</b>
                   <small>{t('settings.densityHint')}</small>
                 </div>
-                <div className="seg" aria-disabled="true">
-                  <button type="button" className="is-active" disabled>
-                    {t('settings.densityCozy')}
+                <div className="seg" role="group" aria-label={t('settings.density')}>
+                  <button
+                    type="button"
+                    className={appearance.density === 'comfortable' ? 'is-active' : ''}
+                    aria-pressed={appearance.density === 'comfortable'}
+                    onClick={() => changeAppearance({ density: 'comfortable' })}
+                  >
+                    {t('settings.densityComfortable')}
                   </button>
-                  <button type="button" disabled>
+                  <button
+                    type="button"
+                    className={appearance.density === 'compact' ? 'is-active' : ''}
+                    aria-pressed={appearance.density === 'compact'}
+                    onClick={() => changeAppearance({ density: 'compact' })}
+                  >
                     {t('settings.densityCompact')}
+                  </button>
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="text">
+                  <b>{t('settings.messageSpacing')}</b>
+                  <small>{t('settings.messageSpacingHint')}</small>
+                </div>
+                <div className="seg" role="group" aria-label={t('settings.messageSpacing')}>
+                  <button
+                    type="button"
+                    className={appearance.messageSpacing === 'spacious' ? 'is-active' : ''}
+                    aria-pressed={appearance.messageSpacing === 'spacious'}
+                    onClick={() => changeAppearance({ messageSpacing: 'spacious' })}
+                  >
+                    {t('settings.spacingSpacious')}
+                  </button>
+                  <button
+                    type="button"
+                    className={appearance.messageSpacing === 'compact' ? 'is-active' : ''}
+                    aria-pressed={appearance.messageSpacing === 'compact'}
+                    onClick={() => changeAppearance({ messageSpacing: 'compact' })}
+                  >
+                    {t('settings.spacingCompact')}
                   </button>
                 </div>
               </div>
@@ -401,25 +457,45 @@ export function SettingsPage({
                   <b>{t('settings.linkPreviews')}</b>
                   <small>{t('settings.linkPreviewsHint')}</small>
                 </div>
-                <span className="mode-chip mode-chip--mock">{t('settings.unavailableShort')}</span>
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={appearance.linkPreviews}
+                    onChange={(event) => changeAppearance({ linkPreviews: event.target.checked })}
+                    aria-label={t('settings.linkPreviews')}
+                  />
+                  <span />
+                </label>
               </div>
               <div className="setting-row">
                 <div className="text">
                   <b>{t('settings.feedAvatars')}</b>
                   <small>{t('settings.feedAvatarsHint')}</small>
                 </div>
-                <span className="mode-chip mode-chip--mock">{t('settings.unavailableShort')}</span>
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={appearance.hideOwnAvatars}
+                    onChange={(event) => changeAppearance({ hideOwnAvatars: event.target.checked })}
+                    aria-label={t('settings.feedAvatars')}
+                  />
+                  <span />
+                </label>
               </div>
               <div className="setting-row">
                 <div className="text">
                   <b>{t('settings.accent')}</b>
                   <small>{t('settings.accentHint')}</small>
                 </div>
-                <div className="swatches" aria-hidden="true">
-                  <span className="swatch is-active" style={{ background: '#65BD45' }} />
-                  <span className="swatch" style={{ background: '#D9A441' }} />
-                  <span className="swatch" style={{ background: '#E85D4A' }} />
-                  <span className="swatch" style={{ background: '#2F7A38' }} />
+                <div className="swatches">
+                  <button
+                    type="button"
+                    className="swatch is-active"
+                    style={{ background: '#2aa79b' }}
+                    aria-label={t('settings.accentSova')}
+                    title={t('settings.accentSova')}
+                    onClick={() => changeAppearance({ accent: 'sova-teal' })}
+                  />
                 </div>
               </div>
             </section>

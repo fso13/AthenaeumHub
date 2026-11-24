@@ -35,6 +35,7 @@ import { formatBytes } from '../files/format';
 import { MAX_VOICE_DURATION_MS, planUploadMediaBatch } from '../files/media';
 import { RateLimitBanner, OfflineBanner, RealtimeBanner, SyncErrorBanner } from './Banners';
 import { ChatDetails } from './ChatDetails';
+import { CallLobby } from './CallLobby';
 import { ChatHeader } from './ChatHeader';
 import { Composer, type ComposerCommandStatus } from './Composer';
 import { E2eeBanner } from './E2eeBanner';
@@ -103,6 +104,7 @@ export function ChatScreen({
   const [focusRequest, setFocusRequest] = useState<{ id: string; nonce: number } | null>(null);
   /** #77: GROUP calls first open the participant picker. */
   const [callPicker, setCallPicker] = useState<{ chatId: string; video: boolean } | null>(null);
+  const [callLobby, setCallLobby] = useState<{ chatId: string; video: boolean } | null>(null);
   const focusNonce = useRef(0);
 
   const filesStore = useFilesStore();
@@ -286,7 +288,7 @@ export function ChatScreen({
           : null;
   const callsBlockedKey = store.callDisabledReason(activeChatId);
   const callsDisabledReason = callsBlockedKey ? t(callsBlockedKey as MessageKey) : null;
-  const startCall = useCallback(
+  const beginCall = useCallback(
     (chatId: string, video: boolean) => {
       const chat = state.chats.find((item) => item.id === chatId) ?? null;
       if (!chat || callsBlockedKey !== null) return;
@@ -299,6 +301,14 @@ export function ChatScreen({
       }
     },
     [callsBlockedKey, state.chats, store],
+  );
+  const startCall = useCallback(
+    (chatId: string, video: boolean) => {
+      const chat = state.chats.find((item) => item.id === chatId) ?? null;
+      if (!chat || callsBlockedKey !== null) return;
+      setCallLobby({ chatId, video });
+    },
+    [callsBlockedKey, state.chats],
   );
   const threadsAvailable = activeChatId ? store.threadsAvailable(activeChatId) : false;
   const isGroupChat = chatSummary?.type === 'GROUP';
@@ -1060,6 +1070,24 @@ export function ChatScreen({
               : undefined
           }
           callDisabledReason={callsDisabledReason}
+        />
+      ) : null}
+
+      {callLobby ? (
+        <CallLobby
+          title={
+            chatDisplayName(
+              state.chats.find((item) => item.id === callLobby.chatId) ?? null,
+              state.workspaceMembers.items,
+              state.session?.chat.name ?? null,
+            ) || t('chat.call')
+          }
+          onCancel={() => setCallLobby(null)}
+          onConnect={() => {
+            const target = callLobby;
+            setCallLobby(null);
+            beginCall(target.chatId, target.video);
+          }}
         />
       ) : null}
 

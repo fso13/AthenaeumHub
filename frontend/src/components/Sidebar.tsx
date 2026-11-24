@@ -64,6 +64,8 @@ interface SidebarProps {
   onOpenMembers?: () => void;
   /** D1-FE5: opens the profile modal from the signed-in user row. */
   onOpenProfile?: () => void;
+  /** #193: open the pre-join lobby instead of joining immediately. */
+  onOpenRoom?: (room: import('../api/types').Room) => void;
   /** #65: collapse the sidebar to an icon rail. */
   navCollapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -83,6 +85,7 @@ export function Sidebar({
   onWorkspaceAction,
   onOpenMembers,
   onOpenProfile,
+  onOpenRoom,
   navCollapsed = false,
   onToggleCollapsed,
 }: SidebarProps) {
@@ -407,7 +410,9 @@ export function Sidebar({
                       <button
                         type="button"
                         className={`chat-item rooms-nav-item${rooms.presenceRoomId === room.id ? ' chat-item--active' : ''}`}
-                        onClick={() => void roomsStore.joinRoom(room.id)}
+                        onClick={() =>
+                          onOpenRoom ? onOpenRoom(room) : void roomsStore.joinRoom(room.id)
+                        }
                         title={room.name}
                       >
                         <span className="rooms-nav-icon" aria-hidden="true">

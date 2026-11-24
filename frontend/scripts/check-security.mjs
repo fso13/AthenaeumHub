@@ -32,6 +32,8 @@ const CALL_PREF_MODULE = 'src/prefs/callPreferences.ts';
 const SIDEBAR_SECTIONS_MODULE = 'src/sidebar/sections.ts';
 /** #192: last selected chat per workspace. */
 const LAST_CHAT_MODULE = 'src/sidebar/lastChat.ts';
+/** #194: message feed appearance. */
+const APPEARANCE_PREF_MODULE = 'src/prefs/appearancePreferences.ts';
 
 const forbidden = [
   {
@@ -40,7 +42,7 @@ const forbidden = [
   },
   {
     pattern: /\blocalStorage\s*[.[]/g,
-    message: `localStorage is allowed only in ${WORKSPACE_PREF_MODULE} (workspace id), ${THEME_PREF_MODULE} (theme), ${SIDEBAR_PINS_MODULE} (chat pins) and ${DEVICE_PREF_MODULE} (call output volume) ${CALL_PREF_MODULE} (call defaults) ${SIDEBAR_SECTIONS_MODULE} (sidebar sections) and ${LAST_CHAT_MODULE} (last chat); auth material uses sessionStorage/in-memory`,
+    message: `localStorage is allowed only in ${WORKSPACE_PREF_MODULE} (workspace id), ${THEME_PREF_MODULE} (theme), ${SIDEBAR_PINS_MODULE} (chat pins) and ${DEVICE_PREF_MODULE} (call output volume) ${CALL_PREF_MODULE} (call defaults) ${SIDEBAR_SECTIONS_MODULE} (sidebar sections) ${LAST_CHAT_MODULE} (last chat) and ${APPEARANCE_PREF_MODULE} (appearance); auth material uses sessionStorage/in-memory`,
     allow: [
       WORKSPACE_PREF_MODULE,
       THEME_PREF_MODULE,
@@ -49,6 +51,7 @@ const forbidden = [
       CALL_PREF_MODULE,
       SIDEBAR_SECTIONS_MODULE,
       LAST_CHAT_MODULE,
+      APPEARANCE_PREF_MODULE,
     ],
   },
   {

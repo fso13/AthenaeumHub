@@ -14,9 +14,13 @@ import {
 } from '../store/ChatProvider';
 import type { AppState } from '../store/chatStore';
 import { useTheme } from '../hooks/useTheme';
+import { applyAppearancePreferences } from '../prefs/appearancePreferences';
 import { ChatScreen } from './ChatScreen';
 import { CallLayer } from './CallLayer';
+import { CallLobby } from './CallLobby';
 import { NotificationToaster } from './NotificationToaster';
+import type { Room } from '../api/types';
+import { useRoomsStore } from '../store/ChatProvider';
 import { WorkspaceCreateDialog } from './WorkspaceCreateDialog';
 import { WorkspaceLifecycleDialogs } from './WorkspaceLifecycleDialogs';
 import type { WorkspaceLifecycleAction } from '../workspace/lifecycle';
@@ -71,6 +75,8 @@ export function AppShell({
   onOpenMembers,
 }: AppShellProps) {
   const store = useChatStore();
+  const roomsStore = useRoomsStore();
+  const [roomLobby, setRoomLobby] = useState<Room | null>(null);
   const currentState = useChatState();
   const avatars = useAvatarsState();
   const avatarsStore = useAvatarsStore();
@@ -79,6 +85,13 @@ export function AppShell({
   const view = parseView(location);
   const { theme, setTheme } = useTheme();
   const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => {
+    applyAppearancePreferences();
+    const reload = () => applyAppearancePreferences();
+    window.addEventListener('sova:appearance', reload);
+    return () => window.removeEventListener('sova:appearance', reload);
+  }, []);
+
   const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false);
   const [workspaceCreateBusy, setWorkspaceCreateBusy] = useState(false);
   const [workspaceCreateError, setWorkspaceCreateError] = useState<string | null>(null);
@@ -255,6 +268,7 @@ export function AppShell({
           onOpenAdmin={onOpenAdmin}
           onOpenMembers={onOpenMembers}
           onOpenProfile={() => setProfileOpen(true)}
+          onOpenRoom={setRoomLobby}
           navCollapsed={navCollapsed}
           onToggleCollapsed={() => setNavCollapsed((value) => !value)}
         />
@@ -326,6 +340,17 @@ export function AppShell({
         onLogout={onLogout}
       />
       <CallLayer />
+      {roomLobby ? (
+        <CallLobby
+          title={roomLobby.name}
+          onCancel={() => setRoomLobby(null)}
+          onConnect={() => {
+            const room = roomLobby;
+            setRoomLobby(null);
+            void roomsStore.joinRoom(room.id);
+          }}
+        />
+      ) : null}
       <NotificationToaster />
       <WorkspaceLifecycleDialogs
         workspace={workspaceAction?.workspace ?? null}

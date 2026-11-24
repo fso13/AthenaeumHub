@@ -50,6 +50,15 @@ async function openDirect(user: ReturnType<typeof renderCalls>['user']): Promise
   await screen.findByRole('heading', { name: 'Анна Петрова' });
 }
 
+async function clickCall(
+  user: ReturnType<typeof renderCalls>['user'],
+  container: HTMLElement,
+  kind: 'call' | 'video' = 'call',
+): Promise<void> {
+  await user.click(callButton(container, kind));
+  await user.click(await screen.findByRole('button', { name: 'Подключиться' }));
+}
+
 function callButton(container: HTMLElement, kind: 'call' | 'video' = 'call'): HTMLButtonElement {
   // #178: one unified call button starts a call with video capability; the
   // camera can be toggled off in the call window.
@@ -66,7 +75,7 @@ async function startOutgoing(
   media: ReturnType<typeof createFakeCallMedia>,
   video = false,
 ): Promise<{ callId: string; offer: MockCallSignal }> {
-  await user.click(callButton(container, video ? 'video' : 'call'));
+  await clickCall(user, container, video ? 'video' : 'call');
   await vi.waitFor(() => expect(media.constraints).toHaveLength(1));
   await vi.waitFor(() =>
     expect(mockSentCallSignals().some((item) => item.payload.kind === 'offer')).toBe(true),
@@ -100,7 +109,7 @@ async function openGroupPicker(
   container: HTMLElement,
   video = false,
 ): Promise<HTMLElement> {
-  await user.click(callButton(container, video ? 'video' : 'call'));
+  await clickCall(user, container, video ? 'video' : 'call');
   const dialog = await screen.findByRole('dialog', { name: 'Новый звонок' });
   await within(dialog).findByRole('checkbox', { name: 'Анна Петрова' });
   return dialog;
@@ -193,6 +202,7 @@ describe('1:1 calls', () => {
     const details = container.querySelector<HTMLElement>('.details');
     expect(details).not.toBeNull();
     await user.click(within(details as HTMLElement).getByRole('button', { name: 'Позвонить' }));
+    await user.click(await screen.findByRole('button', { name: 'Подключиться' }));
     const dialog = await screen.findByRole('dialog', { name: 'Новый звонок' });
     expect(within(dialog).getByRole('button', { name: 'Позвонить' })).toBeDisabled();
   });
@@ -434,7 +444,7 @@ describe('1:1 calls', () => {
     await openDirect(user);
     media.failNextGetUserMedia(fakeMediaError('NotAllowedError'));
 
-    await user.click(callButton(container, 'call'));
+    await clickCall(user, container, 'call');
     const notice = await waitFor(() => {
       const element = document.querySelector('.call-notice');
       expect(element).not.toBeNull();
@@ -453,7 +463,7 @@ describe('1:1 calls', () => {
     await openDirect(user);
     media.failNextGetUserMedia(fakeMediaError('NotFoundError'));
 
-    await user.click(callButton(container, 'video'));
+    await clickCall(user, container, 'video');
     await vi.waitFor(() =>
       expect(document.querySelector('.call-notice')).toHaveTextContent(
         'Микрофон или камера недоступны',
@@ -728,7 +738,7 @@ describe('GROUP mesh calls (#77)', () => {
     await waitForOnline(store);
     await openDirect(user);
 
-    await user.click(callButton(container, 'call'));
+    await clickCall(user, container, 'call');
     await vi.waitFor(() => expect(media.constraints).toHaveLength(1));
     expect(ringtone.outgoingStarts).toBe(1);
     const offer = mockSentCallSignals().find((item) => item.payload.kind === 'offer');
