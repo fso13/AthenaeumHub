@@ -10,6 +10,7 @@ import {
   pluginTitleId,
 } from '../plugins/messageCards';
 import type { E2eeMessageView, OutgoingMessage } from '../store/chatStore';
+import { useProfileWorkspaceState } from '../store/ChatProvider';
 import { isStickerMessage, stickerAssetUrl, stickerOf } from '../stickers/model';
 import { AttachmentList } from './AttachmentCard';
 import { Avatar } from './Avatar';
@@ -264,6 +265,7 @@ export function MessageRow({
     }
     return names;
   }, [memberNames, mentionNames, replyTo]);
+  const profile = useProfileWorkspaceState();
   if (message.type === 'SYSTEM') {
     return (
       <div className="system-message" role="note">
@@ -369,7 +371,12 @@ export function MessageRow({
         id={`message-${message.id}`}
         tabIndex={-1}
       >
-        <Avatar name={author} seed={message.bot_id ?? message.sender_id} size="lg" />
+        <Avatar
+          name={author}
+          seed={message.bot_id ?? message.sender_id}
+          size="lg"
+          src={mine ? profile.avatar.previewUrl : null}
+        />
         <div className="msg-body">
           {meta}
           {quote}

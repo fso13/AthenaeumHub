@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import {
   useEffect,
   useId,
@@ -6,7 +7,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from 'react';
-import { createPortal } from 'react-dom';
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
 import { chatDisplayName } from '../domain/chatLabel';
@@ -292,6 +292,8 @@ export function MessageActions({
   const pluginActions = usePluginActionsStore();
   const [toolsOpen, setToolsOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerPosition, setPickerPosition] = useState({ top: 0, left: 0 });
+  const pickerRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleteMenuOpen, setDeleteMenuOpen] = useState(false);
   const [forwardOpen, setForwardOpen] = useState(false);
@@ -375,7 +377,7 @@ export function MessageActions({
   // Dismiss on a click anywhere outside the toolbar. Using the shared toolbar
   // container keeps a second click on «…» / the reaction button a true toggle
   // instead of close-on-mousedown followed by re-open.
-  useDismiss(pickerOpen, toolsRef, closePicker);
+  useDismiss(pickerOpen, pickerRef, closePicker);
   useDismiss(menuOpen, toolsRef, closeMenu);
   useDismiss(deleteMenuOpen, toolsRef, closeDeleteMenu);
   useModal(editOpen, editDialogRef, editTextareaRef, closeEdit, moreTriggerRef);
@@ -564,29 +566,58 @@ export function MessageActions({
     onOpenThread?.(message);
   };
 
-  const picker = pickerOpen ? (
-    <div
-      className="msg-popover reaction-picker"
-      role="dialog"
-      aria-label={t('message.reactionsPicker')}
-    >
-      <p className="msg-popover__title">{t('message.reactionsPicker')}</p>
-      <div className="reaction-picker__grid">
-        {COMMON_REACTIONS.map((emoji, index) => (
-          <button
-            type="button"
-            key={emoji}
-            ref={index === 0 ? firstReactionRef : undefined}
-            className="reaction-picker__item"
-            aria-label={emoji}
-            onClick={() => chooseReaction(emoji)}
-          >
-            {emoji}
-          </button>
-        ))}
-      </div>
-    </div>
-  ) : null;
+  const togglePicker = () => {
+    if (pickerOpen) {
+      setPickerOpen(false);
+      return;
+    }
+    const rect = toolsRef.current?.getBoundingClientRect();
+    if (!rect) {
+      setPickerOpen(true);
+      return;
+    }
+    const width = Math.min(300, window.innerWidth - 16);
+    const height = 218;
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
+    const below = rect.bottom + 6;
+    const top = below + height > window.innerHeight ? Math.max(8, rect.top - height - 6) : below;
+    setPickerPosition({ top, left });
+    setPickerOpen(true);
+  };
+
+  const picker = pickerOpen
+    ? createPortal(
+        <div
+          ref={pickerRef}
+          className="msg-popover reaction-picker"
+          role="dialog"
+          aria-label={t('message.reactionsPicker')}
+          style={{
+            position: 'fixed',
+            top: pickerPosition.top,
+            left: pickerPosition.left,
+            right: 'auto',
+          }}
+        >
+          <p className="msg-popover__title">{t('message.reactionsPicker')}</p>
+          <div className="reaction-picker__grid">
+            {COMMON_REACTIONS.map((emoji, index) => (
+              <button
+                type="button"
+                key={emoji}
+                ref={index === 0 ? firstReactionRef : undefined}
+                className="reaction-picker__item"
+                aria-label={emoji}
+                onClick={() => chooseReaction(emoji)}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
 
   const menu = menuOpen ? (
     <div
@@ -1021,7 +1052,7 @@ export function MessageActions({
           onClick={() => {
             setMenuOpen(false);
             setDeleteMenuOpen(false);
-            setPickerOpen((open) => !open);
+            togglePicker();
           }}
         >
           <EmojiIcon aria-hidden="true" />

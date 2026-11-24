@@ -21643,3 +21643,17 @@ html[data-link-previews='off'] .rich-link__domain {
 .rooms-modal > .page {
   min-height: 100dvh;
 }
+.call-lobby__buttons .call-button {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+}
+.call-lobby__buttons .call-button.is-active {
+  background: color-mix(in srgb, #e05252 22%, var(--surface-2));
+  border-color: color-mix(in srgb, #e05252 55%, var(--line));
+  color: #ffb4b4;
+}
+.call-lobby__buttons .call-button .icon {
+  width: 19px;
+  height: 19px;
+}
