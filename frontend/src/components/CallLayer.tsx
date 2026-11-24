@@ -171,6 +171,39 @@ function ConferenceTile({
   );
 }
 
+/** Square speaker tile in the minimized call bar (#181). */
+function MiniCallTile({
+  name,
+  seed,
+  stream,
+  cameraOn,
+}: {
+  name: string;
+  seed: string;
+  stream: MediaStream | null;
+  cameraOn: boolean;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const hasVideo = Boolean(stream && stream.getVideoTracks().some((track) => track.enabled));
+  useEffect(() => {
+    if (ref.current) ref.current.srcObject = stream;
+  }, [stream]);
+  return (
+    <div className="call-mini__tile" aria-label={name}>
+      {hasVideo && cameraOn ? (
+        <video ref={ref} className="call-mini__video" autoPlay muted playsInline />
+      ) : (
+        <>
+          <Avatar name={name} seed={seed} size="sm" />
+          <span className="call-mini__person" title={name}>
+            {name}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function CallTimer({ startedAt }: { startedAt: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -468,10 +501,27 @@ export function CallLayer() {
     );
   }
 
+  const miniParticipant =
+    call.participants.find((participant) =>
+      participant.stream?.getVideoTracks().some((track) => track.enabled),
+    ) ??
+    call.participants[0] ??
+    null;
+  const miniStream = miniParticipant?.stream ?? (conference ? call.localStream : call.remoteStream);
+  const miniName = miniParticipant
+    ? participantName(miniParticipant.userId)
+    : conference
+      ? t('calls.you')
+      : peerName;
+  const miniSeed = miniParticipant?.userId ?? (conference ? 'local' : (call.chatId ?? peerName));
+  const miniCameraOn = miniParticipant
+    ? Boolean(miniParticipant.stream?.getVideoTracks().some((track) => track.enabled))
+    : call.cameraOn;
+
   if (!incoming && collapsed) {
     return (
       <div className="call-mini" role="region" aria-label={t('calls.miniLabel')}>
-        <span className="call-mini__dot" aria-hidden="true" />
+        <MiniCallTile name={miniName} seed={miniSeed} stream={miniStream} cameraOn={miniCameraOn} />
         <span className="call-mini__title">{infoTitle}</span>
         {call.startedAt !== null ? (
           <CallTimer startedAt={call.startedAt} />
