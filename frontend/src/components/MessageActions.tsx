@@ -814,7 +814,7 @@ export function MessageActions({
                 const forwarded = `↪ ${t('message.forwardedFrom', {
                   author,
                   date: formatDateTime(message.created_at),
-                })}\n\n${message.text ?? ''}`;
+                })}\nsova-forward:${message.chat_id}:${message.id}\n\n${message.text ?? ''}`;
                 await store.send(forwardTarget, forwarded);
                 setForwardOpen(false);
               } catch {

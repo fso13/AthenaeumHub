@@ -21475,3 +21475,15 @@ html[data-theme='dark'] .recent-thumb--video {
   flex-basis: 280px;
   width: 280px;
 }
+.forward-source {
+  display: inline-flex;
+  margin: 2px 0 4px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}

@@ -207,7 +207,12 @@ export function MessageRow({
   const text = deleted
     ? t('chat.deletedMessage')
     : (e2eeFallback ?? e2ee?.text ?? (e2eeChat ? '' : (message.text ?? '')));
-  const showText = deleted || text.trim().length > 0;
+  const forwardMatch =
+    !e2eeChat && message.type === 'TEXT'
+      ? /^↪[^\n]*\nsova-forward:([^:\n]+):([^\n]+)\n?\n?/.exec(text)
+      : null;
+  const visibleText = forwardMatch ? text.slice(forwardMatch[0].length) : text;
+  const showText = deleted || visibleText.trim().length > 0;
 
   const quoteAuthor = replyTo?.sender_display_name?.trim() || UNKNOWN_AUTHOR();
   const quoteText = e2eeChat
@@ -401,7 +406,27 @@ export function MessageRow({
             // E2EE is plain text: no Markdown, no mention chips, no links.
             <p className="msg-text msg-text--plain">{text}</p>
           ) : (
-            <RichText text={text} mentions={resolvedMentionNames} className="msg-text" />
+            <>
+              {forwardMatch ? (
+                <button
+                  type="button"
+                  className="forward-source"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent('sova:open-forward', {
+                        detail: {
+                          chatId: forwardMatch[1],
+                          messageId: forwardMatch[2],
+                        },
+                      }),
+                    )
+                  }
+                >
+                  К исходному сообщению
+                </button>
+              ) : null}
+              <RichText text={visibleText} mentions={resolvedMentionNames} className="msg-text" />
+            </>
           )
         ) : null}
         {!deleted && !e2eeChat ? (

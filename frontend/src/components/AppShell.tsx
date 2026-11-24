@@ -128,6 +128,22 @@ export function AppShell({
     }
   }, [avatarsStore, spaces]);
 
+  useEffect(() => {
+    const openForward = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId: string; messageId: string }>).detail;
+      if (!detail?.chatId || !detail.messageId) return;
+      void store.setActiveChat(detail.chatId).then(() => {
+        window.setTimeout(() => {
+          document
+            .getElementById(`message-${detail.messageId}`)
+            ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }, 500);
+      });
+    };
+    window.addEventListener('sova:open-forward', openForward);
+    return () => window.removeEventListener('sova:open-forward', openForward);
+  }, [store]);
+
   const go = useCallback(
     (next: AppView) => {
       setNavOpen(false);
