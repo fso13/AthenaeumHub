@@ -150,6 +150,13 @@ import type {
   WorkspaceUpdate,
 } from './types';
 
+export interface LinkPreview {
+  url: string;
+  title: string | null;
+  description: string | null;
+  image: string | null;
+}
+
 export interface ListMessagesQuery {
   afterSeq?: number;
   beforeSeq?: number;
@@ -457,6 +464,8 @@ export interface ChatApi {
    * so the read resolves its presigned download URL and follows it.
    */
   getWorkspaceAvatarBlob(workspaceId: string, fileId: string): Promise<Blob>;
+  /** #195: server-side Open Graph metadata for one public link. */
+  getLinkPreview(url: string): Promise<LinkPreview | null>;
   /** Metadata only: the raw token is returned once by create and never listed. */
   listWorkspaceInvites(workspaceId: string): Promise<WorkspaceInviteList>;
   createWorkspaceInvite(
@@ -1152,6 +1161,19 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
       // `logo_file_id` is a managed attachment, not a dedicated avatar object.
       const download = await this.attachmentDownloadUrl(fileId);
       return fetchPresignedBlob(download.url);
+    },
+
+    async getLinkPreview(url) {
+      try {
+        const response = await fetch(`/api/v1/link-preview?url=${encodeURIComponent(url)}`, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) return null;
+        return (await response.json()) as LinkPreview;
+      } catch {
+        return null;
+      }
     },
 
     listWorkspaceInvites(workspaceId) {

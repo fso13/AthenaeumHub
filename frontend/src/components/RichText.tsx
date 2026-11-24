@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   parseRichText,
   type RichBlockNode,
@@ -33,6 +33,60 @@ function RichImage({ src, alt }: { readonly src: string; readonly alt: string })
   );
 }
 
+interface LinkPreviewData {
+  title: string | null;
+  description: string | null;
+  image: string | null;
+}
+
+function LinkPreviewAnchor({ href, children }: { href: string; children: ReactNode }) {
+  const [preview, setPreview] = useState<LinkPreviewData | null>(null);
+  const [host, setHost] = useState('');
+  useEffect(() => {
+    try {
+      setHost(new URL(href).hostname.replace(/^www\./, ''));
+    } catch {
+      setHost('');
+    }
+    if (document.documentElement.dataset.linkPreviews === 'off') return;
+    let cancelled = false;
+    void fetch(`/api/v1/link-preview?url=${encodeURIComponent(href)}`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!cancelled && data) setPreview(data as LinkPreviewData);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [href]);
+  if (!preview) {
+    return (
+      <a className="rich-link" href={href} target="_blank" rel="noopener noreferrer">
+        <span className="rich-link__domain" aria-hidden="true">
+          {host}
+        </span>
+        <span className="rich-link__text">{children}</span>
+      </a>
+    );
+  }
+  return (
+    <a className="link-preview-card" href={href} target="_blank" rel="noopener noreferrer">
+      {preview.image ? (
+        <img className="link-preview-card__image" src={preview.image} alt="" loading="lazy" />
+      ) : null}
+      <span className="link-preview-card__body">
+        <span className="link-preview-card__domain">{host}</span>
+        {preview.title ? <strong>{preview.title}</strong> : <strong>{host}</strong>}
+        {preview.description ? <span>{preview.description}</span> : null}
+      </span>
+    </a>
+  );
+}
+
 function renderInlineNodes(nodes: readonly RichInlineNode[]): ReactNode[] {
   return nodes.map((node, index) => {
     switch (node.type) {
@@ -52,24 +106,9 @@ function renderInlineNodes(nodes: readonly RichInlineNode[]): ReactNode[] {
         );
       case 'link':
         return (
-          <a
-            key={index}
-            className="rich-link"
-            href={node.href}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <span className="rich-link__domain" aria-hidden="true">
-              {(() => {
-                try {
-                  return new URL(node.href).hostname.replace(/^www\./, '');
-                } catch {
-                  return '';
-                }
-              })()}
-            </span>
-            <span className="rich-link__text">{renderInlineNodes(node.children)}</span>
-          </a>
+          <LinkPreviewAnchor key={index} href={node.href}>
+            {renderInlineNodes(node.children)}
+          </LinkPreviewAnchor>
         );
       case 'image':
         return <RichImage key={index} src={node.src} alt={node.alt} />;

@@ -1644,6 +1644,7 @@ export class ChatStore {
 
       // E6: bell badge and list are loaded with the first paint, in parallel
       // with history so notifications never block the chat.
+      void this.profile.loadMyAvatarPreview(true);
       void this.loadNotifications();
       void this.loadNotificationPreferences();
       // #83: mention badge is part of the first paint; failures stay quiet.
@@ -1903,6 +1904,7 @@ export class ChatStore {
         workspaceUnread: { ...workspaceUnread, [workspace.id]: sumUnread(chats) },
       });
 
+      void this.profile.loadMyAvatarPreview(true);
       void this.loadNotifications();
       void this.loadNotificationPreferences();
       // #83: mention badge is part of the first paint; failures stay quiet.

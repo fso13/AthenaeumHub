@@ -2037,6 +2037,15 @@ function readAuditQuery(request: Request):
 
 export function createHandlers(db: MockDb) {
   return [
+    http.get(`${API}/link-preview`, ({ request }) => {
+      const url = new URL(request.url).searchParams.get('url') ?? '';
+      return HttpResponse.json({
+        url,
+        title: 'Example',
+        description: null,
+        image: null,
+      });
+    }),
     http.get(`${API}/health`, () => HttpResponse.json({ status: 'ok' })),
 
     http.post(`${API}/dev/session`, async ({ request }) => {
