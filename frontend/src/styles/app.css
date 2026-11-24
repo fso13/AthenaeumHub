@@ -21274,3 +21274,6 @@ html[data-theme='dark'] .recent-thumb--video {
   margin: 0 4px;
   background: var(--border);
 }
+.composer__field .composer__textarea {
+  flex: none;
+}
