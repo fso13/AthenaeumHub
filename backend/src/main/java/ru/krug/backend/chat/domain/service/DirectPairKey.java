@@ -16,10 +16,12 @@ public final class DirectPairKey {
         if (first == null || second == null) {
             throw new IllegalArgumentException("Both DIRECT participants are required");
         }
-        if (first.equals(second)) {
-            throw new IllegalArgumentException("A DIRECT chat needs two distinct participants");
-        }
         String a = first.toString();
+        if (first.equals(second)) {
+            // #199: the personal "Избранное" chat is a self-pair; a stable
+            // a:a key keeps it unique per user without a second member row.
+            return a + ":" + a;
+        }
         String b = second.toString();
         return a.compareTo(b) < 0 ? a + ":" + b : b + ":" + a;
     }
