@@ -252,6 +252,33 @@ export function Composer({
     });
   };
 
+  // Grow with the content up to the CSS max-height, then scroll.
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 32), 180)}px`;
+  }, [value, textareaRef]);
+
+  // Prefix each selected line (lists, quotes, fenced code).
+  const prefixLines = (prefix: string, placeholder: string) => {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? value.length;
+    const end = textarea?.selectionEnd ?? value.length;
+    const selected = value.slice(start, end) || placeholder;
+    const prefixed = selected
+      .split('\n')
+      .map((line) => `${prefix}${line}`)
+      .join('\n');
+    const next = `${value.slice(0, start)}${prefixed}${value.slice(end)}`;
+    onChange(next);
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      const caret = start + prefixed.length;
+      textarea?.setSelectionRange(caret, caret);
+    });
+  };
+
   const insertEmoji = (emoji: string) => {
     onChange(`${value}${emoji}`);
     setEmojiOpen(false);
@@ -340,6 +367,19 @@ export function Composer({
         </button>
         <button
           type="button"
+          className="round-btn composer__mention"
+          onClick={() => {
+            onChange(`${value}@`);
+            textareaRef.current?.focus();
+          }}
+          disabled={disabled}
+          aria-label={t('composer.mention')}
+          title={t('composer.mention')}
+        >
+          @
+        </button>
+        <button
+          type="button"
           ref={stickerButtonRef}
           className={`round-btn composer__sticker${stickersOpen ? ' is-on' : ''}`}
           onClick={onToggleStickers}
@@ -360,8 +400,6 @@ export function Composer({
               { label: 'U', before: '<u>', after: '</u>', title: t('composer.underline') },
               { label: 'S', before: '~~', after: '~~', title: t('composer.strike') },
               { label: '`', before: '`', after: '`', title: t('composer.code') },
-              { label: '•', before: '- ', after: '', title: t('composer.list') },
-              { label: '❝', before: '> ', after: '', title: t('composer.quote') },
             ].map((item) => (
               <button
                 key={item.title}
@@ -376,6 +414,62 @@ export function Composer({
                 {item.label}
               </button>
             ))}
+            <span className="composer-format__sep" aria-hidden="true" />
+            <button
+              type="button"
+              className="composer-format__button"
+              disabled={disabled}
+              aria-label={t('composer.blockquote')}
+              title={t('composer.blockquote')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => prefixLines('> ', t('composer.quote'))}
+            >
+              ❝
+            </button>
+            <button
+              type="button"
+              className="composer-format__button"
+              disabled={disabled}
+              aria-label={t('composer.codeBlock')}
+              title={t('composer.codeBlock')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => wrapSelection('```\n', '\n```', t('composer.code'))}
+            >
+              {'</>'}
+            </button>
+            <button
+              type="button"
+              className="composer-format__button"
+              disabled={disabled}
+              aria-label={t('composer.orderedList')}
+              title={t('composer.orderedList')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => prefixLines('1. ', t('composer.listItem'))}
+            >
+              1.
+            </button>
+            <button
+              type="button"
+              className="composer-format__button"
+              disabled={disabled}
+              aria-label={t('composer.bulletList')}
+              title={t('composer.bulletList')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => prefixLines('- ', t('composer.listItem'))}
+            >
+              •
+            </button>
+            <button
+              type="button"
+              className="composer-format__button"
+              disabled={disabled}
+              aria-label={t('composer.markdownCode')}
+              title={t('composer.markdownCode')}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => wrapSelection('`', '`', t('composer.code'))}
+            >
+              {'{ }'}
+            </button>
             <button
               type="button"
               className="composer-format__button"
@@ -386,17 +480,6 @@ export function Composer({
               onClick={() => wrapSelection('[', '](https://)', t('composer.linkText'))}
             >
               🔗
-            </button>
-            <button
-              type="button"
-              className="composer-format__button"
-              disabled={disabled}
-              aria-label={t('composer.mention')}
-              title={t('composer.mention')}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onChange(`${value}@`)}
-            >
-              @
             </button>
           </div>
           <textarea
