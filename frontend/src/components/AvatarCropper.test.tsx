@@ -181,7 +181,7 @@ describe('#106 cropper integration', () => {
     mockDb.roomChatAvatars.set(IDS.roomStandupChat, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     const { user } = renderPasswordApp();
     await login(user);
-    await user.click(screen.getByRole('button', { name: 'Комнаты' }));
+    await user.click(screen.getByRole('button', { name: 'Открыть комнаты' }));
     await screen.findByRole('heading', { name: 'Комнаты', level: 1 });
     await screen.findByRole('heading', { name: 'Планёрка' });
 

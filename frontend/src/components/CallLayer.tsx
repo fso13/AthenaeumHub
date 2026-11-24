@@ -82,6 +82,7 @@ function ConferenceTile({
   cameraOn = true,
   ringing = false,
   featured = false,
+  screenSharing = false,
   outputVolume,
   outputMuted,
   outputDeviceId,
@@ -95,6 +96,7 @@ function ConferenceTile({
   cameraOn?: boolean;
   ringing?: boolean;
   featured?: boolean;
+  screenSharing?: boolean;
   outputVolume: number;
   outputMuted: boolean;
   outputDeviceId: string | null;
@@ -132,7 +134,7 @@ function ConferenceTile({
 
   return (
     <div
-      className={`call-tile${showVideo ? ' is-video' : ''}${local ? ' call-tile--local' : ''}${featured ? ' call-tile--featured' : ''}`}
+      className={`call-tile${showVideo ? ' is-video' : ''}${local ? ' call-tile--local' : ''}${featured ? ' call-tile--featured' : ''}${local && screenSharing ? ' is-screen' : ''}`}
     >
       {video || !local ? (
         <video
@@ -696,6 +698,7 @@ export function CallLayer() {
                   stream={call.localStream}
                   local
                   cameraOn={call.cameraOn}
+                  screenSharing={Boolean(call.screenSharing)}
                   outputVolume={outputVolume}
                   outputMuted={outputMuted}
                   outputDeviceId={outputDeviceId}
@@ -788,7 +791,7 @@ export function CallLayer() {
             <div className={`call-local${call.cameraOn ? '' : ' is-off'}`}>
               <video
                 ref={localVideoRef}
-                className="call-local__video"
+                className={`call-local__video${call.screenSharing ? ' is-screen' : ''}`}
                 autoPlay
                 muted
                 playsInline

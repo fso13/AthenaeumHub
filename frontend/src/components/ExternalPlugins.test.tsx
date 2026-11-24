@@ -14,7 +14,8 @@ async function waitForChat(): Promise<void> {
 
 async function openPlugins(user: TestUser): Promise<void> {
   await waitForChat();
-  await user.click(screen.getByRole('button', { name: 'Плагины' }));
+  await user.click(screen.getByRole('button', { name: 'Настройки' }));
+  await user.click(await screen.findByRole('button', { name: 'Открыть плагины' }));
   await screen.findByRole('heading', { level: 1, name: 'Плагины' });
 }
 

@@ -287,13 +287,15 @@ describe('D1-FE1 shell, pages and routing', () => {
     const { user } = renderApp();
     await waitForChat();
 
-    await user.click(screen.getByRole('button', { name: 'Плагины' }));
+    await user.click(screen.getByRole('button', { name: 'Настройки' }));
+    await user.click(await screen.findByRole('button', { name: 'Открыть плагины' }));
     await screen.findByRole('heading', { name: 'Плагины' });
     expect(await screen.findByRole('heading', { name: 'Опросы' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Задачи' })).toBeInTheDocument();
     expect(screen.getAllByRole('switch')).toHaveLength(5);
 
-    await user.click(screen.getByRole('button', { name: 'Защита' }));
+    await user.click(screen.getByRole('button', { name: 'Настройки' }));
+    await user.click(await screen.findByRole('button', { name: 'Открыть защиту' }));
     await screen.findByRole('heading', { name: 'Защита' });
     // The dev session has no workspace role projection, so the manager
     // surface stays hidden rather than guessing OWNER: only the honest access

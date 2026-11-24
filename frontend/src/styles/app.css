@@ -21441,3 +21441,37 @@ html[data-theme='dark'] .recent-thumb--video {
   height: 240px;
   flex: none;
 }
+/* Screen capture is not a selfie: never mirror the shared display. */
+.call-local__video.is-screen,
+.call-tile--local.is-screen .call-tile__video {
+  transform: none;
+}
+.section-toggle--static {
+  cursor: default;
+}
+.rooms-nav-empty {
+  margin: 2px 9px 6px;
+  color: var(--faint);
+  font-size: 12px;
+}
+.rooms-nav-item {
+  gap: 8px;
+}
+.rooms-nav-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--accent);
+}
+.rooms-nav-icon .icon {
+  width: 15px;
+  height: 15px;
+}
+.sidebar {
+  flex-basis: 280px;
+  width: 280px;
+}

@@ -25,22 +25,18 @@ import {
   OverviewIcon,
   PeopleIcon,
   PinIcon,
-  PlugIcon,
   PlusIcon,
   SettingsIcon,
-  ShieldIcon,
   SunIcon,
   VideoIcon,
 } from './Icons';
+import { useRoomsState, useRoomsStore } from '../store/ChatProvider';
 import { NotificationBell } from './NotificationBell';
 import { readPinnedChatIds, togglePinnedChatId } from '../sidebar/pins';
 
 const NAV_ITEMS: ReadonlyArray<{ view: PageView; label: MessageKey; Icon: typeof OverviewIcon }> = [
   { view: 'overview', label: 'nav.overview', Icon: OverviewIcon },
-  { view: 'rooms', label: 'nav.rooms', Icon: VideoIcon },
   { view: 'files', label: 'nav.files', Icon: FolderIcon },
-  { view: 'plugins', label: 'nav.plugins', Icon: PlugIcon },
-  { view: 'security', label: 'nav.security', Icon: ShieldIcon },
   { view: 'settings', label: 'nav.settings', Icon: SettingsIcon },
 ];
 
@@ -100,6 +96,20 @@ export function Sidebar({
   const profileStore = useProfileWorkspaceStore();
   const profileState = useProfileWorkspaceState();
   const userAvatarUrl = profileState.avatar.previewUrl;
+  const roomsStore = useRoomsStore();
+  const rooms = useRoomsState();
+  const activeWorkspaceId = state.activeWorkspaceId ?? state.session?.workspace.id ?? null;
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    roomsStore.setWorkspace(activeWorkspaceId);
+    void roomsStore.load();
+    const timer = window.setInterval(() => void roomsStore.load(), 5000);
+    return () => {
+      window.clearInterval(timer);
+      roomsStore.detach();
+    };
+  }, [activeWorkspaceId, roomsStore]);
+
   const [collapsed, setCollapsed] = useState<{ channels: boolean; directs: boolean }>({
     channels: false,
     directs: false,
@@ -346,6 +356,50 @@ export function Sidebar({
                 <ul className="chat-list__items">{pinnedChats.map(renderChatItem)}</ul>
               </section>
             ) : null}
+            <section className="section" aria-label={t('nav.rooms')}>
+              <div className="section-head">
+                <span className="section-toggle section-toggle--static">
+                  <VideoIcon className="chev" aria-hidden="true" />
+                  <span>{t('nav.rooms')}</span>
+                </span>
+                <button
+                  type="button"
+                  className="section-add"
+                  onClick={() => onNavigate('rooms')}
+                  aria-label={t('rooms.open')}
+                  title={t('rooms.open')}
+                >
+                  <PlusIcon aria-hidden="true" />
+                </button>
+              </div>
+              {rooms.items.length === 0 ? (
+                <p className="rooms-nav-empty">{t('sidebar.roomsEmpty')}</p>
+              ) : (
+                <ul className="chat-list__items">
+                  {rooms.items.map((room) => (
+                    <li key={room.id}>
+                      <button
+                        type="button"
+                        className={`chat-item rooms-nav-item${rooms.presenceRoomId === room.id ? ' chat-item--active' : ''}`}
+                        onClick={() => void roomsStore.joinRoom(room.id)}
+                        title={room.name}
+                      >
+                        <span className="rooms-nav-icon" aria-hidden="true">
+                          <VideoIcon />
+                        </span>
+                        <span className="chat-item__body">
+                          <span className="chat-item__name">{room.name}</span>
+                          <span className="chat-item__preview">
+                            {t('rooms.participants.count', { count: room.participant_count })}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
             {renderSection('channels', t('sidebar.channels'), channels)}
             {renderSection('directs', t('sidebar.directs'), directs)}
           </>

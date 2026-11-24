@@ -1629,6 +1629,8 @@ export const ru = {
   'nav.close': 'Закрыть навигацию',
   'nav.dismiss': 'Закрыть навигацию (фон)',
 
+  'sidebar.roomsEmpty': 'Пока нет комнат',
+  'rooms.participants.count': 'Участников: {count}',
   'sidebar.channels': 'Каналы',
   'sidebar.directs': 'Личные сообщения',
 
@@ -1657,6 +1659,7 @@ export const ru = {
 
   'rooms.title': 'Комнаты',
   'rooms.subtitle': 'Видеокомнаты пространства на общем канале',
+  'rooms.open': 'Открыть комнаты',
   'rooms.create.open': 'Создать комнату',
   'rooms.create.heading': 'Новая комната',
   'rooms.create.label': 'Название комнаты',
@@ -2476,6 +2479,8 @@ export const ru = {
   'settings.sessionsAvailable': 'Список сессий и завершение — в профиле.',
   'settings.openSessions': 'Открыть профиль',
   'settings.finishSessions': 'Завершить',
+  'settings.openPlugins': 'Открыть плагины',
+  'settings.pluginsHint': 'Плагины и внешние пакеты пространства.',
   'settings.openSecurity': 'Открыть защиту',
   'settings.density': 'Плотность',
   'settings.densityHint': 'Расстояние между сообщениями',

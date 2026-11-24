@@ -139,6 +139,20 @@ export function SettingsPage({
 
   const e2eeKeys = devices.items.filter((item) => item.e2ee_capable !== false).length;
 
+  const pluginsCard = onNavigate ? (
+    <section className="card" aria-labelledby="settings-plugins">
+      <div className="card-head">
+        <h2 className="card-title" id="settings-plugins">
+          {t('nav.plugins')}
+        </h2>
+        <button type="button" className="card-link" onClick={() => onNavigate('plugins')}>
+          {t('settings.openPlugins')}
+        </button>
+      </div>
+      <p className="settings-hint">{t('settings.pluginsHint')}</p>
+    </section>
+  ) : null;
+
   const securityCard = (
     <section className="card" aria-labelledby="settings-security">
       <div className="card-head">
@@ -317,6 +331,7 @@ export function SettingsPage({
                 </div>
               </section>
               {securityCard}
+              {pluginsCard}
               <BlockedUsersCard />
             </>
           ) : null}

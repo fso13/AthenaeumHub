@@ -48,7 +48,7 @@ async function runRoomsIntervals(captured: CapturedInterval[]): Promise<void> {
 
 async function openRoomsShell(user: App['user']): Promise<void> {
   await screen.findByRole('heading', { name: 'Команда «Восход»' });
-  await user.click(screen.getByRole('button', { name: 'Комнаты' }));
+  await user.click(screen.getByRole('button', { name: 'Открыть комнаты' }));
   await screen.findByRole('heading', { name: 'Комнаты', level: 1 });
 }
 

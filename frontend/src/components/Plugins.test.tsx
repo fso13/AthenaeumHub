@@ -32,7 +32,8 @@ async function login(user: TestUser): Promise<void> {
 
 async function openPlugins(user: TestUser): Promise<void> {
   await waitForChat();
-  await user.click(screen.getByRole('button', { name: 'Плагины' }));
+  await user.click(screen.getByRole('button', { name: 'Настройки' }));
+  await user.click(await screen.findByRole('button', { name: 'Открыть плагины' }));
   await screen.findByRole('heading', { level: 1, name: 'Плагины' });
   await screen.findByRole('heading', { name: 'Опросы' });
   await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(5));
@@ -242,7 +243,8 @@ describe('D1.1 plugin catalog and per-chat state', () => {
     );
     const { user } = renderApp();
     await waitForChat();
-    await user.click(screen.getByRole('button', { name: 'Плагины' }));
+    await user.click(screen.getByRole('button', { name: 'Настройки' }));
+    await user.click(await screen.findByRole('button', { name: 'Открыть плагины' }));
     await screen.findByRole('heading', { level: 1, name: 'Плагины' });
 
     const alert = await screen.findByRole('alert');
@@ -264,7 +266,8 @@ describe('D1.1 plugin catalog and per-chat state', () => {
     );
     const { user } = renderApp();
     await waitForChat();
-    await user.click(screen.getByRole('button', { name: 'Плагины' }));
+    await user.click(screen.getByRole('button', { name: 'Настройки' }));
+    await user.click(await screen.findByRole('button', { name: 'Открыть плагины' }));
     await screen.findByRole('heading', { level: 1, name: 'Плагины' });
     await screen.findByRole('heading', { name: 'Опросы' });
 
