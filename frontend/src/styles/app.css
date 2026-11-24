@@ -21277,3 +21277,46 @@ html[data-theme='dark'] .recent-thumb--video {
 .composer__field .composer__textarea {
   flex: none;
 }
+/* #184: Slack-like single composer card: markdown toolbar, input, bottom actions. */
+.composer__row {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px 8px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  background: var(--card);
+}
+.composer__row .composer__field {
+  order: 1;
+  flex: 1 0 100%;
+  width: 100%;
+  padding: 2px 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.composer__row .composer__field:focus-within {
+  border: 0;
+  box-shadow: none;
+}
+.composer__row .composer-format {
+  padding: 2px 0 5px;
+  border-bottom: 1px solid var(--line-strong);
+  margin-bottom: 2px;
+}
+.composer__row .composer__attach,
+.composer__row .composer__sticker,
+.composer__row .composer__mention,
+.composer__row .composer__voice,
+.composer__row .send-btn {
+  order: 2;
+}
+.composer__row .send-btn {
+  margin-left: auto;
+}
+.composer__row .composer__emoji {
+  bottom: 2px;
+  right: 4px;
+}

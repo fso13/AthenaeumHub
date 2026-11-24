@@ -397,7 +397,6 @@ export function Composer({
             {[
               { label: 'B', before: '**', after: '**', title: t('composer.bold') },
               { label: 'I', before: '*', after: '*', title: t('composer.italic') },
-              { label: 'U', before: '<u>', after: '</u>', title: t('composer.underline') },
               { label: 'S', before: '~~', after: '~~', title: t('composer.strike') },
               { label: '`', before: '`', after: '`', title: t('composer.code') },
             ].map((item) => (
@@ -415,17 +414,6 @@ export function Composer({
               </button>
             ))}
             <span className="composer-format__sep" aria-hidden="true" />
-            <button
-              type="button"
-              className="composer-format__button"
-              disabled={disabled}
-              aria-label={t('composer.blockquote')}
-              title={t('composer.blockquote')}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => prefixLines('> ', t('composer.quote'))}
-            >
-              ❝
-            </button>
             <button
               type="button"
               className="composer-format__button"
@@ -458,17 +446,6 @@ export function Composer({
               onClick={() => prefixLines('- ', t('composer.listItem'))}
             >
               •
-            </button>
-            <button
-              type="button"
-              className="composer-format__button"
-              disabled={disabled}
-              aria-label={t('composer.markdownCode')}
-              title={t('composer.markdownCode')}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => wrapSelection('`', '`', t('composer.code'))}
-            >
-              {'{ }'}
             </button>
             <button
               type="button"
