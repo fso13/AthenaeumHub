@@ -19,6 +19,7 @@ import {
   EmojiIcon,
   NumberListIcon,
   LockIcon,
+  MarkdownIcon,
   MicIcon,
   PlusIcon,
   SendIcon,
@@ -28,6 +29,7 @@ import {
 import { CommandPalette } from './bots/CommandPalette';
 import { MentionPopover } from './MentionPopover';
 import { MentionText } from './MentionText';
+import { RichText } from './RichText';
 
 export type SendBlockedReason = 'offline' | 'rate_limit' | 'read_only' | 'e2ee_blocked' | null;
 export type ComposerCommandStatus = 'idle' | 'sending' | 'accepted' | 'error';
@@ -862,6 +864,7 @@ export function Composer({
   const length = value.length;
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [emojiCategory, setEmojiCategory] = useState<EmojiCategory>('smileys');
+  const [previewOpen, setPreviewOpen] = useState(false);
   const emojiRef = useRef<HTMLDivElement>(null);
   const emojiButtonRef = useRef<HTMLButtonElement>(null);
   const commandListboxId = useId();
@@ -1126,7 +1129,7 @@ export function Composer({
           <StickerIcon aria-hidden="true" />
         </button>
 
-        <div className="field composer__field">
+        <div className={`field composer__field${previewOpen ? ' is-preview' : ''}`}>
           <div className="composer-format" role="toolbar" aria-label={t('composer.formatting')}>
             {[
               { label: 'B', before: '**', after: '**', title: t('composer.bold') },
@@ -1197,6 +1200,18 @@ export function Composer({
               onClick={() => wrapSelection('[', ']()')}
             >
               🔗
+            </button>
+            <button
+              type="button"
+              className={`composer-format__button composer-format__preview${previewOpen ? ' is-active' : ''}`}
+              disabled={disabled}
+              aria-label={t('composer.preview')}
+              title={t('composer.preview')}
+              aria-pressed={previewOpen}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setPreviewOpen((open) => !open)}
+            >
+              <MarkdownIcon />
             </button>
           </div>
           <textarea
@@ -1275,6 +1290,15 @@ export function Composer({
               }
             }}
           />
+          {previewOpen ? (
+            <div className="composer-preview" aria-label={t('composer.preview')}>
+              {value.trim() ? (
+                <RichText text={value} />
+              ) : (
+                <p className="composer-preview__empty">{t('composer.previewEmpty')}</p>
+              )}
+            </div>
+          ) : null}
           {mentions.open ? (
             <MentionPopover
               listboxId={mentions.listboxId}

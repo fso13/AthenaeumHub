@@ -21380,3 +21380,64 @@ html[data-theme='dark'] .recent-thumb--video {
   max-height: 220px;
   overflow-y: auto;
 }
+.composer-format__preview {
+  margin-left: auto;
+}
+.composer-format__preview.is-active {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+.composer__field.is-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(40px, auto);
+  column-gap: 10px;
+}
+.composer__field.is-preview .composer-format {
+  grid-column: 1 / -1;
+}
+.composer__field.is-preview .composer__textarea {
+  grid-column: 1;
+  grid-row: 2;
+}
+.composer-preview {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 40px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 4px 10px;
+  border-left: 1px solid var(--line-strong);
+  color: var(--ink);
+}
+.composer-preview__empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+@media (max-width: 720px) {
+  .composer__field.is-preview {
+    grid-template-columns: 1fr;
+  }
+  .composer__field.is-preview .composer__textarea,
+  .composer-preview {
+    grid-column: 1;
+  }
+  .composer-preview {
+    grid-row: 3;
+    border-left: 0;
+    border-top: 1px solid var(--line-strong);
+  }
+}
+.composer-format__button svg {
+  width: 16px;
+  height: 16px;
+}
+.call-overlay--incoming .call-dialog--floating {
+  width: min(420px, calc(100vw - 36px));
+  height: auto;
+}
+.call-overlay--incoming .call-dialog--floating .call-stage {
+  height: 240px;
+  flex: none;
+}

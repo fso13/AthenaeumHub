@@ -355,8 +355,8 @@ export function CallLayer() {
   const connected = call.phase === 'connected';
   // Only a ringing incoming call owns the screen. Outgoing, connecting and
   // connected calls are non-modal so the app remains usable.
-  // The call is a separate non-modal window; only an incoming ring is modal.
-  const floating = !incoming;
+  // The call is always a separate non-modal window, including an incoming ring.
+  const floating = true;
   const activeSpeakerId = useActiveSpeaker(call.participants, connected);
   const participantName = (userId: string): string =>
     state.workspaceMembers.items.find((item) => item.user_id === userId)?.display_name ??

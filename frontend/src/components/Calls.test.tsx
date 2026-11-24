@@ -327,7 +327,7 @@ describe('1:1 calls', () => {
     await vi.waitFor(() => expect(store.getSnapshot().call.phase).toBe('idle'));
   });
 
-  it('shows an incoming call on another chat, traps focus, accepts with buffered ICE and ends on peer hangup', async () => {
+  it('shows a non-modal incoming call on another chat, accepts with buffered ICE and ends on peer hangup', async () => {
     const { user, store, media } = renderCalls();
     await waitForOnline(store);
     expect(store.getSnapshot().activeChatId).toBe(IDS.groupChat);
@@ -344,9 +344,6 @@ describe('1:1 calls', () => {
     expect(within(dialog).getByText('Анна Петрова')).toBeInTheDocument();
     expect(within(dialog).getByText('Входящий видеозвонок')).toBeInTheDocument();
     expect(store.getSnapshot().activeChatId).toBe(IDS.groupChat);
-    await vi.waitFor(() =>
-      expect(within(dialog).getByRole('button', { name: 'Принять' })).toHaveFocus(),
-    );
 
     act(() =>
       publishMockCallSignal({

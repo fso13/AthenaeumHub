@@ -348,6 +348,8 @@ export const ru = {
   'composer.bulletList': 'Маркированный список',
   'composer.markdownCode': 'Markdown-код',
   'composer.listItem': 'элемент',
+  'composer.preview': 'Предпросмотр Markdown',
+  'composer.previewEmpty': 'Введите сообщение, чтобы увидеть предпросмотр',
   'composer.counter': '{count} / 8000',
   'composer.counterLabel': 'Символов: {count} из 8000',
   'composer.offline': 'Нет сети. Текст сохранится — отправить можно после подключения.',
