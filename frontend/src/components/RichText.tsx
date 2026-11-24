@@ -34,13 +34,31 @@ function RichImage({ src, alt }: { readonly src: string; readonly alt: string })
   );
 }
 
+function inlinePlainText(nodes: readonly RichInlineNode[]): string {
+  return nodes
+    .map((node) => {
+      if (node.type === 'text') return node.text;
+      if ('children' in node && Array.isArray(node.children)) return inlinePlainText(node.children);
+      return '';
+    })
+    .join('');
+}
+
 interface LinkPreviewData {
   title: string | null;
   description: string | null;
   image: string | null;
 }
 
-function LinkPreviewAnchor({ href, children }: { href: string; children: ReactNode }) {
+function LinkPreviewAnchor({
+  href,
+  children,
+  preview: withPreview,
+}: {
+  href: string;
+  children: ReactNode;
+  preview: boolean;
+}) {
   const [preview, setPreview] = useState<LinkPreviewData | null>(null);
   const [host, setHost] = useState('');
   useEffect(() => {
@@ -49,7 +67,7 @@ function LinkPreviewAnchor({ href, children }: { href: string; children: ReactNo
     } catch {
       setHost('');
     }
-    if (document.documentElement.dataset.linkPreviews === 'off') return;
+    if (!withPreview || document.documentElement.dataset.linkPreviews === 'off') return;
     let cancelled = false;
     const token = getAccessToken();
     void fetch(`/api/v1/link-preview?url=${encodeURIComponent(href)}`, {
@@ -67,7 +85,7 @@ function LinkPreviewAnchor({ href, children }: { href: string; children: ReactNo
     return () => {
       cancelled = true;
     };
-  }, [href]);
+  }, [href, withPreview]);
   if (!preview) {
     return (
       <a className="rich-link" href={href} target="_blank" rel="noopener noreferrer">
@@ -80,9 +98,16 @@ function LinkPreviewAnchor({ href, children }: { href: string; children: ReactNo
   }
   return (
     <a className="link-preview-card" href={href} target="_blank" rel="noopener noreferrer">
-      {preview.image ? (
-        <img className="link-preview-card__image" src={preview.image} alt="" loading="lazy" />
-      ) : null}
+      <img
+        className="link-preview-card__image"
+        src={preview.image || '/link-preview.svg'}
+        alt=""
+        loading="lazy"
+        onError={(event) => {
+          event.currentTarget.onerror = null;
+          event.currentTarget.src = '/link-preview.svg';
+        }}
+      />
       <span className="link-preview-card__body">
         <span className="link-preview-card__domain">{host}</span>
         {preview.title ? <strong>{preview.title}</strong> : <strong>{host}</strong>}
@@ -109,12 +134,16 @@ function renderInlineNodes(nodes: readonly RichInlineNode[]): ReactNode[] {
             {node.text}
           </code>
         );
-      case 'link':
+      case 'link': {
+        const label = inlinePlainText(node.children).trim();
+        const bare =
+          label === node.href || label.replace(/\/$/, '') === node.href.replace(/\/$/, '');
         return (
-          <LinkPreviewAnchor key={index} href={node.href}>
+          <LinkPreviewAnchor key={index} href={node.href} preview={bare}>
             {renderInlineNodes(node.children)}
           </LinkPreviewAnchor>
         );
+      }
       case 'image':
         return <RichImage key={index} src={node.src} alt={node.alt} />;
       case 'mention':
