@@ -171,6 +171,80 @@ function ConferenceTile({
   );
 }
 
+/**
+ * Lightweight active-speaker detector for the minimized call tile. It samples
+ * the remote audio tracks with a short analyser window; no audio is recorded or
+ * sent anywhere. If the browser cannot create an AudioContext, the UI falls
+ * back to the participant with an enabled camera.
+ */
+function useActiveSpeaker(participants: CallParticipant[], active: boolean): string | null {
+  const [speakerId, setSpeakerId] = useState<string | null>(null);
+  const signature = participants
+    .map((participant) => `${participant.userId}:${participant.stream?.id ?? ''}`)
+    .join('|');
+  useEffect(() => {
+    const Context =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!active || !Context) {
+      setSpeakerId(null);
+      return;
+    }
+    let context: AudioContext;
+    try {
+      context = new Context();
+    } catch {
+      setSpeakerId(null);
+      return;
+    }
+    const analysers: { userId: string; analyser: AnalyserNode; data: Uint8Array<ArrayBuffer> }[] =
+      [];
+    for (const participant of participants) {
+      if (!participant.stream || participant.stream.getAudioTracks().length === 0) continue;
+      try {
+        const source = context.createMediaStreamSource(participant.stream);
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        analysers.push({
+          userId: participant.userId,
+          analyser,
+          data: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
+        });
+      } catch {
+        // A peer stream can disappear between snapshots; ignore that leg.
+      }
+    }
+    void context.resume().catch(() => undefined);
+    const timer = window.setInterval(() => {
+      let bestId: string | null = null;
+      let bestLevel = 0.02;
+      for (const item of analysers) {
+        item.analyser.getByteTimeDomainData(item.data);
+        let sum = 0;
+        for (const value of item.data) {
+          const normalized = (value - 128) / 128;
+          sum += normalized * normalized;
+        }
+        const level = Math.sqrt(sum / item.data.length);
+        if (level > bestLevel) {
+          bestLevel = level;
+          bestId = item.userId;
+        }
+      }
+      setSpeakerId(bestId);
+    }, 250);
+    return () => {
+      window.clearInterval(timer);
+      void context.close().catch(() => undefined);
+      setSpeakerId(null);
+    };
+    // The signature keeps the effect stable while connection states change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, signature]);
+  return speakerId;
+}
+
 /** Square speaker tile in the minimized call bar (#181). */
 function MiniCallTile({
   name,
@@ -283,6 +357,7 @@ export function CallLayer() {
   // connected calls are non-modal so the app remains usable.
   // A call is a modal, resizable window (latest UX decision).
   const floating = false;
+  const activeSpeakerId = useActiveSpeaker(call.participants, connected);
   const participantName = (userId: string): string =>
     state.workspaceMembers.items.find((item) => item.user_id === userId)?.display_name ??
     t('calls.participantFallback');
@@ -502,6 +577,9 @@ export function CallLayer() {
   }
 
   const miniParticipant =
+    (activeSpeakerId
+      ? call.participants.find((participant) => participant.userId === activeSpeakerId)
+      : null) ??
     call.participants.find((participant) =>
       participant.stream?.getVideoTracks().some((track) => track.enabled),
     ) ??
