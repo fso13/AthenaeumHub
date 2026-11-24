@@ -33,6 +33,7 @@ import { WorkspaceSettingsPanel } from '../workspace/WorkspaceSettingsPanel';
 import {
   readAppearancePreferences,
   writeAppearancePreferences,
+  ACCENTS,
   type AppearancePreferences,
 } from '../../prefs/appearancePreferences';
 import { PluginsPage } from './PluginsPage';
@@ -463,15 +464,19 @@ export function SettingsPage({
                   <b>{t('settings.accent')}</b>
                   <small>{t('settings.accentHint')}</small>
                 </div>
-                <div className="swatches">
-                  <button
-                    type="button"
-                    className="swatch is-active"
-                    style={{ background: '#2aa79b' }}
-                    aria-label={t('settings.accentSova')}
-                    title={t('settings.accentSova')}
-                    onClick={() => changeAppearance({ accent: 'sova-teal' })}
-                  />
+                <div className="swatches" role="group" aria-label={t('settings.accent')}>
+                  {ACCENTS.map((accent) => (
+                    <button
+                      key={accent.id}
+                      type="button"
+                      className={`swatch${appearance.accent === accent.id ? ' is-active' : ''}`}
+                      style={{ background: accent.color }}
+                      aria-label={t(accent.labelKey)}
+                      aria-pressed={appearance.accent === accent.id}
+                      title={t(accent.labelKey)}
+                      onClick={() => changeAppearance({ accent: accent.id })}
+                    />
+                  ))}
                 </div>
               </div>
             </section>
