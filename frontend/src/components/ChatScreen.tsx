@@ -36,7 +36,6 @@ import { MAX_VOICE_DURATION_MS, planUploadMediaBatch } from '../files/media';
 import { RateLimitBanner, OfflineBanner, RealtimeBanner, SyncErrorBanner } from './Banners';
 import { ChatDetails } from './ChatDetails';
 import { CallLobby } from './CallLobby';
-import { UserProfilePanel } from './UserProfilePanel';
 import { ChatHeader } from './ChatHeader';
 import { Composer, type ComposerCommandStatus } from './Composer';
 import { E2eeBanner } from './E2eeBanner';
@@ -106,7 +105,6 @@ export function ChatScreen({
   /** #77: GROUP calls first open the participant picker. */
   const [callPicker, setCallPicker] = useState<{ chatId: string; video: boolean } | null>(null);
   const [callLobby, setCallLobby] = useState<{ chatId: string; video: boolean } | null>(null);
-  const [userPanel, setUserPanel] = useState<{ userId: string; name: string } | null>(null);
   const focusNonce = useRef(0);
 
   const filesStore = useFilesStore();
@@ -290,15 +288,6 @@ export function ChatScreen({
           : null;
   const callsBlockedKey = store.callDisabledReason(activeChatId);
   const callsDisabledReason = callsBlockedKey ? t(callsBlockedKey as MessageKey) : null;
-  useEffect(() => {
-    const openUser = (event: Event) => {
-      const detail = (event as CustomEvent<{ userId: string; name: string }>).detail;
-      if (detail?.userId) setUserPanel(detail);
-    };
-    window.addEventListener('sova:open-user-profile', openUser);
-    return () => window.removeEventListener('sova:open-user-profile', openUser);
-  }, []);
-
   const openDirectWith = useCallback(
     async (userId: string): Promise<string | null> => {
       const existing = state.chats.find(
@@ -310,6 +299,18 @@ export function ChatScreen({
     },
     [state.chats, store],
   );
+
+  useEffect(() => {
+    const openUser = (event: Event) => {
+      const detail = (event as CustomEvent<{ userId: string; name: string }>).detail;
+      if (!detail?.userId) return;
+      void openDirectWith(detail.userId).then((chatId) => {
+        if (chatId) setDetailsOpen(true);
+      });
+    };
+    window.addEventListener('sova:open-user-profile', openUser);
+    return () => window.removeEventListener('sova:open-user-profile', openUser);
+  }, [openDirectWith]);
 
   const beginCall = useCallback(
     (chatId: string, video: boolean) => {
@@ -1093,26 +1094,6 @@ export function ChatScreen({
               : undefined
           }
           callDisabledReason={callsDisabledReason}
-        />
-      ) : null}
-
-      {userPanel ? (
-        <UserProfilePanel
-          userId={userPanel.userId}
-          name={userPanel.name}
-          onClose={() => setUserPanel(null)}
-          onWrite={() => {
-            void openDirectWith(userPanel.userId).then((chatId) => {
-              if (chatId) setUserPanel(null);
-            });
-          }}
-          onCall={() => {
-            void openDirectWith(userPanel.userId).then((chatId) => {
-              if (!chatId) return;
-              setUserPanel(null);
-              setCallLobby({ chatId, video: true });
-            });
-          }}
         />
       ) : null}
 

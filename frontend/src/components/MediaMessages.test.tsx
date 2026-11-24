@@ -292,7 +292,9 @@ describe('song cards and ID3 upload metadata', () => {
     const video = (await screen.findByLabelText('Видео: clip.mp4')) as HTMLVideoElement;
     expect(video.getAttribute('poster')).toBe('https://cdn.example/poster.jpg');
     expect(video.autoplay).toBe(false);
-    expect(screen.getByText(/1:05/)).toBeInTheDocument();
+    expect(
+      within(video.closest('.attachment-card') as HTMLElement).getByText(/1:05/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/1280×720/)).toBeInTheDocument();
     expect(container.querySelectorAll('.attachment-card img')).toHaveLength(1);
     expect(screen.getByAltText('Превью файла photo.png')).toBeInTheDocument();
