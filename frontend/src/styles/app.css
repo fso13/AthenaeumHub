@@ -21601,3 +21601,34 @@ html[data-link-previews='off'] .rich-link {
   gap: 8px;
   margin: 10px 0;
 }
+.rich-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rich-link__domain {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-3, var(--surface-2));
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+.rich-link__text {
+  text-decoration: underline;
+}
+html[data-link-previews='off'] .rich-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+html[data-link-previews='off'] .rich-link__domain {
+  display: none;
+}
+.call-lobby__buttons .call-button {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+}

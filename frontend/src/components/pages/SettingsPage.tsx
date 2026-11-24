@@ -430,30 +430,6 @@ export function SettingsPage({
               </div>
               <div className="setting-row">
                 <div className="text">
-                  <b>{t('settings.messageSpacing')}</b>
-                  <small>{t('settings.messageSpacingHint')}</small>
-                </div>
-                <div className="seg" role="group" aria-label={t('settings.messageSpacing')}>
-                  <button
-                    type="button"
-                    className={appearance.messageSpacing === 'spacious' ? 'is-active' : ''}
-                    aria-pressed={appearance.messageSpacing === 'spacious'}
-                    onClick={() => changeAppearance({ messageSpacing: 'spacious' })}
-                  >
-                    {t('settings.spacingSpacious')}
-                  </button>
-                  <button
-                    type="button"
-                    className={appearance.messageSpacing === 'compact' ? 'is-active' : ''}
-                    aria-pressed={appearance.messageSpacing === 'compact'}
-                    onClick={() => changeAppearance({ messageSpacing: 'compact' })}
-                  >
-                    {t('settings.spacingCompact')}
-                  </button>
-                </div>
-              </div>
-              <div className="setting-row">
-                <div className="text">
                   <b>{t('settings.linkPreviews')}</b>
                   <small>{t('settings.linkPreviewsHint')}</small>
                 </div>

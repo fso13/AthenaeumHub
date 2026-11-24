@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { t } from '../i18n/ru';
+import { MicIcon, MicOffIcon, VideoIcon, VideoOffIcon } from './Icons';
 import { readCallPreferences, writeCallPreferences } from '../prefs/callPreferences';
 
 export interface CallLobbyProps {
@@ -72,16 +73,20 @@ export function CallLobby({ title, onCancel, onConnect }: CallLobbyProps) {
               className={`call-button call-button--round${micOn ? '' : ' is-active'}`}
               aria-pressed={micOn}
               onClick={() => setMicOn((on) => !on)}
+              aria-label={micOn ? t('calls.mute') : t('calls.unmute')}
+              title={micOn ? t('calls.mute') : t('calls.unmute')}
             >
-              {micOn ? t('calls.mute') : t('calls.unmute')}
+              {micOn ? <MicIcon aria-hidden="true" /> : <MicOffIcon aria-hidden="true" />}
             </button>
             <button
               type="button"
               className={`call-button call-button--round${cameraOn ? '' : ' is-active'}`}
               aria-pressed={cameraOn}
               onClick={() => setCameraOn((on) => !on)}
+              aria-label={cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
+              title={cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
             >
-              {cameraOn ? t('calls.cameraOff') : t('calls.cameraOn')}
+              {cameraOn ? <VideoIcon aria-hidden="true" /> : <VideoOffIcon aria-hidden="true" />}
             </button>
           </div>
           <label className="field">

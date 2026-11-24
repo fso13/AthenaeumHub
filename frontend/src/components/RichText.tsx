@@ -59,7 +59,16 @@ function renderInlineNodes(nodes: readonly RichInlineNode[]): ReactNode[] {
             target="_blank"
             rel="noopener noreferrer"
           >
-            {renderInlineNodes(node.children)}
+            <span className="rich-link__domain" aria-hidden="true">
+              {(() => {
+                try {
+                  return new URL(node.href).hostname.replace(/^www\./, '');
+                } catch {
+                  return '';
+                }
+              })()}
+            </span>
+            <span className="rich-link__text">{renderInlineNodes(node.children)}</span>
           </a>
         );
       case 'image':
