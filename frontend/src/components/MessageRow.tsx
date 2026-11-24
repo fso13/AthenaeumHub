@@ -85,6 +85,90 @@ function messagePreview(message: ApiMessage | null): string {
   return t('chat.deletedMessage');
 }
 
+interface ForwardMeta {
+  chatId: string;
+  messageId: string;
+  senderId: string | null;
+  author: string;
+  createdAt: string;
+  chatType: string | null;
+  chatName: string | null;
+}
+
+function parseForward(text: string): { meta: ForwardMeta; body: string; header: string } | null {
+  const match = /^↪([^\n]*)\nsova-forward:([^\n]+)\n?\n?/.exec(text);
+  if (!match) return null;
+  const header = `↪${match[1]}`;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decodeURIComponent(match[2] ?? ''));
+  } catch {
+    // Older markers were only `chatId:messageId`; keep the body navigable.
+    const [chatId, messageId] = (match[2] ?? '').split(':');
+    parsed = { chatId, messageId };
+  }
+  const raw =
+    typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  return {
+    meta: {
+      chatId: typeof raw.chatId === 'string' ? raw.chatId : '',
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : '',
+      senderId: typeof raw.senderId === 'string' ? raw.senderId : null,
+      author:
+        typeof raw.author === 'string' && raw.author.trim().length > 0
+          ? raw.author
+          : t('message.forwardUnknownAuthor'),
+      createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : '',
+      chatType: typeof raw.chatType === 'string' ? raw.chatType : null,
+      chatName: typeof raw.chatName === 'string' ? raw.chatName : null,
+    },
+    body: text.slice(match[0].length),
+    header,
+  };
+}
+
+function ForwardedMessage({ text }: { text: string }) {
+  const parsed = parseForward(text);
+  if (!parsed) return <RichText text={text} />;
+  const { meta, body } = parsed;
+  const sourceLabel =
+    meta.chatType === 'DIRECT'
+      ? t('message.forwardDirect')
+      : meta.chatName
+        ? `#${meta.chatName}`
+        : t('message.forwardChannel');
+  return (
+    <div className="forward-card">
+      <div className="forward-card__head">
+        <Avatar name={meta.author} seed={meta.senderId ?? meta.author} size="sm" />
+        <div className="forward-card__meta">
+          <strong>{meta.author}</strong>
+          {meta.createdAt ? <time>{formatDateTime(meta.createdAt)}</time> : null}
+          <span className="forward-card__source">{sourceLabel}</span>
+        </div>
+        <button
+          type="button"
+          className="forward-card__jump"
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent('sova:open-forward', {
+                detail: { chatId: meta.chatId, messageId: meta.messageId },
+              }),
+            )
+          }
+          aria-label={t('message.forwardOpenSource')}
+          title={t('message.forwardOpenSource')}
+        >
+          ↗
+        </button>
+      </div>
+      <div className="forward-card__body">
+        <RichText text={body} />
+      </div>
+    </div>
+  );
+}
+
 interface MessageMetaProps {
   author: string;
   mine: boolean;
@@ -207,12 +291,8 @@ export function MessageRow({
   const text = deleted
     ? t('chat.deletedMessage')
     : (e2eeFallback ?? e2ee?.text ?? (e2eeChat ? '' : (message.text ?? '')));
-  const forwardMatch =
-    !e2eeChat && message.type === 'TEXT'
-      ? /^↪[^\n]*\nsova-forward:([^:\n]+):([^\n]+)\n?\n?/.exec(text)
-      : null;
-  const forwardHeader = forwardMatch ? text.slice(0, text.indexOf('\n')) : null;
-  const visibleText = forwardMatch ? text.slice(forwardMatch[0].length) : text;
+  const forward = !e2eeChat && message.type === 'TEXT' ? parseForward(text) : null;
+  const visibleText = forward ? forward.body : text;
   const showText = deleted || visibleText.trim().length > 0;
 
   const quoteAuthor = replyTo?.sender_display_name?.trim() || UNKNOWN_AUTHOR();
@@ -406,31 +486,10 @@ export function MessageRow({
           ) : e2eeChat ? (
             // E2EE is plain text: no Markdown, no mention chips, no links.
             <p className="msg-text msg-text--plain">{text}</p>
+          ) : forward ? (
+            <ForwardedMessage text={text} />
           ) : (
-            <>
-              {forwardMatch ? (
-                <span className="forward-attribution">
-                  <span>{forwardHeader}</span>
-                  <button
-                    type="button"
-                    className="forward-source"
-                    onClick={() =>
-                      window.dispatchEvent(
-                        new CustomEvent('sova:open-forward', {
-                          detail: {
-                            chatId: forwardMatch[1],
-                            messageId: forwardMatch[2],
-                          },
-                        }),
-                      )
-                    }
-                  >
-                    К исходному сообщению
-                  </button>
-                </span>
-              ) : null}
-              <RichText text={visibleText} mentions={resolvedMentionNames} className="msg-text" />
-            </>
+            <RichText text={visibleText} mentions={resolvedMentionNames} className="msg-text" />
           )
         ) : null}
         {!deleted && !e2eeChat ? (

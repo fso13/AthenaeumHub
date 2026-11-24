@@ -811,10 +811,21 @@ export function MessageActions({
               try {
                 const author =
                   message.sender_display_name?.trim() || t('message.forwardUnknownAuthor');
+                const sourceChat = state.chats.find((chat) => chat.id === message.chat_id) ?? null;
+                const meta = {
+                  chatId: message.chat_id,
+                  messageId: message.id,
+                  senderId: message.sender_id ?? null,
+                  author,
+                  createdAt: message.created_at,
+                  chatType: sourceChat?.type ?? null,
+                  chatName: sourceChat?.name ?? null,
+                };
+                const marker = `sova-forward:${encodeURIComponent(JSON.stringify(meta))}`;
                 const forwarded = `↪ ${t('message.forwardedFrom', {
                   author,
                   date: formatDateTime(message.created_at),
-                })}\nsova-forward:${message.chat_id}:${message.id}\n\n${message.text ?? ''}`;
+                })}\n${marker}\n\n${message.text ?? ''}`;
                 await store.send(forwardTarget, forwarded);
                 setForwardOpen(false);
               } catch {
