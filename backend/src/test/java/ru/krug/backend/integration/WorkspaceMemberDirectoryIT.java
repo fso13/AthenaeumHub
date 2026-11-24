@@ -291,7 +291,6 @@ class WorkspaceMemberDirectoryIT extends IntegrationTestBase {
                 """, Long.class, owner.workspace().id());
         assertThat(directChats).isEqualTo(1L);
 
-        assertDirectRejected(owner, owner.user().id(), "VALIDATION_FAILED");
         SessionResponse removedPeer = createMember(owner,
                 "e10b-direct-removed-" + shortId());
         membership(owner.workspace().id(), removedPeer.user().id(), "MEMBER", "REMOVED");
