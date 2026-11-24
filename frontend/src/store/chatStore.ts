@@ -8106,7 +8106,7 @@ export class ChatStore {
       await this.api.createChat(
         workspaceId,
         { type: 'DIRECT', peer_id: viewerId },
-        `self-chat-${workspaceId}-${viewerId}`,
+        crypto.randomUUID(),
       );
       const list = await this.api.listChats(workspaceId);
       if (this.currentWorkspaceId() !== workspaceId) return;
