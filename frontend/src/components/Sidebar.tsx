@@ -33,6 +33,11 @@ import {
 import { useRoomsState, useRoomsStore } from '../store/ChatProvider';
 import { NotificationBell } from './NotificationBell';
 import { readPinnedChatIds, togglePinnedChatId } from '../sidebar/pins';
+import {
+  readSidebarSections,
+  writeSidebarSections,
+  type SidebarSectionsState,
+} from '../sidebar/sections';
 
 const NAV_ITEMS: ReadonlyArray<{ view: PageView; label: MessageKey; Icon: typeof OverviewIcon }> = [
   { view: 'overview', label: 'nav.overview', Icon: OverviewIcon },
@@ -110,17 +115,22 @@ export function Sidebar({
     };
   }, [activeWorkspaceId, roomsStore]);
 
-  const [collapsed, setCollapsed] = useState<{ channels: boolean; directs: boolean }>({
-    channels: false,
-    directs: false,
-  });
+  const userId = user?.id ?? null;
+  const [collapsed, setCollapsed] = useState<SidebarSectionsState>(() =>
+    readSidebarSections(userId),
+  );
+  useEffect(() => {
+    setCollapsed(readSidebarSections(userId));
+  }, [userId]);
+  const toggleSection = (kind: keyof SidebarSectionsState) => {
+    setCollapsed((current) => writeSidebarSections(userId, { ...current, [kind]: !current[kind] }));
+  };
   // #80: the personal archive is a separate list; it never mixes with `chats`.
   const [archivedOpen, setArchivedOpen] = useState(false);
   const archived = state.archivedChats;
 
   // Personal pinned chats: ordered ids scoped to the signed-in user and kept
   // in browser storage. They only reorder this client's sidebar.
-  const userId = user?.id ?? null;
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => readPinnedChatIds(userId));
   useEffect(() => {
     setPinnedIds(readPinnedChatIds(userId));
@@ -139,8 +149,19 @@ export function Sidebar({
     });
   };
   // Pinned chats live only in their own top section, never duplicated below.
-  const channels = state.chats.filter((chat) => chat.type === 'GROUP' && !pinnedSet.has(chat.id));
-  const directs = state.chats.filter((chat) => chat.type === 'DIRECT' && !pinnedSet.has(chat.id));
+  const byActivity = (a: AppState['chats'][number], b: AppState['chats'][number]) => {
+    const at = (chat: AppState['chats'][number]) => {
+      const time = chat.last_message_at ? Date.parse(chat.last_message_at) : 0;
+      return Number.isFinite(time) ? time : 0;
+    };
+    return at(b) - at(a);
+  };
+  const channels = state.chats
+    .filter((chat) => chat.type === 'GROUP' && !pinnedSet.has(chat.id))
+    .sort(byActivity);
+  const directs = state.chats
+    .filter((chat) => chat.type === 'DIRECT' && !pinnedSet.has(chat.id))
+    .sort(byActivity);
 
   // Own avatar: the authenticated `GET /me/avatar` blob is resolved once per
   // session (deduped in the store) and shared with the profile dialog.
@@ -242,7 +263,7 @@ export function Sidebar({
             type="button"
             className="section-toggle"
             aria-expanded={!isCollapsed}
-            onClick={() => setCollapsed((current) => ({ ...current, [kind]: !current[kind] }))}
+            onClick={() => toggleSection(kind)}
           >
             <ChevronDownIcon className="chev" aria-hidden="true" />
             <span>{title}</span>
@@ -358,10 +379,15 @@ export function Sidebar({
             ) : null}
             <section className="section" aria-label={t('nav.rooms')}>
               <div className="section-head">
-                <span className="section-toggle section-toggle--static">
+                <button
+                  type="button"
+                  className="section-toggle"
+                  aria-expanded={!collapsed.rooms}
+                  onClick={() => toggleSection('rooms')}
+                >
                   <VideoIcon className="chev" aria-hidden="true" />
                   <span>{t('nav.rooms')}</span>
-                </span>
+                </button>
                 <button
                   type="button"
                   className="section-add"
@@ -372,7 +398,7 @@ export function Sidebar({
                   <PlusIcon aria-hidden="true" />
                 </button>
               </div>
-              {rooms.items.length === 0 ? (
+              {collapsed.rooms ? null : rooms.items.length === 0 ? (
                 <p className="rooms-nav-empty">{t('sidebar.roomsEmpty')}</p>
               ) : (
                 <ul className="chat-list__items">

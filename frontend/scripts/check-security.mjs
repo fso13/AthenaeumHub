@@ -28,6 +28,8 @@ const SIDEBAR_PINS_MODULE = 'src/sidebar/pins.ts';
 const DEVICE_PREF_MODULE = 'src/prefs/devicePreferences.ts';
 /** #178: non-secret call defaults/device ids. */
 const CALL_PREF_MODULE = 'src/prefs/callPreferences.ts';
+/** #190: collapsed sidebar sections. */
+const SIDEBAR_SECTIONS_MODULE = 'src/sidebar/sections.ts';
 
 const forbidden = [
   {
@@ -36,13 +38,14 @@ const forbidden = [
   },
   {
     pattern: /\blocalStorage\s*[.[]/g,
-    message: `localStorage is allowed only in ${WORKSPACE_PREF_MODULE} (workspace id), ${THEME_PREF_MODULE} (theme), ${SIDEBAR_PINS_MODULE} (chat pins) and ${DEVICE_PREF_MODULE} (call output volume) and ${CALL_PREF_MODULE} (call defaults); auth material uses sessionStorage/in-memory`,
+    message: `localStorage is allowed only in ${WORKSPACE_PREF_MODULE} (workspace id), ${THEME_PREF_MODULE} (theme), ${SIDEBAR_PINS_MODULE} (chat pins) and ${DEVICE_PREF_MODULE} (call output volume) ${CALL_PREF_MODULE} (call defaults) and ${SIDEBAR_SECTIONS_MODULE} (sidebar sections); auth material uses sessionStorage/in-memory`,
     allow: [
       WORKSPACE_PREF_MODULE,
       THEME_PREF_MODULE,
       SIDEBAR_PINS_MODULE,
       DEVICE_PREF_MODULE,
       CALL_PREF_MODULE,
+      SIDEBAR_SECTIONS_MODULE,
     ],
   },
   {

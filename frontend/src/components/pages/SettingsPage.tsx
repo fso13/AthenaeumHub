@@ -20,6 +20,7 @@ import {
   MonitorIcon,
   MoonIcon,
   PeopleIcon,
+  PlugIcon,
   SettingsIcon,
   ShieldIcon,
   SmartphoneIcon,
@@ -248,6 +249,18 @@ export function SettingsPage({
               {t(entry.label)}
             </button>
           ))}
+          {onNavigate ? (
+            <>
+              <button type="button" onClick={() => onNavigate('plugins')}>
+                <PlugIcon aria-hidden="true" />
+                {t('nav.plugins')}
+              </button>
+              <button type="button" onClick={() => onNavigate('security')}>
+                <ShieldIcon aria-hidden="true" />
+                {t('nav.security')}
+              </button>
+            </>
+          ) : null}
           {isAdmin && onOpenAdmin ? (
             <button type="button" onClick={onOpenAdmin}>
               <SettingsIcon aria-hidden="true" />
