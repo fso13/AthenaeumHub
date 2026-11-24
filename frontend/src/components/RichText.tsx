@@ -6,6 +6,7 @@ import {
   type RichTableAlign,
 } from '../domain/richText';
 import { t } from '../i18n/ru';
+import { getAccessToken } from '../auth/session';
 import { CodeBlock } from './CodeBlock';
 
 interface RichTextProps {
@@ -50,9 +51,13 @@ function LinkPreviewAnchor({ href, children }: { href: string; children: ReactNo
     }
     if (document.documentElement.dataset.linkPreviews === 'off') return;
     let cancelled = false;
+    const token = getAccessToken();
     void fetch(`/api/v1/link-preview?url=${encodeURIComponent(href)}`, {
       credentials: 'include',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {

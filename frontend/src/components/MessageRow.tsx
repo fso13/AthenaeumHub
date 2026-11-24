@@ -274,6 +274,7 @@ export function MessageRow({
     );
   }
 
+  const avatarSrc = mine ? profile.avatar.previewUrl : null;
   const author = message.sender_display_name?.trim() || UNKNOWN_AUTHOR();
   const deleted = Boolean(message.deleted_at);
   // #95: E2EE chats never render server plugin projections (the server cannot
@@ -375,7 +376,7 @@ export function MessageRow({
           name={author}
           seed={message.bot_id ?? message.sender_id}
           size="lg"
-          src={mine ? profile.avatar.previewUrl : null}
+          src={avatarSrc}
         />
         <div className="msg-body">
           {meta}
@@ -431,7 +432,12 @@ export function MessageRow({
         data-message-type={message.type}
         tabIndex={-1}
       >
-        <Avatar name={author} seed={message.bot_id ?? message.sender_id} size="lg" />
+        <Avatar
+          name={author}
+          seed={message.bot_id ?? message.sender_id}
+          size="lg"
+          src={avatarSrc}
+        />
         <div className="msg-body">
           {meta}
           {quote}
@@ -483,7 +489,7 @@ export function MessageRow({
       id={`message-${message.id}`}
       tabIndex={-1}
     >
-      <Avatar name={author} seed={message.bot_id ?? message.sender_id} size="lg" />
+      <Avatar name={author} seed={message.bot_id ?? message.sender_id} size="lg" src={avatarSrc} />
       <div className="msg-body">
         {meta}
         {quote}

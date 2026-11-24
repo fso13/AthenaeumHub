@@ -78,6 +78,7 @@ export function AppShell({
   const roomsStore = useRoomsStore();
   const [roomLobby, setRoomLobby] = useState<Room | null>(null);
   const [roomsOpen, setRoomsOpen] = useState(false);
+  const [roomsCreate, setRoomsCreate] = useState(false);
   const currentState = useChatState();
   const avatars = useAvatarsState();
   const avatarsStore = useAvatarsStore();
@@ -272,7 +273,10 @@ export function AppShell({
           onOpenMembers={onOpenMembers}
           onOpenProfile={() => setProfileOpen(true)}
           onOpenRoom={setRoomLobby}
-          onOpenRooms={() => setRoomsOpen(true)}
+          onOpenRooms={() => {
+            setRoomsCreate(true);
+            setRoomsOpen(true);
+          }}
           navCollapsed={navCollapsed}
           onToggleCollapsed={() => setNavCollapsed((value) => !value)}
         />
@@ -350,7 +354,13 @@ export function AppShell({
       <CallLayer />
       {roomsOpen ? (
         <div className="rooms-modal" role="dialog" aria-modal="true" aria-label={t('nav.rooms')}>
-          <RoomsPage onBack={() => setRoomsOpen(false)} />
+          <RoomsPage
+            initialCreate={roomsCreate}
+            onBack={() => {
+              setRoomsOpen(false);
+              setRoomsCreate(false);
+            }}
+          />
         </div>
       ) : null}
       {roomLobby ? (

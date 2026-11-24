@@ -1706,6 +1706,7 @@ export const ru = {
   'rooms.leave': 'Выйти',
   'rooms.leaveAction': 'Выйти из комнаты «{name}»',
   'rooms.leaving': 'Выходим…',
+  'rooms.actions.open': 'Действия с комнатой {name}',
   'rooms.rename': 'Переименовать',
   'rooms.renameAction': 'Переименовать комнату «{name}»',
   'rooms.rename.label': 'Новое название комнаты «{name}»',

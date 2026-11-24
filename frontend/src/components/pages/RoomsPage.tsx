@@ -25,6 +25,8 @@ import { PageShell } from './PageShell';
 
 interface RoomsPageProps {
   onBack: () => void;
+  /** #196: sidebar plus opens the create form immediately. */
+  initialCreate?: boolean;
 }
 
 const CALL_ISSUE_KEYS: Record<NonNullable<RoomsState['callIssue']>['reason'], MessageKey> = {
@@ -110,7 +112,7 @@ function countLabel(room: Room): string {
  * mesh-call bridge. Participants shown here are exactly the rows the server
  * returned inside its 30 s TTL — there are no placeholder or demo people.
  */
-export function RoomsPage({ onBack }: RoomsPageProps) {
+export function RoomsPage({ onBack, initialCreate = false }: RoomsPageProps) {
   const store = useRoomsStore();
   const chatStore = useChatStore();
   const avatarsStore = useAvatarsStore();
@@ -128,7 +130,8 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
     null;
   const call = state.call;
 
-  const [createOpen, setCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(initialCreate);
+  const [cardMenu, setCardMenu] = useState<string | null>(null);
   const [createName, setCreateName] = useState('');
   const [createMode, setCreateMode] = useState<RoomMediaMode>('VIDEO');
   const [createError, setCreateError] = useState<string | null>(null);
@@ -500,7 +503,6 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
             const joining = pending?.kind === 'join' && pending.roomId === room.id;
             const leaving = pending?.kind === 'leave' && pending.roomId === room.id;
             const renamingThis = pending?.kind === 'rename' && pending.roomId === room.id;
-            const modeChangingThis = pending?.kind === 'media_mode' && pending.roomId === room.id;
             const closingThis = pending?.kind === 'close' && pending.roomId === room.id;
             const issue = rooms.callIssue?.roomId === room.id ? rooms.callIssue.reason : null;
             const errorHere =
@@ -521,16 +523,6 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                         {room.name}
                       </h2>
                       <div className="room-card__chips">
-                        <span
-                          className={`chip room-media-chip room-media-chip--${mode.toLowerCase()}`}
-                        >
-                          {mode === 'AUDIO' ? (
-                            <PhoneIcon aria-hidden="true" />
-                          ) : (
-                            <VideoIcon aria-hidden="true" />
-                          )}
-                          {mode === 'AUDIO' ? t('rooms.media.audio') : t('rooms.media.video')}
-                        </span>
                         {present ? (
                           <span className="chip chip--accent">{t('rooms.present')}</span>
                         ) : null}
@@ -554,7 +546,61 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                       </div>
                     </div>
                   </div>
-                  <span className="room-card__count">{countLabel(room)}</span>
+                  <div className="room-card__head-actions">
+                    <span className="room-card__count">{countLabel(room)}</span>
+                    <button
+                      type="button"
+                      className="room-card__more"
+                      aria-label={t('rooms.actions.open', { name: room.name })}
+                      aria-expanded={cardMenu === room.id}
+                      onClick={() =>
+                        setCardMenu((current) => (current === room.id ? null : room.id))
+                      }
+                    >
+                      ⋯
+                    </button>
+                    {cardMenu === room.id ? (
+                      <div className="room-card__menu" role="menu">
+                        {canRename(room) ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setCardMenu(null);
+                              setRenaming({ roomId: room.id, name: room.name, error: null });
+                            }}
+                          >
+                            {t('rooms.rename')}
+                          </button>
+                        ) : null}
+                        {canManageAvatar(room) ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setCardMenu(null);
+                              setAvatarEditorRoomId(room.id);
+                            }}
+                          >
+                            {t('rooms.avatar.change')}
+                          </button>
+                        ) : null}
+                        {canClose(room) ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="is-danger"
+                            onClick={() => {
+                              setCardMenu(null);
+                              setClosingId(room.id);
+                            }}
+                          >
+                            {t('rooms.close')}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
 
                 {room.participants.length > 0 ? (
@@ -749,36 +795,6 @@ export function RoomsPage({ onBack }: RoomsPageProps) {
                       {joining ? t('rooms.joining') : t('rooms.join')}
                     </button>
                   )}
-                  {canRename(room) ? (
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={busy || closingId === room.id}
-                      aria-label={t(
-                        mode === 'AUDIO'
-                          ? 'rooms.media.makeVideoAction'
-                          : 'rooms.media.makeAudioAction',
-                        { name: room.name },
-                      )}
-                      aria-busy={modeChangingThis}
-                      onClick={() => {
-                        store.clearActionError();
-                        setRenaming(null);
-                        setClosingId(null);
-                        setAvatarEditorRoomId(null);
-                        void store.updateRoomMediaMode(
-                          room.id,
-                          mode === 'AUDIO' ? 'VIDEO' : 'AUDIO',
-                        );
-                      }}
-                    >
-                      {modeChangingThis
-                        ? t('rooms.media.switching')
-                        : mode === 'AUDIO'
-                          ? t('rooms.media.makeVideo')
-                          : t('rooms.media.makeAudio')}
-                    </button>
-                  ) : null}
                   {canRename(room) ? (
                     <button
                       type="button"
