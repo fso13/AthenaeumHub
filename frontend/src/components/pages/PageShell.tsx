@@ -9,13 +9,23 @@ interface PageShellProps {
   onBack: () => void;
   actions?: ReactNode;
   children: ReactNode;
+  /** Rendered inside another page (Settings) without its own header. */
+  embedded?: boolean;
 }
 
 /**
  * D1 UX fidelity 2: common workspace section layout. The heading is the page's
  * single `h1`; the back control returns to the preserved chat surface.
  */
-export function PageShell({ title, eyebrow, subtitle, onBack, actions, children }: PageShellProps) {
+export function PageShell({
+  title,
+  eyebrow,
+  subtitle,
+  onBack,
+  actions,
+  children,
+  embedded = false,
+}: PageShellProps) {
   const titleId = useId();
   const mainRef = useRef<HTMLElement>(null);
 
@@ -23,6 +33,22 @@ export function PageShell({ title, eyebrow, subtitle, onBack, actions, children 
   useEffect(() => {
     mainRef.current?.focus();
   }, []);
+
+  if (embedded) {
+    return (
+      <div className="page-body page-body--embedded">
+        <PageHeader
+          eyebrow={eyebrow ?? ''}
+          title={title}
+          subtitle={subtitle}
+          titleId={titleId}
+          onBack={onBack}
+          actions={actions}
+        />
+        {children}
+      </div>
+    );
+  }
 
   return (
     <main className="page" id="chat-main" tabIndex={-1} aria-labelledby={titleId} ref={mainRef}>

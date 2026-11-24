@@ -20,6 +20,7 @@ import { securityModeLabel } from './pageData';
 
 interface SecurityPageProps {
   onBack: () => void;
+  embedded?: boolean;
 }
 
 function DeviceRows() {
@@ -113,7 +114,7 @@ function DevicesCard({ mode }: { mode: 'MANAGED' | 'E2EE' }) {
  * notice and their own device list; the manager endpoints are never called, so
  * the 403 path is not used as a data-loading strategy.
  */
-export function SecurityPage({ onBack }: SecurityPageProps) {
+export function SecurityPage({ onBack, embedded = false }: SecurityPageProps) {
   const store = useChatStore();
   const state = useChatState();
   const security = useSecurityStore();
@@ -150,6 +151,7 @@ export function SecurityPage({ onBack }: SecurityPageProps) {
 
   return (
     <PageShell
+      embedded={embedded}
       title={t('security.title')}
       eyebrow={`${workspaceName} · ${securityModeLabel(securityMode)}`}
       subtitle={t('security.subtitle')}

@@ -219,6 +219,7 @@ function PluginCard({
 
 interface PluginsPageProps {
   onBack: () => void;
+  embedded?: boolean;
 }
 
 /**
@@ -232,7 +233,7 @@ interface PluginsPageProps {
  * workspace OWNER/ADMIN as the affordance hint and still handles `403`
  * honestly if the server rejects the change.
  */
-export function PluginsPage({ onBack }: PluginsPageProps) {
+export function PluginsPage({ onBack, embedded = false }: PluginsPageProps) {
   const state = useChatState();
   const chatStore = useChatStore();
   const store = usePluginsStore();
@@ -350,6 +351,7 @@ export function PluginsPage({ onBack }: PluginsPageProps) {
 
   return (
     <PageShell
+      embedded={embedded}
       title={t('plugins.title')}
       eyebrow={`${workspaceName} · ${securityModeLabel(workspaceMode)}`}
       onBack={onBack}

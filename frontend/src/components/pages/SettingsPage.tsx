@@ -30,13 +30,23 @@ import { BlockedUsersCard } from '../BlockedUsersCard';
 import { WorkspaceBotsCard } from '../bots/WorkspaceBotsCard';
 import { NotificationPreferencesDialog } from '../NotificationPreferencesDialog';
 import { WorkspaceSettingsPanel } from '../workspace/WorkspaceSettingsPanel';
+import { PluginsPage } from './PluginsPage';
+import { SecurityPage } from './SecurityPage';
 import type { WorkspaceLifecycleAction } from '../../workspace/lifecycle';
 import { PageShell } from './PageShell';
 import { roleLabel, securityModeLabel, storageLimit, storageUsed, tariffLabel } from './pageData';
 
-type SettingsTab = 'profile' | 'appearance' | 'notifications' | 'workspace' | 'bots' | 'devices';
+type SettingsTab =
+  | 'profile'
+  | 'appearance'
+  | 'notifications'
+  | 'workspace'
+  | 'bots'
+  | 'devices'
+  | 'plugins'
+  | 'security';
 
-type TabIconName = 'profile' | 'appearance' | 'bell' | 'shield' | 'bot' | 'monitor';
+type TabIconName = 'profile' | 'appearance' | 'bell' | 'shield' | 'bot' | 'monitor' | 'plug';
 
 interface TabEntry {
   id: SettingsTab;
@@ -51,6 +61,8 @@ const TABS: ReadonlyArray<TabEntry> = [
   { id: 'workspace', label: 'settings.nav.workspace', icon: 'shield' },
   { id: 'bots', label: 'settings.nav.bots', icon: 'bot' },
   { id: 'devices', label: 'settings.nav.devices', icon: 'monitor' },
+  { id: 'plugins', label: 'nav.plugins', icon: 'plug' },
+  { id: 'security', label: 'nav.security', icon: 'shield' },
 ];
 
 const TYPE_LABEL: Record<string, MessageKey> = {
@@ -69,6 +81,7 @@ const MODE_LABEL: Record<string, MessageKey> = {
 };
 
 function TabIcon({ icon }: { icon: TabIconName }) {
+  if (icon === 'plug') return <PlugIcon aria-hidden="true" />;
   if (icon === 'appearance') return <SunIcon aria-hidden="true" />;
   if (icon === 'bell') return <BellIcon aria-hidden="true" />;
   if (icon === 'shield') return <ShieldIcon aria-hidden="true" />;
@@ -146,7 +159,7 @@ export function SettingsPage({
         <h2 className="card-title" id="settings-plugins">
           {t('nav.plugins')}
         </h2>
-        <button type="button" className="card-link" onClick={() => onNavigate('plugins')}>
+        <button type="button" className="card-link" onClick={() => setTab('plugins')}>
           {t('settings.openPlugins')}
         </button>
       </div>
@@ -160,7 +173,7 @@ export function SettingsPage({
         <h2 className="card-title" id="settings-security">
           {t('settings.security')}
         </h2>
-        <button type="button" className="card-link" onClick={() => onNavigate?.('security')}>
+        <button type="button" className="card-link" onClick={() => setTab('security')}>
           {t('settings.openSecurity')}
         </button>
       </div>
@@ -249,18 +262,6 @@ export function SettingsPage({
               {t(entry.label)}
             </button>
           ))}
-          {onNavigate ? (
-            <>
-              <button type="button" onClick={() => onNavigate('plugins')}>
-                <PlugIcon aria-hidden="true" />
-                {t('nav.plugins')}
-              </button>
-              <button type="button" onClick={() => onNavigate('security')}>
-                <ShieldIcon aria-hidden="true" />
-                {t('nav.security')}
-              </button>
-            </>
-          ) : null}
           {isAdmin && onOpenAdmin ? (
             <button type="button" onClick={onOpenAdmin}>
               <SettingsIcon aria-hidden="true" />
@@ -270,6 +271,8 @@ export function SettingsPage({
         </nav>
 
         <div className="settings-pane">
+          {tab === 'plugins' ? <PluginsPage embedded onBack={onBack} /> : null}
+          {tab === 'security' ? <SecurityPage embedded onBack={onBack} /> : null}
           {tab === 'profile' ? (
             <>
               <section className="card" aria-labelledby="settings-profile">
