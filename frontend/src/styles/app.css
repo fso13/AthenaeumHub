@@ -21632,3 +21632,13 @@ html[data-link-previews='off'] .rich-link__domain {
   width: 40px;
   height: 40px;
 }
+.rooms-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  overflow: auto;
+  background: var(--bg);
+}
+.rooms-modal > .page {
+  min-height: 100dvh;
+}

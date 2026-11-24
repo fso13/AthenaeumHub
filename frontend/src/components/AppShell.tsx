@@ -77,6 +77,7 @@ export function AppShell({
   const store = useChatStore();
   const roomsStore = useRoomsStore();
   const [roomLobby, setRoomLobby] = useState<Room | null>(null);
+  const [roomsOpen, setRoomsOpen] = useState(false);
   const currentState = useChatState();
   const avatars = useAvatarsState();
   const avatarsStore = useAvatarsStore();
@@ -160,6 +161,8 @@ export function AppShell({
   const go = useCallback(
     (next: AppView) => {
       setNavOpen(false);
+      setRoomsOpen(false);
+      setRoomLobby(null);
       if (next === view) return;
       navigate(withView(location, next));
     },
@@ -269,6 +272,7 @@ export function AppShell({
           onOpenMembers={onOpenMembers}
           onOpenProfile={() => setProfileOpen(true)}
           onOpenRoom={setRoomLobby}
+          onOpenRooms={() => setRoomsOpen(true)}
           navCollapsed={navCollapsed}
           onToggleCollapsed={() => setNavCollapsed((value) => !value)}
         />
@@ -305,7 +309,11 @@ export function AppShell({
             onOpenMembers={() => onOpenMembers?.()}
           />
         ) : page === 'rooms' ? (
-          <RoomsPage onBack={() => go('chat')} />
+          <ChatScreen
+            onOpenChatSettings={() => setChatSettingsOpen(true)}
+            onOpenMembers={() => onOpenMembers?.()}
+            onNavigate={go}
+          />
         ) : page === 'files' ? (
           <FilesPage onBack={() => go('chat')} onOpenChat={openChat} />
         ) : page === 'settings' ? (
@@ -340,6 +348,11 @@ export function AppShell({
         onLogout={onLogout}
       />
       <CallLayer />
+      {roomsOpen ? (
+        <div className="rooms-modal" role="dialog" aria-modal="true" aria-label={t('nav.rooms')}>
+          <RoomsPage onBack={() => setRoomsOpen(false)} />
+        </div>
+      ) : null}
       {roomLobby ? (
         <CallLobby
           title={roomLobby.name}

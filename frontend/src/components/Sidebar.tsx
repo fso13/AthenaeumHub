@@ -66,6 +66,8 @@ interface SidebarProps {
   onOpenProfile?: () => void;
   /** #193: open the pre-join lobby instead of joining immediately. */
   onOpenRoom?: (room: import('../api/types').Room) => void;
+  /** Opens the room manager modal (creation/edit). */
+  onOpenRooms?: () => void;
   /** #65: collapse the sidebar to an icon rail. */
   navCollapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -86,6 +88,7 @@ export function Sidebar({
   onOpenMembers,
   onOpenProfile,
   onOpenRoom,
+  onOpenRooms,
   navCollapsed = false,
   onToggleCollapsed,
 }: SidebarProps) {
@@ -394,7 +397,7 @@ export function Sidebar({
                 <button
                   type="button"
                   className="section-add"
-                  onClick={() => onNavigate('rooms')}
+                  onClick={() => onOpenRooms?.()}
                   aria-label={t('rooms.open')}
                   title={t('rooms.open')}
                 >
