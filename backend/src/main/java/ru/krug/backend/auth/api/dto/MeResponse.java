@@ -26,6 +26,12 @@ public record MeResponse(User user, List<Workspace> workspaces, UUID defaultWork
         }
     }
 
-    public record Workspace(UUID id, String name, String slug, String role, String securityMode) {
+    public record Workspace(UUID id, String name, String slug, String role, String securityMode,
+                            String description,
+                            @JsonProperty("logo_file_id") UUID logoFileId) {
+
+        public Workspace(UUID id, String name, String slug, String role, String securityMode) {
+            this(id, name, slug, role, securityMode, null, null);
+        }
     }
 }

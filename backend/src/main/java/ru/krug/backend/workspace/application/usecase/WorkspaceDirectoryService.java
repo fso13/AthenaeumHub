@@ -35,6 +35,7 @@ public class WorkspaceDirectoryService implements WorkspaceDirectoryPort {
     private static WorkspaceMembershipView toView(WorkspaceMembership item) {
         return new WorkspaceMembershipView(item.workspace().id(), item.workspace().name(),
                 item.workspace().slug(), item.membership().role().name(),
-                item.workspace().securityMode().name());
+                item.workspace().securityMode().name(), item.workspace().description(),
+                item.workspace().logoFileId());
     }
 }

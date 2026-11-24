@@ -143,6 +143,6 @@ public final class AuthApiMapper {
 
     private static MeResponse.Workspace toWorkspace(WorkspaceMembershipView view) {
         return new MeResponse.Workspace(view.id(), view.name(), view.slug(), view.role(),
-                view.securityMode());
+                view.securityMode(), view.description(), view.logoFileId());
     }
 }

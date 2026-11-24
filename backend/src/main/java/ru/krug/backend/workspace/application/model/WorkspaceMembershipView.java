@@ -8,5 +8,12 @@ public record WorkspaceMembershipView(
         String name,
         String slug,
         String role,
-        String securityMode) {
+        String securityMode,
+        String description,
+        UUID logoFileId) {
+
+    public WorkspaceMembershipView(UUID id, String name, String slug, String role,
+                                   String securityMode) {
+        this(id, name, slug, role, securityMode, null, null);
+    }
 }
