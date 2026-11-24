@@ -21487,3 +21487,15 @@ html[data-theme='dark'] .recent-thumb--video {
   cursor: pointer;
   text-decoration: underline;
 }
+.forward-attribution {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 2px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.forward-attribution .forward-source {
+  margin: 0;
+}

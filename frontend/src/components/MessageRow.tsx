@@ -211,6 +211,7 @@ export function MessageRow({
     !e2eeChat && message.type === 'TEXT'
       ? /^↪[^\n]*\nsova-forward:([^:\n]+):([^\n]+)\n?\n?/.exec(text)
       : null;
+  const forwardHeader = forwardMatch ? text.slice(0, text.indexOf('\n')) : null;
   const visibleText = forwardMatch ? text.slice(forwardMatch[0].length) : text;
   const showText = deleted || visibleText.trim().length > 0;
 
@@ -408,22 +409,25 @@ export function MessageRow({
           ) : (
             <>
               {forwardMatch ? (
-                <button
-                  type="button"
-                  className="forward-source"
-                  onClick={() =>
-                    window.dispatchEvent(
-                      new CustomEvent('sova:open-forward', {
-                        detail: {
-                          chatId: forwardMatch[1],
-                          messageId: forwardMatch[2],
-                        },
-                      }),
-                    )
-                  }
-                >
-                  К исходному сообщению
-                </button>
+                <span className="forward-attribution">
+                  <span>{forwardHeader}</span>
+                  <button
+                    type="button"
+                    className="forward-source"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent('sova:open-forward', {
+                          detail: {
+                            chatId: forwardMatch[1],
+                            messageId: forwardMatch[2],
+                          },
+                        }),
+                      )
+                    }
+                  >
+                    К исходному сообщению
+                  </button>
+                </span>
               ) : null}
               <RichText text={visibleText} mentions={resolvedMentionNames} className="msg-text" />
             </>
