@@ -1619,7 +1619,7 @@ export class ChatStore {
       this.files.setWorkspace(session.workspace.id, null);
       this.workspaceOverview.setWorkspace(session.workspace.id);
       const chatList = await this.api.listChats(session.workspace.id);
-      const chats = chatList.items;
+      const chats = this.labelSelfChats(chatList.items, session.user.id);
       const remembered = readLastChat(session.user.id, session.workspace.id);
       const activeChatId =
         chats.find((chat) => chat.id === remembered)?.id ??
@@ -1645,6 +1645,7 @@ export class ChatStore {
       // E6: bell badge and list are loaded with the first paint, in parallel
       // with history so notifications never block the chat.
       void this.profile.loadMyAvatarPreview(true);
+      void this.ensureSelfChat();
       void this.loadNotifications();
       void this.loadNotificationPreferences();
       // #83: mention badge is part of the first paint; failures stay quiet.
@@ -1887,7 +1888,7 @@ export class ChatStore {
       const chatList = await this.api.listChats(workspace.id);
       // A later switch/removal superseded this activation; discard its read.
       if (generation !== this.workspaceGeneration) return;
-      const chats = chatList.items;
+      const chats = this.labelSelfChats(chatList.items, this.viewerId());
       const slices: Record<string, ChatSlice> = {};
       for (const chat of chats) {
         slices[chat.id] = createEmptySlice(chat.id, chat.unread_count);
@@ -1905,6 +1906,7 @@ export class ChatStore {
       });
 
       void this.profile.loadMyAvatarPreview(true);
+      void this.ensureSelfChat();
       void this.loadNotifications();
       void this.loadNotificationPreferences();
       // #83: mention badge is part of the first paint; failures stay quiet.
@@ -8085,6 +8087,42 @@ export class ChatStore {
    * Start an outgoing 1:1 call. DIRECT only; GROUP uses `startGroupCall`.
    * Calls stay managed-only: E2EE chats never expose a call attempt.
    */
+  private labelSelfChats(chats: AppState['chats'], viewerId: string | null): AppState['chats'] {
+    if (!viewerId) return chats;
+    return chats.map((chat) =>
+      chat.type === 'DIRECT' && chat.peer_id === viewerId ? { ...chat, name: 'Избранное' } : chat,
+    );
+  }
+
+  /** #199: create the personal saved-messages chat once per workspace. */
+  private async ensureSelfChat(): Promise<void> {
+    const workspaceId = this.currentWorkspaceId();
+    const viewerId = this.viewerId();
+    if (!workspaceId || !viewerId) return;
+    if (this.state.chats.some((chat) => chat.type === 'DIRECT' && chat.peer_id === viewerId)) {
+      return;
+    }
+    try {
+      await this.api.createChat(
+        workspaceId,
+        { type: 'DIRECT', peer_id: viewerId },
+        `self-chat-${workspaceId}-${viewerId}`,
+      );
+      const list = await this.api.listChats(workspaceId);
+      if (this.currentWorkspaceId() !== workspaceId) return;
+      const chats = this.labelSelfChats(list.items, viewerId);
+      const slices = { ...this.state.slices };
+      for (const chat of chats) slices[chat.id] ??= createEmptySlice(chat.id, chat.unread_count);
+      this.patch({
+        chats,
+        slices,
+        workspaceUnread: this.withActiveWorkspaceUnread(chats),
+      });
+    } catch {
+      // A chat limit or an older server must not block the workspace.
+    }
+  }
+
   startCall(chatId: string, video: boolean): void {
     if (this.state.call.phase !== 'idle') return;
     const chat = this.state.chats.find((item) => item.id === chatId) ?? null;

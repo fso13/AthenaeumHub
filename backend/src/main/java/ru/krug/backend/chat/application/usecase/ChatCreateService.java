@@ -119,10 +119,9 @@ public class ChatCreateService {
 
     private CreateChatResult createDirect(Principal principal, UUID workspaceId, String mode,
                                           UUID peerId) {
-        if (peerId.equals(principal.userId())) {
-            throw DomainException.badRequest("peer_id must differ from the caller",
-                    Map.of("field", "peer_id"));
-        }
+        // #199: a DIRECT chat with the caller is the personal "Избранное"
+        // (saved messages) chat. It has one member row via ON CONFLICT and is
+        // found by the same direct pair key.
         if (!workspaceAccess.isActiveMember(workspaceId, peerId)) {
             throw DomainException.badRequest("peer is not an active workspace member",
                     Map.of("field", "peer_id"));
