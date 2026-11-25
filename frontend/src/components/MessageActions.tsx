@@ -15,6 +15,7 @@ import { t } from '../i18n/ru';
 import { usePluginGate } from '../plugins/gate';
 import { useChatState, useChatStore, usePluginActionsStore } from '../store/ChatProvider';
 import {
+  BookmarkIcon,
   CloseIcon,
   EditIcon,
   EmojiIcon,
@@ -308,6 +309,7 @@ export function MessageActions({
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [actionFailure, setActionFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [favoriteBusy, setFavoriteBusy] = useState(false);
 
   const pinsState = state.chatPins;
   const pinned =
@@ -701,6 +703,28 @@ export function MessageActions({
           <ThreadIcon aria-hidden="true" />
           <span className="msg-menu__text">{t('thread.start')}</span>
           <span className="msg-menu__hint">{threadDisabledReason}</span>
+        </button>
+      ) : null}
+      {!e2eeChat && !message.deleted_at ? (
+        <button
+          type="button"
+          className="msg-menu__item"
+          disabled={favoriteBusy}
+          onClick={() => {
+            setMenuOpen(false);
+            setFavoriteBusy(true);
+            void store
+              .saveToFavorites(message)
+              .then((ok) => {
+                if (!ok) setActionFailure(t('message.favoriteError'));
+              })
+              .finally(() => setFavoriteBusy(false));
+          }}
+        >
+          <BookmarkIcon aria-hidden="true" />
+          <span className="msg-menu__text">
+            {favoriteBusy ? t('message.favoriteSaving') : t('message.favorite')}
+          </span>
         </button>
       ) : null}
       {!e2eeChat &&

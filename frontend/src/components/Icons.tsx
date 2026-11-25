@@ -694,6 +694,15 @@ export function SparklesIcon(props: IconProps) {
 }
 
 /** #80: pin/unpin a channel message. */
+export function BookmarkIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M6 3.5h12v17l-6-4.2-6 4.2v-17Z" />
+      <path d="M9 7h6" />
+    </IconBase>
+  );
+}
+
 export function PinIcon(props: IconProps) {
   return (
     <IconBase {...props}>

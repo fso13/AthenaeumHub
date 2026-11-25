@@ -8097,17 +8097,14 @@ export class ChatStore {
   }
 
   /** #199: create the personal saved-messages chat once per workspace. */
-  private async ensureSelfChat(): Promise<void> {
+  private async ensureSelfChat(): Promise<string | null> {
     const workspaceId = this.currentWorkspaceId();
     const viewerId = this.viewerId();
-    if (!workspaceId || !viewerId) return;
-    if (
-      this.state.chats.some(
-        (chat) => chat.type === 'DIRECT' && (chat.peer_id === viewerId || chat.peer_id === null),
-      )
-    ) {
-      return;
-    }
+    if (!workspaceId || !viewerId) return null;
+    const existing = this.state.chats.find(
+      (chat) => chat.type === 'DIRECT' && (chat.peer_id === viewerId || chat.peer_id === null),
+    );
+    if (existing) return existing.id;
     try {
       await this.api.createChat(
         workspaceId,
@@ -8115,7 +8112,7 @@ export class ChatStore {
         crypto.randomUUID(),
       );
       const list = await this.api.listChats(workspaceId);
-      if (this.currentWorkspaceId() !== workspaceId) return;
+      if (this.currentWorkspaceId() !== workspaceId) return null;
       const chats = this.labelSelfChats(list.items, viewerId);
       const slices = { ...this.state.slices };
       for (const chat of chats) slices[chat.id] ??= createEmptySlice(chat.id, chat.unread_count);
@@ -8124,9 +8121,46 @@ export class ChatStore {
         slices,
         workspaceUnread: this.withActiveWorkspaceUnread(chats),
       });
+      return chats.find((chat) => chat.type === 'DIRECT' && chat.name === 'Избранное')?.id ?? null;
     } catch {
       // A chat limit or an older server must not block the workspace.
+      return null;
     }
+  }
+
+  /** #200: copy a message into the personal "Избранное" chat. */
+  async saveToFavorites(message: ApiMessage): Promise<boolean> {
+    if (this.state.e2ee.enabled && this.isE2eeChat(message.chat_id)) return false;
+    let favoritesId: string | null =
+      this.state.chats.find(
+        (chat) =>
+          chat.type === 'DIRECT' &&
+          (chat.peer_id === this.viewerId() || chat.peer_id === null) &&
+          chat.name === 'Избранное',
+      )?.id ?? null;
+    if (!favoritesId) {
+      favoritesId = await this.ensureSelfChat();
+    }
+    if (!favoritesId) return false;
+    if (!this.state.slices[favoritesId] || this.state.slices[favoritesId]?.status !== 'ready') {
+      await this.loadChat(favoritesId);
+    }
+    const sourceChat = this.state.chats.find((chat) => chat.id === message.chat_id) ?? null;
+    const author = message.sender_display_name?.trim() || 'Неизвестный автор';
+    const meta = {
+      chatId: message.chat_id,
+      messageId: message.id,
+      senderId: message.sender_id ?? null,
+      author,
+      createdAt: message.created_at,
+      chatType: sourceChat?.type ?? null,
+      chatName: sourceChat?.name ?? null,
+    };
+    const marker = `sova-forward:${encodeURIComponent(JSON.stringify(meta))}`;
+    const body = message.text?.trim() || message.sticker?.alt || '[вложение]';
+    const text = `↪ Переслано от ${author}\n${marker}\n\n${body}`;
+    await this.send(favoritesId, text);
+    return true;
   }
 
   startCall(chatId: string, video: boolean): void {
