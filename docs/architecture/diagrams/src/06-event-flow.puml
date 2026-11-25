@@ -13,7 +13,7 @@ title Событийный поток: transactional outbox → Kafka → consum
 
 package "conversation (владелец данных)" {
   component "Домен\nmessage + chat" as domain #2B6CB0
-  component "ops.outbox\n(в БД сервиса)" as outbox #2B6CB0
+  component "outbox\n(в БД сервиса)" as outbox #2B6CB0
 }
 
 component "Outbox relay\n(SKIP LOCKED)" as relay #4A5568

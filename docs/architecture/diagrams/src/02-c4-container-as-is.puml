@@ -9,7 +9,7 @@ System_Boundary(krug, "Сова — текущий стенд") {
   Container(spa, "SPA", "React 19, TypeScript, Vite", "UI, E2EE-клиент, локальный индекс")
   Container(proxy, "nginx / Caddy", "Reverse proxy", "TLS, статика, same-origin")
   Container(backend, "krug-backend", "Spring Boot 3.4 / Java 21, один процесс", "15 модулей, ~78k LOC: auth, workspace, chat, message, file, sticker, notification, plugin, bot, room, realtime, ops, audit")
-  ContainerDb(pg, "PostgreSQL 16", "14 схем", "63 миграции, RLS, 93 межсхемных FK, 60 SECURITY DEFINER функций")
+  ContainerDb(pg, "PostgreSQL 16", "13 схем", "62 миграции, RLS, 93 FK-ссылки, 60 SECURITY DEFINER функций")
   Container(keycloak, "Keycloak 26", "OIDC", "Realm krug, LDAP/AD федерация")
   ContainerDb(kcpg, "PostgreSQL", "БД Keycloak", "Отдельный кластер/база")
   ContainerDb(minio, "MinIO / S3", "Object storage", "Файлы, стикеры, пакеты плагинов")

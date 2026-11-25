@@ -1,0 +1,398 @@
+# Каталог сервисов «Совы» — машинночитаемое представление.
+# Источник истины для платформы: генерация маршрутов edge, чартов, дашбордов,
+# проверок ownership и списка топиков.
+#
+# Статус: draft. Значения SLO — целевые, не измеренные.
+version: 1
+updated_at: "2026-11-25"
+
+assumptions:
+  team_size: "8-15 инженеров, 3-4 потока"
+  scale: "100k DAU, 20k одновременных WS, пик 2k msg/s"
+  platform: "Kubernetes, 3 AZ; PostgreSQL HA; Kafka RF=3; Redis cluster"
+  e2ee: "пилот, флаг false; архитектура не должна ломать E2EE"
+  transitional: "один кластер PostgreSQL, отдельная database и роль на сервис"
+
+services:
+  - name: edge
+    title: Edge Gateway + BFF
+    tier: edge
+    wave: 0
+    owner: platform
+    responsibility: "TLS/WAF, JWT, rate limit, маршрутизация, композиция экранов, /ws upgrade, cookie/CSRF для /auth/*"
+    bounded_context: null
+    data:
+      postgres: []
+      redis: ["rate-limit", "jwks-cache", "route-cache"]
+      object_storage: []
+    api:
+      public_prefixes: ["/api/v1/**", "/ws"]
+      internal: []
+    publishes: []
+    consumes: []
+    sync_dependencies: ["identity", "workspace", "conversation", "media", "realtime", "notification", "extensions", "audit", "search", "admin"]
+    slo:
+      availability: "99.95%"
+      p95_ms: 100
+    scaling:
+      replicas: "2+"
+      hpa: "CPU/RPS"
+    notes: "Никаких доменных инвариантов; только orchestration и DTO."
+
+  - name: identity
+    title: Identity & Access
+    tier: core
+    wave: 4
+    owner: identity-tenancy
+    responsibility: "Пользователи, сессии, 2FA, устройства, prekeys, верификация ключей, блокировки, профиль"
+    bounded_context: auth
+    data:
+      postgres: ["auth"]
+      redis: ["rate-limit"]
+      object_storage: []
+    api:
+      public_prefixes: ["/api/v1/auth/*", "/api/v1/me*", "/api/v1/devices*", "/api/v1/keys*", "/api/v1/users/*/block"]
+      internal: ["POST /internal/v1/users:batch", "GET /internal/v1/sessions/{id}", "POST /internal/v1/devices/keys:batch"]
+    publishes: ["user.registered", "user.updated", "user.deleted", "device.revoked", "device.keys.updated", "session.revoked"]
+    consumes: ["workspace.deleted"]
+    sync_dependencies: ["keycloak", "postgres", "redis", "smtp"]
+    slo:
+      availability: "99.95%"
+      login_p95_ms: 400
+      refresh_p95_ms: 150
+    scaling:
+      replicas: "2+"
+      hpa: "CPU/RPS"
+    notes: "Пароли и коды не хранятся и не логируются; refresh — HttpOnly cookie с ротацией."
+
+  - name: workspace
+    title: Workspace & Policy
+    tier: core
+    wave: 4
+    owner: identity-tenancy
+    responsibility: "Воркспейсы, членство, роли, инвайты, лимиты, security/DLP-политики, retention"
+    bounded_context: workspace
+    data:
+      postgres: ["workspace"]
+      redis: ["limits-cache", "membership-cache"]
+      object_storage: []
+    api:
+      public_prefixes: ["/api/v1/workspaces*", "/api/v1/workspace-invites/*"]
+      internal: ["POST /internal/v1/memberships:batch", "GET /internal/v1/workspaces/{id}/limits", "GET /internal/v1/workspaces/{id}/dlp-policy"]
+    publishes: ["workspace.created", "workspace.updated", "workspace.deleted", "member.changed", "invite.accepted", "limits.changed", "policy.changed", "security.changed"]
+    consumes: ["user.deleted", "user.updated"]
+    sync_dependencies: ["postgres", "redis"]
+    slo:
+      availability: "99.95%"
+      membership_p95_ms: 50
+    scaling:
+      replicas: "2+"
+      hpa: "CPU/RPS"
+    notes: "Источник истины по лимитам и политикам; остальные кэшируют snapshot."
+
+  - name: conversation
+    title: Chat & Message Core
+    tier: core
+    wave: 5
+    owner: conversation
+    responsibility: "Чаты, участники, права, seq, сообщения, конверты, реакции, треды, read state, комнаты"
+    bounded_context: "chat + message + room"
+    data:
+      postgres: ["chat", "message", "room"]
+      redis: []
+      object_storage: []
+    api:
+      public_prefixes: ["/api/v1/chats*", "/api/v1/workspaces/{id}/chats"]
+      internal: ["POST /internal/v1/chats:acl-batch", "GET /internal/v1/chats/{id}/replay", "POST /internal/v1/messages/envelopes:batch", "POST /internal/v1/messages:batch"]
+    publishes: ["chat.created", "chat.updated", "chat.member.changed", "chat.pin.changed", "message.created", "message.edited", "message.deleted", "message.reaction.changed", "message.read"]
+    consumes: ["workspace.member.changed", "workspace.limits.changed", "workspace.policy.changed", "media.scan.completed", "media.upload.completed", "identity.device.revoked", "receipt.read", "receipt.delivered"]
+    sync_dependencies: ["workspace", "media", "identity"]
+    slo:
+      availability: "99.95%"
+      send_p95_ms: 150
+      send_p99_ms: 400
+      history_p95_ms: 120
+    scaling:
+      replicas: "3+"
+      hpa: "CPU/RPS"
+    notes: "chat + message — одна БД и одна транзакция. Не дробить без ADR-001."
+
+  - name: media
+    title: Media & Stickers
+    tier: core
+    wave: 2
+    owner: media-extensions
+    responsibility: "Загрузки, вложения, квоты, S3, AV, превью, стикеры, GC"
+    bounded_context: "file + sticker"
+    data:
+      postgres: ["file", "sticker"]
+      redis: []
+      object_storage: ["files", "stickers"]
+    api:
+      public_prefixes: ["/api/v1/uploads*", "/api/v1/media/*", "/api/v1/attachments/*", "/api/v1/files*", "/api/v1/sticker-packs", "/api/v1/stickers/*", "/api/v1/workspaces/{id}/files"]
+      internal: ["POST /internal/v1/attachments:batch", "GET /internal/v1/attachments/{id}/download-url"]
+    publishes: ["upload.completed", "media.scan.completed", "quota.threshold.reached", "sticker.pack.changed", "attachment.deleted"]
+    consumes: ["workspace.limits.changed", "message.deleted", "user.deleted"]
+    sync_dependencies: ["workspace", "s3", "clamav", "kms"]
+    slo:
+      availability: "99.9%"
+      init_p95_ms: 150
+      part_p95_ms: 300
+      scan_lag_p95_s: 60
+    scaling:
+      replicas: "2+"
+      hpa: "CPU/IO"
+    notes: "Fail-closed: сообщение с вложением не принимается до CLEAN. Квота reserve/commit/release."
+
+  - name: realtime
+    title: Realtime Gateway
+    tier: core
+    wave: 1
+    owner: conversation
+    responsibility: "WS-тикеты, сессии, подписки, replay, fan-out, presence, typing, call signaling"
+    bounded_context: realtime
+    data:
+      postgres: ["realtime"]
+      redis: ["presence", "typing", "ws-routing", "ticket-cache"]
+      object_storage: []
+    api:
+      public_prefixes: ["/api/v1/realtime/ticket", "/ws"]
+      internal: []
+    publishes: ["receipt.delivered", "receipt.read", "call.ended"]
+    consumes: ["message.created", "message.edited", "message.deleted", "message.reaction.changed", "chat.member.changed", "identity.device.revoked", "media.scan.completed"]
+    sync_dependencies: ["conversation", "identity"]
+    slo:
+      availability: "99.9%"
+      connect_p95_ms: 300
+      fanout_p95_ms: 200
+      connections_per_node: 10000
+    scaling:
+      replicas: "N"
+      hpa: "connections/CPU"
+    notes: "Не пишет домен. E2EE-конверты — batch-запрос в conversation на устройство."
+
+  - name: notification
+    title: Notifications
+    tier: platform
+    wave: 2
+    owner: trust-insights
+    responsibility: "In-app лента, настройки, quiet hours, dedupe, email/push, retry"
+    bounded_context: notification
+    data:
+      postgres: ["notification"]
+      redis: ["dedupe-cache"]
+      object_storage: []
+    api:
+      public_prefixes: ["/api/v1/notifications*", "/api/v1/notification-preferences"]
+      internal: []
+    publishes: ["notification.sent", "notification.failed"]
+    consumes: ["message.created", "chat.member.changed", "workspace.invite.accepted", "media.quota.threshold.reached", "identity.device.revoked"]
+    sync_dependencies: ["identity", "smtp", "web-push"]
+    slo:
+      availability: "99.5%"
+      inapp_p95_s: 2
+    scaling:
+      replicas: "2+"
+      hpa: "CPU/lag"
+    notes: "Без контента в push/email. Dedupe по dedupe_key."
+
+  - name: extensions
+    title: Plugins & Bots
+    tier: platform
+    wave: 3
+    owner: media-extensions
+    responsibility: "Плагины, пакеты, установка, capability-токены, боты, polls/tasks, перевод"
+    bounded_context: "plugin + bot"
+    data:
+      postgres: ["plugin", "bot"]
+      redis: ["capability-cache"]
+      object_storage: ["plugin-packages"]
+    api:
+      public_prefixes: ["/api/v1/plugins*", "/api/v1/bots*", "/api/v1/bot-responses/*", "/api/v1/chats/{id}/plugins", "/api/v1/chats/{id}/polls*", "/api/v1/chats/{id}/tasks*", "/api/v1/chats/{id}/commands", "/api/v1/admin/plugins*"]
+      internal: ["POST /internal/v1/capabilities/check"]
+    publishes: ["plugin.installed", "plugin.enabled", "plugin.disabled", "plugin.killed", "plugin.consent.changed", "bot.event.delivered", "bot.event.failed", "poll.closed", "task.updated"]
+    consumes: ["message.created", "chat.member.changed", "identity.device.revoked", "workspace.deleted"]
+    sync_dependencies: ["conversation", "media", "s3", "plugin-registry", "plugin-runtime"]
+    slo:
+      availability: "99.5%"
+      install_p95_s: 2
+      bot_delivery_p95_s: 5
+    scaling:
+      replicas: "2+"
+      hpa: "CPU/lag"
+    notes: "Sandbox без БД и сети; capability-токен с TTL; kill switch < 5 c."
+
+  - name: audit
+    title: Audit & Compliance
+    tier: platform
+    wave: 1
+    owner: trust-insights
+    responsibility: "Append-only аудит, hash chain, anchors, экспорт, SIEM, DLP-события"
+    bounded_context: audit
+    data:
+      postgres: ["audit"]
+      redis: []
+      object_storage: ["audit-anchors", "audit-exports"]
+    api:
+      public_prefixes: ["/api/v1/workspaces/{id}/audit*", "/api/v1/admin/audit*", "/api/v1/workspaces/{id}/dlp/events"]
+      internal: ["GET /internal/v1/audit/export"]
+    publishes: ["audit.appended", "audit.anchor.created"]
+    consumes: ["*"]
+    sync_dependencies: ["postgres", "s3", "kms", "siem"]
+    slo:
+      availability: "99.9%"
+      append_lag_p95_s: 5
+      query_p95_ms: 300
+    scaling:
+      replicas: "2"
+      hpa: "CPU/lag"
+    notes: "Ноль потерь: outbox + DLQ. Не вызывает другие сервисы."
+
+  - name: search
+    title: Search (managed)
+    tier: platform
+    wave: 5
+    owner: trust-insights
+    responsibility: "Индексация managed-контента, ACL-фильтр, DLP-редакция, reindex, query"
+    bounded_context: search
+    data:
+      postgres: []
+      redis: []
+      object_storage: []
+      opensearch: ["messages-managed"]
+    api:
+      public_prefixes: ["/api/v1/workspaces/{id}/search/messages"]
+      internal: []
+    publishes: ["search.index.completed"]
+    consumes: ["message.created", "message.edited", "message.deleted", "chat.member.changed", "workspace.member.changed"]
+    sync_dependencies: ["opensearch", "conversation"]
+    slo:
+      availability: "99.5%"
+      index_lag_p95_s: 10
+      query_p95_ms: 200
+    scaling:
+      replicas: "2"
+      hpa: "CPU/lag"
+    notes: "E2EE не индексируется. PostgreSQL не SoT."
+
+  - name: admin
+    title: Platform Admin
+    tier: platform
+    wave: 3
+    owner: trust-insights
+    responsibility: "Platform Admin BFF, CQRS read model, команды, setup, system settings"
+    bounded_context: "ops (dissolved)"
+    data:
+      postgres: ["admin_read", "ops"]
+      redis: ["admin-cache"]
+      object_storage: []
+    api:
+      public_prefixes: ["/api/v1/admin/*", "/api/v1/setup/*", "/api/v1/health"]
+      internal: []
+    publishes: []
+    consumes: ["*"]
+    sync_dependencies: ["identity", "workspace", "conversation", "media", "audit"]
+    slo:
+      availability: "99.5%"
+      list_p95_ms: 300
+    scaling:
+      replicas: "2"
+      hpa: "CPU"
+    notes: "Списки — из read model; команды — через API владельца. Без кросс-БД JOIN."
+
+topics:
+  - name: krug.identity.v1
+    owner: identity
+    partitions: 12
+    key: user_id
+    retention: "14d"
+    producers: ["identity"]
+    consumers: ["workspace", "conversation", "realtime", "notification", "audit", "admin"]
+  - name: krug.workspace.v1
+    owner: workspace
+    partitions: 12
+    key: workspace_id
+    retention: "14d"
+    producers: ["workspace"]
+    consumers: ["conversation", "media", "notification", "audit", "admin", "search"]
+  - name: krug.chat.v1
+    owner: conversation
+    partitions: 24
+    key: chat_id
+    retention: "14d"
+    producers: ["conversation"]
+    consumers: ["realtime", "notification", "search", "audit", "admin"]
+  - name: krug.chat.acl.v1
+    owner: conversation
+    partitions: 24
+    key: chat_id
+    retention: compact
+    producers: ["conversation"]
+    consumers: ["realtime", "media"]
+  - name: krug.message.v1
+    owner: conversation
+    partitions: 48
+    key: chat_id
+    retention: "7d"
+    producers: ["conversation"]
+    consumers: ["realtime", "notification", "extensions", "search", "audit", "admin"]
+  - name: krug.media.v1
+    owner: media
+    partitions: 12
+    key: workspace_id
+    retention: "14d"
+    producers: ["media"]
+    consumers: ["conversation", "realtime", "notification", "audit", "admin"]
+  - name: krug.plugin.v1
+    owner: extensions
+    partitions: 12
+    key: workspace_id
+    retention: "14d"
+    producers: ["extensions"]
+    consumers: ["realtime", "notification", "audit", "admin"]
+  - name: krug.notify.v1
+    owner: notification
+    partitions: 12
+    key: user_id
+    retention: "7d"
+    producers: ["notification"]
+    consumers: ["audit", "admin"]
+  - name: krug.realtime.v1
+    owner: realtime
+    partitions: 24
+    key: chat_id
+    retention: "3d"
+    producers: ["realtime"]
+    consumers: ["conversation", "notification", "audit", "admin"]
+
+teams:
+  - id: platform
+    services: ["edge", "kafka", "redis", "observability", "ci-cd"]
+  - id: identity-tenancy
+    services: ["identity", "workspace"]
+  - id: conversation
+    services: ["conversation", "realtime"]
+  - id: media-extensions
+    services: ["media", "extensions"]
+  - id: trust-insights
+    services: ["audit", "search", "notification", "admin"]
+
+waves:
+  - id: 0
+    title: "Платформенные enablers"
+    exit: "outbox lag p95 < 2s; сервис поднимается отдельно; OTel-трейс сквозной"
+  - id: 1
+    title: "realtime + audit"
+    exit: "10k WS/узел; reconnect без потерь; audit lag p95 < 5s"
+  - id: 2
+    title: "media + notification"
+    exit: "квота сходится; скан fail-closed; push dedupe"
+  - id: 3
+    title: "extensions + admin"
+    exit: "sandbox без БД/сети; admin без кросс-БД JOIN"
+  - id: 4
+    title: "identity + workspace"
+    exit: "revoke < 5s; policy-кэш инвалидируется"
+  - id: 5
+    title: "conversation hardening + search"
+    exit: "send p95 < 150ms; ADR по chat/message"

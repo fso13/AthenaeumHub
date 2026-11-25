@@ -1,0 +1,75 @@
+@startuml
+top to bottom direction
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam ArrowColor #4A5568
+skinparam ArrowFontSize 10
+skinparam node {
+  BorderColor #718096
+  BackgroundColor #F7FAFC
+  RoundCorner 8
+}
+skinparam cloud {
+  BorderColor #A0AEC0
+  BackgroundColor #FFFFFF
+}
+
+title Deployment — compute-топология (Kubernetes, 3 AZ)
+
+actor "Пользователь" as user
+
+node "Kubernetes cluster · 3 AZ" as k8s {
+  node "Ingress / WAF\nTLS · rate limit" as ingress
+  node "edge\n2+ реплики" as edge
+
+  node "Core services" as core {
+    artifact "identity ×2" as id
+    artifact "workspace ×2" as ws
+    artifact "conversation ×3+" as conv
+    artifact "media ×2+" as media
+    artifact "realtime ×N\nHPA по connections" as rt
+  }
+
+  node "Platform services" as platform {
+    artifact "notification ×2" as notif
+    artifact "extensions ×2" as ext
+    artifact "audit ×2" as audit
+    artifact "search ×2" as search
+    artifact "admin ×2" as admin
+  }
+
+  node "Kafka\n3 brokers · RF=3" as kafka
+  node "Redis\ncluster / sentinel" as redis
+  node "Observability\nOTel · Prometheus · Grafana · Loki" as obs
+}
+
+cloud "PostgreSQL HA (Patroni / CNPG) — database per service\nS3 / MinIO — files, packages, audit anchors\nKeycloak — OIDC / MFA\nOpenSearch — managed index\nVault / KMS — keys, secrets\nClamAV — AV\nSMTP · Web Push · SIEM" as external
+
+user --> ingress : HTTPS / WSS
+ingress --> edge
+edge --> core : REST / WS
+edge --> platform : REST
+
+core --> kafka : publish / consume
+kafka --> platform : события
+core --> redis : presence / cache
+core --> external : JDBC · S3 · OIDC · scan
+platform --> external : JDBC · S3 · SMTP · SIEM
+
+note right of k8s
+  **Политики**
+  • NetworkPolicy: внешний трафик — только edge
+  • mTLS между сервисами (cert-manager; mesh — позже)
+  • HPA: conversation по CPU/RPS, realtime по connections
+  • PDB и anti-affinity по AZ
+  • секреты — External Secrets / Vault
+  • Kafka и Redis — StatefulSet или managed
+end note
+
+note bottom of external
+  Конкретные пары «сервис → хранилище» — в 07-data-ownership.
+  На старте допустим один кластер PostgreSQL
+  с отдельной database и ролью на сервис.
+end note
+
+@enduml

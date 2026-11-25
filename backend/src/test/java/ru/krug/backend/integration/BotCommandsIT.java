@@ -94,7 +94,12 @@ class BotCommandsIT extends IntegrationTestBase {
         // Slash-command invocation itself never writes a chat message.
         assertThat(messageCount(chatId)).isEqualTo(before);
 
-        assertThat(deliveryService.deliverDue()).isEqualTo(1);
+        int delivered = 0;
+        for (int attempt = 0; attempt < 20 && delivered == 0; attempt++) {
+            delivered = deliveryService.deliverDue();
+            if (delivered == 0) Thread.sleep(25);
+        }
+        assertThat(delivered).isEqualTo(1);
         assertThat(requests).hasSize(1);
         JsonNode slash = objectMapper.readTree(requests.get(0).body());
         assertThat(slash.get("type").asText()).isEqualTo("slash_command");

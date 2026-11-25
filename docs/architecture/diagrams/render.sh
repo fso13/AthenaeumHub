@@ -24,6 +24,12 @@ command -v plantuml >/dev/null 2>&1 || {
 }
 
 mkdir -p "$SVG" "$PNG"
+
+# Матрица связности строится из кода и не является .puml.
+if (($# == 0)) && command -v python3 >/dev/null 2>&1; then
+  python3 "$DIR/gen-coupling-matrix.py"
+fi
+
 cd "$SRC"
 
 FILES=""
