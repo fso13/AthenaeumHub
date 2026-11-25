@@ -83,6 +83,20 @@ public class ProfileAvatarService {
                 clock.now()));
     }
 
+    /** #109: public-to-authenticated avatar of another user (stable bytes, no file id). */
+    @Transactional(readOnly = true)
+    public ProfileAvatarView downloadUser(Principal principal, UUID targetUserId) {
+        tenantContext.activate(principal.withWorkspace(null));
+        User user = users.findById(targetUserId)
+                .orElseThrow(() -> DomainException.notFound("User not found"));
+        if (user.avatarFileId() == null) {
+            throw DomainException.notFound("Avatar not found");
+        }
+        return avatars.download(user.avatarFileId())
+                .map(value -> new ProfileAvatarView(value.url(), value.expiresAt()))
+                .orElseThrow(() -> DomainException.notFound("Avatar not found"));
+    }
+
     @Transactional(readOnly = true)
     public ProfileAvatarView download(Principal principal) {
         tenantContext.activate(principal.withWorkspace(null));

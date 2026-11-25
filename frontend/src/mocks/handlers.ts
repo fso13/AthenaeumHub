@@ -6618,6 +6618,9 @@ export function createHandlers(db: MockDb) {
      * and the browser only sees image bytes, so the mock serves the bytes with
      * a `200` (the client contract is a Blob either way).
      */
+    http.get(`${API}/users/:userId/avatar`, () =>
+      HttpResponse.json({ code: 'NOT_FOUND', message: 'Avatar not found' }, { status: 404 }),
+    ),
     http.get(`${API}/chats/:chatId/avatar`, ({ request, params }) => {
       const unauthorized = requireAuth(request);
       if (unauthorized) return unauthorized;

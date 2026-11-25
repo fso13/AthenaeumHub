@@ -629,6 +629,8 @@ export interface ChatApi {
   deleteChatCover(chatId: string): Promise<void>;
   /** #80/avatar: channel icon bytes (the contract `302` is followed by `fetch`). */
   getChatAvatarBlob(chatId: string): Promise<Blob>;
+  /** #109: avatar bytes of another user; 404 when unset. */
+  getUserAvatarBlob(userId: string): Promise<Blob>;
   /** Avatar: existing image attachment of the same chat; the `Chat` is authoritative. */
   setChatAvatar(chatId: string, body: ChatAvatarRequest): Promise<Chat>;
   /** Avatar: idempotent `204`; the attachment itself is not deleted. */
@@ -1780,6 +1782,13 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
         // `302` to a 5-minute presigned object URL; `fetch` follows it and the
         // browser only ever sees bytes. The attachment id/key is never exposed.
         const response = await client.getBlob(`/chats/${encodeURIComponent(chatId)}/avatar`);
+        return response.blob;
+      });
+    },
+
+    getUserAvatarBlob(userId) {
+      return withReauth(async () => {
+        const response = await client.getBlob(`/users/${encodeURIComponent(userId)}/avatar`);
         return response.blob;
       });
     },

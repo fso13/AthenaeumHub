@@ -2,7 +2,13 @@ import { t } from '../i18n/ru';
 import { formatDateTime } from './admin/format';
 import { Avatar } from './Avatar';
 import { PhoneIcon, PlusIcon } from './Icons';
-import { useChatState, useProfileWorkspaceState } from '../store/ChatProvider';
+import {
+  useAvatarsState,
+  useAvatarsStore,
+  useChatState,
+  useProfileWorkspaceState,
+} from '../store/ChatProvider';
+import { useEffect } from 'react';
 
 const ROLE_LABELS: Record<string, string> = {
   OWNER: 'Владелец',
@@ -26,6 +32,11 @@ export function UserProfilePanel({
 }) {
   const state = useChatState();
   const profile = useProfileWorkspaceState();
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
+  useEffect(() => {
+    void avatarsStore.ensureUser(userId);
+  }, [avatarsStore, userId]);
   const member = state.workspaceMembers.items.find((item) => item.user_id === userId) ?? null;
   const isMe = (state.user?.id ?? state.session?.user.id ?? null) === userId;
   const displayName = member?.display_name ?? name;
@@ -47,7 +58,7 @@ export function UserProfilePanel({
           name={displayName}
           seed={userId}
           size="profile"
-          src={isMe ? profile.avatar.previewUrl : null}
+          src={isMe ? profile.avatar.previewUrl : (avatars.users[userId]?.url ?? null)}
         />
         <strong>{displayName}</strong>
         <span>{member ? (ROLE_LABELS[member.role] ?? member.role) : t('userPanel.member')}</span>

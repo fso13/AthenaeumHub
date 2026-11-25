@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { ApiMessage } from '../api/types';
 import { describeError } from '../domain/errors';
 import { formatDateTime, formatTime, replyPreview } from '../domain/messages';
@@ -10,7 +10,7 @@ import {
   pluginTitleId,
 } from '../plugins/messageCards';
 import type { E2eeMessageView, OutgoingMessage } from '../store/chatStore';
-import { useProfileWorkspaceState } from '../store/ChatProvider';
+import { useAvatarsState, useAvatarsStore, useProfileWorkspaceState } from '../store/ChatProvider';
 import { isStickerMessage, stickerAssetUrl, stickerOf } from '../stickers/model';
 import { AttachmentList } from './AttachmentCard';
 import { Avatar } from './Avatar';
@@ -281,6 +281,12 @@ export function MessageRow({
     return names;
   }, [memberNames, mentionNames, replyTo]);
   const profile = useProfileWorkspaceState();
+  const avatars = useAvatarsState();
+  const avatarsStore = useAvatarsStore();
+  const senderId = message.sender_id;
+  useEffect(() => {
+    if (senderId && !isBot) void avatarsStore.ensureUser(senderId);
+  }, [avatarsStore, isBot, senderId]);
   if (message.type === 'SYSTEM') {
     return (
       <div className="system-message" role="note">
@@ -289,7 +295,11 @@ export function MessageRow({
     );
   }
 
-  const avatarSrc = mine ? profile.avatar.previewUrl : null;
+  const avatarSrc = mine
+    ? profile.avatar.previewUrl
+    : senderId
+      ? (avatars.users[senderId]?.url ?? null)
+      : null;
   const openUserProfile = () => {
     if (!message.sender_id || isBot) return;
     window.dispatchEvent(

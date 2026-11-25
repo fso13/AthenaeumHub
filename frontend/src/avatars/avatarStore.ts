@@ -28,13 +28,17 @@ export interface AvatarEntry {
 export interface AvatarsState {
   chats: Record<string, AvatarEntry>;
   workspaces: Record<string, AvatarEntry>;
+  users: Record<string, AvatarEntry>;
 }
 
 export interface AvatarStoreDeps {
-  api: Pick<ChatApi, 'getChatAvatarBlob' | 'getWorkspaceAvatarBlob' | 'attachmentDownloadUrl'>;
+  api: Pick<
+    ChatApi,
+    'getChatAvatarBlob' | 'getUserAvatarBlob' | 'getWorkspaceAvatarBlob' | 'attachmentDownloadUrl'
+  >;
 }
 
-const EMPTY_STATE: AvatarsState = { chats: {}, workspaces: {} };
+const EMPTY_STATE: AvatarsState = { chats: {}, workspaces: {}, users: {} };
 
 function idleEntry(fileId: string | null = null): AvatarEntry {
   return { status: 'idle', url: null, error: null, ...(fileId === null ? {} : { fileId }) };
@@ -71,6 +75,57 @@ export class AvatarStore {
 
   getWorkspace(workspaceId: string): AvatarEntry | null {
     return this.state.workspaces[workspaceId] ?? null;
+  }
+
+  getUser(userId: string): AvatarEntry | null {
+    return this.state.users[userId] ?? null;
+  }
+
+  ensureUser(userId: string, force = false): Promise<void> {
+    const key = `user:${userId}`;
+    const current = this.state.users[userId];
+    if (!force && current && (current.status === 'ready' || current.status === 'empty')) {
+      return Promise.resolve();
+    }
+    if (!force) {
+      const pending = this.inFlight.get(key);
+      if (pending) return pending;
+    }
+    const generation = this.generation;
+    const token = {};
+    this.tokens.set(key, token);
+    this.replaceEntry('users', userId, { status: 'loading', url: null, error: null });
+    const promise = (async () => {
+      try {
+        const blob = await this.api.getUserAvatarBlob(userId);
+        if (this.isStale(generation) || this.tokens.get(key) !== token) return;
+        const url = this.createObjectUrl(key, blob);
+        this.replaceEntry('users', userId, {
+          status: url ? 'ready' : 'empty',
+          url,
+          error: null,
+        });
+      } catch (error) {
+        if (this.isStale(generation) || this.tokens.get(key) !== token) return;
+        const apiError = toApiError(error);
+        this.replaceEntry(
+          'users',
+          userId,
+          apiError.status === 404
+            ? { status: 'empty', url: null, error: null }
+            : { status: 'error', url: null, error: apiError },
+        );
+      } finally {
+        if (this.tokens.get(key) === token) this.inFlight.delete(key);
+      }
+    })();
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+
+  private replaceEntry(collection: 'users', id: string, entry: AvatarEntry): void {
+    this.state = { ...this.state, [collection]: { ...this.state[collection], [id]: entry } };
+    this.emit();
   }
 
   /**
