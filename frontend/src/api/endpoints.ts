@@ -664,6 +664,8 @@ export interface ChatApi {
    */
   addReaction(chatId: string, messageId: string, emoji: string): Promise<ReactionSummary>;
   removeReaction(chatId: string, messageId: string, emoji: string): Promise<void>;
+  /** #201: users who reacted with one emoji, oldest first. */
+  getReactionUsers(chatId: string, messageId: string, emoji: string): Promise<string[]>;
   editMessage(chatId: string, messageId: string, body: MessageEdit): Promise<ApiMessage>;
   deleteMessage(chatId: string, messageId: string, scope: MessageDeleteScope): Promise<void>;
   markRead(chatId: string, lastSeq: number, idempotencyKey: string): Promise<void>;
@@ -1912,6 +1914,15 @@ export function createApi(client: ApiClient, config: ApiAuthConfig): ChatApi {
             messageId,
           )}/reactions/${encodeURIComponent(emoji)}`,
         );
+      });
+    },
+
+    getReactionUsers(chatId, messageId, emoji) {
+      return withReauth(async () => {
+        const response = await client.get<{ user_ids: string[] }>(
+          `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(emoji)}/users`,
+        );
+        return response.data.user_ids ?? [];
       });
     },
 

@@ -207,6 +207,9 @@ export function ReactionBar({ message, e2eeChat }: ReactionBarProps) {
   const slice = state.slices[message.chat_id];
   const reactions = message.reactions ?? [];
   const pending = new Set(slice?.pendingReactions ?? []);
+  const [reactionHover, setReactionHover] = useState<{ emoji: string; users: string[] } | null>(
+    null,
+  );
   const actionError = slice?.actionError ?? null;
   const error =
     actionError?.kind === 'reaction' && actionError.messageId === message.id
@@ -226,21 +229,47 @@ export function ReactionBar({ message, e2eeChat }: ReactionBarProps) {
         })}${mine ? `, ${t('message.reactionsMine')}` : ''}`;
         const busy = pending.has(`${message.id}:${reaction.emoji}`);
         return (
-          <button
-            type="button"
-            key={reaction.emoji}
-            className={`reaction-chip${mine ? ' is-mine' : ''}`}
-            aria-pressed={mine}
-            aria-label={label}
-            title={label}
-            disabled={busy}
-            onClick={() => void store.toggleReaction(message.chat_id, message.id, reaction.emoji)}
-          >
-            <span className="reaction-chip__emoji" aria-hidden="true">
-              {reaction.emoji}
-            </span>
-            <span className="reaction-chip__count">{reaction.count}</span>
-          </button>
+          <span className="reaction-chip-wrap" key={reaction.emoji}>
+            <button
+              type="button"
+              className={`reaction-chip${mine ? ' is-mine' : ''}`}
+              aria-pressed={mine}
+              aria-label={label}
+              disabled={busy}
+              onMouseEnter={() => {
+                void store
+                  .getReactionUsers(message.chat_id, message.id, reaction.emoji)
+                  .then((users) => setReactionHover({ emoji: reaction.emoji, users }));
+              }}
+              onMouseLeave={() => setReactionHover(null)}
+              onFocus={() => {
+                void store
+                  .getReactionUsers(message.chat_id, message.id, reaction.emoji)
+                  .then((users) => setReactionHover({ emoji: reaction.emoji, users }));
+              }}
+              onBlur={() => setReactionHover(null)}
+              onClick={() => void store.toggleReaction(message.chat_id, message.id, reaction.emoji)}
+            >
+              <span className="reaction-chip__emoji" aria-hidden="true">
+                {reaction.emoji}
+              </span>
+              <span className="reaction-chip__count">{reaction.count}</span>
+            </button>
+            {reactionHover?.emoji === reaction.emoji ? (
+              <span className="reaction-tooltip" role="tooltip">
+                {reactionHover.users.length === 0
+                  ? t('message.reactionsNobody')
+                  : reactionHover.users
+                      .map((id) => {
+                        const member = state.workspaceMembers.items.find(
+                          (item) => item.user_id === id,
+                        );
+                        return member?.display_name ?? t('message.reactionsUnknownUser');
+                      })
+                      .join(', ')}
+              </span>
+            ) : null}
+          </span>
         );
       })}
       {error ? (
@@ -310,7 +339,6 @@ export function MessageActions({
   const [actionFailure, setActionFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [favoriteBusy, setFavoriteBusy] = useState(false);
-
   const pinsState = state.chatPins;
   const pinned =
     pinsState.chatId === message.chat_id &&

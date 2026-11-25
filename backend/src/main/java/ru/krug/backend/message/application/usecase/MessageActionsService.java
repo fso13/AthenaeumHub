@@ -1,6 +1,7 @@
 package ru.krug.backend.message.application.usecase;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -182,6 +183,22 @@ public class MessageActionsService {
         events.publishEvent(new MessageReactionNotification(scoped.workspaceId(), chatId,
                 messageId, message.seq(), scoped.userId(), emoji, "ADDED", count, false));
         return new ReactionSummaryView(emoji, count, true);
+    }
+
+    @Transactional(readOnly = true)
+    public List<UUID> reactionUsers(Principal principal, UUID chatId, UUID messageId,
+                                    String emoji) {
+        Principal scoped = scope(principal, chatId);
+        tenantContext.activate(scoped);
+        ChatAccess access = chatAccess.requireActiveChat(scoped.workspaceId(), chatId,
+                scoped.userId());
+        Message message = requireMessage(scoped, chatId, messageId);
+        requireManaged(access, message);
+        if (message.deletedAt() != null) {
+            throw notFound();
+        }
+        MessageReactionPolicy.validate(emoji);
+        return reactionRepository.users(scoped.workspaceId(), messageId, emoji);
     }
 
     @Transactional

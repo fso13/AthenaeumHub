@@ -25,6 +25,9 @@ public interface MessageReactionRepository {
     /** Unique users for one emoji on one message (0 when absent). */
     long count(UUID workspaceId, UUID messageId, String emoji);
 
+    /** #201: who reacted with one emoji, oldest first. */
+    List<UUID> users(UUID workspaceId, UUID messageId, String emoji);
+
     /**
      * One windowed aggregation for a whole page: keyed by message id, each list has at most
      * one entry per emoji with {@code me} computed for {@code viewerId}. No per-message query.

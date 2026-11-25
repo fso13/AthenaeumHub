@@ -9423,6 +9423,23 @@ export function createHandlers(db: MockDb) {
      * optimistic-lock edit (409), and delete scope=me|all.
      */
 
+    http.get(
+      `${API}/chats/:chatId/messages/:messageId/reactions/:emoji/users`,
+      ({ request, params }) => {
+        const unauthorized = requireAuth(request);
+        if (unauthorized) return unauthorized;
+        const chat = db.chats[String(params.chatId)];
+        if (!chat) return errorResponse(404, 'NOT_FOUND', 'Chat not found');
+        const message = visibleMessage(chat, String(params.messageId));
+        if (!message) return errorResponse(404, 'NOT_FOUND', 'Message not found');
+        const emoji = decodeURIComponent(String(params.emoji));
+        const reaction = (message.reactions ?? []).find((item) => item.emoji === emoji);
+        return HttpResponse.json({
+          user_ids: reaction?.me ? [db.session.user.id] : [],
+        });
+      },
+    ),
+
     http.post(`${API}/chats/:chatId/messages/:messageId/reactions`, async ({ request, params }) => {
       const unauthorized = requireAuth(request);
       if (unauthorized) return unauthorized;

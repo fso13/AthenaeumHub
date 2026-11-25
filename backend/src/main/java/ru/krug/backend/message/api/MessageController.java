@@ -21,6 +21,7 @@ import ru.krug.backend.message.api.dto.MessagePageResponse;
 import ru.krug.backend.message.api.dto.MessageResponse;
 import ru.krug.backend.message.api.dto.ReactionCreateRequest;
 import ru.krug.backend.message.api.dto.ReactionSummaryResponse;
+import ru.krug.backend.message.api.dto.ReactionUsersResponse;
 import ru.krug.backend.message.api.mapper.MessageApiMapper;
 import ru.krug.backend.message.application.command.DeleteMessageScope;
 import ru.krug.backend.message.application.command.ListMessagesQuery;
@@ -124,6 +125,15 @@ public class MessageController {
         ReactionSummaryView reaction = messageActionsService.react(principal, chatId,
                 messageId, request.emoji());
         return new ReactionSummaryResponse(reaction.emoji(), reaction.count(), reaction.me());
+    }
+
+    @GetMapping("/{messageId}/reactions/{emoji}/users")
+    public ReactionUsersResponse reactionUsers(@PathVariable UUID chatId,
+                                               @PathVariable UUID messageId,
+                                               @PathVariable String emoji,
+                                               Principal principal) {
+        return new ReactionUsersResponse(
+                messageActionsService.reactionUsers(principal, chatId, messageId, emoji));
     }
 
     @DeleteMapping("/{messageId}/reactions/{emoji}")

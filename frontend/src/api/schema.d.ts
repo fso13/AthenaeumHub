@@ -2103,6 +2103,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chats/{chatId}/messages/{messageId}/reactions/{emoji}/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who reacted with one emoji */
+        get: operations["getReactionUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chats/{chatId}/messages/{messageId}/reactions/{emoji}": {
         parameters: {
             query?: never;
@@ -4407,6 +4424,9 @@ export interface components {
         ReactionCreate: {
             /** @description Emoji-последовательность (ZWJ/VS16/skin-tone допустимы); plain text, без HTML/пробелов/control-символов. */
             emoji: string;
+        };
+        ReactionUsers: {
+            user_ids: string[];
         };
         ReactionSummary: {
             emoji: string;
@@ -9143,6 +9163,32 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    getReactionUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chatId: string;
+                messageId: string;
+                emoji: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description User ids, oldest reaction first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReactionUsers"];
+                };
+            };
             404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
         };

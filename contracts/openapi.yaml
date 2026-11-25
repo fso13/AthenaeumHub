@@ -4333,6 +4333,35 @@ paths:
         "422":
           $ref: "#/components/responses/Unprocessable"
 
+  /chats/{chatId}/messages/{messageId}/reactions/{emoji}/users:
+    get:
+      tags: [Messages]
+      summary: Who reacted with one emoji
+      operationId: getReactionUsers
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: messageId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: emoji
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 32 }
+      responses:
+        '200':
+          description: User ids, oldest reaction first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReactionUsers'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
   /chats/{chatId}/messages/{messageId}/reactions/{emoji}:
     parameters:
       - $ref: "#/components/parameters/ChatId"
@@ -8724,6 +8753,14 @@ components:
             Emoji-последовательность (ZWJ/VS16/skin-tone допустимы); plain text,
             без HTML/пробелов/control-символов.
 
+    ReactionUsers:
+      type: object
+      required: [user_ids]
+      properties:
+        user_ids:
+          type: array
+          maxItems: 1000
+          items: { type: string, format: uuid }
     ReactionSummary:
       type: object
       required: [emoji, count, me]

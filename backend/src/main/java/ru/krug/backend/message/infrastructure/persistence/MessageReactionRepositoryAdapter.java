@@ -78,6 +78,20 @@ public class MessageReactionRepositoryAdapter implements MessageReactionReposito
 
     @Override
     @SuppressWarnings("unchecked")
+    public List<UUID> users(UUID workspaceId, UUID messageId, String emoji) {
+        return entityManager.createNativeQuery("""
+                        SELECT user_id FROM message.message_reactions
+                         WHERE workspace_id = ?1 AND message_id = ?2 AND emoji = ?3
+                         ORDER BY created_at ASC, user_id ASC
+                        """)
+                .setParameter(1, workspaceId)
+                .setParameter(2, messageId)
+                .setParameter(3, emoji)
+                .getResultList();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
     public Map<UUID, List<MessageReaction>> summarize(UUID workspaceId,
                                                       Collection<UUID> messageIds,
                                                       UUID viewerId) {

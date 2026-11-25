@@ -5075,6 +5075,15 @@ export class ChatStore {
     return this.mutateReaction(chatId, messageId, emoji, 'remove');
   }
 
+  /** #201: reaction authors for the hover tooltip. */
+  async getReactionUsers(chatId: string, messageId: string, emoji: string): Promise<string[]> {
+    try {
+      return await this.api.getReactionUsers(chatId, messageId, emoji);
+    } catch {
+      return [];
+    }
+  }
+
   async toggleReaction(chatId: string, messageId: string, emoji: string): Promise<boolean> {
     const found = this.findMessageLocation(chatId, messageId);
     if (!found) return false;

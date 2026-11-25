@@ -10,3 +10,8 @@ test-results
 .pw-tmp
 .pw-home
 src/api/schema.d.ts
+final-shots.mjs
+fwd-shot.mjs
+pwtest.mjs
+shot*.mjs
+verify*.mjs

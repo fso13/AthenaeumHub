@@ -428,6 +428,8 @@ export const ru = {
   'message.translateRu': 'Перевести на русский',
   'message.translateEn': 'Перевести на английский',
   'message.react': 'Поставить реакцию',
+  'message.reactionsNobody': 'Пока никто',
+  'message.reactionsUnknownUser': 'Участник',
   'message.reactionsLabel': 'Реакции',
   'message.reactionsPicker': 'Выберите реакцию',
   'message.reactionsCount': '{emoji}: {count}',
