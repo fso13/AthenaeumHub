@@ -1,0 +1,45 @@
+@startuml
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam rectangle {
+  BorderColor #718096
+  RoundCorner 8
+  FontSize 11
+}
+
+title Владение данными: database per service
+
+rectangle "**identity**\n\nPostgreSQL: auth\nusers, devices,\nprekeys, sessions, 2FA" as id #EBF8FF
+rectangle "**workspace**\n\nPostgreSQL: workspace\nworkspaces, memberships,\ninvites, limits, policies" as ws #EBF8FF
+rectangle "**conversation**\n\nPostgreSQL: chat + message\nchats, members, counters,\nmessages, envelopes, rooms" as conv #EBF8FF
+rectangle "**media**\n\nPostgreSQL: file + sticker\nuploads, attachments,\nquotas, packs · S3" as media #EBF8FF
+rectangle "**realtime**\n\nPostgreSQL: realtime\nRedis: presence, typing,\nws-routing, tickets" as rt #EBF8FF
+
+rectangle "**notification**\n\nPostgreSQL: notification\nfeed, preferences,\ndedupe" as notif #F7FAFC
+rectangle "**extensions**\n\nPostgreSQL: plugin + bot\ncatalog, packages,\ninstallations · S3" as ext #F7FAFC
+rectangle "**audit**\n\nPostgreSQL: audit\nappend-only, hash chain,\nanchors · S3 WORM" as audit #F7FAFC
+rectangle "**search**\n\nOpenSearch\nmanaged index,\nACL filter" as search #F7FAFC
+rectangle "**admin**\n\nPostgreSQL: admin_read\nCQRS projections,\noverview, lists" as admin #F7FAFC
+
+id -[hidden]right- ws
+ws -[hidden]right- conv
+conv -[hidden]right- media
+media -[hidden]right- rt
+notif -[hidden]right- ext
+ext -[hidden]right- audit
+audit -[hidden]right- search
+search -[hidden]right- admin
+id -[hidden]down- notif
+
+legend bottom
+  **Правила**
+  • каждый сервис — отдельная БД и отдельная роль; в переходный период — отдельная database в том же кластере
+  • нет кросс-БД JOIN и внешних ключей между сервисами: 93 текущих межсхемных FK снимаются
+  • ссылки на чужие ID — логические; целостность через события, саги и reconciliation-джобы
+  • outbox и idempotency_keys — в БД каждого сервиса, не в общей ops
+  • RLS сохраняется внутри сервиса; worker-роли — отдельные
+  • read models: conversation ← лимиты workspace, realtime ← ACL чата, notification ← профиль identity
+  • инвалидация кэшей — событиями, TTL — fallback
+end legend
+
+@enduml

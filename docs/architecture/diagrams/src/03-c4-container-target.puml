@@ -1,0 +1,53 @@
+@startuml
+!include <C4/C4_Container>
+LAYOUT_TOP_DOWN()
+title C4 L2 — «Сова»: целевые сервисы
+
+Person(user, "Пользователь", "Web/PWA · бот · плагин в sandbox")
+
+Container(edge, "edge", "Spring Cloud Gateway + BFF", "TLS, JWT, rate limit, маршрутизация, композиция экранов, /ws upgrade")
+
+Container_Boundary(core, "Core domain — общий домен, высокая нагрузка") {
+  Container(identity, "identity", "Spring Boot", "Пользователи, устройства, сессии, 2FA, prekeys, блокировки. БД: auth")
+  Container(workspace, "workspace", "Spring Boot", "Воркспейсы, членство, роли, лимиты, security/DLP-политики. БД: workspace")
+  Container(conversation, "conversation", "Spring Boot", "Чаты, участники, сообщения, seq, треды, read state, комнаты. БД: chat + message")
+  Container(media, "media", "Spring Boot", "Загрузки, вложения, квоты, S3, AV, превью, стикеры. БД: file + sticker")
+  Container(realtime, "realtime", "Spring WebFlux / Netty", "WS-сессии, тикеты, подписки, replay, presence, calls. Redis + тикеты")
+}
+
+Container_Boundary(platform, "Platform services — асинхронные и административные") {
+  Container(notification, "notification", "Spring Boot", "In-app лента, настройки, email/push, dedupe. БД: notification")
+  Container(extensions, "extensions", "Spring Boot", "Плагины, пакеты, capability-токены, боты, polls/tasks. БД: plugin + bot")
+  Container(audit, "audit", "Spring Boot", "Append-only аудит, hash chain, экспорт, SIEM. БД: audit")
+  Container(search, "search", "Spring Boot", "Индексатор и поиск managed-режима. OpenSearch")
+  Container(admin, "admin", "Spring Boot", "Platform Admin BFF + CQRS read model. БД: admin_read")
+}
+
+Rel(user, edge, "HTTPS + WSS")
+Rel(edge, identity, "REST /auth /me /devices")
+Rel(edge, workspace, "REST /workspaces")
+Rel(edge, conversation, "REST /chats /messages")
+Rel(edge, media, "REST /uploads /files /stickers")
+Rel(edge, realtime, "WSS /ws")
+Rel(edge, notification, "REST /notifications")
+Rel(edge, extensions, "REST /plugins /bots")
+Rel(edge, audit, "REST /audit")
+Rel(edge, search, "REST /search")
+Rel(edge, admin, "REST /admin")
+
+note bottom of core
+  **Границы и данные**
+  • conversation — единственная транзакция на send: chat ACL + seq + message + outbox
+  • каждый сервис владеет своей БД; кросс-БД запросов нет
+  • синхронные вызовы — только чтение/валидация в рамках запроса
+end note
+
+note bottom of platform
+  **Асинхронность**
+  • notification / audit / search / admin — консьюмеры Kafka
+  • extensions вызывает conversation только для публикации plugin-сообщения
+  • plugin-runtime — отдельный sandbox без доступа к БД
+end note
+
+SHOW_LEGEND()
+@enduml

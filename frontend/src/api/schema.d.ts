@@ -1437,6 +1437,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/link-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Open Graph metadata for a public link
+         * @description Fetches one public HTML page server-side and returns only title/description/image.
+         *     The server rejects non-http(s), localhost/private-network hosts and does not follow
+         *     redirects. Used by the message link card; never returns page HTML.
+         */
+        get: operations["getLinkPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/files": {
         parameters: {
             query?: never;
@@ -4050,6 +4072,14 @@ export interface components {
         UploadCompleteRequest: {
             sha256: string;
             parts_count: number;
+        };
+        LinkPreview: {
+            /** Format: uri */
+            url: string;
+            title?: string | null;
+            description?: string | null;
+            /** Format: uri */
+            image?: string | null;
         };
         AttachmentRef: {
             /** Format: uuid */
@@ -7867,6 +7897,30 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    getLinkPreview: {
+        parameters: {
+            query: {
+                url: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metadata found. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkPreview"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            404: components["responses"]["NotFound"];
         };
     };
     listFiles: {

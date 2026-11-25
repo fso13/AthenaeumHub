@@ -1,0 +1,71 @@
+@startuml
+autonumber
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 210
+skinparam ArrowColor #4A5568
+
+title Sequence — подключение к realtime, подписка и replay
+
+participant "Клиент\nWeb/PWA" as client
+participant "edge" as edge
+participant "realtime" as rt
+participant "identity" as id
+participant "conversation" as conv
+participant "PostgreSQL\nrealtime" as db
+participant "Redis" as redis
+participant "Kafka" as kafka
+
+client -> edge : POST /api/v1/realtime/ticket\nBearer access token
+edge -> rt : route (JWT уже проверен)
+rt -> id : validate session + device\n(кэш / introspection)
+id --> rt : active / revoked
+rt -> db : INSERT ticket\nhash, user, device, expires_at = +30s
+rt --> edge : {ticket, ws_url, expires_at}
+edge --> client : 200
+
+client -> rt : WSS /ws?ticket=...
+rt -> db : consume ticket (single use)
+alt ticket истёк / использован
+  rt --> client : close 4401
+else ok
+  rt --> client : hello {session_id, protocol, heartbeat}
+end
+
+client -> rt : subscribe {chats[], last_seq}
+rt -> redis : register connection\n(session → node, presence TTL)
+rt -> conv : POST /internal/v1/chats:acl-batch\n{chat_ids, user_id}
+conv --> rt : {role, permissions, last_seq, epoch}
+rt -> conv : GET /internal/v1/chats/{id}/replay?from_seq
+conv --> rt : events batch / gap marker
+rt --> client : subscribed {chat_id, accepted, server_last_seq}
+rt --> client : replay events (ordering by seq)
+
+kafka -> rt : message.created / chat.member.changed
+rt -> rt : filter by ACL cache + device
+rt --> client : event {seq, event_id, payload}
+note right of rt : E2EE — конверт только\nдля устройства соединения
+
+client -> rt : read receipt {chat_id, last_read_seq}
+rt -> kafka : message.read (at-least-once)
+kafka -> conv : persist read state\n(monotonic)
+
+client -> rt : ping
+rt --> client : pong {server_time}
+
+alt replay не помещается в окно
+  rt --> client : resume.gap {from_seq, to_seq}
+  note right of client : клиент делает\nREST-догрузку истории
+end
+
+note over client, rt
+  Один ticket — одно подключение, TTL 30 с.
+  Realtime не принимает бизнес-решений:
+  ACL — из conversation (кэш + epoch),
+  история — replay из conversation.
+  Между узлами — Redis pub/sub.
+end note
+
+@enduml

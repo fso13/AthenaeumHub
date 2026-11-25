@@ -1,0 +1,68 @@
+@startuml
+top to bottom direction
+skinparam componentStyle rectangle
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam ArrowColor #4A5568
+skinparam ArrowFontSize 10
+skinparam nodesep 26
+skinparam ranksep 42
+skinparam packageBackgroundColor #F7FAFC
+
+title Событийный поток: transactional outbox → Kafka → consumers
+
+package "conversation (владелец данных)" {
+  component "Домен\nmessage + chat" as domain #2B6CB0
+  component "ops.outbox\n(в БД сервиса)" as outbox #2B6CB0
+}
+
+component "Outbox relay\n(SKIP LOCKED)" as relay #4A5568
+queue "Kafka\nkrug.message.v1" as topic #B7791F
+component "DLQ\nkrug.message.v1.dlq" as dlq #C53030
+
+package "Consumer groups" {
+  component "realtime\nfan-out по устройствам" as rt #2F855A
+  component "extensions\nbot events" as ext #2F855A
+  component "notification\nin-app / push" as notif #2F855A
+  component "search\nmanaged index" as search #2F855A
+  component "audit\nappend-only" as audit #2F855A
+  component "admin\nCQRS read model" as admin #2F855A
+}
+
+domain --> outbox : INSERT в той же транзакции
+outbox --> relay : polling / CDC
+relay --> topic : publish (at-least-once)
+topic --> dlq : poison / N попыток
+topic --> rt : message.created
+topic --> ext : message.created
+topic --> notif : message.created
+topic --> search : managed only
+topic --> audit : audit envelope
+topic --> admin : projection
+
+note right of topic
+  **Контракт события**
+  • event_id (UUID), type, version
+  • workspace_id, aggregate_id
+  • partition_key = chat_id / workspace_id
+  • trace_id, occurred_at
+  • payload без plaintext и секретов
+  Дедуп у консьюмера по event_id.
+end note
+
+note bottom of rt
+  E2EE: событие несёт только флаг e2ee.
+  Конверты на устройство realtime
+  запрашивает у conversation batch-ом,
+  чтобы не раздувать Kafka и не
+  рассылать чужие конверты.
+end note
+
+note bottom of admin
+  Тот же паттерн для identity.v1,
+  workspace.v1, chat.v1, media.v1,
+  plugin.v1, realtime.v1.
+  Полная матрица — EVENTS.md.
+end note
+
+@enduml

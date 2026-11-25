@@ -1,0 +1,73 @@
+@startuml
+autonumber
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 200
+skinparam ArrowColor #4A5568
+
+title Sequence — вход, сессия, refresh и отзыв (BFF + Keycloak)
+
+participant "Браузер" as browser
+participant "edge" as edge
+participant "identity" as id
+participant "Keycloak" as kc
+participant "PostgreSQL\nidentity" as db
+participant "Redis" as redis
+participant "Kafka" as kafka
+participant "realtime" as rt
+
+browser -> edge : POST /api/v1/auth/login\n{email, password}
+edge -> id : proxy (тот же контракт)
+id -> redis : rate limit по email + IP
+id -> kc : token request (BFF client)\ngrant_type=password
+kc --> id : access + refresh\nили 2FA challenge
+
+alt требуется 2FA
+  id --> browser : 401 TWO_FACTOR_REQUIRED
+  browser -> id : POST /auth/2fa/verify {code}
+  id -> kc : OTP verification
+  kc --> id : tokens
+end
+
+id -> db : upsert user + device\nsession (hash refresh, TTL)
+id --> edge : AuthSession {access_token}\nSet-Cookie: sova_refresh\nHttpOnly; Secure; SameSite=Lax; Path=/api/v1/auth
+edge --> browser : 200 + cookie
+
+browser -> edge : GET /api/v1/chats\nAuthorization: Bearer
+edge -> edge : verify JWT (JWKS cache)\n+ device binding
+edge -> id : (опционально) introspection\nпри неизвестном kid
+edge -> rt : route
+
+browser -> edge : POST /api/v1/auth/refresh\n(cookie, без body)
+edge -> id : proxy + CSRF origin check
+id -> redis : rate limit
+id -> kc : grant_type=refresh_token
+kc --> id : новая пара токенов
+id -> db : rotate session\n(старый refresh — revoke)
+id --> edge : новый access + rotated cookie
+edge --> browser : 200 AuthSession
+
+browser -> edge : POST /api/v1/auth/logout
+edge -> id : proxy
+id -> kc : logout / revoke refresh
+id -> db : session = REVOKED
+id -> kafka : session.revoked / device.revoked
+kafka -> rt : close WS 4403
+
+note over id, db
+  Пароли и коды не хранятся и не логируются.
+  Access token — короткий (15 мин), refresh —
+  только HttpOnly cookie, ротация при каждом refresh.
+  Device binding: X-Device-Id + отпечаток устройства.
+end note
+
+note over edge
+  Edge не хранит сессии и не выпускает токены:
+  только проверяет подпись/audience/exp и
+  проксирует /auth/* в identity. CSRF — origin
+  check на refresh/logout.
+end note
+
+@enduml

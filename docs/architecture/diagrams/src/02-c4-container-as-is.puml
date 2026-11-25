@@ -1,0 +1,40 @@
+@startuml
+!include <C4/C4_Container>
+LAYOUT_LEFT_RIGHT()
+title C4 L2 — «Сова»: контейнеры «как есть» (ноябрь 2026)
+
+Person(user, "Пользователь", "Браузер, Web/PWA")
+
+System_Boundary(krug, "Сова — текущий стенд") {
+  Container(spa, "SPA", "React 19, TypeScript, Vite", "UI, E2EE-клиент, локальный индекс")
+  Container(proxy, "nginx / Caddy", "Reverse proxy", "TLS, статика, same-origin")
+  Container(backend, "krug-backend", "Spring Boot 3.4 / Java 21, один процесс", "15 модулей, ~78k LOC: auth, workspace, chat, message, file, sticker, notification, plugin, bot, room, realtime, ops, audit")
+  ContainerDb(pg, "PostgreSQL 16", "14 схем", "63 миграции, RLS, 93 межсхемных FK, 60 SECURITY DEFINER функций")
+  Container(keycloak, "Keycloak 26", "OIDC", "Realm krug, LDAP/AD федерация")
+  ContainerDb(kcpg, "PostgreSQL", "БД Keycloak", "Отдельный кластер/база")
+  ContainerDb(minio, "MinIO / S3", "Object storage", "Файлы, стикеры, пакеты плагинов")
+  Container(mail, "SMTP / Mailpit", "Почтовый шлюз", "Коды входа, инвайты")
+  Container(translate, "LibreTranslate", "Опциональный профиль", "Перевод managed-сообщений")
+}
+
+Rel(user, proxy, "HTTPS/WSS")
+Rel(proxy, spa, "Статика")
+Rel(proxy, backend, "REST + /ws")
+Rel(backend, pg, "JDBC, одна БД")
+Rel(backend, keycloak, "OIDC / JWKS")
+Rel(keycloak, kcpg, "JDBC")
+Rel(backend, minio, "S3 API")
+Rel(backend, mail, "SMTP")
+Rel(backend, translate, "HTTP, профиль translate")
+
+note bottom of backend
+  **Ограничения текущей реализации**
+  • WebSocket fan-out — in-memory, один узел
+  • ops.outbox → лог-заглушка, брокера нет
+  • Redis / Kafka / OpenSearch не используются
+  • Один deployable и одна Flyway-история
+  • Масштабирование — только вертикальное/реплики без WS
+end note
+
+SHOW_LEGEND()
+@enduml

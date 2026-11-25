@@ -1,0 +1,16 @@
+' Общий стиль диаграмм. Подключается как !include common.puml
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam ArrowColor #4A5568
+skinparam ArrowFontColor #2D3748
+skinparam ArrowFontSize 11
+skinparam nodesep 28
+skinparam ranksep 38
+skinparam packageBorderColor #A0AEC0
+skinparam packageBackgroundColor #F7FAFC
+skinparam componentBorderColor #718096
+skinparam componentBackgroundColor #FFFFFF
+skinparam databaseBorderColor #4A5568
+skinparam databaseBackgroundColor #EDF2F7

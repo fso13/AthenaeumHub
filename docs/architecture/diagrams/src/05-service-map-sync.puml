@@ -1,0 +1,47 @@
+@startuml
+left to right direction
+skinparam componentStyle rectangle
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam ArrowColor #4A5568
+skinparam ArrowFontSize 10
+skinparam nodesep 34
+skinparam ranksep 70
+
+title Синхронные вызовы ядра (без edge, admin и notification)
+
+component "identity" as identity #2F855A
+component "workspace" as workspace #2F855A
+component "conversation" as conv #2B6CB0
+component "media" as media #B7791F
+component "realtime" as rt #B7791F
+component "extensions" as ext #718096
+
+rt --> conv : ACL чата, replay\n(batch)
+rt --> identity : сессия, устройство\n(тикет)
+
+conv --> workspace : лимиты, DLP\n(кэш + fallback)
+conv --> media : готовность вложений\n(batch)
+conv --> identity : профили, устройства\n(кэш + события)
+
+media --> workspace : лимиты и тариф\n(кэш)
+
+ext --> conv : публикация\nplugin-сообщения
+ext --> media : ассеты плагина
+
+legend right
+  **Правила**
+  • только запрос/валидация, без распределённых транзакций
+  • timeout 200–500 мс, circuit breaker, bulkhead
+  • batch-эндпоинты вместо N+1
+  • кэш + инвалидация событиями
+  • максимум 2 hops в цепочке
+  --
+  **Не показаны**
+  • edge — единая точка входа (03)
+  • admin — BFF + CQRS read model
+  • notification — event-driven, читает профиль из identity
+  • audit/search — только события (06)
+end legend
+
+@enduml

@@ -1,0 +1,55 @@
+@startuml
+top to bottom direction
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam rectangle {
+  RoundCorner 8
+  BorderColor #718096
+  FontSize 11
+}
+skinparam ArrowColor #4A5568
+skinparam ArrowFontSize 10
+
+title План выделения сервисов: волны и exit criteria
+
+rectangle "**Wave 0 — платформенные enablers**  ·  2–3 спринта\n\n• Kafka + реальный outbox relay (сейчас заглушка в лог)\n• Redis: presence, rate limit, кэш, WS-маршрутизация\n• БД: отдельные роли/базы, запрет кросс-схемных JOIN и FK\n• контракты: OpenAPI по сервисам, JSON Schema событий\n• OTel, SLO-дашборды, per-service CI/CD, Testcontainers\n\n**Exit:** событие доходит < 2 c; outbox lag = 0; сервис поднимается отдельно" as w0 #FFF5F5
+
+rectangle "**Wave 1 — realtime + audit**  ·  3–4 спринта\n\n• WS gateway: тикеты, подписки, replay, presence\n• Redis pub/sub между узлами, HPA по connections\n• audit: консьюмер всех топиков, hash chain, SIEM\n\n**Exit:** 10k WS на узел; reconnect без потерь; аудит не теряется" as w1 #EBF8FF
+
+rectangle "**Wave 2 — media + notification**  ·  3–4 спринта\n\n• uploads, attachments, квоты, AV, превью, GC, S3\n• notification: in-app, prefs, email/push, dedupe\n\n**Exit:** квота сходится (reserve/commit/release); скан fail-closed; push без дублей" as w2 #EBF8FF
+
+rectangle "**Wave 3 — extensions + admin**  ·  4–5 спринтов\n\n• plugin packages, sandbox, capability-токены, боты, polls/tasks\n• admin: CQRS read model, команды через владельцев данных\n\n**Exit:** плагин без доступа к БД/сети; admin не делает кросс-БД JOIN" as w3 #F0FFF4
+
+rectangle "**Wave 4 — identity + workspace**  ·  4–5 спринтов\n\n• BFF/cookie, сессии, устройства, prekeys, Keycloak\n• memberships, роли, лимиты, security/DLP-политики\n\n**Exit:** revoke < 5 c; policy-кэш инвалидируется; пароли не хранятся" as w4 #F0FFF4
+
+rectangle "**Wave 5 — conversation hardening + search**  ·  ongoing\n\n• модульные границы, ACL-кэш, search как отдельный сервис\n• decision gate: дробить ли chat/message (по умолчанию — NO)\n\n**Exit:** send p95 < 150 мс; ADR по границе chat/message" as w5 #F7FAFC
+
+w0 --> w1
+w1 --> w2
+w2 --> w3
+w3 --> w4
+w4 --> w5
+
+note right of w1
+  Wave 1 и Wave 2 можно вести
+  параллельно двумя командами:
+  у них нет общих записей,
+  только Kafka-контракты.
+end note
+
+note right of w4
+  До Wave 4 edge уже умеет
+  проверять JWT; identity
+  переезжает без смены
+  клиентского контракта.
+end note
+
+note left of w5
+  **Стоп-фактор**
+  Не начинать с chat/message:
+  send — одна транзакция,
+  разделение даст сагу,
+  рост latency и потерю seq.
+end note
+
+@enduml

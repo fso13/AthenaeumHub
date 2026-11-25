@@ -2846,6 +2846,34 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /link-preview:
+    get:
+      tags: [Files]
+      summary: Open Graph metadata for a public link
+      description: |
+        Fetches one public HTML page server-side and returns only title/description/image.
+        The server rejects non-http(s), localhost/private-network hosts and does not follow
+        redirects. Used by the message link card; never returns page HTML.
+      operationId: getLinkPreview
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+            maxLength: 2048
+      responses:
+        '200':
+          description: Metadata found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkPreview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /files:
     get:
       tags: [files]
@@ -8163,6 +8191,24 @@ components:
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
         parts_count: { type: integer, minimum: 1 }
 
+    LinkPreview:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        title:
+          type: [string, 'null']
+          maxLength: 180
+        description:
+          type: [string, 'null']
+          maxLength: 300
+        image:
+          type: [string, 'null']
+          format: uri
+          maxLength: 2048
     AttachmentRef:
       type: object
       required: [id, size_bytes, scan_status]

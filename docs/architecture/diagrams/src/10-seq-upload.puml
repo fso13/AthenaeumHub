@@ -1,0 +1,85 @@
+@startuml
+autonumber
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 200
+skinparam ArrowColor #4A5568
+
+title Sequence — загрузка файла, квота, AV-скан и привязка к сообщению
+
+participant "Клиент" as client
+participant "edge" as edge
+participant "media" as media
+participant "workspace" as ws
+participant "PostgreSQL\nmedia" as db
+participant "S3 / MinIO" as s3
+participant "AV worker\n(ClamAV)" as av
+participant "Kafka" as kafka
+participant "realtime" as rt
+participant "conversation" as conv
+
+client -> edge : POST /uploads/preflight\n{size, mime, workspace_id}
+edge -> media : route
+media -> ws : тариф и лимиты\n(кэш, fallback)
+ws --> media : max_file_size, allowed_ext
+media -> db : проверить квоту\n(reserve при init)
+media --> client : {max_size, part_size, allowed}
+
+client -> edge : POST /uploads {size, mime, sha256}
+edge -> media : route
+media -> db : INSERT upload + quota_reservation\n(status=CREATED)
+media -> s3 : CreateMultipartUpload
+media --> client : {upload_id, part_size}
+
+loop по частям (resume)
+  client -> media : PUT /uploads/{id}/parts/{n}\nbytes
+  media -> db : проверить ownership + part_no
+  media -> s3 : UploadPart
+  s3 --> media : ETag
+  media --> client : {part_no, etag}
+end
+
+client -> media : POST /uploads/{id}/complete\n{parts[]}
+media -> s3 : CompleteMultipartUpload
+media -> db : attachment=SCANNING\nquota commit, upload=DONE
+media -> kafka : upload.completed
+media --> client : 201 {attachment_id, scan=SCANNING}
+
+kafka -> av : upload.completed
+av -> s3 : GET object (stream)
+av -> av : ClamAV scan
+av -> db : scan_status = CLEAN | INFECTED
+av -> kafka : media.scan.completed
+
+kafka -> rt : media.scan.completed
+rt --> client : WS attachment.ready\n{attachment_id, scan_status}
+kafka -> conv : media.scan.completed\n(readiness cache)
+
+client -> edge : POST /chats/{id}/messages\nattachment_ids[]
+edge -> conv : send
+conv -> media : GET /internal/v1/attachments:batch\n(кэш; при промахе)
+media --> conv : READY / SCANNING / INFECTED
+alt SCANNING / INFECTED
+  conv --> client : 409 / 423\nATTACHMENT_NOT_READY
+else CLEAN
+  conv -> conv : сообщение + outbox\n(одна транзакция)
+  conv --> client : 201
+end
+
+note over media, db
+  Квота: reserve на init → commit на complete
+  или release по TTL/abort. Ошибка скана
+  освобождает квоту и помечает объект
+  на удаление (GC-воркер).
+end note
+
+note over conv
+  Fail-closed: сообщение с вложением
+  не принимается, пока скан не CLEAN.
+  E2EE: сервер не видит plaintext,
+  но метаданные и размер проверяются.
+end note
+
+@enduml

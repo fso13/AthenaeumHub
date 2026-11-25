@@ -86,13 +86,29 @@ function LinkPreviewAnchor({
       cancelled = true;
     };
   }, [href, withPreview]);
-  if (!preview) {
+  if (!withPreview) {
     return (
       <a className="rich-link" href={href} target="_blank" rel="noopener noreferrer">
-        <span className="rich-link__domain" aria-hidden="true">
-          {host}
+        {children}
+      </a>
+    );
+  }
+  if (!preview) {
+    // Reserve the same card geometry before metadata arrives; otherwise the
+    // async preview grows the feed and pushes the newest messages off-screen.
+    return (
+      <a
+        className="link-preview-card link-preview-card--loading"
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <img className="link-preview-card__image" src="/link-preview.svg" alt="" />
+        <span className="link-preview-card__body">
+          <span className="link-preview-card__domain">{host}</span>
+          <strong className="link-preview-card__placeholder">{children || host}</strong>
+          <span className="link-preview-card__placeholder">Загрузка превью…</span>
         </span>
-        <span className="rich-link__text">{children}</span>
       </a>
     );
   }

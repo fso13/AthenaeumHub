@@ -127,7 +127,13 @@ export function MessageList({
     const inner = innerRef.current;
     if (!inner || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
-      if (stickToBottom.current) scrollToBottom();
+      const element = scrollRef.current;
+      if (!element) return;
+      const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (stickToBottom.current || distance < 180) {
+        stickToBottom.current = true;
+        scrollToBottom();
+      }
     });
     observer.observe(inner);
     return () => observer.disconnect();

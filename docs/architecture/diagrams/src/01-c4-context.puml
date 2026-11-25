@@ -1,0 +1,43 @@
+@startuml
+!include <C4/C4_Context>
+LAYOUT_LEFT_RIGHT()
+title C4 L1 — «Сова»: контекст (целевое состояние)
+
+Person(member, "Участник", "Чаты, файлы, стикеры, звонки, поиск")
+Person(guest, "Гость", "Один чат по ссылке, ограниченный TTL")
+Person(wsAdmin, "Админ воркспейса", "Роли, плагины, лимиты, аудит")
+Person(platformAdmin, "Платформенный админ", "Эксплуатация, расследования, kill switch")
+Person(dev, "Разработчик плагинов/ботов", "Публикует подписанные пакеты и ботов")
+
+System(krug, "Сова", "Мессенджер: managed и E2EE, чаты, медиа, плагины, аудит")
+
+System_Ext(search, "OpenSearch", "Индекс managed-режима")
+System_Ext(translate, "Translation Provider", "Перевод managed-сообщений")
+System_Ext(registry, "Plugin Registry", "Пакеты, подписи, манифесты")
+System_Ext(siem, "SIEM", "Поток аудита и DLP-событий")
+System_Ext(clam, "ClamAV", "Антивирус managed-контента")
+System_Ext(email, "Email / SMTP", "Коды входа, инвайты, сброс")
+System_Ext(push, "Web Push", "Push без контента")
+System_Ext(s3, "S3 / MinIO", "Блобы файлов, стикеров, пакетов")
+System_Ext(kms, "KMS / Vault", "KEK/DEK, break-glass grants, секреты")
+System_Ext(keycloak, "Keycloak", "OIDC, MFA, федерация LDAP/AD")
+
+Rel(member, krug, "HTTPS + WSS", "REST, WebSocket")
+Rel(guest, krug, "HTTPS + WSS", "Ограниченная сессия")
+Rel(wsAdmin, krug, "HTTPS", "Workspace Admin API")
+Rel(platformAdmin, krug, "HTTPS + mTLS", "Platform Admin API")
+Rel(dev, registry, "HTTPS", "Публикация пакетов")
+
+Rel(krug, keycloak, "OIDC / JWKS", "Вход, MFA, сессии")
+Rel(krug, kms, "mTLS", "Ключи, секреты, grants")
+Rel(krug, s3, "HTTPS", "Presigned PUT/GET")
+Rel(krug, push, "HTTPS", "Уведомления без plaintext")
+Rel(krug, email, "SMTP/API", "Письма")
+Rel(krug, clam, "ICAP/TCP", "Скан вложений")
+Rel(krug, siem, "HTTPS webhook", "Аудит, DLP")
+Rel(krug, registry, "HTTPS", "Загрузка пакетов")
+Rel(krug, translate, "HTTPS", "Перевод (managed)")
+Rel(krug, search, "HTTPS", "Индексация и поиск (managed)")
+
+SHOW_LEGEND()
+@enduml

@@ -1,0 +1,76 @@
+@startuml
+autonumber
+skinparam defaultFontName "Helvetica"
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 220
+skinparam ArrowColor #4A5568
+
+title Sequence — отправка сообщения (целевое состояние)
+
+participant "Клиент\nWeb/PWA" as client
+participant "edge\nGateway + BFF" as edge
+participant "conversation" as conv
+participant "workspace" as ws
+participant "media" as media
+participant "PostgreSQL\nconversation" as db
+participant "Kafka" as kafka
+participant "realtime" as rt
+participant "notification" as notif
+participant "search / audit" as sa
+
+client -> edge : POST /chats/{chatId}/messages\nIdempotency-Key + Bearer
+edge -> conv : route + actor context\nX-Request-Id, X-Workspace-Id
+
+conv -> conv : ACL чата + POST_MESSAGES\n(данные чата локальны)
+
+conv -> ws : лимиты + DLP-политика\n(кэш, fallback REST)
+ws --> conv : snapshot (TTL + инвалидация)
+
+conv -> media : POST /internal/v1/attachments:batch\nattachment_ids[]
+media --> conv : READY / SCANNING / INFECTED
+
+alt DLP BLOCK (только managed)
+  conv --> edge : 422 DLP_BLOCKED
+  edge --> client : 422 + код
+else можно отправлять
+  conv -> db : BEGIN
+  conv -> db : idempotency.reserve(key, hash)
+  conv -> db : seq = next_seq(chat) — row lock
+  conv -> db : INSERT message + envelopes
+  conv -> db : INSERT outbox(message.created)
+  conv -> db : COMMIT
+  conv --> edge : 201 {id, seq, created_at}
+  edge --> client : 201
+end
+
+note over conv, db
+  Одна транзакция: idempotency + seq +
+  message + outbox. Распределённой
+  транзакции нет, chat и message
+  живут в одной БД.
+end note
+
+conv -> kafka : outbox relay: message.created\nevent_id, seq, chat_id, e2ee
+note right of kafka : at-least-once,\nordering by chat_id
+
+par fan-out
+  kafka -> rt : message.created
+  rt -> conv : envelopes by device (batch)\nтолько для E2EE
+  rt --> client : WS event {seq, event_id}
+else
+  kafka -> notif : message.created
+  notif --> client : push без контента
+else
+  kafka -> sa : managed index + audit
+end
+
+note over client
+  Ответ 201 не ждёт fan-out.
+  Клиент дедуплицирует по event_id,
+  порядок — по seq; при пропуске —
+  replay через realtime.
+end note
+
+@enduml

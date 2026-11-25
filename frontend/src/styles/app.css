@@ -21932,3 +21932,14 @@ html[data-link-previews='off'] .rich-link__domain {
   flex: 1;
   justify-content: center;
 }
+.link-preview-card {
+  min-height: 88px;
+  box-sizing: border-box;
+}
+.link-preview-card__placeholder {
+  color: var(--muted);
+  font-size: 12px;
+}
+.link-preview-card__placeholder::after {
+  content: '';
+}
