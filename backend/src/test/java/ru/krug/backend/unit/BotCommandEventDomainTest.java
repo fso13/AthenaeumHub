@@ -54,7 +54,8 @@ class BotCommandEventDomainTest {
         assertThat(parsed.workspaceId()).isEqualTo(workspace);
         assertThat(parsed.tokenId()).isEqualTo(tokenId);
         assertThat(BotResponseTokens.hash(raw)).hasSize(32);
-        assertThat(parsed.toString()).doesNotContain(raw.substring(raw.lastIndexOf('_') + 1));
+        String secret = raw.replaceFirst("^sova_resp_[^_]+_[^_]+_", "");
+        assertThat(parsed.toString()).doesNotContain(secret);
         assertThat(BotResponseTokens.parse(raw + "x")).isEmpty();
     }
 }
