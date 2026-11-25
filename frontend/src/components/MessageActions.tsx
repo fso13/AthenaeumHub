@@ -728,9 +728,9 @@ export function MessageActions({
         </button>
       ) : null}
       {!e2eeChat &&
-      message.type === 'TEXT' &&
-      (message.text ?? '').trim() &&
-      !message.deleted_at ? (
+      !message.deleted_at &&
+      ((message.type === 'TEXT' && (message.text ?? '').trim()) ||
+        (message.type === 'STICKER' && message.sticker)) ? (
         <button
           type="button"
           className="msg-menu__item"
@@ -864,6 +864,11 @@ export function MessageActions({
               setForwardBusy(true);
               setForwardError(null);
               try {
+                if (message.sticker && !message.text) {
+                  await store.sendSticker(forwardTarget, message.sticker);
+                  setForwardOpen(false);
+                  return;
+                }
                 const author =
                   message.sender_display_name?.trim() || t('message.forwardUnknownAuthor');
                 const sourceChat = state.chats.find((chat) => chat.id === message.chat_id) ?? null;

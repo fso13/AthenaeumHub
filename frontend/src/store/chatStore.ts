@@ -8145,6 +8145,12 @@ export class ChatStore {
     if (!this.state.slices[favoritesId] || this.state.slices[favoritesId]?.status !== 'ready') {
       await this.loadChat(favoritesId);
     }
+    if (message.sticker && !message.text) {
+      return this.sendSticker(favoritesId, message.sticker);
+    }
+    if (message.sticker && !message.text) {
+      return this.sendSticker(favoritesId, message.sticker);
+    }
     const sourceChat = this.state.chats.find((chat) => chat.id === message.chat_id) ?? null;
     const author = message.sender_display_name?.trim() || 'Неизвестный автор';
     const meta = {
