@@ -8128,6 +8128,34 @@ export class ChatStore {
     }
   }
 
+  /**
+   * #110: re-upload visible attachments as unbound workspace files, which the
+   * bind rule allows in another chat. Bytes are copied through the regular
+   * authenticated download/upload path, so DLP and malware scan still apply.
+   */
+  async copyAttachmentsForForward(attachments: readonly ApiAttachment[]): Promise<ApiAttachment[]> {
+    const workspaceId = this.currentWorkspaceId();
+    if (!workspaceId || attachments.length === 0) return [];
+    const copied: ApiAttachment[] = [];
+    for (const attachment of attachments.slice(0, 10)) {
+      try {
+        const download = await this.api.attachmentDownloadUrl(attachment.id);
+        const response = await fetch(download.url);
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        const name = attachment.filename ?? 'file';
+        const file = new File([blob], name, {
+          type: attachment.mime_type ?? blob.type ?? 'application/octet-stream',
+        });
+        const uploaded = await this.api.uploadWorkspaceFile(workspaceId, file);
+        copied.push(uploaded);
+      } catch {
+        // A single unavailable attachment must not drop the text forward.
+      }
+    }
+    return copied;
+  }
+
   /** #200: copy a message into the personal "Избранное" chat. */
   async saveToFavorites(message: ApiMessage): Promise<boolean> {
     if (this.state.e2ee.enabled && this.isE2eeChat(message.chat_id)) return false;
@@ -8165,7 +8193,8 @@ export class ChatStore {
     const marker = `sova-forward:${encodeURIComponent(JSON.stringify(meta))}`;
     const body = message.text?.trim() || message.sticker?.alt || '[вложение]';
     const text = `↪ Переслано от ${author}\n${marker}\n\n${body}`;
-    await this.send(favoritesId, text);
+    const copied = await this.copyAttachmentsForForward(message.attachments ?? []);
+    await this.send(favoritesId, text, null, copied);
     return true;
   }
 

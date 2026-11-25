@@ -886,7 +886,8 @@ export function MessageActions({
                   author,
                   date: formatDateTime(message.created_at),
                 })}\n${marker}\n\n${message.text ?? ''}`;
-                await store.send(forwardTarget, forwarded);
+                const copied = await store.copyAttachmentsForForward(message.attachments ?? []);
+                await store.send(forwardTarget, forwarded, null, copied);
                 setForwardOpen(false);
               } catch {
                 setForwardError(t('message.forwardError'));
